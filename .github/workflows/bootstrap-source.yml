@@ -5,13 +5,15 @@ on:
     branches: [main]
     paths:
       - .bootstrap/READY
+  issues:
+    types: [opened]
 
 permissions:
   contents: write
 
 jobs:
   publish:
-    if: github.repository == 'zila-kh/nd-dsh'
+    if: github.repository == 'zila-kh/nd-dsh' && (github.event_name == 'push' || github.event.issue.title == '[publish-source] ND-DSH')
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -41,7 +43,7 @@ jobs:
           test -f scripts/verify.mjs
           test -f .gitmodules
 
-          rm -f .bootstrap/source.part-*
+          rm -rf .bootstrap .github/workflows/bootstrap-source.yml
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
