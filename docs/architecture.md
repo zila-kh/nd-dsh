@@ -5,10 +5,12 @@
 | Subsystem | Owner | Notes |
 | --- | --- | --- |
 | desktop lifecycle | ND-DSH / Electron | windows, IPC, native-view geometry, process shutdown |
-| workbench | ND-DSH / React | Explorer, chat, source preview, activity, status |
+| workbench | ND-DSH / React | sessions, chat, explorer, source preview, activity, status |
+| DeepSeek UI surface | ND-DSH / WebContentsView | official harness UI on the loopback gateway origin |
 | visible web runtime | Electron `WebContentsView` | one persistent partition and canonical target |
 | browser automation | `agent-browser` | CDP, ARIA snapshots, actions, diagnostics, MCP |
-| agent runtime | pinned DeepSeek Harness submodule | loop, model route, tools, sessions, skills, subagents |
+| agent runtime | pinned DeepSeek Harness submodule | `web` profile + ND-DSH patch overlay; loop, tools, sessions, presets |
+| gateway transport | ND-DSH / main process | HTTP RPC + WebSocket events to the runtime's `/api` |
 | browser tool bridge | DSH MCP client | maps MCP schemas/results into native Harness tools |
 | workspace policy | DSH sandbox providers | filesystem and shell capability boundary |
 
@@ -16,10 +18,13 @@
 
 ```text
 Electron main process
-  ├─ renderer process (React, context-isolated preload)
-  ├─ WebContentsView renderer (the inspected application)
-  ├─ agent-browser daemon/session (attached over loopback CDP)
-  └─ DeepSeek Harness JSON-RPC child
+  ├─ renderer process (React workbench, context-isolated preload)
+  ├─ WebContentsView renderer (the inspected application — canonical browser)
+  ├─ WebContentsView renderer (official DeepSeek UI surface, loopback origin)
+  ├─ agent-browser session (attached over loopback CDP)
+  └─ DeepSeek Harness child: dsh --profile web --patch configs/dsh/nd-dsh.patch.yml
+       ├─ web server + /api gateway + official UI dist (127.0.0.1:<port>)
+       ├─ gateway client in the main process (HTTP RPC + WebSocket events)
        └─ agent-browser MCP child
             └─ same agent-browser session and exact CDP target
 ```
@@ -41,20 +46,34 @@ later CLI and MCP commands cannot silently adopt another renderer.
 
 ## Harness boundary
 
-ND-DSH imports only the built TypeScript SDK client from the pinned submodule.
-The SDK owns a JSON-RPC subprocess that boots the upstream runtime with the
-external `configs/dsh/cordis.yml`. No Harness core source is patched.
+ND-DSH never imports harness code at build time and never patches the pinned
+submodule. It launches the upstream `web` profile through the harness's own
+CLI launcher and applies two ND-DSH-owned artifacts:
 
-The project composition adds:
+- `configs/dsh/nd-dsh.patch.yml` — a `--patch` overlay pinning the sandbox to
+  the selected workspace, enabling durable full-text session search, making
+  `nd-dsh` the default preset, and mounting the `browser-mcp` row
+  (`@deepseek-ai/dsh-mcp-client` → `agent-browser mcp`).
+- `configs/dsh/agent-presets/nd-dsh/` — the ND-DSH agent preset (standard
+  toolset, ND-DSH persona, bundled `live-browser` skill), installed into the
+  harness-home user preset root at launch. The shipped `standard`, `code`
+  (PTC/code mode), and `cordis` (creator mode) presets remain available.
 
-- DeepSeek adapter and model route
-- JSONL persistence, checkpoints, token metering, and compaction
-- workspace-scoped filesystem and cross-platform shell providers
-- local skills, workspace instructions, jobs, and todo tools
-- in-process spawn/fork subagents
-- `@deepseek-ai/dsh-mcp-client` configured for `agent-browser mcp`
-
+The desktop then drives the runtime over the loopback gateway
+(`src/main/dsh/gateway-client.ts`): unary RPCs on `POST /api/<method>`,
+answerable frames (approvals, questions) on `POST /api/respond`, and live
+events over the `/api/events.mux` and `/api/events.host` WebSocket downlinks.
 This keeps upstream updates reviewable as one explicit submodule/pin change.
+
+## Surfaces
+
+The default surface is the official DeepSeek UI: the harness serves it at the
+gateway origin, and `src/main/dsh/dsh-surface.ts` hosts it in a sandboxed,
+preload-free `WebContentsView` whose navigation is pinned to that origin. The
+ND-DSH workbench surface shares the same runtime and session store: sessions
+created in either surface appear in both, and the Explorer rail plus the
+Browser tab stay available in both. The choice persists in `settings.json`
+(`surface: dsh | workbench`).
 
 ## Trust boundaries
 
@@ -75,35 +94,39 @@ providers, not renderer IPC.
 ### Browser
 
 The embedded page has its own persistent partition, no Node integration, and no
-permission grants. CDP is bound to loopback. Browser MCP remains privileged
-because page storage, cookies, console output, screenshots, and network payloads
-may contain secrets.
+permission grants. CDP is bound to loopback (auto-picked unless pinned). The
+official DeepSeek UI view gets the same hardening plus an origin-locked
+navigation guard; it is a product surface, never the agent browser. Browser
+MCP remains privileged because page storage, cookies, console output,
+screenshots, and network payloads may contain secrets.
 
 ### Approvals
 
-The SDK automation protocol currently has no desktop human-approval responder.
-The Harness approval policy is therefore `never`. Workspace-contained actions
-run according to the selected sandbox mode; escalation requests are rejected
-without hanging. A renderer approval channel is a later milestone.
+The engine approval policy is the default `ask`. Approval frames stream over
+the gateway event downlink; the official DeepSeek UI answers them directly,
+and the ND-DSH workbench renders allow-once/reject cards answered through
+`POST /api/respond`. Escalation requests never hang: with no answerer the
+engine fails closed.
 
 ## Failure behavior
 
 - Missing `agent-browser`: the native browser still loads and navigates; manual
   automation status becomes `unavailable`, and agent turns fail before launch.
-- Missing or unbuilt Harness submodule: chat reports the exact missing SDK or
-  runtime path; the browser remains usable.
+- Missing or unbuilt Harness submodule: the workbench reports the exact missing
+  CLI/runtime path; the browser remains usable.
 - Missing API key: the workbench shows a setup warning; the upstream adapter
   reports the model error on use.
 - Browser MCP startup failure: Harness startup fails loudly because the browser
   is a required capability; the visible browser remains manually usable.
 - Initial localhost page unavailable: the pane records the load failure and the
   user can navigate later.
-- App quit or window close: the SDK performs protocol shutdown and subprocess
-  escalation; Electron waits for every active close operation before exit.
+- App quit or window close: the harness child is terminated (graceful on
+  POSIX, direct kill on Windows); durable sessions survive either way.
 
 ## Extension path
 
-Monaco/LSP, terminal, Git, Problems, approval dialogs, and session history should
-be added as UI projections over Harness services or narrow Electron IPC
-adapters. They must not introduce a second browser, bypass workspace policy, or
-patch the Harness agent loop.
+Monaco/LSP, a writable editor, terminal, Git, a trajectory event-ledger tab,
+and packaging should be added as UI projections over Harness services or
+narrow Electron IPC adapters. Engine-facing features belong in ND-DSH-owned
+Harness plugins or patch-overlay rows. They must not introduce a second
+browser, bypass workspace policy, or patch the Harness agent loop.

@@ -966,3 +966,75 @@
     margin: 0;
   }
 }
+
+/* ── DSH surface tab + real agent thread ───────────────────────────────────── */
+
+.dsh-toolbar{gap:8px}
+.dsh-toolbar-brand{display:flex;align-items:center;gap:7px;color:var(--text-soft);font-size:10px;font-weight:650}
+.dsh-toolbar-brand .mini-logo{width:18px;height:18px;font-size:7px}
+.dsh-toolbar .bridge-pill{margin-left:auto}
+
+.sessions-empty{padding:14px 10px;color:var(--faint);font-size:10px;line-height:1.5}
+
+.chat-thread-pane .chat-message{display:block;margin:0 0 9px;padding:10px 11px;border:1px solid var(--border-soft);border-radius:8px;background:var(--composer-bg)}
+.chat-thread-pane .chat-message.user{margin-left:24px;border-color:var(--blue-border-soft);background:var(--blue-soft-2)}
+.chat-thread-pane .chat-message.assistant{margin-right:8px;border-color:var(--accent-border-soft);background:var(--assistant-msg-bg)}
+.chat-thread-pane .chat-message.system{border-color:var(--warning-border);background:var(--warning-soft)}
+.chat-thread-pane .chat-message.system.error{border-color:var(--danger);color:var(--danger)}
+.chat-thread-pane .message-label{display:flex;align-items:center;gap:5px;margin:0 0 7px;color:var(--muted);font-size:9px;font-weight:650}
+.chat-thread-pane .message-label svg{width:13px;height:13px;color:var(--accent)}
+.chat-thread-pane .message-content{color:var(--text-soft);font-size:11px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}
+.stream-caret{display:inline-block;width:6px;height:11px;margin-left:2px;background:var(--accent);vertical-align:text-bottom;animation:caret-blink 1s step-end infinite}
+@keyframes caret-blink{50%{opacity:0}}
+
+.tool-card{margin:0 0 8px;padding:8px 10px;border:1px solid var(--border-soft);border-radius:8px;background:var(--meta-bg)}
+.tool-card.running{border-color:var(--blue-border-soft)}
+.tool-card.error{border-color:var(--danger)}
+.tool-card-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:5px}
+.tool-name{color:var(--text-soft);font-family:"SFMono-Regular",Consolas,monospace;font-size:9px;font-weight:600}
+.tool-status{color:var(--faint);font-size:8px;text-transform:uppercase;letter-spacing:.08em}
+.tool-card.running .tool-status{color:var(--blue)}
+.tool-card.error .tool-status{color:var(--danger)}
+.tool-card-path{overflow:hidden;color:var(--accent);font-family:"SFMono-Regular",Consolas,monospace;font-size:8px;text-overflow:ellipsis;white-space:nowrap}
+.tool-card-result{margin:6px 0 0;padding:7px 8px;max-height:140px;overflow:auto;border:1px solid var(--border-soft);border-radius:5px;background:var(--surface-0);color:var(--muted);font-family:"SFMono-Regular",Consolas,monospace;font-size:8px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
+
+.todo-card{margin:0 0 8px;padding:8px 10px;border:1px solid var(--border-soft);border-radius:8px;background:var(--composer-bg)}
+.todo-row{display:flex;align-items:center;gap:7px;padding:3px 0;color:var(--text-soft);font-size:10px}
+.todo-row.completed{color:var(--faint);text-decoration:line-through}
+.todo-check{display:grid;width:13px;height:13px;flex:0 0 13px;place-items:center;border:1px solid var(--border-strong);border-radius:4px;color:var(--accent);font-size:9px}
+.todo-row.in_progress .todo-check{color:var(--blue);border-color:var(--blue)}
+
+.approval-card,.question-card{margin:0 0 9px;padding:10px 11px;border:1px solid var(--warning-border);border-radius:8px;background:var(--warning-soft)}
+.approval-head{display:flex;align-items:center;gap:6px;margin-bottom:7px;color:var(--text);font-size:10px;font-weight:650}
+.approval-head svg{width:13px;height:13px;color:var(--warning)}
+.approval-body{display:flex;flex-direction:column;gap:4px;margin-bottom:9px}
+.approval-tool{color:var(--text-soft);font-family:"SFMono-Regular",Consolas,monospace;font-size:9px}
+.approval-reason{color:var(--muted);font-size:10px;line-height:1.45}
+.approval-actions{display:flex;gap:7px}
+.approval-allow,.approval-reject{padding:5px 11px;border-radius:5px;font-size:10px;cursor:pointer}
+.approval-allow{border:1px solid var(--accent-border);background:var(--accent-soft);color:var(--accent)}
+.approval-reject{border:1px solid var(--border-strong);background:transparent;color:var(--muted)}
+.approval-resolved{margin-top:7px;color:var(--muted);font-size:9px}
+.question-block{margin-bottom:9px}
+.question-text{color:var(--text-soft);font-size:10px;line-height:1.5}
+.question-options{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+.question-option{padding:4px 9px;border:1px solid var(--border-strong);border-radius:5px;background:transparent;color:var(--muted);font-size:9px;cursor:pointer}
+.question-option.selected{border-color:var(--accent-border);background:var(--accent-soft);color:var(--accent)}
+.question-custom{width:100%;margin-top:6px;padding:5px 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface-0);color:var(--text);font-size:10px;box-sizing:border-box}
+.question-custom::placeholder{color:var(--faint)}
+
+.banner-files{display:flex;min-width:0;align-items:center;gap:5px}
+.banner-file{max-width:170px;overflow:hidden;padding:2px 6px;border:1px solid var(--border-soft);border-radius:4px;background:var(--surface-0);color:var(--accent);font-family:"SFMono-Regular",Consolas,monospace;font-size:8px;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+.banner-file:hover{background:var(--accent-soft)}
+.banner-more{color:var(--faint);font-size:9px;white-space:nowrap}
+
+.settings-button.active{border-color:var(--accent-border);background:var(--accent-soft);color:var(--accent)}
+
+/* ── preset settings ───────────────────────────────────────────────────────── */
+
+.settings-note{margin:6px 0 10px;color:var(--muted);font-size:10px;line-height:1.5}
+.settings-note code{padding:1px 5px;border:1px solid var(--border-soft);border-radius:4px;background:var(--meta-bg);font-family:"SFMono-Regular",Consolas,monospace;font-size:9px}
+.settings-note.good{color:var(--accent)}
+.settings-row-actions{display:flex;flex:0 0 auto;gap:6px}
+.settings-row .settings-status{margin-left:8px;padding:2px 6px;border:1px solid var(--border-soft);border-radius:4px;color:var(--faint);font-size:8px;text-transform:uppercase;letter-spacing:.06em}
+.settings-row .settings-status.good{border-color:var(--accent-border);color:var(--accent)}

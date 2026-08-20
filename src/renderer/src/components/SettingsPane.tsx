@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import type {
   AppInfo,
   BrowserState,
+  DshSurface,
   HarnessStatus,
   ThemeMode,
   ThemeState,
@@ -9,6 +10,7 @@ import type {
 } from '../../../shared/contracts'
 import { MonitorIcon, MoonIcon, SunIcon } from './Icons'
 import { ModelSettings } from './ModelSettings'
+import { PresetSettings } from './PresetSettings'
 
 interface SettingsPaneProps {
   theme: ThemeState | null
@@ -17,21 +19,29 @@ interface SettingsPaneProps {
   onWorkspaceChanged(workspace: WorkspaceState): void
   harness: HarnessStatus | null
   browser: BrowserState | null
+  surface: DshSurface
+  onSurfaceChanged(surface: DshSurface): void
   onError(message: string): void
 }
 
-type SettingsTab = 'general' | 'appearance' | 'models'
+type SettingsTab = 'general' | 'appearance' | 'models' | 'presets'
 
 const TABS: { id: SettingsTab; label: string }[] = [
   { id: 'general', label: 'General' },
   { id: 'appearance', label: 'Appearance' },
   { id: 'models', label: 'Models' },
+  { id: 'presets', label: 'Presets' },
 ]
 
 const THEME_OPTIONS: { mode: ThemeMode; label: string; Icon: typeof SunIcon }[] = [
   { mode: 'system', label: 'System', Icon: MonitorIcon },
   { mode: 'light', label: 'Light', Icon: SunIcon },
   { mode: 'dark', label: 'Dark', Icon: MoonIcon },
+]
+
+const SURFACE_OPTIONS: { surface: DshSurface; label: string; hint: string }[] = [
+  { surface: 'dsh', label: 'DeepSeek UI', hint: 'The official DeepSeek Harness interface, served by the runtime.' },
+  { surface: 'workbench', label: 'ND-DSH workbench', hint: 'Our custom IDE layout with the sessions rail, explorer, and browser pane.' },
 ]
 
 export function SettingsPane({
@@ -41,6 +51,8 @@ export function SettingsPane({
   onWorkspaceChanged,
   harness,
   browser,
+  surface,
+  onSurfaceChanged,
   onError,
 }: SettingsPaneProps) {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null)
@@ -79,6 +91,16 @@ export function SettingsPane({
     }
   }
 
+  const changeSurface = async (next: DshSurface): Promise<void> => {
+    if (next === surface) return
+    try {
+      const state = await window.ndDsh.surface.set(next)
+      onSurfaceChanged(state.surface)
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
+
   const dotClass =
     harness?.state === 'ready' ? 'good'
     : harness?.state === 'running' || harness?.state === 'starting' ? 'busy'
@@ -109,6 +131,8 @@ export function SettingsPane({
       <div className="settings-tab-content">
         {tab === 'models' ? (
           <ModelSettings onError={onError} />
+        ) : tab === 'presets' ? (
+          <PresetSettings onError={onError} />
         ) : (
           <div className="settings-scroll">
             {tab === 'general' ? (
@@ -181,6 +205,24 @@ export function SettingsPane({
                       </div>
                     </div>
                   ) : null}
+                </section>
+
+                <section className="settings-section">
+                  <h2>Interface surface</h2>
+                  {SURFACE_OPTIONS.map((option) => (
+                    <div className="settings-row" key={option.surface}>
+                      <div>
+                        <strong>{option.label}</strong>
+                        <span>{option.hint}</span>
+                      </div>
+                      <button
+                        className={`settings-button ${surface === option.surface ? 'active' : ''}`}
+                        onClick={() => void changeSurface(option.surface)}
+                      >
+                        {surface === option.surface ? 'Active' : 'Switch'}
+                      </button>
+                    </div>
+                  ))}
                 </section>
 
                 <section className="settings-section">

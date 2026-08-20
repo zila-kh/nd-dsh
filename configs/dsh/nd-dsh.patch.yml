@@ -1,0 +1,67 @@
+# ND-DSH overlay for the DeepSeek Harness `web` profile.
+#
+# The desktop launches the official web surface as:
+#   node <harness>/apps/cli/lib/bin.js --profile web --patch <this file> --no-open --port <port>
+#
+# Patch layers, in application order (last write per row wins):
+#   dsh-base bundle -> dsh-web-app bundle -> $DSH_HOME/profiles/web/cordis.patch.yml
+#   -> $DSH_HOME/cordis.patch.yml -> this overlay -> launcher agent-presets roots.
+# A patch replaces a targeted row's whole `config`, so each row below restates
+# every key it owns. New rows arrive through `insert`.
+
+# ── workspace scoping: the desktop's selected folder ──────────────────────────
+
+- id: fs-sandbox
+  config:
+    cwd: !!js process.env.DSH_CWD ?? process.cwd()
+
+- id: sandbox-policy
+  config:
+    mode: !!js process.env.DSH_PERMISSION_MODE ?? 'workspace-write'
+    workspaceRoot: !!js process.env.DSH_CWD ?? process.cwd()
+
+# ── session search: durable full-text index inside the harness home ───────────
+
+- id: session-query-sqlite
+  config:
+    path: !!js dshHomePath('session-search.sqlite')
+    openAt: first-search
+
+# ── the ND-DSH default preset ─────────────────────────────────────────────────
+
+# The launcher appends the shipped preset root (standard/code/cordis) after
+# this layer; the harness-home user root ($DSH_HOME/.agent-presets, where the
+# desktop installs the nd-dsh preset at launch) is always included.
+- id: agent-presets
+  config:
+    default: nd-dsh
+
+# ── the canonical Electron browser ────────────────────────────────────────────
+
+# Host-plane row on purpose: every preset joins it, so the visible pane stays
+# available to standard, code, and cordis sessions alike. The MCP process
+# attaches to the exact CDP target the desktop pinned, through the same
+# AGENT_BROWSER_* config/session the pane itself uses.
+- insert:
+    - id: browser-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: browser
+        transport: stdio
+        command: !!js process.execPath
+        args:
+          - !!js process.env.ND_DSH_AGENT_BROWSER_ENTRY
+          - mcp
+          - --tools
+          - core,network,state,debug,tabs,react
+        env:
+          PATH: !!js process.env.PATH
+          AGENT_BROWSER_CONFIG: !!js process.env.ND_DSH_AGENT_BROWSER_CONFIG
+          AGENT_BROWSER_SESSION: !!js process.env.ND_DSH_AGENT_BROWSER_SESSION
+        toolCallTimeoutMs: 120000
+        failOnStartupError: true
+        reconnect:
+          enabled: true
+          initialDelayMs: 500
+          maxDelayMs: 30000
+          maxAttempts: 10

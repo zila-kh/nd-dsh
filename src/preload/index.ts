@@ -30,17 +30,42 @@ const api: DesktopApi = {
   },
   harness: {
     status: () => ipcRenderer.invoke(IPC.harnessStatus),
-    run: (prompt) => ipcRenderer.invoke(IPC.harnessRun, prompt),
+    run: (prompt, options) => ipcRenderer.invoke(IPC.harnessRun, prompt, options),
     stop: () => ipcRenderer.invoke(IPC.harnessStop),
+    getPermissionMode: () => ipcRenderer.invoke(IPC.harnessPermissionGet),
+    setPermissionMode: (mode) => ipcRenderer.invoke(IPC.harnessPermissionSet, mode),
     onStatus: (listener) => {
       const handler = (_event: Electron.IpcRendererEvent, status: Parameters<typeof listener>[0]) => listener(status)
       ipcRenderer.on(IPC.harnessStatusEvent, handler)
       return () => ipcRenderer.removeListener(IPC.harnessStatusEvent, handler)
     },
-    onNotification: (listener) => {
-      const handler = (_event: Electron.IpcRendererEvent, notification: Parameters<typeof listener>[0]) => listener(notification)
-      ipcRenderer.on(IPC.harnessNotificationEvent, handler)
-      return () => ipcRenderer.removeListener(IPC.harnessNotificationEvent, handler)
+  },
+  dsh: {
+    rpc: (method, payload) => ipcRenderer.invoke(IPC.dshRpc, method, payload),
+    respond: (rpcId, value) => ipcRenderer.invoke(IPC.dshRespond, rpcId, value),
+    onEvent: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, frame: Parameters<typeof listener>[0]) => listener(frame)
+      ipcRenderer.on(IPC.dshEvent, handler)
+      return () => ipcRenderer.removeListener(IPC.dshEvent, handler)
+    },
+  },
+  surface: {
+    state: () => ipcRenderer.invoke(IPC.surfaceState),
+    set: (surface) => ipcRenderer.invoke(IPC.surfaceSet, surface),
+    onChanged: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: Parameters<typeof listener>[0]) => listener(state)
+      ipcRenderer.on(IPC.surfaceChangedEvent, handler)
+      return () => ipcRenderer.removeListener(IPC.surfaceChangedEvent, handler)
+    },
+  },
+  dshView: {
+    setBounds: (bounds) => ipcRenderer.invoke(IPC.dshViewSetBounds, bounds),
+    setVisible: (visible) => ipcRenderer.invoke(IPC.dshViewSetVisible, visible),
+    reload: () => ipcRenderer.invoke(IPC.dshViewReload),
+    onState: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: Parameters<typeof listener>[0]) => listener(state)
+      ipcRenderer.on(IPC.dshViewStateEvent, handler)
+      return () => ipcRenderer.removeListener(IPC.dshViewStateEvent, handler)
     },
   },
   theme: {

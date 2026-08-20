@@ -49,7 +49,6 @@ export const ArrowLeftIcon = (props: IconProps) => <IconBase {...props}><path d=
 export const ArrowRightIcon = (props: IconProps) => <IconBase {...props}><path d="m9 18 6-6-6-6" /></IconBase>
 export const ReloadIcon = (props: IconProps) => <IconBase {...props}><path d="M20 11a8 8 0 1 0-2.34 5.66" /><path d="M20 4v7h-7" /></IconBase>
 export const CameraIcon = (props: IconProps) => <IconBase {...props}><path d="M4 7h3l1.5-2h7L17 7h3v12H4z" /><circle cx="12" cy="13" r="3.5" /></IconBase>
-export const SendIcon = (props: IconProps) => <IconBase {...props}><path d="m21 3-7.5 18-3.3-7.2L3 10.5z" /><path d="M10.2 13.8 21 3" /></IconBase>
 export const StopIcon = (props: IconProps) => <IconBase {...props}><rect x="6" y="6" width="12" height="12" rx="1" /></IconBase>
 export const SparkIcon = (props: IconProps) => <IconBase {...props}><path d="m12 2 1.5 5.5L19 9l-5.5 1.5L12 16l-1.5-5.5L5 9l5.5-1.5z" /><path d="m19 15 .7 2.3L22 18l-2.3.7L19 21l-.7-2.3L16 18l2.3-.7z" /></IconBase>
 export const CloseIcon = (props: IconProps) => <IconBase {...props}><path d="m7 7 10 10M17 7 7 17" /></IconBase>
@@ -68,7 +67,6 @@ export const PlugIcon = (props: IconProps) => <IconBase {...props}><path d="M12 
 export const ShieldIcon = (props: IconProps) => <IconBase {...props}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10" /></IconBase>
 export const BrainIcon = (props: IconProps) => <IconBase {...props}><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z" /><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z" /></IconBase>
 export const ArrowUpIcon = (props: IconProps) => <IconBase {...props}><path d="m5 12 7-7 7 7M12 19V5" /></IconBase>
-export const UndoIcon = (props: IconProps) => <IconBase {...props}><path d="M3 7v6h6" /><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" /></IconBase>
 export const CheckIcon = (props: IconProps) => <IconBase {...props}><path d="m20 6-11 11-5-5" /></IconBase>
 export const SpinnerIcon = (props: IconProps) => <IconBase {...props} className={`spin ${props.className || ''}`}><path d="M21 12a9 9 0 1 1-6.219-8.56" /></IconBase>
 export const SearchIcon = (props: IconProps) => <IconBase {...props}><circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" /></IconBase>

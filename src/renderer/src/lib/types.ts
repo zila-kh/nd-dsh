@@ -1,8 +1,36 @@
-export interface ChatMessage {
-  id: string
-  role: 'user' | 'assistant' | 'system'
+import type { SessionSummary } from '../../../shared/contracts'
+
+export type CenterView = 'dsh' | 'browser' | 'editor' | 'settings'
+
+export interface TodoItem {
   content: string
-  detail?: string
+  status: 'pending' | 'in_progress' | 'completed'
 }
 
-export type CenterView = 'browser' | 'editor' | 'settings'
+export interface AskQuestion {
+  id: string
+  question: string
+  detail?: string
+  header?: string
+  options?: { label: string; description?: string }[]
+  multiSelect?: boolean
+}
+
+export type ThreadEntry =
+  | { kind: 'user'; id: string; text: string }
+  | { kind: 'assistant'; id: string; text: string; streaming?: boolean }
+  | { kind: 'tool'; id: string; callId?: string; name: string; args?: unknown; status: 'running' | 'done' | 'error'; result?: string }
+  | { kind: 'todo'; id: string; items: TodoItem[] }
+  | { kind: 'approval'; id: string; sessionId: string; approvalId: string; toolName: string; reason?: string; rpcId: string; resolved?: 'allowed-once' | 'rejected' }
+  | { kind: 'question'; id: string; sessionId: string; questions: AskQuestion[]; rpcId: string; resolved?: boolean }
+  | { kind: 'notice'; id: string; text: string; tone?: 'info' | 'error' }
+
+export interface SessionThread {
+  summary: SessionSummary
+  entries: ThreadEntry[]
+}
+
+export interface DshSessionStore {
+  sessions: SessionSummary[]
+  activeSessionId: string | null
+}

@@ -1,65 +1,36 @@
 import { app } from 'electron'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, promises as fs } from 'node:fs'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
-import type { HarnessNotification, HarnessRunResult, HarnessStatus } from '../../shared/contracts.js'
-import { cordisConfigPath, harnessRoot, harnessRuntimeBinPath, harnessSdkClientPath, projectRoot } from '../app-paths.js'
+import type {
+  DshEventFrame,
+  GatewayRpcResult,
+  HarnessRunResult,
+  HarnessStatus,
+} from '../../shared/contracts.js'
+import { dshPatchPath, harnessCliBinPath, harnessRoot, presetSourceDir } from '../app-paths.js'
 import type { BrowserController } from '../browser/browser-controller.js'
+import { GatewayClient, pickFreePort } from '../dsh/gateway-client.js'
 import type { ProviderStore } from '../providers.js'
 import type { WorkspaceService } from '../workspace/workspace-service.js'
 
-interface UpstreamRunResult {
-  sessionId: string
-  finalResponse: string
-  events: unknown[]
-  notifications: unknown[]
-}
-
-interface UpstreamHarness {
-  run(
-    input: string,
-    options?: {
-      sessionId?: string
-      onNotification?: (notification: unknown) => void
-    },
-  ): Promise<UpstreamRunResult>
-  close(): Promise<void>
-}
-
-interface UpstreamModule {
-  DeepSeekHarness: new (options: {
-    launch: {
-      command: string
-      args: string[]
-      cwd: string
-      env: NodeJS.ProcessEnv
-      shutdownTimeoutMs: number
-      disposeEofGraceMs: number
-      disposeGraceMs: number
-    }
-    cwd: string
-    provider: string
-    model: string
-    maxTokens: number
-  }) => UpstreamHarness
-}
-
-const importModule = new Function('specifier', 'return import(specifier)') as (
-  specifier: string,
-) => Promise<UpstreamModule>
-
 const DEFAULT_PROVIDER = 'deepseek-official'
 const DEFAULT_MODEL = 'deepseek-v4-flash'
+const READY_TIMEOUT_MS = 120_000
+const READY_POLL_MS = 300
+const READY_URL_PATTERN = /dsh web:\s+(https?:\/\/\S+)/
 
 export class HarnessService {
-  private instance: UpstreamHarness | undefined
-  private sessionId: string | undefined
+  private child: ChildProcess | undefined
+  private gateway: GatewayClient | undefined
+  private baseUrl: string | undefined
+  private activeSessionId: string | undefined
   private statusValue: HarnessStatus
-  private running = false
-  private stopRequested = false
-  private stopping: Promise<void> | undefined
+  private startPromise: Promise<GatewayClient> | undefined
+  private stopping = false
   private onStatusChanged?: (status: HarnessStatus) => void
-  private onNotification?: (notification: HarnessNotification) => void
+  private onEvent?: (frame: DshEventFrame) => void
+  private onGatewayReady?: (url: string) => void
 
   constructor(
     private readonly workspace: WorkspaceService,
@@ -71,10 +42,12 @@ export class HarnessService {
 
   setListeners(listeners: {
     status: (status: HarnessStatus) => void
-    notification: (notification: HarnessNotification) => void
+    event: (frame: DshEventFrame) => void
+    gatewayReady: (url: string) => void
   }): void {
     this.onStatusChanged = listeners.status
-    this.onNotification = listeners.notification
+    this.onEvent = listeners.event
+    this.onGatewayReady = listeners.gatewayReady
     listeners.status(this.status())
   }
 
@@ -82,118 +55,242 @@ export class HarnessService {
     return { ...this.statusValue }
   }
 
-  async run(prompt: string): Promise<HarnessRunResult> {
+  /**
+   * Send one prompt to the active session (created lazily on first use).
+   * The turn's progress arrives over the gateway event stream; the result
+   * carries the durable message receipt.
+   */
+  async run(prompt: string, options?: { sessionId?: string }): Promise<HarnessRunResult> {
     const cleaned = prompt.trim()
     if (!cleaned) throw new Error('Prompt cannot be empty')
     if (cleaned.length > 100_000) throw new Error('Prompt exceeds the 100,000 character limit')
-    if (this.running) throw new Error('The Harness is already running a turn')
-    if (this.stopping) await this.stopping
 
-    this.stopRequested = false
-    this.running = true
-    this.updateStatus(this.instance ? 'running' : 'starting')
-    try {
-      const harness = await this.ensureStarted()
-      this.updateStatus('running')
-      const result = await harness.run(cleaned, {
-        ...(this.sessionId ? { sessionId: this.sessionId } : {}),
-        onNotification: (notification) => this.onNotification?.(normalizeNotification(notification)),
-      })
-      this.sessionId = result.sessionId
-      this.updateStatus('ready')
-      return {
-        sessionId: result.sessionId,
-        finalResponse: result.finalResponse,
-        eventCount: result.events.length,
-        notificationCount: result.notifications.length,
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      this.updateStatus(this.stopRequested ? 'stopped' : 'error', this.stopRequested ? undefined : message)
-      throw error
-    } finally {
-      this.running = false
-    }
+    const gateway = await this.ensureStarted()
+    const sessionId = options?.sessionId?.trim() || this.activeSessionId || await this.createSession()
+    this.activeSessionId = sessionId
+
+    const result = await gateway.rpc('session.prompt', {
+      sessionId,
+      content: [{ type: 'text', text: cleaned }],
+    })
+    if (!result.ok) throw new Error(rpcFailureMessage('session.prompt', result))
+    const value = result.value as { messageId?: unknown } | undefined
+    this.updateStatus('running')
+    return { sessionId, ...(typeof value?.messageId === 'string' ? { messageId: value.messageId } : {}) }
   }
 
+  /** Create a session on the workspace root (the deployment default preset applies). */
+  async createSession(): Promise<string> {
+    const gateway = await this.ensureStarted()
+    const result = await gateway.rpc('session.create', { cwd: this.workspace.state().root })
+    if (!result.ok) throw new Error(rpcFailureMessage('session.create', result))
+    const sessionId = (result.value as { sessionId?: unknown } | undefined)?.sessionId
+    if (typeof sessionId !== 'string') throw new Error('session.create returned no session id')
+    this.activeSessionId = sessionId
+    this.updateStatus(this.statusValue.state === 'running' ? 'running' : 'ready')
+    return sessionId
+  }
+
+  /** Whitelisted gateway call for read-oriented UI needs (sessions, models, presets…). */
+  async gatewayRpc(method: string, payload?: unknown): Promise<GatewayRpcResult> {
+    const gateway = await this.ensureStarted()
+    return gateway.rpc(method, payload)
+  }
+
+  /** Boot the runtime eagerly (the DSH surface needs the UI as soon as it is active). */
+  warmup(): void {
+    void this.ensureStarted().catch((error) => {
+      console.warn('ND-DSH harness warmup failed:', error instanceof Error ? error.message : String(error))
+    })
+  }
+
+  /** Answer a pending approval or user question frame. */
+  async respond(rpcId: string, value: unknown): Promise<void> {
+    const gateway = await this.ensureStarted()
+    await gateway.respond(rpcId, value)
+  }
+
+  /** Cancel the active session's pending turn; the runtime stays up. */
   async stop(): Promise<HarnessStatus> {
-    this.stopRequested = true
-    if (!this.stopping) {
-      this.stopping = (async () => {
-        const instance = this.instance
-        this.instance = undefined
-        this.sessionId = undefined
-        if (instance) await instance.close()
-      })().finally(() => {
-        this.stopping = undefined
-      })
+    if (this.activeSessionId && this.gateway) {
+      try {
+        await this.gateway.rpc('session.cancel', { sessionId: this.activeSessionId })
+      } catch {
+        // Cancellation is best-effort; the child teardown below is the backstop.
+      }
     }
-    await this.stopping
-    this.running = false
-    this.updateStatus('stopped')
+    this.updateStatus('ready')
     return this.status()
   }
 
-  async close(): Promise<void> {
-    await this.stop()
+  /**
+   * Apply a new sandbox permission mode: it is a launch-time policy, so the
+   * runtime restarts with the new DSH_PERMISSION_MODE (sessions are durable
+   * and survive the restart).
+   */
+  async restartWithPermissionMode(mode: string): Promise<string> {
+    process.env.ND_DSH_PERMISSION_MODE = mode
+    await this.close()
+    return mode
   }
 
-  private async ensureStarted(): Promise<UpstreamHarness> {
-    if (this.instance) return this.instance
+  /** Tear down the runtime subprocess (app shutdown / workspace change). */
+  async close(): Promise<void> {
+    this.stopping = true
+    const child = this.child
+    const gateway = this.gateway
+    this.child = undefined
+    this.gateway = undefined
+    this.baseUrl = undefined
+    gateway?.close()
+    if (child && child.exitCode === null && child.signalCode === null) {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          try {
+            child.kill()
+          } catch {
+            // Already gone.
+          }
+          resolve()
+        }, 4_000)
+        child.once('exit', () => {
+          clearTimeout(timer)
+          resolve()
+        })
+        try {
+          // The CLI handles SIGTERM/SIGINT with a graceful dispose; on Windows
+          // kill() terminates directly, and durable sessions survive either way.
+          child.kill(process.platform === 'win32' ? undefined : 'SIGTERM')
+        } catch {
+          clearTimeout(timer)
+          resolve()
+        }
+      })
+    }
+    this.activeSessionId = undefined
+    this.updateStatus('stopped')
+  }
 
+  private async ensureStarted(): Promise<GatewayClient> {
+    if (this.gateway) return this.gateway
+    if (this.startPromise) return this.startPromise
+    this.startPromise = this.start().finally(() => {
+      this.startPromise = undefined
+    })
+    return this.startPromise
+  }
+
+  private async start(): Promise<GatewayClient> {
     await this.browser.ensureAgentReady()
 
-    const sdkPath = harnessSdkClientPath()
-    const runtimePath = harnessRuntimeBinPath()
-    const configPath = cordisConfigPath()
-    const missing = [sdkPath, runtimePath, configPath].filter((value) => !existsSync(value))
+    const cliBin = harnessCliBinPath()
+    const patchPath = dshPatchPath()
+    const presetsDir = presetSourceDir()
+    const missing = [cliBin, patchPath, presetsDir].filter((value) => !existsSync(value))
     if (missing.length > 0) {
       throw new Error(`DeepSeek Harness is not bootstrapped. Missing: ${missing.join(', ')}. Run pnpm bootstrap.`)
     }
 
-    const module = await importModule(pathToFileURL(sdkPath).href)
     const workspaceRoot = this.workspace.state().root
     const dshHome = join(app.getPath('userData'), 'dsh-home')
-    const sessionRoot = join(app.getPath('userData'), 'sessions')
-    await Promise.all([fs.mkdir(dshHome, { recursive: true }), fs.mkdir(sessionRoot, { recursive: true })])
+    await fs.mkdir(join(dshHome, '.agent-presets'), { recursive: true })
+    // The nd-dsh preset ships with the desktop; a fresh copy keeps it current.
+    await fs.cp(presetsDir, join(dshHome, '.agent-presets'), { recursive: true, force: true })
 
-    const provider = process.env.ND_DSH_PROVIDER?.trim() || DEFAULT_PROVIDER
     const configured = this.providers.enabled()
-    const model = configured?.models[0]?.id?.trim() || process.env.ND_DSH_MODEL?.trim() || DEFAULT_MODEL
-    const maxTokens = parsePositiveInteger(process.env.ND_DSH_MAX_TOKENS, 49_152)
+    const port = await pickFreePort()
     const environment: NodeJS.ProcessEnv = {
       ...process.env,
       ...(configured?.apiKey ? { DEEPSEEK_API_KEY: configured.apiKey } : {}),
       ...this.browser.agentBrowserEnvironment(),
       DSH_HOME: dshHome,
       DSH_CWD: workspaceRoot,
-      DSH_SESSION_ROOT: sessionRoot,
       DSH_PERMISSION_MODE: process.env.ND_DSH_PERMISSION_MODE ?? 'workspace-write',
-      DSH_CORDIS_CONFIG: configPath,
-      ND_DSH_PROJECT_SKILL_DIR: join(projectRoot(), '.dsh/skills'),
+      DSH_SESSION_ROOT: join(app.getPath('userData'), 'sessions'),
     }
 
-    this.instance = new module.DeepSeekHarness({
-      launch: {
-        command: process.env.ND_DSH_NODE_BIN?.trim() || 'node',
-        args: [runtimePath, configPath],
-        cwd: harnessRoot(),
-        env: environment,
-        shutdownTimeoutMs: 2_000,
-        disposeEofGraceMs: 8_000,
-        disposeGraceMs: 4_000,
-      },
-      cwd: workspaceRoot,
-      provider,
-      model,
-      maxTokens,
+    this.updateStatus('starting')
+    const child = spawn(process.env.ND_DSH_NODE_BIN?.trim() || 'node', [
+      cliBin,
+      '--profile', 'web',
+      '--patch', patchPath,
+      '--no-open',
+      '--port', String(port),
+    ], {
+      cwd: harnessRoot(),
+      env: environment,
+      stdio: ['pipe', 'pipe', 'pipe'],
     })
-    return this.instance
+    this.child = child
+    if (child.stdout) child.stdout.setEncoding('utf8')
+    if (child.stderr) child.stderr.setEncoding('utf8')
+
+    let childError = ''
+    child.stderr?.on('data', (chunk: string) => {
+      childError = `${childError}${chunk}`.slice(-16_384)
+    })
+    child.once('exit', (code, signal) => {
+      const wasExpected = this.stopping
+      const gateway = this.gateway
+      this.child = undefined
+      this.gateway = undefined
+      this.baseUrl = undefined
+      gateway?.close()
+      const reason = wasExpected ? undefined : `Harness exited (${signal ?? String(code ?? 'unknown')}): ${childError.split(/\r?\n/).at(-1) ?? ''}`.trim()
+      this.updateStatus(wasExpected ? 'stopped' : 'error', wasExpected ? undefined : reason)
+    })
+
+    const baseUrl = `http://127.0.0.1:${port}`
+    await this.waitUntilReady(child, baseUrl)
+    const gateway = new GatewayClient(baseUrl)
+    gateway.openEvents((frame) => this.handleEvent(frame))
+    this.gateway = gateway
+    this.baseUrl = baseUrl
+    this.updateStatus('ready')
+    this.onGatewayReady?.(baseUrl)
+    return gateway
+  }
+
+  private async waitUntilReady(child: ChildProcess, baseUrl: string): Promise<void> {
+    const deadline = Date.now() + READY_TIMEOUT_MS
+    const printedUrl = new Promise<void>((resolve) => {
+      if (!child.stdout) return resolve()
+      const onData = (chunk: string): void => {
+        const match = READY_URL_PATTERN.exec(chunk)
+        if (match) {
+          child.stdout?.off('data', onData)
+          resolve()
+        }
+      }
+      child.stdout.on('data', onData)
+      // The URL line is a readiness signal only; a child that never prints it
+      // still resolves through the poll below, so keep the listener harmless.
+    })
+    const polled = (async () => {
+      while (Date.now() < deadline) {
+        if (child.exitCode !== null) break
+        try {
+          const response = await fetch(baseUrl, { signal: AbortSignal.timeout(2_000) })
+          if (response.status < 500) return
+        } catch {
+          // Not up yet.
+        }
+        await new Promise((resolve) => setTimeout(resolve, READY_POLL_MS))
+      }
+      throw new Error('Harness did not become ready within the timeout')
+    })()
+    await Promise.race([printedUrl, polled])
+  }
+
+  private handleEvent(frame: DshEventFrame): void {
+    if (frame.kind === 'session-status' && frame.sessionId === this.activeSessionId) {
+      this.updateStatus(frame.running ? 'running' : 'ready')
+    }
+    this.onEvent?.(frame)
   }
 
   private computeStatus(state: HarnessStatus['state'], error?: string): HarnessStatus {
-    const sourceReady =
-      existsSync(harnessSdkClientPath()) && existsSync(harnessRuntimeBinPath()) && existsSync(cordisConfigPath())
+    const sourceReady = existsSync(harnessCliBinPath()) && existsSync(dshPatchPath()) && existsSync(presetSourceDir())
     const configured = this.providers.enabled()
     const apiKeyPresent = Boolean((configured?.apiKey ?? process.env.DEEPSEEK_API_KEY)?.trim())
     return {
@@ -202,7 +299,8 @@ export class HarnessService {
       apiKeyPresent,
       provider: process.env.ND_DSH_PROVIDER?.trim() || DEFAULT_PROVIDER,
       model: configured?.models[0]?.id?.trim() || process.env.ND_DSH_MODEL?.trim() || DEFAULT_MODEL,
-      ...(this.sessionId ? { sessionId: this.sessionId } : {}),
+      ...(this.activeSessionId ? { sessionId: this.activeSessionId } : {}),
+      ...(this.baseUrl ? { url: this.baseUrl, port: Number(new URL(this.baseUrl).port) } : {}),
       ...(error ? { error } : {}),
     }
   }
@@ -213,17 +311,6 @@ export class HarnessService {
   }
 }
 
-function parsePositiveInteger(value: string | undefined, fallback: number): number {
-  if (!value) return fallback
-  const parsed = Number.parseInt(value, 10)
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback
-}
-
-function normalizeNotification(value: unknown): HarnessNotification {
-  if (value && typeof value === 'object') {
-    const record = value as Record<string, unknown>
-    const method = typeof record.method === 'string' ? record.method : 'harness/notification'
-    return { method, ...(record.params === undefined ? {} : { params: record.params }) }
-  }
-  return { method: 'harness/notification', params: value }
+function rpcFailureMessage(method: string, result: GatewayRpcResult): string {
+  return `${method} failed: ${result.error?.message ?? result.error?.code ?? 'unknown error'}`
 }

@@ -1,8 +1,9 @@
 import { app, ipcMain, shell, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
-import type { BrowserBounds, ThemeMode } from '../shared/contracts.js'
+import type { BrowserBounds, DshSurface, ThemeMode } from '../shared/contracts.js'
 import { IPC } from '../shared/contracts.js'
 import { projectRoot } from './app-paths.js'
 import type { BrowserController } from './browser/browser-controller.js'
+import type { DshSurfaceController } from './dsh/dsh-surface.js'
 import type { HarnessService } from './harness/harness-service.js'
 import type { ProviderStore } from './providers.js'
 import type { ThemeService } from './theme.js'
@@ -11,6 +12,7 @@ import type { WorkspaceService } from './workspace/workspace-service.js'
 interface IpcDependencies {
   window: BrowserWindow
   browser: BrowserController
+  dshSurface: DshSurfaceController
   harness: HarnessService
   workspace: WorkspaceService
   theme: ThemeService
@@ -18,6 +20,9 @@ interface IpcDependencies {
 }
 
 type Handler = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown | Promise<unknown>
+
+const GATEWAY_METHOD_PATTERN = /^[a-z]+\.[a-zA-Z][a-zA-Z0-9]*$/
+const GATEWAY_METHOD_MAX_LENGTH = 64
 
 export function registerIpc(deps: IpcDependencies): () => void {
   const channels: string[] = []
@@ -64,8 +69,27 @@ export function registerIpc(deps: IpcDependencies): () => void {
   )
 
   handle(IPC.harnessStatus, () => deps.harness.status())
-  handle(IPC.harnessRun, (_event, value) => deps.harness.run(asString(value, 'Prompt', 100_000)))
+  handle(IPC.harnessRun, (_event, value, options) => deps.harness.run(asString(value, 'Prompt', 100_000), asSessionOptions(options)))
   handle(IPC.harnessStop, () => deps.harness.stop())
+  handle(IPC.harnessPermissionGet, () => deps.theme.permissionMode())
+  handle(IPC.harnessPermissionSet, async (_event, value) => {
+    const mode = deps.theme.setPermissionMode(asPermissionMode(value))
+    return deps.harness.restartWithPermissionMode(mode)
+  })
+
+  handle(IPC.dshRpc, (_event, method, payload) => deps.harness.gatewayRpc(asGatewayMethod(method), payload))
+  handle(IPC.dshRespond, (_event, rpcId, value) => deps.harness.respond(asString(rpcId, 'RPC id', 128), value))
+
+  handle(IPC.surfaceState, () => ({ surface: deps.theme.surface(), view: deps.dshSurface.state() }))
+  handle(IPC.surfaceSet, (_event, value) => {
+    const surface = deps.theme.setSurface(asSurface(value))
+    if (surface === 'dsh') deps.harness.warmup()
+    return { surface, view: deps.dshSurface.state() }
+  })
+
+  handle(IPC.dshViewSetBounds, (_event, value) => deps.dshSurface.setBounds(asBounds(value)))
+  handle(IPC.dshViewSetVisible, (_event, visible) => deps.dshSurface.setVisible(Boolean(visible)))
+  handle(IPC.dshViewReload, () => deps.dshSurface.reload())
 
   handle(IPC.themeState, () => deps.theme.state())
   handle(IPC.themeSet, (_event, value) => deps.theme.set(asThemeMode(value)))
@@ -109,6 +133,38 @@ function asThemeMode(value: unknown): ThemeMode {
     throw new Error('Theme mode must be one of: system, light, dark')
   }
   return value
+}
+
+function asSurface(value: unknown): DshSurface {
+  if (value !== 'dsh' && value !== 'workbench') {
+    throw new Error('Surface must be one of: dsh, workbench')
+  }
+  return value
+}
+
+function asPermissionMode(value: unknown): string {
+  if (value !== 'read-only' && value !== 'workspace-write' && value !== 'danger-full-access') {
+    throw new Error('Permission mode must be one of: read-only, workspace-write, danger-full-access')
+  }
+  return value
+}
+
+function asGatewayMethod(value: unknown): string {
+  if (typeof value !== 'string' || value.length > GATEWAY_METHOD_MAX_LENGTH || !GATEWAY_METHOD_PATTERN.test(value)) {
+    throw new Error('Gateway method must be a dotted name like "session.list"')
+  }
+  return value
+}
+
+function asSessionOptions(value: unknown): { sessionId?: string } {
+  if (value === undefined || value === null) return {}
+  if (typeof value !== 'object') throw new Error('Harness run options must be an object')
+  const record = value as Record<string, unknown>
+  const sessionId = record.sessionId
+  if (sessionId !== undefined && (typeof sessionId !== 'string' || !sessionId.trim() || sessionId.length > 128)) {
+    throw new Error('sessionId must be a short non-empty string')
+  }
+  return { ...(typeof sessionId === 'string' ? { sessionId: sessionId.trim() } : {}) }
 }
 
 async function openExternal(value: string): Promise<void> {

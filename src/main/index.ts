@@ -6,6 +6,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { IPC } from '../shared/contracts.js'
 import { projectRoot } from './app-paths.js'
 import { BrowserController } from './browser/browser-controller.js'
+import { DshSurfaceController } from './dsh/dsh-surface.js'
+import { pickFreePort } from './dsh/gateway-client.js'
 import { HarnessService } from './harness/harness-service.js'
 import { registerIpc } from './ipc.js'
 import { ProviderStore } from './providers.js'
@@ -13,11 +15,10 @@ import { ThemeService } from './theme.js'
 import { WorkspaceService } from './workspace/workspace-service.js'
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url))
-const cdpPort = parsePort(process.env.ND_DSH_CDP_PORT, 9222)
+// 0 means "reserve a free loopback port" — 9222 is commonly occupied.
+const requestedCdpPort = parsePort(process.env.ND_DSH_CDP_PORT, 0)
 const startUrl = process.env.ND_DSH_BROWSER_URL?.trim() || 'http://localhost:5173'
 
-app.commandLine.appendSwitch('remote-debugging-port', String(cdpPort))
-app.commandLine.appendSwitch('remote-debugging-address', '127.0.0.1')
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
 app.enableSandbox()
 
@@ -39,7 +40,7 @@ app.on('second-instance', () => {
   mainWindow.focus()
 })
 
-async function createWindow(): Promise<void> {
+async function createWindow(cdpPort: number): Promise<void> {
   const preload = join(currentDirectory, '../preload/index.cjs')
   const workspace = new WorkspaceService(process.env.ND_DSH_WORKSPACE?.trim() || process.cwd())
   const isMac = process.platform === 'darwin'
@@ -68,25 +69,39 @@ async function createWindow(): Promise<void> {
   })
 
   const browser = new BrowserController(window, cdpPort, projectRoot())
+  const dshSurface = new DshSurfaceController(window)
   const harness = new HarnessService(workspace, browser, providers)
-  const disposeIpc = registerIpc({ window, browser, harness, workspace, theme, providers })
+  const disposeIpc = registerIpc({ window, browser, dshSurface, harness, workspace, theme, providers })
   mainWindow = window
   activeHarness = harness
 
-  theme.attach(window, (color) => browser.setBackgroundColor(color))
+  theme.attach(window, (color) => {
+    browser.setBackgroundColor(color)
+    dshSurface.setBackgroundColor(color)
+  })
   theme.setOnChanged((state) => {
     if (!window.isDestroyed()) window.webContents.send(IPC.themeChangedEvent, state)
+  })
+  theme.setOnSurfaceChanged((surface) => {
+    if (!window.isDestroyed()) window.webContents.send(IPC.surfaceChangedEvent, { surface, view: dshSurface.state() })
   })
 
   browser.setStateListener((state) => {
     if (!window.isDestroyed()) window.webContents.send(IPC.browserStateEvent, state)
   })
+  dshSurface.setStateListener((state) => {
+    if (!window.isDestroyed()) window.webContents.send(IPC.dshViewStateEvent, state)
+  })
   harness.setListeners({
     status: (status) => {
       if (!window.isDestroyed()) window.webContents.send(IPC.harnessStatusEvent, status)
     },
-    notification: (notification) => {
-      if (!window.isDestroyed()) window.webContents.send(IPC.harnessNotificationEvent, notification)
+    event: (frame) => {
+      if (!window.isDestroyed()) window.webContents.send(IPC.dshEvent, frame)
+    },
+    gatewayReady: (url) => {
+      console.log(`ND-DSH gateway ready at ${url}`)
+      dshSurface.setTarget(url)
     },
   })
 
@@ -108,11 +123,15 @@ async function createWindow(): Promise<void> {
   await browser.initialize(startUrl).catch((error) => {
     console.warn('Initial browser navigation failed:', error)
   })
+  // The official DeepSeek UI is the default surface: it needs the runtime up
+  // immediately, not on first prompt.
+  if (theme.surface() === 'dsh') harness.warmup()
   if (!window.isVisible()) window.show()
 
   window.on('closed', () => {
     disposeIpc()
     browser.destroy()
+    dshSurface.destroy()
     if (mainWindow === window) mainWindow = undefined
     if (activeHarness === harness) activeHarness = undefined
     beginHarnessClose(harness)
@@ -120,16 +139,19 @@ async function createWindow(): Promise<void> {
 }
 
 if (hasSingleInstanceLock) {
-  void app.whenReady()
-    .then(async () => {
-      await createWindow()
-      app.on('activate', () => {
-        if (BrowserWindow.getAllWindows().length === 0) {
-          void createWindow().catch(reportFatalStartupError)
-        }
-      })
+  void (async () => {
+    const cdpPort = requestedCdpPort || await pickFreePort()
+    console.log(`ND-DSH CDP port: ${cdpPort}`)
+    app.commandLine.appendSwitch('remote-debugging-port', String(cdpPort))
+    app.commandLine.appendSwitch('remote-debugging-address', '127.0.0.1')
+    await app.whenReady()
+    await createWindow(cdpPort)
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        void createWindow(cdpPort).catch(reportFatalStartupError)
+      }
     })
-    .catch(reportFatalStartupError)
+  })().catch(reportFatalStartupError)
 }
 
 app.on('before-quit', (event) => {

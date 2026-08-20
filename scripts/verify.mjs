@@ -17,23 +17,29 @@ const notes = []
 const required = [
   '.gitmodules',
   '.env.example',
-  'configs/dsh/cordis.yml',
+  'configs/dsh/nd-dsh.patch.yml',
+  'configs/dsh/agent-presets/nd-dsh/preset.yml',
+  'configs/dsh/agent-presets/nd-dsh/agent.cordis.yml',
+  'configs/dsh/agent-presets/nd-dsh/skills/live-browser/SKILL.md',
   '.dsh/skills/live-browser/SKILL.md',
   'docs/architecture.md',
   'docs/roadmap.md',
   'src/main/index.ts',
   'src/main/browser/browser-controller.ts',
+  'src/main/dsh/gateway-client.ts',
+  'src/main/dsh/dsh-surface.ts',
   'src/main/harness/harness-service.ts',
   'src/preload/index.ts',
   'src/renderer/index.html',
   'src/renderer/src/App.tsx',
+  'src/renderer/src/components/DshPane.tsx',
   'src/shared/contracts.ts',
   'vendor/deepseek-harness.json',
 ]
 for (const path of required) {
   if (!existsSync(join(root, path))) errors.push(`missing required file: ${path}`)
 }
-for (const stale of ['docs/ARCHITECTURE.md', 'docs/ROADMAP.md', 'tsconfig.node.tsbuildinfo', 'tsconfig.web.tsbuildinfo']) {
+for (const stale of ['configs/dsh/cordis.yml', 'docs/ARCHITECTURE.md', 'docs/ROADMAP.md', 'tsconfig.node.tsbuildinfo', 'tsconfig.web.tsbuildinfo']) {
   // Compare against real directory entries: existsSync is case-insensitive on
   // Windows, so the legacy uppercase prototypes would always look present.
   if (await caseSensitiveExists(join(root, stale))) {
@@ -78,19 +84,54 @@ if (!projectReadme.includes('dsh:update -- <tag-or-commit>')) {
   errors.push('README must document explicit-ref Harness updates')
 }
 
-const cordis = await fs.readFile(join(root, 'configs/dsh/cordis.yml'), 'utf8')
+const patch = await fs.readFile(join(root, 'configs/dsh/nd-dsh.patch.yml'), 'utf8')
 for (const needle of [
-  '@deepseek-ai/dsh-sdk-jsonrpc-server',
-  '@deepseek-ai/dsh-agent-spine-demo',
   '@deepseek-ai/dsh-mcp-client',
-  '@deepseek-ai/dsh-subagent-spawn-in-process',
   'ND_DSH_AGENT_BROWSER_ENTRY',
   'core,network,state,debug,tabs,react',
   'failOnStartupError: true',
-  'policy: never',
-  "toolBash: !!js process.platform === 'win32' ? false : {}",
+  'DSH_PERMISSION_MODE',
+  'DSH_CWD',
+  'dshHomePath',
+  'default: nd-dsh',
 ]) {
-  if (!cordis.includes(needle)) errors.push(`configs/dsh/cordis.yml is missing ${needle}`)
+  if (!patch.includes(needle)) errors.push(`configs/dsh/nd-dsh.patch.yml is missing ${needle}`)
+}
+if (patch.includes('policy: never')) {
+  errors.push('configs/dsh/nd-dsh.patch.yml must not pin the approval policy to never (the engine default ask backs the approval UI)')
+}
+
+const preset = await fs.readFile(join(root, 'configs/dsh/agent-presets/nd-dsh/agent.cordis.yml'), 'utf8')
+for (const needle of [
+  '@deepseek-ai/dsh-persona',
+  '@deepseek-ai/dsh-skill-filesystem',
+  '@deepseek-ai/dsh-tool-skill',
+  "new URL('skills/', baseUrl)",
+  '@deepseek-ai/dsh-tool-web',
+  '@deepseek-ai/dsh-plan-mode',
+  '@deepseek-ai/dsh-compaction-basic',
+]) {
+  if (!preset.includes(needle)) errors.push(`configs/dsh/agent-presets/nd-dsh/agent.cordis.yml is missing ${needle}`)
+}
+const presetMeta = await fs.readFile(join(root, 'configs/dsh/agent-presets/nd-dsh/preset.yml'), 'utf8')
+if (!presetMeta.includes('name: ND-DSH')) errors.push('configs/dsh/agent-presets/nd-dsh/preset.yml must name the ND-DSH preset')
+
+const harnessService = await fs.readFile(join(root, 'src/main/harness/harness-service.ts'), 'utf8')
+for (const needle of ["'--profile', 'web'", "'--patch'", "'--no-open'", "'--port'", '127.0.0.1']) {
+  if (!harnessService.includes(needle)) errors.push(`src/main/harness/harness-service.ts must launch the web profile with ${needle}`)
+}
+if (harnessService.includes("'--host'")) {
+  errors.push('src/main/harness/harness-service.ts must not pass --host; the gateway binds loopback only')
+}
+
+const dshSurface = await fs.readFile(join(root, 'src/main/dsh/dsh-surface.ts'), 'utf8')
+for (const needle of ['sandbox: true', 'contextIsolation: true', 'nodeIntegration: false', 'webSecurity: true']) {
+  if (!dshSurface.includes(needle)) errors.push(`src/main/dsh/dsh-surface.ts must keep the DSH UI view hardened (${needle})`)
+}
+
+const gatewayClient = await fs.readFile(join(root, 'src/main/dsh/gateway-client.ts'), 'utf8')
+for (const needle of ['/api/respond', '/api/events.mux', '/api/events.host', "type: 'client-request'"]) {
+  if (!gatewayClient.includes(needle)) errors.push(`src/main/dsh/gateway-client.ts must speak the upstream gateway protocol (${needle})`)
 }
 
 const rendererHtml = await fs.readFile(join(root, 'src/renderer/index.html'), 'utf8')

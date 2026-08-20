@@ -46,19 +46,119 @@ export interface HarnessStatus {
   provider: string
   model: string
   sessionId?: string
+  url?: string
+  port?: number
   error?: string
-}
-
-export interface HarnessNotification {
-  method: string
-  params?: unknown
 }
 
 export interface HarnessRunResult {
   sessionId: string
-  finalResponse: string
-  eventCount: number
-  notificationCount: number
+  messageId?: string
+}
+
+// ── DSH gateway surface ──────────────────────────────────────────────────────
+
+export type DshSurface = 'dsh' | 'workbench'
+
+export interface DshViewState {
+  ready: boolean
+  loading: boolean
+  title: string
+  visible: boolean
+  url?: string
+  port?: number
+}
+
+export interface SurfaceState {
+  surface: DshSurface
+  view: DshViewState
+}
+
+export interface SessionSummary {
+  sessionId: string
+  updatedAt: number
+  running: boolean
+  blank: boolean
+  parentSessionId?: string
+  origin?: 'subagent'
+  cwd?: string
+  agentPreset?: string
+  projections?: { asOfSeq: number; values: Record<string, unknown> }
+}
+
+export interface ModelReasoningEffort {
+  id: string
+  name: string
+  description?: string
+}
+
+export interface ModelCatalogModel {
+  id: string
+  name?: string
+  description?: string
+  reasoning?: { efforts: ModelReasoningEffort[]; defaultEffort?: string }
+}
+
+export interface ModelProviderGroup {
+  id: string
+  name: string
+  models: ModelCatalogModel[]
+}
+
+export interface SessionModels {
+  current: { provider: string; model: string; reasoningEffort?: string }
+  routable: boolean
+  groups: ModelProviderGroup[]
+  failures: { id: string; name: string; message: string }[]
+}
+
+export interface AgentPresetSummary {
+  id: string
+  name?: string
+  description?: string
+  order?: number
+  broken?: string
+}
+
+export interface SessionEventEnvelope {
+  type: string
+  seq: number
+  time: number
+  data?: unknown
+  surfaceOp?: unknown
+}
+
+export interface DshEventFrame {
+  kind:
+    | 'session-event'
+    | 'approval-requested'
+    | 'approval-resolved'
+    | 'question-requested'
+    | 'question-resolved'
+    | 'session-status'
+    | 'session-added'
+    | 'session-removed'
+    | 'agent-error'
+    | 'stream-error'
+    | 'other'
+  sessionId?: string
+  event?: SessionEventEnvelope
+  approvalId?: string
+  toolName?: string
+  callId?: string
+  reason?: string
+  outcome?: string
+  running?: boolean
+  questions?: unknown
+  message?: string
+  rpcId?: string
+  meta?: unknown
+}
+
+export interface GatewayRpcResult {
+  ok: boolean
+  value?: unknown
+  error?: { code: string; message: string }
 }
 
 export interface AppInfo {
@@ -120,10 +220,27 @@ export interface DesktopApi {
   }
   harness: {
     status(): Promise<HarnessStatus>
-    run(prompt: string): Promise<HarnessRunResult>
+    run(prompt: string, options?: { sessionId?: string }): Promise<HarnessRunResult>
     stop(): Promise<HarnessStatus>
+    getPermissionMode(): Promise<string>
+    setPermissionMode(mode: string): Promise<string>
     onStatus(listener: (status: HarnessStatus) => void): () => void
-    onNotification(listener: (notification: HarnessNotification) => void): () => void
+  }
+  dsh: {
+    rpc(method: string, payload?: unknown): Promise<GatewayRpcResult>
+    respond(rpcId: string, value: unknown): Promise<void>
+    onEvent(listener: (frame: DshEventFrame) => void): () => void
+  }
+  surface: {
+    state(): Promise<SurfaceState>
+    set(surface: DshSurface): Promise<SurfaceState>
+    onChanged(listener: (state: SurfaceState) => void): () => void
+  }
+  dshView: {
+    setBounds(bounds: BrowserBounds): Promise<void>
+    setVisible(visible: boolean): Promise<void>
+    reload(): Promise<void>
+    onState(listener: (state: DshViewState) => void): () => void
   }
   theme: {
     state(): Promise<ThemeState>
@@ -152,8 +269,19 @@ export const IPC = {
   harnessStatus: 'harness:status',
   harnessRun: 'harness:run',
   harnessStop: 'harness:stop',
+  harnessPermissionGet: 'harness:permission:get',
+  harnessPermissionSet: 'harness:permission:set',
   harnessStatusEvent: 'harness:status-event',
-  harnessNotificationEvent: 'harness:notification-event',
+  dshRpc: 'dsh:rpc',
+  dshRespond: 'dsh:respond',
+  dshEvent: 'dsh:event',
+  surfaceState: 'surface:state',
+  surfaceSet: 'surface:set',
+  surfaceChangedEvent: 'surface:changed',
+  dshViewSetBounds: 'dsh-view:set-bounds',
+  dshViewSetVisible: 'dsh-view:set-visible',
+  dshViewReload: 'dsh-view:reload',
+  dshViewStateEvent: 'dsh-view:state-event',
   themeState: 'theme:state',
   themeSet: 'theme:set',
   themeChangedEvent: 'theme:changed',

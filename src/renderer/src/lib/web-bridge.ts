@@ -2,11 +2,14 @@ import type {
   AppInfo,
   BrowserState,
   DesktopApi,
+  DshEventFrame,
+  DshViewState,
   EffectiveTheme,
-  HarnessNotification,
+  GatewayRpcResult,
   HarnessRunResult,
   HarnessStatus,
   ModelProvider,
+  SurfaceState,
   ThemeMode,
   ThemeState,
 } from '../../../shared/contracts'
@@ -135,14 +138,13 @@ export function installWebBridge(): void {
   }
   let harnessStatus: HarnessStatus = READY_HARNESS
   const statusListeners = new Set<(status: HarnessStatus) => void>()
-  const notificationListeners = new Set<(notification: HarnessNotification) => void>()
+  const eventListeners = new Set<(frame: DshEventFrame) => void>()
   const emitStatus = (status: HarnessStatus): void => {
     harnessStatus = status
     for (const listener of statusListeners) listener(status)
   }
-  const emitNotification = (method: string, params?: unknown): void => {
-    const notification: HarnessNotification = { method, ...(params === undefined ? {} : { params }) }
-    for (const listener of notificationListeners) listener(notification)
+  const emitEvent = (frame: DshEventFrame): void => {
+    for (const listener of eventListeners) listener(frame)
   }
 
   // --- browser ---
@@ -179,6 +181,12 @@ export function installWebBridge(): void {
     browserState = { ...browserState, loading: false }
     emitBrowser()
   }
+
+  // --- surface + DSH view (web preview shows the workbench, no native view) ---
+  let surfaceValue: SurfaceState['surface'] = 'workbench'
+  let surfaceChanged: ((state: SurfaceState) => void) | undefined
+  const dshView: DshViewState = { ready: false, loading: false, title: 'DeepSeek', visible: false }
+  const dshViewListeners = new Set<(state: DshViewState) => void>()
 
   const bridge: DesktopApi = {
     app: {
@@ -247,30 +255,63 @@ export function installWebBridge(): void {
     },
     harness: {
       status: async (): Promise<HarnessStatus> => ({ ...harnessStatus }),
-      run: async (prompt: string): Promise<HarnessRunResult> => {
+      run: async (prompt: string, options?: { sessionId?: string }): Promise<HarnessRunResult> => {
+        const sessionId = options?.sessionId ?? 'web-preview'
         emitStatus({ ...READY_HARNESS, state: 'running' })
-        emitNotification('session/start', { sessionId: 'web-preview' })
         await delay(900)
-        emitNotification('session/turn-complete', { sessionId: 'web-preview' })
+        emitEvent({
+          kind: 'session-event',
+          sessionId,
+          event: {
+            type: 'assistant/message',
+            seq: 1,
+            time: Date.now(),
+            data: { message: { role: 'assistant', content: [{ type: 'text', text: `Simulated agent reply (web preview).\n\nYou asked: "${prompt}"\n\nThe desktop app runs this through the DeepSeek Harness and drives the visible browser.` }] } },
+          },
+        })
         emitStatus(READY_HARNESS)
-        return {
-          sessionId: 'web-preview',
-          finalResponse: `Simulated agent reply (web preview).\n\nYou asked: "${prompt}"\n\nThe desktop app would run this through the DeepSeek Harness and drive the visible browser.`,
-          eventCount: 4,
-          notificationCount: 2,
-        }
+        return { sessionId }
       },
       stop: async (): Promise<HarnessStatus> => {
         emitStatus(READY_HARNESS)
         return { ...harnessStatus }
       },
+      getPermissionMode: async (): Promise<string> => 'workspace-write',
+      setPermissionMode: async (mode: string): Promise<string> => mode,
       onStatus: (listener) => {
         statusListeners.add(listener)
         return () => statusListeners.delete(listener)
       },
-      onNotification: (listener) => {
-        notificationListeners.add(listener)
-        return () => notificationListeners.delete(listener)
+    },
+    dsh: {
+      rpc: async (): Promise<GatewayRpcResult> => ({ ok: true, value: { items: [] } }),
+      respond: async (): Promise<void> => undefined,
+      onEvent: (listener) => {
+        eventListeners.add(listener)
+        return () => eventListeners.delete(listener)
+      },
+    },
+    surface: {
+      state: async (): Promise<SurfaceState> => ({ surface: surfaceValue, view: { ...dshView } }),
+      set: async (surface: SurfaceState['surface']): Promise<SurfaceState> => {
+        surfaceValue = surface
+        surfaceChanged?.({ surface, view: { ...dshView } })
+        return { surface, view: { ...dshView } }
+      },
+      onChanged: (listener) => {
+        surfaceChanged = listener
+        return () => {
+          if (surfaceChanged === listener) surfaceChanged = undefined
+        }
+      },
+    },
+    dshView: {
+      setBounds: async (): Promise<void> => undefined,
+      setVisible: async (): Promise<void> => undefined,
+      reload: async (): Promise<void> => undefined,
+      onState: (listener) => {
+        dshViewListeners.add(listener)
+        return () => dshViewListeners.delete(listener)
       },
     },
     theme: {

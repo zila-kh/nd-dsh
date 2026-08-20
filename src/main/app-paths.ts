@@ -27,14 +27,17 @@ export function harnessRoot(): string {
   return resolve(process.env.ND_DSH_HARNESS_ROOT ?? join(projectRoot(), 'vendor/deepseek-harness'))
 }
 
-export function cordisConfigPath(): string {
-  return resolve(process.env.ND_DSH_CORDIS_CONFIG ?? join(projectRoot(), 'configs/dsh/cordis.yml'))
+/** The dsh CLI launcher bin: boots the `web` profile the desktop shells. */
+export function harnessCliBinPath(): string {
+  return join(harnessRoot(), 'apps/cli/lib/bin.js')
 }
 
-export function harnessSdkClientPath(): string {
-  return join(harnessRoot(), 'packages/sdk/client/lib/index.js')
+/** ND-DSH's patch overlay applied on top of the web profile. */
+export function dshPatchPath(): string {
+  return resolve(process.env.ND_DSH_PATCH ?? join(projectRoot(), 'configs/dsh/nd-dsh.patch.yml'))
 }
 
-export function harnessRuntimeBinPath(): string {
-  return join(harnessRoot(), 'packages/examples/jsonrpc-demo/lib/bin.js')
+/** Shipped ND-DSH agent presets (installed into the harness home at launch). */
+export function presetSourceDir(): string {
+  return resolve(process.env.ND_DSH_PRESET_DIR ?? join(projectRoot(), 'configs/dsh/agent-presets'))
 }

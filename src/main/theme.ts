@@ -2,13 +2,18 @@ import { app, nativeTheme, type BrowserWindow, type TitleBarOverlay } from 'elec
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import process from 'node:process'
-import type { EffectiveTheme, ThemeMode, ThemeState } from '../shared/contracts.js'
+import type { DshSurface, EffectiveTheme, ThemeMode, ThemeState } from '../shared/contracts.js'
 
 const SETTINGS_FILE = 'settings.json'
+const DEFAULT_PERMISSION_MODE = 'workspace-write'
 
 interface PersistedSettings {
   theme?: ThemeMode
+  surface?: DshSurface
+  permissionMode?: string
 }
+
+export const PERMISSION_MODES = ['read-only', 'workspace-write', 'danger-full-access'] as const
 
 interface WindowPalette {
   backgroundColor: string
@@ -32,23 +37,30 @@ const BROWSER_VIEW_BACKGROUND: Record<EffectiveTheme, string> = {
 }
 
 const VALID_MODES: readonly ThemeMode[] = ['system', 'light', 'dark']
+const VALID_SURFACES: readonly DshSurface[] = ['dsh', 'workbench']
 
 /**
- * Owns the user's theme preference. The renderer reads the effective theme
- * (resolved against the OS when in `system` mode) and applies it as a
- * `data-theme` attribute; this service keeps the native window chrome and the
- * embedded browser view in sync and persists the choice across restarts.
+ * Owns the user's persisted preferences (settings.json): the theme and the
+ * active UI surface. The renderer reads the effective theme (resolved against
+ * the OS when in `system` mode) and applies it as a `data-theme` attribute;
+ * this service keeps the native window chrome and the embedded views in sync
+ * and persists the choices across restarts.
  */
 export class ThemeService {
   private readonly settingsPath: string
   private mode: ThemeMode
+  private surfaceValue: DshSurface
+  private permissionModeValue: string
   private window: BrowserWindow | undefined
   private setViewBackground: ((color: string) => void) | undefined
   private onChanged: ((state: ThemeState) => void) | undefined
+  private onSurfaceChanged: ((surface: DshSurface) => void) | undefined
 
   constructor() {
     this.settingsPath = join(app.getPath('userData'), SETTINGS_FILE)
     this.mode = this.readMode()
+    this.surfaceValue = this.readSurface()
+    this.permissionModeValue = process.env.ND_DSH_PERMISSION_MODE?.trim() || this.readPermissionMode()
     nativeTheme.themeSource = this.mode
     nativeTheme.on('updated', () => this.emit())
   }
@@ -65,6 +77,31 @@ export class ThemeService {
     this.applyWindowChrome()
     this.emit()
     return this.state()
+  }
+
+  surface(): DshSurface {
+    return this.surfaceValue
+  }
+
+  setSurface(surface: DshSurface): DshSurface {
+    if (!VALID_SURFACES.includes(surface)) throw new Error(`Unknown surface: ${surface}`)
+    this.surfaceValue = surface
+    this.persist()
+    this.onSurfaceChanged?.(surface)
+    return surface
+  }
+
+  permissionMode(): string {
+    return this.permissionModeValue
+  }
+
+  setPermissionMode(mode: string): string {
+    if (!PERMISSION_MODES.includes(mode as (typeof PERMISSION_MODES)[number])) {
+      throw new Error(`Unknown permission mode: ${mode}`)
+    }
+    this.permissionModeValue = mode
+    this.persist()
+    return mode
   }
 
   windowBackgroundColor(): string {
@@ -84,6 +121,10 @@ export class ThemeService {
 
   setOnChanged(listener: (state: ThemeState) => void): void {
     this.onChanged = listener
+  }
+
+  setOnSurfaceChanged(listener: (surface: DshSurface) => void): void {
+    this.onSurfaceChanged = listener
   }
 
   private effective(): EffectiveTheme {
@@ -113,11 +154,38 @@ export class ThemeService {
     return 'system'
   }
 
+  private readSurface(): DshSurface {
+    try {
+      const settings = JSON.parse(readFileSync(this.settingsPath, 'utf8')) as PersistedSettings
+      if (settings.surface && VALID_SURFACES.includes(settings.surface)) return settings.surface
+    } catch {
+      // Missing or unreadable settings fall back to the official DeepSeek UI.
+    }
+    return 'dsh'
+  }
+
+  private readPermissionMode(): string {
+    try {
+      const settings = JSON.parse(readFileSync(this.settingsPath, 'utf8')) as PersistedSettings
+      if (settings.permissionMode && PERMISSION_MODES.includes(settings.permissionMode as (typeof PERMISSION_MODES)[number])) {
+        return settings.permissionMode
+      }
+    } catch {
+      // Missing or unreadable settings fall back to workspace-write.
+    }
+    return DEFAULT_PERMISSION_MODE
+  }
+
   private persist(): void {
     try {
-      writeFileSync(this.settingsPath, `${JSON.stringify({ theme: this.mode }, null, 2)}\n`, 'utf8')
+      const settings: PersistedSettings = {
+        theme: this.mode,
+        surface: this.surfaceValue,
+        permissionMode: this.permissionModeValue,
+      }
+      writeFileSync(this.settingsPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8')
     } catch (error) {
-      console.warn('Failed to persist theme preference:', error)
+      console.warn('Failed to persist settings:', error)
     }
   }
 }
