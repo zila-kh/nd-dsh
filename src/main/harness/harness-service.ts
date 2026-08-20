@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url'
 import type { HarnessNotification, HarnessRunResult, HarnessStatus } from '../../shared/contracts.js'
 import { cordisConfigPath, harnessRoot, harnessRuntimeBinPath, harnessSdkClientPath, projectRoot } from '../app-paths.js'
 import type { BrowserController } from '../browser/browser-controller.js'
+import type { ProviderStore } from '../providers.js'
 import type { WorkspaceService } from '../workspace/workspace-service.js'
 
 interface UpstreamRunResult {
@@ -63,6 +64,7 @@ export class HarnessService {
   constructor(
     private readonly workspace: WorkspaceService,
     private readonly browser: BrowserController,
+    private readonly providers: ProviderStore,
   ) {
     this.statusValue = this.computeStatus('stopped')
   }
@@ -156,10 +158,12 @@ export class HarnessService {
     await Promise.all([fs.mkdir(dshHome, { recursive: true }), fs.mkdir(sessionRoot, { recursive: true })])
 
     const provider = process.env.ND_DSH_PROVIDER?.trim() || DEFAULT_PROVIDER
-    const model = process.env.ND_DSH_MODEL?.trim() || DEFAULT_MODEL
+    const configured = this.providers.enabled()
+    const model = configured?.models[0]?.id?.trim() || process.env.ND_DSH_MODEL?.trim() || DEFAULT_MODEL
     const maxTokens = parsePositiveInteger(process.env.ND_DSH_MAX_TOKENS, 49_152)
     const environment: NodeJS.ProcessEnv = {
       ...process.env,
+      ...(configured?.apiKey ? { DEEPSEEK_API_KEY: configured.apiKey } : {}),
       ...this.browser.agentBrowserEnvironment(),
       DSH_HOME: dshHome,
       DSH_CWD: workspaceRoot,
@@ -190,12 +194,14 @@ export class HarnessService {
   private computeStatus(state: HarnessStatus['state'], error?: string): HarnessStatus {
     const sourceReady =
       existsSync(harnessSdkClientPath()) && existsSync(harnessRuntimeBinPath()) && existsSync(cordisConfigPath())
+    const configured = this.providers.enabled()
+    const apiKeyPresent = Boolean((configured?.apiKey ?? process.env.DEEPSEEK_API_KEY)?.trim())
     return {
       state,
       sourceReady,
-      apiKeyPresent: Boolean(process.env.DEEPSEEK_API_KEY?.trim()),
+      apiKeyPresent,
       provider: process.env.ND_DSH_PROVIDER?.trim() || DEFAULT_PROVIDER,
-      model: process.env.ND_DSH_MODEL?.trim() || DEFAULT_MODEL,
+      model: configured?.models[0]?.id?.trim() || process.env.ND_DSH_MODEL?.trim() || DEFAULT_MODEL,
       ...(this.sessionId ? { sessionId: this.sessionId } : {}),
       ...(error ? { error } : {}),
     }

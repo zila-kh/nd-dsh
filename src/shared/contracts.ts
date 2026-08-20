@@ -76,9 +76,28 @@ export interface ThemeState {
   effective: EffectiveTheme
 }
 
+export interface ProviderModel {
+  id: string
+  context: string
+}
+
+export interface ModelProvider {
+  id: string
+  name: string
+  enabled: boolean
+  baseUrl: string
+  apiFormat: string
+  apiKey: string
+  models: ProviderModel[]
+}
+
 export interface DesktopApi {
   app: {
     info(): Promise<AppInfo>
+  }
+  providers: {
+    list(): Promise<ModelProvider[]>
+    save(providers: ModelProvider[]): Promise<ModelProvider[]>
   }
   browser: {
     state(): Promise<BrowserState>
@@ -95,6 +114,7 @@ export interface DesktopApi {
   workspace: {
     state(): Promise<WorkspaceState>
     pick(): Promise<WorkspaceState>
+    setRoot(path: string): Promise<WorkspaceState>
     list(relativePath?: string): Promise<WorkspaceEntry[]>
     read(relativePath: string): Promise<WorkspaceFile>
   }
@@ -126,6 +146,7 @@ export const IPC = {
   browserStateEvent: 'browser:state-event',
   workspaceState: 'workspace:state',
   workspacePick: 'workspace:pick',
+  workspaceSetRoot: 'workspace:set-root',
   workspaceList: 'workspace:list',
   workspaceRead: 'workspace:read',
   harnessStatus: 'harness:status',
@@ -136,4 +157,6 @@ export const IPC = {
   themeState: 'theme:state',
   themeSet: 'theme:set',
   themeChangedEvent: 'theme:changed',
+  providersList: 'providers:list',
+  providersSave: 'providers:save',
 } as const

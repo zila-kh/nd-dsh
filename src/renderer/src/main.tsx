@@ -1,7 +1,7 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
-import { installWebBridge } from './lib/web-bridge'
+import { installWebBridge, applyStoredWebTheme } from './lib/web-bridge'
 import './styles.css'
 import './component.css'
 
@@ -16,6 +16,7 @@ document.querySelector('meta[name="color-scheme"]')?.setAttribute('content', ini
 // stub so the full shell still renders; desktop-only actions surface a toast.
 if (typeof window.ndDsh === 'undefined' || window.ndDsh === null) {
   installWebBridge()
+  applyStoredWebTheme()
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

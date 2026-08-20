@@ -24,6 +24,7 @@ const api: DesktopApi = {
   workspace: {
     state: () => ipcRenderer.invoke(IPC.workspaceState),
     pick: () => ipcRenderer.invoke(IPC.workspacePick),
+    setRoot: (path) => ipcRenderer.invoke(IPC.workspaceSetRoot, path),
     list: (relativePath) => ipcRenderer.invoke(IPC.workspaceList, relativePath),
     read: (relativePath) => ipcRenderer.invoke(IPC.workspaceRead, relativePath),
   },
@@ -50,6 +51,10 @@ const api: DesktopApi = {
       ipcRenderer.on(IPC.themeChangedEvent, handler)
       return () => ipcRenderer.removeListener(IPC.themeChangedEvent, handler)
     },
+  },
+  providers: {
+    list: () => ipcRenderer.invoke(IPC.providersList),
+    save: (providers) => ipcRenderer.invoke(IPC.providersSave, providers),
   },
 }
 

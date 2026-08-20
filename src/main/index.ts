@@ -8,6 +8,7 @@ import { projectRoot } from './app-paths.js'
 import { BrowserController } from './browser/browser-controller.js'
 import { HarnessService } from './harness/harness-service.js'
 import { registerIpc } from './ipc.js'
+import { ProviderStore } from './providers.js'
 import { ThemeService } from './theme.js'
 import { WorkspaceService } from './workspace/workspace-service.js'
 
@@ -29,6 +30,7 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) app.quit()
 
 const theme = new ThemeService()
+const providers = new ProviderStore()
 
 app.on('second-instance', () => {
   if (!mainWindow) return
@@ -66,8 +68,8 @@ async function createWindow(): Promise<void> {
   })
 
   const browser = new BrowserController(window, cdpPort, projectRoot())
-  const harness = new HarnessService(workspace, browser)
-  const disposeIpc = registerIpc({ window, browser, harness, workspace, theme })
+  const harness = new HarnessService(workspace, browser, providers)
+  const disposeIpc = registerIpc({ window, browser, harness, workspace, theme, providers })
   mainWindow = window
   activeHarness = harness
 

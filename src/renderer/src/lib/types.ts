@@ -5,4 +5,4 @@ export interface ChatMessage {
   detail?: string
 }
 
-export type CenterView = 'browser' | 'editor'
+export type CenterView = 'browser' | 'editor' | 'settings'

@@ -30,6 +30,14 @@ export class WorkspaceService {
     return this.state()
   }
 
+  async setRoot(path: string): Promise<WorkspaceState> {
+    const candidate = resolve(path)
+    const stats = await fs.stat(candidate)
+    if (!stats.isDirectory()) throw new Error('The selected path is not a directory')
+    this.root = candidate
+    return this.state()
+  }
+
   async list(relativePath = '.'): Promise<WorkspaceEntry[]> {
     const absolute = await this.resolveExisting(relativePath)
     const stats = await fs.stat(absolute)

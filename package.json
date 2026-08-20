@@ -24,6 +24,7 @@
   },
   "dependencies": {
     "dotenv": "17.2.3",
+    "highlight.js": "^11.12.0",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },

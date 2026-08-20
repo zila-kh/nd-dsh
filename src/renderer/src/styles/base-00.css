@@ -28,6 +28,14 @@
   --code-dim: #46515e;
   --on-accent: #17200f;
 
+  /* Editor selection & floating prompt menu (VS Code palette) */
+  --editor-selection: #264f78;
+  --editor-selection-inactive: #3a3d41;
+  --prompt-menu-bg: #252526;
+  --prompt-menu-border: #3c3c3c;
+  --prompt-menu-text: #cccccc;
+  --prompt-menu-hover: #37373d;
+
   /* Accents */
   --accent: #a6f06d;
   --accent-strong: #7ddc3d;
@@ -129,6 +137,14 @@
   --fainter: #b3bbc4;
   --code-dim: #9aa3ae;
   --on-accent: #ffffff;
+
+  /* Editor selection & floating prompt menu (light equivalents) */
+  --editor-selection: #add6ff;
+  --editor-selection-inactive: #e5ebf1;
+  --prompt-menu-bg: #ffffff;
+  --prompt-menu-border: #d2d7de;
+  --prompt-menu-text: #1b2128;
+  --prompt-menu-hover: #f0f2f5;
 
   --accent: #4c8a10;
   --accent-strong: #3a6d0c;

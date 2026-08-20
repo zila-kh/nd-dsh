@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import type { BrowserState } from '../../../shared/contracts'
 import { ArrowLeftIcon, ArrowRightIcon, CameraIcon, ExternalIcon, ReloadIcon } from './Icons'
+import { MockWebPage } from './MockWebPage'
 
 interface BrowserPaneProps {
   active: boolean
@@ -13,6 +14,7 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
   const surfaceRef = useRef<HTMLDivElement>(null)
   const addressFocused = useRef(false)
   const [address, setAddress] = useState(state?.url ?? 'http://localhost:5173')
+  const webMode = document.documentElement.dataset.webMode === 'true'
 
   useEffect(() => {
     if (!addressFocused.current && state?.url) setAddress(state.url)
@@ -109,10 +111,14 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
         </span>
       </div>
       <div className="browser-native-surface" ref={surfaceRef}>
-        <div className="browser-placeholder">
-          <div className="placeholder-ring" />
-          <span>{state?.loading ? `Loading ${state.url}` : 'Electron WebContentsView'}</span>
-        </div>
+        {webMode ? (
+          <MockWebPage title={state?.title} />
+        ) : (
+          <div className="browser-placeholder">
+            <div className="placeholder-ring" />
+            <span>{state?.loading ? `Loading ${state.url}` : 'Electron WebContentsView'}</span>
+          </div>
+        )}
       </div>
     </section>
   )

@@ -36,6 +36,13 @@ export const SettingsIcon = (props: IconProps) => (
 )
 export const ChevronRightIcon = (props: IconProps) => <IconBase {...props}><path d="m9 18 6-6-6-6" /></IconBase>
 export const ChevronDownIcon = (props: IconProps) => <IconBase {...props}><path d="m6 9 6 6 6-6" /></IconBase>
+export const SidebarToggleIcon = ({ collapsed = false, ...props }: { collapsed?: boolean } & IconProps) => (
+  <IconBase {...props}>
+    <rect x="3.5" y="3.5" width="17" height="17" rx="4" />
+    <path d="M16 3.5v17" />
+    <path d={collapsed ? 'm12.5 18-6-6 6-6' : 'm6.5 18 6-6-6-6'} />
+  </IconBase>
+)
 export const FolderIcon = (props: IconProps) => <IconBase {...props}><path d="M3 5h7l2 2h9v12H3z" /></IconBase>
 export const FileIcon = (props: IconProps) => <IconBase {...props}><path d="M6 2.75h8l4 4v14.5H6z" /><path d="M14 2.75v4h4" /></IconBase>
 export const ArrowLeftIcon = (props: IconProps) => <IconBase {...props}><path d="m15 18-6-6 6-6" /></IconBase>
@@ -50,3 +57,11 @@ export const ExternalIcon = (props: IconProps) => <IconBase {...props}><path d="
 export const SunIcon = (props: IconProps) => <IconBase {...props}><circle cx="12" cy="12" r="4" /><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5 5l1.4 1.4M17.6 17.6 19 19M19 5l-1.4 1.4M6.4 17.6 5 19" /></IconBase>
 export const MoonIcon = (props: IconProps) => <IconBase {...props}><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z" /></IconBase>
 export const MonitorIcon = (props: IconProps) => <IconBase {...props}><rect x="2.75" y="4.5" width="18.5" height="12.5" rx="1.5" /><path d="M9 20h6M12 17v3" /></IconBase>
+export const RotateIcon = (props: IconProps) => <IconBase {...props}><path d="M20 11a8 8 0 1 0-2.34 5.66" /><path d="M20 4v7h-7" /></IconBase>
+export const PencilIcon = (props: IconProps) => <IconBase {...props}><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z" /><path d="m15 5 4 4" /></IconBase>
+export const TrashIcon = (props: IconProps) => <IconBase {...props}><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><path d="M10 11v6M14 11v6" /></IconBase>
+export const EyeIcon = (props: IconProps) => <IconBase {...props}><path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0" /><circle cx="12" cy="12" r="3" /></IconBase>
+export const EyeOffIcon = (props: IconProps) => <IconBase {...props}><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" /><path d="M6.61 6.61A13.53 13.53 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" /><path d="M2 2l20 20" /><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" /></IconBase>
+export const PlusIcon = (props: IconProps) => <IconBase {...props}><path d="M5 12h14M12 5v14" /></IconBase>
+export const BoxIcon = (props: IconProps) => <IconBase {...props}><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" /><path d="m3.3 7 8.7 5 8.7-5M12 22V12" /></IconBase>
+export const PlugIcon = (props: IconProps) => <IconBase {...props}><path d="M12 22v-5M9 8V2M15 8V2" /><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8z" /></IconBase>

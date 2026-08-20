@@ -4,6 +4,7 @@ import { IPC } from '../shared/contracts.js'
 import { projectRoot } from './app-paths.js'
 import type { BrowserController } from './browser/browser-controller.js'
 import type { HarnessService } from './harness/harness-service.js'
+import type { ProviderStore } from './providers.js'
 import type { ThemeService } from './theme.js'
 import type { WorkspaceService } from './workspace/workspace-service.js'
 
@@ -13,6 +14,7 @@ interface IpcDependencies {
   harness: HarnessService
   workspace: WorkspaceService
   theme: ThemeService
+  providers: ProviderStore
 }
 
 type Handler = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown | Promise<unknown>
@@ -50,6 +52,10 @@ export function registerIpc(deps: IpcDependencies): () => void {
     await deps.harness.stop()
     return deps.workspace.pick()
   })
+  handle(IPC.workspaceSetRoot, async (_event, value) => {
+    await deps.harness.stop()
+    return deps.workspace.setRoot(asString(value, 'Workspace path', 4_096))
+  })
   handle(IPC.workspaceList, (_event, value) =>
     deps.workspace.list(value === undefined ? '.' : asString(value, 'Workspace path', 4_096)),
   )
@@ -63,6 +69,9 @@ export function registerIpc(deps: IpcDependencies): () => void {
 
   handle(IPC.themeState, () => deps.theme.state())
   handle(IPC.themeSet, (_event, value) => deps.theme.set(asThemeMode(value)))
+
+  handle(IPC.providersList, () => deps.providers.list())
+  handle(IPC.providersSave, (_event, value) => deps.providers.save(value))
 
   return () => {
     for (const channel of channels) ipcMain.removeHandler(channel)
