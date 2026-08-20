@@ -1,0 +1,40 @@
+import { app } from 'electron'
+import { existsSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const currentDirectory = dirname(fileURLToPath(import.meta.url))
+
+function candidateProjectRoots(): string[] {
+  const values = [
+    process.env.ND_DSH_PROJECT_ROOT,
+    app.isPackaged ? process.resourcesPath : undefined,
+    app.getAppPath(),
+    resolve(currentDirectory, '../../..'),
+    process.cwd(),
+  ]
+  return values.filter((value): value is string => Boolean(value))
+}
+
+export function projectRoot(): string {
+  for (const root of candidateProjectRoots()) {
+    if (existsSync(join(root, 'package.json'))) return root
+  }
+  return app.getAppPath()
+}
+
+export function harnessRoot(): string {
+  return resolve(process.env.ND_DSH_HARNESS_ROOT ?? join(projectRoot(), 'vendor/deepseek-harness'))
+}
+
+export function cordisConfigPath(): string {
+  return resolve(process.env.ND_DSH_CORDIS_CONFIG ?? join(projectRoot(), 'configs/dsh/cordis.yml'))
+}
+
+export function harnessSdkClientPath(): string {
+  return join(harnessRoot(), 'packages/sdk/client/lib/index.js')
+}
+
+export function harnessRuntimeBinPath(): string {
+  return join(harnessRoot(), 'packages/examples/jsonrpc-demo/lib/bin.js')
+}

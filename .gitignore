@@ -1,0 +1,21 @@
+node_modules/
+out/
+dist/
+coverage/
+.DS_Store
+.env
+*.log
+.sessions/
+.nd-dsh/
+artifacts/
+
+# Keep project skills tracked while ignoring local DSH runtime state.
+.dsh/*
+!.dsh/skills/
+!.dsh/skills/**
+
+# Populated by git submodule or scripts/bootstrap.mjs.
+/vendor/deepseek-harness/
+!/vendor/README.md
+
+*.tsbuildinfo

@@ -1,0 +1,42 @@
+{
+  "name": "nd-dsh",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cursor-style Electron IDE shell powered by DeepSeek Harness and agent-browser.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./out/main/index.js",
+  "packageManager": "pnpm@11.7.0",
+  "engines": {
+    "node": ">=24.0.0",
+    "pnpm": ">=11.0.0"
+  },
+  "scripts": {
+    "bootstrap": "node scripts/bootstrap.mjs",
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "test": "vitest run",
+    "verify": "node scripts/verify.mjs",
+    "dsh:build": "pnpm --dir vendor/deepseek-harness run build",
+    "dsh:update": "node scripts/update-harness.mjs"
+  },
+  "dependencies": {
+    "dotenv": "17.2.3",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.0",
+    "@types/react": "19.2.4",
+    "@types/react-dom": "19.2.4",
+    "@vitejs/plugin-react": "6.0.5",
+    "agent-browser": "0.34.0",
+    "electron": "43.4.0",
+    "electron-vite": "5.0.0",
+    "typescript": "7.0.2",
+    "vite": "8.2.1",
+    "vitest": "4.1.8"
+  }
+}
