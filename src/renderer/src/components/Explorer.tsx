@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { WorkspaceEntry, WorkspaceState } from '../../../shared/contracts'
-import { ChevronDownIcon, ChevronRightIcon, FileIcon, FolderIcon } from './Icons'
+import { ChevronDownIcon, ChevronRightIcon, FileIcon, FilesIcon, FolderIcon, GitIcon, SearchIcon } from './Icons'
 
 interface ExplorerProps {
   workspace: WorkspaceState | null
@@ -9,9 +9,12 @@ interface ExplorerProps {
   onOpenFile(path: string): void
 }
 
+type ExplorerTab = 'files' | 'search' | 'git'
+
 export function Explorer({ workspace, selectedPath, onWorkspaceChanged, onOpenFile }: ExplorerProps) {
   const [rootEntries, setRootEntries] = useState<WorkspaceEntry[]>([])
   const [error, setError] = useState<string>()
+  const [activeTab, setActiveTab] = useState<ExplorerTab>('files')
 
   const refresh = useCallback(async () => {
     try {
@@ -34,24 +37,65 @@ export function Explorer({ workspace, selectedPath, onWorkspaceChanged, onOpenFi
   return (
     <aside className="explorer-pane">
       <header className="pane-heading">
-        <span>EXPLORER</span>
-        <button className="text-button" onClick={() => void pickWorkspace()} title="Open folder">Open</button>
+        <span className="pane-title">{activeTab === 'files' ? 'EXPLORER' : activeTab === 'search' ? 'SEARCH' : 'SOURCE CONTROL'}</span>
+        <div className="explorer-tab-bar">
+          <button
+            className={`tab-icon-button ${activeTab === 'files' ? 'active' : ''}`}
+            title="Explorer"
+            onClick={() => setActiveTab('files')}
+          >
+            <FilesIcon />
+          </button>
+          <button
+            className={`tab-icon-button ${activeTab === 'search' ? 'active' : ''}`}
+            title="Search"
+            onClick={() => setActiveTab('search')}
+          >
+            <SearchIcon />
+          </button>
+          <button
+            className={`tab-icon-button ${activeTab === 'git' ? 'active' : ''}`}
+            title="Source Control"
+            onClick={() => setActiveTab('git')}
+          >
+            <GitIcon />
+          </button>
+        </div>
       </header>
-      <button className="workspace-heading" onClick={() => void pickWorkspace()} title={workspace?.root ?? 'Open workspace'}>
-        <ChevronDownIcon />
-        <span>{workspace?.name?.toUpperCase() ?? 'NO WORKSPACE'}</span>
-      </button>
-      <div className="tree-scroll">
-        {error ? <div className="pane-error">{error}</div> : null}
-        {rootEntries.map((entry) => (
-          <TreeEntry key={entry.relativePath} entry={entry} depth={0} selectedPath={selectedPath} onOpenFile={onOpenFile} />
-        ))}
-        {rootEntries.length === 0 && !error ? <div className="empty-note">This folder is empty.</div> : null}
-      </div>
-      <div className="explorer-sections">
-        <div>OUTLINE</div>
-        <div>TIMELINE</div>
-      </div>
+
+      {activeTab === 'files' && (
+        <>
+          <button className="workspace-heading" onClick={() => void pickWorkspace()} title={workspace?.root ?? 'Open workspace'}>
+            <ChevronDownIcon />
+            <span>{workspace?.name?.toUpperCase() ?? 'NO WORKSPACE'}</span>
+          </button>
+          <div className="tree-scroll">
+            {error ? <div className="pane-error">{error}</div> : null}
+            {rootEntries.map((entry) => (
+              <TreeEntry key={entry.relativePath} entry={entry} depth={0} selectedPath={selectedPath} onOpenFile={onOpenFile} />
+            ))}
+            {rootEntries.length === 0 && !error ? <div className="empty-note">This folder is empty.</div> : null}
+          </div>
+          <div className="explorer-sections">
+            <div>OUTLINE</div>
+            <div>TIMELINE</div>
+          </div>
+        </>
+      )}
+
+      {activeTab === 'search' && (
+        <div className="sidebar-placeholder">
+          <strong>Search files</strong>
+          <p>Use ⌘K or type to search across workspace.</p>
+        </div>
+      )}
+
+      {activeTab === 'git' && (
+        <div className="sidebar-placeholder">
+          <strong>Source Control</strong>
+          <p>Git repository tracking ready.</p>
+        </div>
+      )}
     </aside>
   )
 }

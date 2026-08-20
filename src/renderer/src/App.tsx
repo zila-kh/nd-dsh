@@ -153,20 +153,17 @@ export default function App() {
       </header>
       <main className={`workbench ${settingsMode ? 'settings-only' : ''} ${rightCollapsed && !settingsMode ? 'chat-collapsed' : ''}`}>
         {!settingsMode ? (
-          <ActivityRail
-            browserActive={centerView === 'browser'}
-            settingsActive={settingsMode}
-            onBrowser={() => setCenterView('browser')}
-            onSettings={() => setCenterView('settings')}
-          />
-        ) : null}
-        {!settingsMode ? (
-          <Explorer
-            workspace={workspace}
-            selectedPath={selectedFile?.relativePath}
-            onWorkspaceChanged={(next) => { setWorkspace(next); setSelectedFile(null) }}
-            onOpenFile={(path) => void openFile(path)}
-          />
+          <aside className="chat-rail">
+            <ChatPanel
+              status={harnessStatus}
+              notifications={notifications}
+              messages={messages}
+              workspace={workspace}
+              onMessages={setMessages}
+              onError={setToast}
+              onOpenSettings={() => setCenterView('settings')}
+            />
+          </aside>
         ) : null}
         <section className="center-workspace">
           <div className="center-tabs">
@@ -214,16 +211,12 @@ export default function App() {
           </div>
         </section>
         {!settingsMode ? (
-          <aside className={rightCollapsed ? 'chat-rail collapsed' : 'chat-rail'}>
-            <div className="chat-toggle-strip">
-              <RightSidebarToggle isCollapsed={rightCollapsed} onToggle={() => setRightCollapsed((current) => !current)} />
-            </div>
-            <ChatPanel
-              status={harnessStatus}
-              notifications={notifications}
-              messages={messages}
-              onMessages={setMessages}
-              onError={setToast}
+          <aside className={rightCollapsed ? 'explorer-rail collapsed' : 'explorer-rail'}>
+            <Explorer
+              workspace={workspace}
+              selectedPath={selectedFile?.relativePath}
+              onWorkspaceChanged={(next) => { setWorkspace(next); setSelectedFile(null) }}
+              onOpenFile={(path) => void openFile(path)}
             />
           </aside>
         ) : null}
