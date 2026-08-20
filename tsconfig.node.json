@@ -11,9 +11,9 @@
     "noEmit": true,
     "skipLibCheck": true,
     "types": ["node", "electron-vite/node"],
-    "baseUrl": ".",
+    "tsBuildInfoFile": "./node_modules/.cache/tsconfig.node.tsbuildinfo",
     "paths": {
-      "@shared/*": ["src/shared/*"]
+      "@shared/*": ["./src/shared/*"]
     }
   },
   "include": [

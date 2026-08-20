@@ -1,9 +1,10 @@
-import { app, ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
-import type { BrowserBounds } from '../shared/contracts.js'
+import { app, ipcMain, shell, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
+import type { BrowserBounds, ThemeMode } from '../shared/contracts.js'
 import { IPC } from '../shared/contracts.js'
 import { projectRoot } from './app-paths.js'
 import type { BrowserController } from './browser/browser-controller.js'
 import type { HarnessService } from './harness/harness-service.js'
+import type { ThemeService } from './theme.js'
 import type { WorkspaceService } from './workspace/workspace-service.js'
 
 interface IpcDependencies {
@@ -11,6 +12,7 @@ interface IpcDependencies {
   browser: BrowserController
   harness: HarnessService
   workspace: WorkspaceService
+  theme: ThemeService
 }
 
 type Handler = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown | Promise<unknown>
@@ -41,6 +43,7 @@ export function registerIpc(deps: IpcDependencies): () => void {
   handle(IPC.browserForward, () => deps.browser.forward())
   handle(IPC.browserReload, () => deps.browser.reload())
   handle(IPC.browserSnapshot, () => deps.browser.snapshot())
+  handle(IPC.browserOpenExternal, (_event, value) => openExternal(asString(value, 'URL', 8_192)))
 
   handle(IPC.workspaceState, () => deps.workspace.state())
   handle(IPC.workspacePick, async () => {
@@ -57,6 +60,9 @@ export function registerIpc(deps: IpcDependencies): () => void {
   handle(IPC.harnessStatus, () => deps.harness.status())
   handle(IPC.harnessRun, (_event, value) => deps.harness.run(asString(value, 'Prompt', 100_000)))
   handle(IPC.harnessStop, () => deps.harness.stop())
+
+  handle(IPC.themeState, () => deps.theme.state())
+  handle(IPC.themeSet, (_event, value) => deps.theme.set(asThemeMode(value)))
 
   return () => {
     for (const channel of channels) ipcMain.removeHandler(channel)
@@ -87,4 +93,24 @@ function asString(value: unknown, label: string, maxLength: number): string {
   if (!value.trim()) throw new Error(`${label} cannot be empty`)
   if (value.length > maxLength) throw new Error(`${label} exceeds ${maxLength.toLocaleString()} characters`)
   return value
+}
+
+function asThemeMode(value: unknown): ThemeMode {
+  if (value !== 'system' && value !== 'light' && value !== 'dark') {
+    throw new Error('Theme mode must be one of: system, light, dark')
+  }
+  return value
+}
+
+async function openExternal(value: string): Promise<void> {
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    throw new Error('URL must be a valid absolute web address')
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('Only http and https URLs can be opened in a system browser')
+  }
+  await shell.openExternal(parsed.toString())
 }

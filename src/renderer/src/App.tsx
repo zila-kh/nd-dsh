@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { BrowserState, HarnessNotification, HarnessStatus, WorkspaceFile, WorkspaceState } from '../../shared/contracts'
+import type { BrowserState, HarnessNotification, HarnessStatus, ThemeMode, ThemeState, WorkspaceFile, WorkspaceState } from '../../shared/contracts'
 import { ActivityRail } from './components/ActivityRail'
 import { BrowserPane } from './components/BrowserPane'
 import { ChatPanel } from './components/ChatPanel'
@@ -7,6 +7,7 @@ import { EditorPane } from './components/EditorPane'
 import { Explorer } from './components/Explorer'
 import { BrowserIcon, CloseIcon, FileIcon } from './components/Icons'
 import { StatusBar } from './components/StatusBar'
+import { ThemeToggle } from './components/ThemeToggle'
 import type { CenterView, ChatMessage } from './lib/types'
 
 const INITIAL_MESSAGES: ChatMessage[] = [
@@ -26,6 +27,7 @@ export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>(INITIAL_MESSAGES)
   const [notifications, setNotifications] = useState<string[]>([])
   const [toast, setToast] = useState<string>()
+  const [theme, setTheme] = useState<ThemeState | null>(null)
 
   useEffect(() => {
     void Promise.all([
@@ -51,6 +53,28 @@ export default function App() {
     return () => window.clearTimeout(timer)
   }, [toast])
 
+  useEffect(() => {
+    let mounted = true
+    void window.ndDsh.theme.state()
+      .then((state) => { if (mounted) setTheme(state) })
+      .catch((cause) => setToast(errorMessage(cause)))
+    const offTheme = window.ndDsh.theme.onChanged(setTheme)
+    return () => {
+      mounted = false
+      offTheme()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!theme) return
+    document.documentElement.dataset.theme = theme.effective
+    document.querySelector('meta[name="color-scheme"]')?.setAttribute('content', theme.effective)
+  }, [theme])
+
+  const selectTheme = (mode: ThemeMode): void => {
+    void window.ndDsh.theme.set(mode).then(setTheme).catch((cause) => setToast(errorMessage(cause)))
+  }
+
   const fileName = useMemo(() => selectedFile?.relativePath.split(/[\\/]/).at(-1), [selectedFile?.relativePath])
 
   const openFile = async (path: string): Promise<void> => {
@@ -67,7 +91,7 @@ export default function App() {
       <header className="title-bar">
         <div className="title-brand"><span className="mini-logo">ND</span><strong>nd-dsh</strong><span className="title-separator">/</span><span>{workspace?.name ?? 'workspace'}</span></div>
         <div className="title-command">Search files, commands, and sessions <kbd>⌘ K</kbd></div>
-        <div className="title-state"><span className={`tiny-dot ${harnessStatus?.state ?? 'stopped'}`} />{harnessStatus?.model ?? 'DeepSeek'}</div>
+        <div className="title-state"><ThemeToggle theme={theme} onSelect={selectTheme} /><span className={`tiny-dot ${harnessStatus?.state ?? 'stopped'}`} />{harnessStatus?.model ?? 'DeepSeek'}</div>
       </header>
       <main className="workbench">
         <ActivityRail browserActive={centerView === 'browser'} onBrowser={() => setCenterView('browser')} />

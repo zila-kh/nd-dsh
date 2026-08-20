@@ -2,7 +2,7 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, promises as fs } from 'node:fs'
 import { createRequire } from 'node:module'
-import { dirname, extname, join, relative, resolve } from 'node:path'
+import { basename, dirname, extname, join, relative, resolve } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
@@ -34,7 +34,11 @@ for (const path of required) {
   if (!existsSync(join(root, path))) errors.push(`missing required file: ${path}`)
 }
 for (const stale of ['docs/ARCHITECTURE.md', 'docs/ROADMAP.md', 'tsconfig.node.tsbuildinfo', 'tsconfig.web.tsbuildinfo']) {
-  if (existsSync(join(root, stale))) errors.push(`stale generated/prototype file must be removed: ${stale}`)
+  // Compare against real directory entries: existsSync is case-insensitive on
+  // Windows, so the legacy uppercase prototypes would always look present.
+  if (await caseSensitiveExists(join(root, stale))) {
+    errors.push(`stale generated/prototype file must be removed: ${stale}`)
+  }
 }
 
 if (!/^[0-9a-f]{40}$/.test(harnessCommit)) errors.push('Harness pin must contain a full 40-character commit SHA')
@@ -127,7 +131,7 @@ for (const file of scriptFiles.filter((path) => extname(path) === '.mjs')) {
 }
 
 const ts = loadTypeScript()
-if (ts) {
+if (ts && typeof ts.transpileModule === 'function') {
   const transpileFiles = typescriptFiles.filter((file) => !file.endsWith('.d.ts'))
   for (const file of transpileFiles) {
     const content = await fs.readFile(file, 'utf8')
@@ -152,6 +156,8 @@ if (ts) {
     }
   }
   notes.push(`TypeScript ${ts.version} transpile syntax check passed for ${transpileFiles.length} files.`)
+} else if (ts) {
+  notes.push(`TypeScript ${ts.version} does not expose the legacy transpile API; syntax is covered by \`pnpm typecheck\`.`)
 } else {
   notes.push('TypeScript package unavailable; skipped transpile syntax checks (relative imports and Node scripts were still checked).')
 }
@@ -229,6 +235,15 @@ function resolveLocalImport(importer, specifier) {
     candidates.push(`${base}.ts`, `${base}.tsx`, `${base}.css`, join(base, 'index.ts'), join(base, 'index.tsx'))
   }
   return candidates.find((candidate) => existsSync(candidate))
+}
+
+async function caseSensitiveExists(path) {
+  try {
+    const entries = await fs.readdir(dirname(path))
+    return entries.includes(basename(path))
+  } catch {
+    return false
+  }
 }
 
 function loadTypeScript() {

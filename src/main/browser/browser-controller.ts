@@ -93,6 +93,10 @@ export class BrowserController {
     this.emitState()
   }
 
+  setBackgroundColor(color: string): void {
+    this.view.setBackgroundColor(color)
+  }
+
   async navigate(input: string): Promise<BrowserState> {
     const url = normalizeBrowserUrl(input)
     await this.view.webContents.loadURL(url)

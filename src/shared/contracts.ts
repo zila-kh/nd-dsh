@@ -68,6 +68,14 @@ export interface AppInfo {
   projectRoot: string
 }
 
+export type ThemeMode = 'system' | 'light' | 'dark'
+export type EffectiveTheme = 'light' | 'dark'
+
+export interface ThemeState {
+  mode: ThemeMode
+  effective: EffectiveTheme
+}
+
 export interface DesktopApi {
   app: {
     info(): Promise<AppInfo>
@@ -81,6 +89,7 @@ export interface DesktopApi {
     forward(): Promise<BrowserState>
     reload(): Promise<BrowserState>
     snapshot(): Promise<unknown>
+    openExternal(url: string): Promise<void>
     onState(listener: (state: BrowserState) => void): () => void
   }
   workspace: {
@@ -96,6 +105,11 @@ export interface DesktopApi {
     onStatus(listener: (status: HarnessStatus) => void): () => void
     onNotification(listener: (notification: HarnessNotification) => void): () => void
   }
+  theme: {
+    state(): Promise<ThemeState>
+    set(mode: ThemeMode): Promise<ThemeState>
+    onChanged(listener: (state: ThemeState) => void): () => void
+  }
 }
 
 export const IPC = {
@@ -108,6 +122,7 @@ export const IPC = {
   browserForward: 'browser:forward',
   browserReload: 'browser:reload',
   browserSnapshot: 'browser:snapshot',
+  browserOpenExternal: 'browser:open-external',
   browserStateEvent: 'browser:state-event',
   workspaceState: 'workspace:state',
   workspacePick: 'workspace:pick',
@@ -118,4 +133,7 @@ export const IPC = {
   harnessStop: 'harness:stop',
   harnessStatusEvent: 'harness:status-event',
   harnessNotificationEvent: 'harness:notification-event',
+  themeState: 'theme:state',
+  themeSet: 'theme:set',
+  themeChangedEvent: 'theme:changed',
 } as const

@@ -14,6 +14,7 @@ const api: DesktopApi = {
     forward: () => ipcRenderer.invoke(IPC.browserForward),
     reload: () => ipcRenderer.invoke(IPC.browserReload),
     snapshot: () => ipcRenderer.invoke(IPC.browserSnapshot),
+    openExternal: (url) => ipcRenderer.invoke(IPC.browserOpenExternal, url),
     onState: (listener) => {
       const handler = (_event: Electron.IpcRendererEvent, state: Parameters<typeof listener>[0]) => listener(state)
       ipcRenderer.on(IPC.browserStateEvent, handler)
@@ -39,6 +40,15 @@ const api: DesktopApi = {
       const handler = (_event: Electron.IpcRendererEvent, notification: Parameters<typeof listener>[0]) => listener(notification)
       ipcRenderer.on(IPC.harnessNotificationEvent, handler)
       return () => ipcRenderer.removeListener(IPC.harnessNotificationEvent, handler)
+    },
+  },
+  theme: {
+    state: () => ipcRenderer.invoke(IPC.themeState),
+    set: (mode) => ipcRenderer.invoke(IPC.themeSet, mode),
+    onChanged: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: Parameters<typeof listener>[0]) => listener(state)
+      ipcRenderer.on(IPC.themeChangedEvent, handler)
+      return () => ipcRenderer.removeListener(IPC.themeChangedEvent, handler)
     },
   },
 }

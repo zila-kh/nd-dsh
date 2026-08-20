@@ -8,6 +8,7 @@ import { projectRoot } from './app-paths.js'
 import { BrowserController } from './browser/browser-controller.js'
 import { HarnessService } from './harness/harness-service.js'
 import { registerIpc } from './ipc.js'
+import { ThemeService } from './theme.js'
 import { WorkspaceService } from './workspace/workspace-service.js'
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url))
@@ -27,6 +28,8 @@ const closingHarnesses = new Set<Promise<void>>()
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) app.quit()
 
+const theme = new ThemeService()
+
 app.on('second-instance', () => {
   if (!mainWindow) return
   if (mainWindow.isMinimized()) mainWindow.restore()
@@ -35,7 +38,7 @@ app.on('second-instance', () => {
 })
 
 async function createWindow(): Promise<void> {
-  const preload = join(currentDirectory, '../preload/index.js')
+  const preload = join(currentDirectory, '../preload/index.cjs')
   const workspace = new WorkspaceService(process.env.ND_DSH_WORKSPACE?.trim() || process.cwd())
   const isMac = process.platform === 'darwin'
 
@@ -45,13 +48,13 @@ async function createWindow(): Promise<void> {
     minWidth: 1180,
     minHeight: 720,
     show: false,
-    backgroundColor: '#0b0d10',
+    backgroundColor: theme.windowBackgroundColor(),
     autoHideMenuBar: true,
     title: 'ND · DeepSeek IDE',
     titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
     ...(isMac
       ? { trafficLightPosition: { x: 14, y: 13 } }
-      : { titleBarOverlay: { color: '#101319', symbolColor: '#c5cad3', height: 38 } }),
+      : { titleBarOverlay: theme.titleBarOverlay() }),
     webPreferences: {
       preload,
       contextIsolation: true,
@@ -64,9 +67,14 @@ async function createWindow(): Promise<void> {
 
   const browser = new BrowserController(window, cdpPort, projectRoot())
   const harness = new HarnessService(workspace, browser)
-  const disposeIpc = registerIpc({ window, browser, harness, workspace })
+  const disposeIpc = registerIpc({ window, browser, harness, workspace, theme })
   mainWindow = window
   activeHarness = harness
+
+  theme.attach(window, (color) => browser.setBackgroundColor(color))
+  theme.setOnChanged((state) => {
+    if (!window.isDestroyed()) window.webContents.send(IPC.themeChangedEvent, state)
+  })
 
   browser.setStateListener((state) => {
     if (!window.isDestroyed()) window.webContents.send(IPC.browserStateEvent, state)

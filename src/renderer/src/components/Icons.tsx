@@ -47,3 +47,6 @@ export const StopIcon = (props: IconProps) => <IconBase {...props}><rect x="6" y
 export const SparkIcon = (props: IconProps) => <IconBase {...props}><path d="m12 2 1.5 5.5L19 9l-5.5 1.5L12 16l-1.5-5.5L5 9l5.5-1.5z" /><path d="m19 15 .7 2.3L22 18l-2.3.7L19 21l-.7-2.3L16 18l2.3-.7z" /></IconBase>
 export const CloseIcon = (props: IconProps) => <IconBase {...props}><path d="m7 7 10 10M17 7 7 17" /></IconBase>
 export const ExternalIcon = (props: IconProps) => <IconBase {...props}><path d="M14 4h6v6M20 4l-9 9" /><path d="M18 13v7H4V6h7" /></IconBase>
+export const SunIcon = (props: IconProps) => <IconBase {...props}><circle cx="12" cy="12" r="4" /><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5 5l1.4 1.4M17.6 17.6 19 19M19 5l-1.4 1.4M6.4 17.6 5 19" /></IconBase>
+export const MoonIcon = (props: IconProps) => <IconBase {...props}><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z" /></IconBase>
+export const MonitorIcon = (props: IconProps) => <IconBase {...props}><rect x="2.75" y="4.5" width="18.5" height="12.5" rx="1.5" /><path d="M9 20h6M12 17v3" /></IconBase>

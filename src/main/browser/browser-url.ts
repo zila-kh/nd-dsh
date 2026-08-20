@@ -1,7 +1,7 @@
 export const DEFAULT_BROWSER_URL = 'http://localhost:5173'
 
-const LOOPBACK_HOST = /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/|$)/i
-const DOMAIN_WITH_PORT = /^(?:[a-z0-9-]+\.)+[a-z0-9-]+:\d+(?:\/|$)/i
+const LOOPBACK_HOST = /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:[/?#]|$)/i
+const DOMAIN_WITH_PORT = /^(?:[a-z0-9-]+\.)+[a-z0-9-]+:\d+(?:[/?#]|$)/i
 const ALLOWED_EXPLICIT_PROTOCOL = /^(?:https?|about):/i
 const EXPLICIT_PROTOCOL = /^([a-z][a-z\d+.-]*):/i
 
@@ -29,8 +29,8 @@ export function normalizeBrowserUrl(input: string): string {
 
 export function isAllowedBrowserUrl(value: string): boolean {
   try {
-    const protocol = new URL(value).protocol
-    return protocol === 'http:' || protocol === 'https:' || protocol === 'about:'
+    const parsed = new URL(value)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.href === 'about:blank'
   } catch {
     return false
   }

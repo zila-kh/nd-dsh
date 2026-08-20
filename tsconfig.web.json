@@ -15,10 +15,10 @@
     "noEmit": true,
     "skipLibCheck": true,
     "types": ["vite/client"],
-    "baseUrl": ".",
+    "tsBuildInfoFile": "./node_modules/.cache/tsconfig.web.tsbuildinfo",
     "paths": {
-      "@renderer/*": ["src/renderer/src/*"],
-      "@shared/*": ["src/shared/*"]
+      "@renderer/*": ["./src/renderer/src/*"],
+      "@shared/*": ["./src/shared/*"]
     }
   },
   "include": ["src/renderer/src/**/*.ts", "src/renderer/src/**/*.tsx", "src/shared/**/*.ts"]

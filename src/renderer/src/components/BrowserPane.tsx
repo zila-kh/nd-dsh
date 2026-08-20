@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import type { BrowserState } from '../../../shared/contracts'
-import { ArrowLeftIcon, ArrowRightIcon, CameraIcon, ReloadIcon } from './Icons'
+import { ArrowLeftIcon, ArrowRightIcon, CameraIcon, ExternalIcon, ReloadIcon } from './Icons'
 
 interface BrowserPaneProps {
   active: boolean
@@ -96,6 +96,14 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
           />
         </form>
         <button className="icon-button snapshot-button" onClick={() => void snapshot()} title="Interactive snapshot"><CameraIcon /></button>
+        <button
+          className="icon-button"
+          disabled={!state?.url}
+          onClick={() => void runBrowserAction(() => window.ndDsh.browser.openExternal(state?.url ?? address))}
+          title="Open in system browser"
+        >
+          <ExternalIcon />
+        </button>
         <span className={`bridge-pill ${state?.agentBrowser ?? 'binding'}`} title={state?.agentBrowserError}>
           <span />{state?.agentBrowser === 'ready' ? 'Agent linked' : state?.agentBrowser === 'unavailable' ? 'Agent offline' : 'Linking'}
         </span>
