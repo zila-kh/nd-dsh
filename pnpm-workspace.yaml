@@ -1,0 +1,6 @@
+packages:
+  - .
+
+# DeepSeek Harness intentionally remains its own pinned workspace under
+# vendor/deepseek-harness. Bootstrap installs and builds it with --dir instead
+# of merging its rapidly-changing workspace graph into this one.

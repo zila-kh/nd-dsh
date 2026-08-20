@@ -19,8 +19,7 @@ React workbench
 - native `WebContentsView` browser pane inside the IDE
 - exact CDP target discovery, selection, and strict reattachment
 - `agent-browser` accessibility snapshots, interactions, console, network,
-  cookies, storage, screenshots, React diagnostics, and read-only tab inventory
-  through a least-privilege MCP policy bridge
+  cookies, storage, tabs, screenshots, and React diagnostics through MCP
 - DeepSeek Harness as a **pinned Git submodule**, driven through its official
   TypeScript SDK and stdio JSON-RPC runtime
 - workspace-scoped filesystem and shell providers
@@ -91,9 +90,8 @@ still opens and the address bar remains usable.
    strict `agent-browser` tab pinning for all later CLI and MCP calls.
 5. When the user sends a prompt, the official TypeScript DSH SDK lazily starts
    the pinned Harness JSON-RPC runtime.
-6. DSH's MCP client launches the ND-DSH policy bridge, which delegates to
-   `agent-browser mcp` with the same config and session. The bridge exposes only
-   same-pane tools, so every model browser action appears in the visible pane.
+6. DSH's MCP client launches `agent-browser mcp` with the same config and
+   session, so every model browser action appears in the visible pane.
 
 The MCP tools are exposed to the model as
 `mcp__browser__agent_browser_<action>`. The project skill at
@@ -135,11 +133,6 @@ composition while all Harness implementation remains in the submodule.
   requests for sandbox escalation fail closed.
 - cookies, storage, console output, screenshots, and network bodies can contain
   secrets; browser MCP tools are privileged local capabilities.
-- the browser MCP policy bridge uses an exact allowlist. It denies tab creation,
-  switching and closing, new windows, CDP reconnects, browser close, arbitrary
-  evaluation/function execution, host-file cookie imports, HAR file output,
-  plugin installation, and upgrade surfaces. Tab inventory remains
-  read-only until ND-DSH has a visible multi-tab workbench.
 - the MCP stdio command is trusted executable code started outside the model's
   sandbox. Keep both upstream pins reviewed.
 
@@ -159,9 +152,7 @@ corepack pnpm build
 metadata, Cordis composition, security invariants, relative imports, Node script
 syntax, CSS brace balance, and TypeScript transpile syntax when a TypeScript
 installation is available. The remaining commands require a completed
-bootstrap. The packaging validation record is in
-[`docs/verification.md`](docs/verification.md); it distinguishes completed
-static checks from the full Node 24/Electron release gate.
+bootstrap.
 
 ## Updating DeepSeek Harness
 
@@ -185,8 +176,7 @@ ND-DSH adapters before committing the updated gitlink.
 This scaffold intentionally does not reimplement Chromium, CDP, accessibility
 snapshots, click targeting, console capture, or network capture. It also does
 not yet include Monaco, a writable editor surface, a PTY terminal, LSP UI, Git
-panels, approval dialogs, extension packaging, or signed installers. Browser target creation and switching are also
-deferred until the workbench can render every agent-controlled tab. Future IDE
+panels, approval dialogs, extension packaging, or signed installers. Future IDE
 surfaces should project Harness services through narrow IPC contracts without
 introducing a second browser or patching the Harness agent loop.
 
