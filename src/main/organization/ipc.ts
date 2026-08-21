@@ -1,5 +1,5 @@
 import { ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
-import { ORGANIZATION_IPC, type OrganizationMutation } from '../../shared/organization.js'
+import { ORGANIZATION_IPC, type OrganizationMutation, type OrganizationSnapshot } from '../../shared/organization.js'
 import type { OrganizationOrchestrator } from './orchestrator.js'
 import type { OrganizationStore } from './store.js'
 
@@ -21,13 +21,48 @@ export function registerOrganizationIpc(window: BrowserWindow, store: Organizati
   }
 
   handle(ORGANIZATION_IPC.state, () => store.state())
-  handle(ORGANIZATION_IPC.mutate, (_event, value) => store.mutate(asMutation(value)))
+  handle(ORGANIZATION_IPC.mutate, async (_event, value) => {
+    const mutation = asMutation(value)
+    const state = await store.mutate(mutation)
+    const projectId = autopilotProjectId(mutation, state)
+    if (projectId) {
+      try {
+        await orchestrator.runNext(projectId, false)
+        return store.state()
+      } catch (error) {
+        console.warn('Organization autopilot did not start:', error instanceof Error ? error.message : String(error))
+      }
+    }
+    return state
+  })
   handle(ORGANIZATION_IPC.planProject, (_event, value) => orchestrator.planProject(asId(value, 'Project id')))
   handle(ORGANIZATION_IPC.runTask, (_event, value) => orchestrator.runTask(asId(value, 'Task id')))
   handle(ORGANIZATION_IPC.reviewTask, (_event, value) => orchestrator.reviewTask(asId(value, 'Task id')))
   handle(ORGANIZATION_IPC.runNext, (_event, value) => orchestrator.runNext(value === undefined || value === null ? undefined : asId(value, 'Project id')))
 
   return () => { for (const channel of channels) ipcMain.removeHandler(channel) }
+}
+
+function autopilotProjectId(mutation: OrganizationMutation, state: OrganizationSnapshot): string | undefined {
+  let companyId: string | undefined
+  let projectId: string | undefined
+
+  if (mutation.type === 'project.create') {
+    companyId = mutation.companyId
+    projectId = state.activeProjectId
+  } else if (mutation.type === 'company.update' && mutation.patch.autonomyLevel === 4) {
+    companyId = mutation.id
+    projectId = state.activeProjectId && state.projects.some((item) => item.id === state.activeProjectId && item.companyId === companyId)
+      ? state.activeProjectId
+      : state.projects.find((item) => item.companyId === companyId && item.status !== 'completed' && item.status !== 'archived')?.id
+  }
+
+  if (!companyId || !projectId) return undefined
+  const company = state.companies.find((item) => item.id === companyId)
+  if (company?.autonomyLevel !== 4) return undefined
+  const project = state.projects.find((item) => item.id === projectId)
+  if (!project || project.status === 'completed' || project.status === 'archived') return undefined
+  return project.id
 }
 
 function assertTrusted(event: IpcMainInvokeEvent, window: BrowserWindow): void {

@@ -15,6 +15,7 @@ import type {
   OrganizationSkill,
   OrganizationSnapshot,
   OrganizationTask,
+  OrganizationWorkflow,
   Project,
   ProjectPlanInput,
   Team,
@@ -83,6 +84,7 @@ export class OrganizationStore {
         const id = randomUUID()
         taskIdsByTitle.set(input.title.trim().toLowerCase(), id)
         const agent = this.pickAgent(companyId, input.role)
+        if (agent?.teamId && !project.teamIds.includes(agent.teamId)) project.teamIds.push(agent.teamId)
         this.value.tasks.push({
           id, companyId, projectId, goalId, milestoneId,
           title: clean(input.title), description: clean(input.description),
@@ -134,10 +136,31 @@ export class OrganizationStore {
     return this.value.policies.find((item) => item.companyId === companyId && item.action === action)?.effect ?? 'ask'
   }
 
+  async workflowForProject(projectId: string): Promise<OrganizationWorkflow | undefined> {
+    await this.load()
+    const project = this.project(projectId)
+    const projectWorkflow = this.value.workflows.filter((item) => item.companyId === project.companyId && item.projectId === projectId).at(-1)
+    const companyWorkflow = this.value.workflows.filter((item) => item.companyId === project.companyId && !item.projectId).at(-1)
+    const workflow = projectWorkflow ?? companyWorkflow
+    return workflow ? clone(workflow) : undefined
+  }
+
+  async activeRun(projectId: string): Promise<OrganizationRun | undefined> {
+    await this.load()
+    const found = this.value.runs.find((item) => item.projectId === projectId && item.status === 'running')
+    return found ? clone(found) : undefined
+  }
+
   async runBySession(sessionId: string): Promise<OrganizationRun | undefined> {
     await this.load()
     const found = this.value.runs.find((item) => item.sessionId === sessionId && item.status === 'running')
     return found ? clone(found) : undefined
+  }
+
+  async executionAttemptCount(taskId: string): Promise<number> {
+    await this.load()
+    this.task(taskId)
+    return this.value.runs.filter((item) => item.taskId === taskId && item.kind === 'task-execution').length
   }
 
   async beginRun(kind: OrganizationRunKind, companyId: string, projectId: string, sessionId: string, taskId?: string, goalId?: string): Promise<OrganizationRun> {
@@ -194,8 +217,48 @@ export class OrganizationStore {
     task.status = passed ? 'completed' : 'blocked'; task.reviewSummary = summary.slice(0, 20_000); task.updatedAt = Date.now()
     const reviewer = this.value.agents.find((agent) => agent.status === 'reviewing' && agent.currentTaskId === task.id)
     this.setAgent(reviewer?.id, 'idle')
+    this.addMemory({
+      companyId: task.companyId,
+      projectId: task.projectId,
+      title: `Review: ${task.title}`,
+      content: summary,
+      tags: ['review', passed ? 'passed' : 'failed'],
+      source: 'reviewer',
+    })
     for (const item of memories) this.addMemory({ companyId: task.companyId, projectId: task.projectId, title: item.title, content: item.content, ...(item.tags ? { tags: item.tags } : {}), source: 'reviewer' })
     this.activity(task.companyId, task.projectId, passed ? 'task.completed' : 'task.blocked', `${passed ? 'Passed' : 'Failed'} review: “${task.title}”.`)
+    this.refreshProject(task.projectId)
+    await this.save()
+  }
+
+  async queueRework(taskId: string, reason: string): Promise<void> {
+    await this.load()
+    const task = this.task(taskId)
+    if (task.status !== 'blocked') throw new Error('Only a blocked task can be queued for rework')
+    task.status = 'ready'
+    task.updatedAt = Date.now()
+    this.activity(task.companyId, task.projectId, 'task.rework', `Queued rework for “${task.title}”: ${reason.slice(0, 500)}`)
+    this.refreshProject(task.projectId)
+    await this.save()
+  }
+
+  async completeWithoutReview(taskId: string, summary: string): Promise<void> {
+    await this.load()
+    const task = this.task(taskId)
+    task.status = 'completed'
+    task.resultSummary = summary.slice(0, 20_000)
+    task.reviewSummary = 'Completed by workflow without an independent review step.'
+    task.updatedAt = Date.now()
+    this.setAgent(task.assignedAgentId, 'idle')
+    this.addMemory({
+      companyId: task.companyId,
+      projectId: task.projectId,
+      title: `Task result: ${task.title}`,
+      content: summary,
+      tags: ['task', 'completed', 'no-review'],
+      source: 'worker',
+    })
+    this.activity(task.companyId, task.projectId, 'task.completed', `Completed “${task.title}” without a review step.`)
     this.refreshProject(task.projectId)
     await this.save()
   }
@@ -258,30 +321,70 @@ export class OrganizationStore {
   private createRole(input: Extract<OrganizationMutation, { type: 'role.create' }>): void { this.company(input.companyId); this.value.roles.push({ id: randomUUID(), companyId: input.companyId, name: clean(input.name), responsibility: clean(input.responsibility), systemPrompt: clean(input.systemPrompt), skillIds: input.skillIds ?? [] }) }
   private createAgent(input: Extract<OrganizationMutation, { type: 'agent.create' }>): void { this.company(input.companyId); this.assertRoleCompany(input.roleId, input.companyId); if (input.teamId) this.assertTeamCompany(input.teamId, input.companyId); this.value.agents.push({ id: randomUUID(), companyId: input.companyId, name: clean(input.name), roleId: input.roleId, status: 'idle', skillIds: input.skillIds ?? [], ...(input.teamId ? { teamId: input.teamId } : {}) }) }
   private createSkill(input: Extract<OrganizationMutation, { type: 'skill.create' }>): void { const companyId = input.companyId; if (!companyId) throw new Error('Scoped skills require companyId'); this.company(companyId); if (input.projectId && this.project(input.projectId).companyId !== companyId) throw new Error('Project skill crosses company boundary'); if (input.teamId) this.assertTeamCompany(input.teamId, companyId); if (input.roleId) this.assertRoleCompany(input.roleId, companyId); if (input.agentId && !this.value.agents.some((item) => item.id === input.agentId && item.companyId === companyId)) throw new Error('Agent skill crosses company boundary'); this.value.skills.push({ id: randomUUID(), scope: input.scope, name: clean(input.name), description: clean(input.description), instructions: clean(input.instructions), companyId, ...(input.projectId ? { projectId: input.projectId } : {}), ...(input.teamId ? { teamId: input.teamId } : {}), ...(input.roleId ? { roleId: input.roleId } : {}), ...(input.agentId ? { agentId: input.agentId } : {}) }) }
-  private createWorkflow(input: Extract<OrganizationMutation, { type: 'workflow.create' }>): void { this.company(input.companyId); if (input.projectId && this.project(input.projectId).companyId !== input.companyId) throw new Error('Workflow crosses company boundary'); this.value.workflows.push({ id: randomUUID(), companyId: input.companyId, name: clean(input.name), scope: input.projectId ? 'project' : 'company', ...(input.projectId ? { projectId: input.projectId } : {}), steps: input.steps }) }
+  private createWorkflow(input: Extract<OrganizationMutation, { type: 'workflow.create' }>): void { this.company(input.companyId); if (input.projectId && this.project(input.projectId).companyId !== input.companyId) throw new Error('Workflow crosses company boundary'); if (!input.steps.length) throw new Error('Workflow must contain at least one step'); this.value.workflows.push({ id: randomUUID(), companyId: input.companyId, name: clean(input.name), scope: input.projectId ? 'project' : 'company', ...(input.projectId ? { projectId: input.projectId } : {}), steps: input.steps }) }
   private createGoal(input: Extract<OrganizationMutation, { type: 'goal.create' }>): void { if (this.project(input.projectId).companyId !== input.companyId) throw new Error('Goal crosses company boundary'); this.value.goals.push({ id: randomUUID(), companyId: input.companyId, projectId: input.projectId, title: clean(input.title), description: clean(input.description), status: 'active', progress: 0, createdAt: Date.now() }); this.refreshProject(input.projectId) }
-  private createTask(input: Extract<OrganizationMutation, { type: 'task.create' }>): void { const project = this.project(input.projectId); if (project.companyId !== input.companyId) throw new Error('Project does not belong to company'); if (input.assignedAgentId && !this.value.agents.some((item) => item.id === input.assignedAgentId && item.companyId === input.companyId)) throw new Error('Assigned agent crosses company boundary'); for (const dependency of input.dependsOn ?? []) if (!this.value.tasks.some((item) => item.id === dependency && item.projectId === input.projectId)) throw new Error('Task dependency crosses project boundary'); const now = Date.now(); this.value.tasks.push({ id: randomUUID(), companyId: input.companyId, projectId: input.projectId, title: clean(input.title), description: clean(input.description), acceptanceCriteria: input.acceptanceCriteria?.map(clean).filter(Boolean) ?? ['Requested outcome is implemented and verified.'], priority: input.priority ?? 'medium', status: 'backlog', dependsOn: input.dependsOn ?? [], ...(input.goalId ? { goalId: input.goalId } : {}), ...(input.milestoneId ? { milestoneId: input.milestoneId } : {}), ...(input.assignedAgentId ? { assignedAgentId: input.assignedAgentId } : {}), createdAt: now, updatedAt: now }); this.refreshProject(input.projectId) }
+  private createTask(input: Extract<OrganizationMutation, { type: 'task.create' }>): void {
+    const project = this.project(input.projectId)
+    if (project.companyId !== input.companyId) throw new Error('Project does not belong to company')
+    if (input.assignedAgentId && !this.value.agents.some((item) => item.id === input.assignedAgentId && item.companyId === input.companyId)) throw new Error('Assigned agent crosses company boundary')
+    for (const dependency of input.dependsOn ?? []) if (!this.value.tasks.some((item) => item.id === dependency && item.projectId === input.projectId)) throw new Error('Task dependency crosses project boundary')
+    const agent = input.assignedAgentId ? this.value.agents.find((item) => item.id === input.assignedAgentId) : this.pickAgent(input.companyId)
+    if (agent?.teamId && !project.teamIds.includes(agent.teamId)) project.teamIds.push(agent.teamId)
+    const now = Date.now()
+    this.value.tasks.push({ id: randomUUID(), companyId: input.companyId, projectId: input.projectId, title: clean(input.title), description: clean(input.description), acceptanceCriteria: input.acceptanceCriteria?.map(clean).filter(Boolean) ?? ['Requested outcome is implemented and verified.'], priority: input.priority ?? 'medium', status: 'backlog', dependsOn: input.dependsOn ?? [], ...(input.goalId ? { goalId: input.goalId } : {}), ...(input.milestoneId ? { milestoneId: input.milestoneId } : {}), ...(agent ? { assignedAgentId: agent.id } : {}), createdAt: now, updatedAt: now })
+    this.refreshProject(input.projectId)
+  }
   private updateTask(id: string, patch: Extract<OrganizationMutation, { type: 'task.update' }>['patch']): void { const task = this.task(id); if (patch.assignedAgentId && !this.value.agents.some((item) => item.id === patch.assignedAgentId && item.companyId === task.companyId)) throw new Error('Assigned agent crosses company boundary'); for (const dependency of patch.dependsOn ?? []) if (!this.value.tasks.some((item) => item.id === dependency && item.projectId === task.projectId)) throw new Error('Task dependency crosses project boundary'); Object.assign(task, patch); task.updatedAt = Date.now(); this.refreshProject(task.projectId) }
   private addMemory(input: { companyId: string; projectId?: string; title: string; content: string; tags?: string[]; source: MemoryEntry['source']; type?: string }): void { this.company(input.companyId); const now = Date.now(); this.value.memory.push({ id: randomUUID(), companyId: input.companyId, ...(input.projectId ? { projectId: input.projectId } : {}), title: clean(input.title), content: clean(input.content), tags: input.tags?.map(clean).filter(Boolean) ?? [], source: input.source, createdAt: now, updatedAt: now }) }
   private setPolicy(input: Extract<OrganizationMutation, { type: 'policy.set' }>): void { this.company(input.companyId); const existing = this.value.policies.find((item) => item.companyId === input.companyId && item.action === input.action); if (existing) { existing.effect = input.effect; if (input.description) existing.description = clean(input.description) } else this.value.policies.push({ id: randomUUID(), companyId: input.companyId, action: clean(input.action), effect: input.effect, description: clean(input.description ?? input.action) }) }
 
   private refreshProject(projectId: string): void {
-    const project = this.project(projectId); const tasks = this.value.tasks.filter((item) => item.projectId === projectId)
-    for (const task of tasks) if (task.status === 'backlog' && task.dependsOn.every((id) => this.value.tasks.find((item) => item.id === id)?.status === 'completed')) task.status = 'ready'
+    const project = this.project(projectId)
+    const tasks = this.value.tasks.filter((item) => item.projectId === projectId)
+    for (const task of tasks) {
+      if (task.status === 'backlog' && task.dependsOn.every((id) => this.value.tasks.find((item) => item.id === id)?.status === 'completed')) task.status = 'ready'
+    }
+
     project.progress = tasks.length ? Math.round(tasks.filter((item) => item.status === 'completed').length / tasks.length * 100) : 0
-    if (tasks.some((item) => item.status === 'in_progress' || item.status === 'review' || item.status === 'ready')) project.status = 'active'
-    if (tasks.length && tasks.every((item) => item.status === 'completed')) project.status = 'completed'
-    if (tasks.some((item) => item.status === 'blocked')) project.status = 'blocked'
+    const allCompleted = tasks.length > 0 && tasks.every((item) => item.status === 'completed')
+    const hasRunnable = tasks.some((item) => item.status === 'in_progress' || item.status === 'review' || item.status === 'ready')
+    const hasBlocked = tasks.some((item) => item.status === 'blocked')
+    if (allCompleted) project.status = 'completed'
+    else if (hasRunnable) project.status = 'active'
+    else if (hasBlocked) project.status = 'blocked'
+    else if (tasks.length > 0) project.status = 'planning'
     project.updatedAt = Date.now()
+
+    for (const milestone of this.value.milestones.filter((item) => item.projectId === projectId)) {
+      const milestoneTasks = tasks.filter((task) => task.milestoneId === milestone.id)
+      if (!milestoneTasks.length) milestone.status = 'pending'
+      else if (milestoneTasks.every((task) => task.status === 'completed')) milestone.status = 'completed'
+      else if (milestoneTasks.some((task) => task.status === 'ready' || task.status === 'in_progress' || task.status === 'review')) milestone.status = 'active'
+      else if (milestoneTasks.some((task) => task.status === 'blocked')) milestone.status = 'blocked'
+      else milestone.status = 'pending'
+    }
+
     for (const goal of this.value.goals.filter((item) => item.projectId === projectId)) {
-      const goalTasks = tasks.filter((task) => task.goalId === goal.id); goal.progress = goalTasks.length ? Math.round(goalTasks.filter((task) => task.status === 'completed').length / goalTasks.length * 100) : 0
-      if (goal.progress === 100) goal.status = 'completed'; else if (goalTasks.some((task) => task.status === 'blocked')) goal.status = 'blocked'; else goal.status = 'active'
+      const goalTasks = tasks.filter((task) => task.goalId === goal.id)
+      goal.progress = goalTasks.length ? Math.round(goalTasks.filter((task) => task.status === 'completed').length / goalTasks.length * 100) : 0
+      if (goal.progress === 100) goal.status = 'completed'
+      else if (goalTasks.some((task) => task.status === 'ready' || task.status === 'in_progress' || task.status === 'review')) goal.status = 'active'
+      else if (goalTasks.some((task) => task.status === 'blocked')) goal.status = 'blocked'
+      else goal.status = 'active'
     }
   }
   private seedRole(companyId: string, name: string, responsibility: string, systemPrompt: string, skillIds: string[]): OrganizationRole { const role = { id: randomUUID(), companyId, name, responsibility, systemPrompt, skillIds }; this.value.roles.push(role); return role }
   private seedTeam(companyId: string, name: string, purpose: string, roleIds: string[], skillIds: string[]): Team { const team = { id: randomUUID(), companyId, name, purpose, roleIds, skillIds }; this.value.teams.push(team); return team }
   private seedAgent(companyId: string, name: string, roleId: string, teamId: string): OrganizationAgent { const agent: OrganizationAgent = { id: randomUUID(), companyId, name, roleId, teamId, status: 'idle', skillIds: [] }; this.value.agents.push(agent); return agent }
-  private pickAgent(companyId: string, roleHint?: string): OrganizationAgent | undefined { const hint = roleHint?.toLowerCase() ?? ''; const roles = this.value.roles.filter((role) => role.companyId === companyId); const role = roles.find((item) => item.name.toLowerCase().includes(hint)) ?? roles.find((item) => /engineer/i.test(item.name)) ?? roles[0]; return role ? this.value.agents.find((agent) => agent.companyId === companyId && agent.roleId === role.id) : undefined }
+  private pickAgent(companyId: string, roleHint?: string): OrganizationAgent | undefined {
+    const hint = roleHint?.trim().toLowerCase() ?? ''
+    const roles = this.value.roles.filter((role) => role.companyId === companyId)
+    const hintedRole = hint ? roles.find((item) => item.name.toLowerCase().includes(hint) || hint.includes(item.name.toLowerCase())) : undefined
+    const role = hintedRole ?? roles.find((item) => /engineer/i.test(item.name)) ?? roles[0]
+    if (!role) return undefined
+    const agents = this.value.agents.filter((agent) => agent.companyId === companyId && agent.roleId === role.id)
+    return agents.find((agent) => agent.status === 'idle') ?? agents[0]
+  }
   private setAgent(agentId: string | undefined, status: AgentStatus, taskId?: string, sessionId?: string): void { if (!agentId) return; const agent = this.value.agents.find((item) => item.id === agentId); if (!agent) return; agent.status = status; if (taskId) agent.currentTaskId = taskId; else delete agent.currentTaskId; if (sessionId) agent.lastSessionId = sessionId }
   private assertRoleCompany(roleId: string, companyId: string): void { if (!this.value.roles.some((item) => item.id === roleId && item.companyId === companyId)) throw new Error('Role crosses company boundary') }
   private assertTeamCompany(teamId: string, companyId: string): void { if (!this.value.teams.some((item) => item.id === teamId && item.companyId === companyId)) throw new Error('Team crosses company boundary') }

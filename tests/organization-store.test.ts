@@ -28,17 +28,18 @@ describe('OrganizationStore', () => {
     await expect(store.mutate({ type: 'skill.create', scope: 'project', companyId: companyA.id, projectId: projectB.id, name: 'Leak', description: 'bad', instructions: 'bad' })).rejects.toThrow(/company boundary/i)
   })
 
-  it('materializes PM plans into dependency-aware work and tracks review progress', async () => {
+  it('materializes PM plans into dependency-aware assigned work and tracks milestones, review memory, and project progress', async () => {
     const store = await storeFixture()
     let state = await store.mutate({ type: 'company.create', name: 'Acme', mission: 'Ship software' })
     const company = state.companies[0]!
+    const builder = state.agents.find((item) => item.companyId === company.id && item.name === 'Builder')!
     state = await store.mutate({ type: 'project.create', companyId: company.id, name: 'Product', objective: 'Launch v1' })
     const project = state.projects[0]!
     await store.applyPlan(project.id, {
       goal: { title: 'Launch', description: 'Launch v1 safely' },
       milestones: [{ title: 'Build', description: 'Build it', tasks: [
-        { title: 'Foundation', description: 'Create foundation', role: 'Software Engineer' },
-        { title: 'Finish', description: 'Complete feature', dependsOn: ['Foundation'], role: 'Software Engineer' },
+        { title: 'Foundation', description: 'Create foundation' },
+        { title: 'Finish', description: 'Complete feature', dependsOn: ['Foundation'] },
       ] }],
     })
     state = await store.state()
@@ -47,6 +48,10 @@ describe('OrganizationStore', () => {
     expect(first.status).toBe('ready')
     expect(second.status).toBe('backlog')
     expect(second.dependsOn).toEqual([first.id])
+    expect(first.assignedAgentId).toBe(builder.id)
+    expect(second.assignedAgentId).toBe(builder.id)
+    expect(state.projects[0]?.teamIds).toContain(builder.teamId)
+    expect(state.milestones[0]?.status).toBe('active')
 
     await store.markExecution(first.id, 'worker-session')
     await store.markForReview(first.id, 'Implemented and tested')
@@ -56,8 +61,23 @@ describe('OrganizationStore', () => {
     expect(state.tasks.find((item) => item.id === first.id)?.status).toBe('completed')
     expect(state.tasks.find((item) => item.id === second.id)?.status).toBe('ready')
     expect(state.memory.some((item) => item.title === 'Lesson')).toBe(true)
+    expect(state.memory.some((item) => item.title === 'Review: Foundation')).toBe(true)
     expect(state.projects[0]?.progress).toBe(50)
+    expect(state.projects[0]?.status).toBe('active')
     expect(state.goals[0]?.progress).toBe(50)
+    expect(state.milestones[0]?.status).toBe('active')
+  })
+
+  it('uses project workflows as the active execution policy', async () => {
+    const store = await storeFixture()
+    let state = await store.mutate({ type: 'company.create', name: 'Workflow Co', mission: 'Ship with explicit workflows' })
+    const company = state.companies[0]!
+    state = await store.mutate({ type: 'project.create', companyId: company.id, name: 'No review project', objective: 'Ship internal prototype' })
+    const project = state.projects[0]!
+    await store.mutate({ type: 'workflow.create', companyId: company.id, projectId: project.id, name: 'Execute only', steps: [{ id: 'execute', name: 'Execute', kind: 'execute' }] })
+    const workflow = await store.workflowForProject(project.id)
+    expect(workflow?.name).toBe('Execute only')
+    expect(workflow?.steps.map((item) => item.kind)).toEqual(['execute'])
   })
 
   it('persists policies and organization state atomically', async () => {
