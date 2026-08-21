@@ -1,69 +1,65 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
-import type { BrowserState, DshViewState, DshSurface, HarnessStatus, SurfaceState, ThemeMode, ThemeState, WorkspaceFile, WorkspaceState } from '../../shared/contracts'
+import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react'
+import type { BrowserState, HarnessStatus, ThemeMode, ThemeState, WorkspaceFile, WorkspaceState } from '../../shared/contracts'
 import { BrowserPane } from './components/BrowserPane'
 import { ChatPanel } from './components/ChatPanel'
-import { DshPane } from './components/DshPane'
 import { EditorPane } from './components/EditorPane'
 import { Explorer } from './components/Explorer'
 import { BrowserIcon, CloseIcon, FileIcon, SparkIcon } from './components/Icons'
-import { LeftSidebarToggle } from './components/LeftSidebarToggle'
 import { OrganizationDashboard } from './components/OrganizationDashboard'
-import { RightSidebarToggle } from './components/RightSidebarToggle'
 import { StatusBar } from './components/StatusBar'
 import { ThemeToggle } from './components/ThemeToggle'
-import type { CenterView } from './lib/types'
 import './styles/organization.css'
+import './styles/product-shell.css'
 
-// Settings is only needed on demand, so it loads as its own chunk.
 const SettingsPane = lazy(() => import('./components/SettingsPane').then((module) => ({ default: module.SettingsPane })))
 
-// Path routing only makes sense over http(s) — the packaged app loads from a
-// file:// URL, where pushState would corrupt the load path.
+type ProductView = 'company' | 'agent' | 'files' | 'browser' | 'settings'
+
 const URL_ROUTING = typeof window !== 'undefined' && window.location.protocol.startsWith('http')
 
-function viewFromPath(): CenterView {
+function viewFromPath(): ProductView {
   if (!URL_ROUTING) return 'company'
   const path = window.location.pathname
+  if (path === '/agent' || path.endsWith('/agent')) return 'agent'
+  if (path === '/files' || path.endsWith('/files')) return 'files'
+  if (path === '/browser' || path.endsWith('/browser')) return 'browser'
   if (path === '/settings' || path.endsWith('/settings')) return 'settings'
   return 'company'
+}
+
+function pathForView(view: ProductView): string {
+  return view === 'company' ? '/' : `/${view}`
 }
 
 export default function App() {
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null)
   const [browserState, setBrowserState] = useState<BrowserState | null>(null)
   const [harnessStatus, setHarnessStatus] = useState<HarnessStatus | null>(null)
-  const [dshView, setDshView] = useState<DshViewState | null>(null)
-  const [surface, setSurface] = useState<DshSurface>('dsh')
   const [selectedFile, setSelectedFile] = useState<WorkspaceFile | null>(null)
-  const [centerView, setCenterView] = useState<CenterView>(viewFromPath)
+  const [view, setView] = useState<ProductView>(viewFromPath)
   const [externalPrompt, setExternalPrompt] = useState<{ id: string; text: string } | null>(null)
   const [toast, setToast] = useState<string>()
   const [theme, setTheme] = useState<ThemeState | null>(null)
-  const [rightCollapsed, setRightCollapsed] = useState(false)
-  const [leftCollapsed, setLeftCollapsed] = useState(false)
 
   useEffect(() => {
     void Promise.all([
       window.ndDsh.workspace.state().then(setWorkspace),
       window.ndDsh.browser.state().then(setBrowserState),
       window.ndDsh.harness.status().then(setHarnessStatus),
-      window.ndDsh.surface.state().then((state) => {
-        setSurface(state.surface)
-        setDshView(state.view)
-      }),
     ]).catch((cause) => setToast(errorMessage(cause)))
+
+    // ND-DSH owns the renderer surface. The legacy Harness web UI remains
+    // available as runtime infrastructure but is never presented as a product.
+    void window.ndDsh.surface.set('workbench').catch((cause) => setToast(errorMessage(cause)))
+    void window.ndDsh.dshView.setVisible(false).catch(() => undefined)
+
     const offBrowser = window.ndDsh.browser.onState(setBrowserState)
     const offHarness = window.ndDsh.harness.onStatus(setHarnessStatus)
-    const offDshView = window.ndDsh.dshView.onState(setDshView)
-    const offSurface = window.ndDsh.surface.onChanged((state: SurfaceState) => {
-      setSurface(state.surface)
-      setDshView(state.view)
-    })
     return () => {
       offBrowser()
       offHarness()
-      offDshView()
-      offSurface()
+      void window.ndDsh.browser.setVisible(false)
+      void window.ndDsh.dshView.setVisible(false)
     }
   }, [])
 
@@ -91,146 +87,160 @@ export default function App() {
     document.querySelector('meta[name="color-scheme"]')?.setAttribute('content', theme.effective)
   }, [theme])
 
-  const selectTheme = (mode: ThemeMode): void => {
-    void window.ndDsh.theme.set(mode).then(setTheme).catch((cause) => setToast(errorMessage(cause)))
-  }
-
-  // Keep the address bar in sync with the active view (pushState never reloads).
   useEffect(() => {
     if (!URL_ROUTING) return
-    const target = centerView === 'settings' ? '/settings' : '/'
+    const target = pathForView(view)
     if (window.location.pathname !== target) window.history.pushState(null, '', target)
-  }, [centerView])
+  }, [view])
 
   useEffect(() => {
     if (!URL_ROUTING) return
-    const onPopState = (): void => {
-      setCenterView((current) => (current === viewFromPath() ? current : viewFromPath()))
-    }
+    const onPopState = (): void => setView(viewFromPath())
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
   }, [])
 
-  const askAgent = (prompt: string): void => {
-    // The chat panel owns the active thread; a selection-menu prompt jumps to
-    // the workbench surface where that panel lives.
-    setExternalPrompt({ id: crypto.randomUUID(), text: prompt })
-    if (surface === 'dsh') {
-      void window.ndDsh.surface.set('workbench').catch((cause) => setToast(errorMessage(cause)))
-    }
-    setCenterView('browser')
+  const selectTheme = (mode: ThemeMode): void => {
+    void window.ndDsh.theme.set(mode).then(setTheme).catch((cause) => setToast(errorMessage(cause)))
   }
 
-  const fileName = useMemo(() => selectedFile?.relativePath.split(/[\\/]/).at(-1), [selectedFile?.relativePath])
-
-  const settingsMode = centerView === 'settings'
-  const companyMode = centerView === 'company'
-  const focusMode = settingsMode || companyMode
+  const changeWorkspace = (next: WorkspaceState): void => {
+    setWorkspace(next)
+    setSelectedFile(null)
+  }
 
   const openFile = async (path: string): Promise<void> => {
     try {
       setSelectedFile(await window.ndDsh.workspace.read(path))
-      setCenterView('editor')
+      setView('files')
     } catch (cause) {
       setToast(errorMessage(cause))
     }
   }
 
+  const askAgent = (prompt: string): void => {
+    setExternalPrompt({ id: crypto.randomUUID(), text: prompt })
+    setView('agent')
+  }
+
+  const navItems: Array<{ id: ProductView; label: string; icon: ReactNode }> = [
+    { id: 'company', label: 'Company', icon: <span className="product-nav-monogram">CO</span> },
+    { id: 'agent', label: 'Agent', icon: <SparkIcon /> },
+    { id: 'files', label: 'Files', icon: <FileIcon /> },
+    { id: 'browser', label: 'Browser', icon: <BrowserIcon /> },
+    { id: 'settings', label: 'Settings', icon: <span className="product-nav-monogram">SE</span> },
+  ]
+
   return (
-    <div className="app-shell">
-      <header className="title-bar">
-        <div className="title-brand"><span className="mini-logo">ND</span><strong>nd-dsh</strong><span className="title-separator">/</span><span>{workspace?.name ?? 'workspace'}</span></div>
-        <div className="title-command">AI Company OS · one Harness execution engine</div>
-        <div className="title-state">
-          {!focusMode ? <LeftSidebarToggle isCollapsed={leftCollapsed} onToggle={() => setLeftCollapsed((c) => !c)} /> : null}
-          {!focusMode ? <RightSidebarToggle isCollapsed={rightCollapsed} onToggle={() => setRightCollapsed((current) => !current)} /> : null}
-          <ThemeToggle theme={theme} onSelect={selectTheme} /><span className={`tiny-dot ${harnessStatus?.state ?? 'stopped'}`} />{harnessStatus?.model ?? 'DeepSeek'}</div>
+    <div className="app-shell product-shell">
+      <header className="product-titlebar">
+        <div className="product-brand">
+          <span className="product-logo">ND</span>
+          <div>
+            <strong>ND-DSH</strong>
+            <span>{workspace?.name ?? 'No workspace'}</span>
+          </div>
+        </div>
+        <div className="product-title-center">
+          <span>AI Company Operating System</span>
+          <small>{viewLabel(view)}</small>
+        </div>
+        <div className="product-runtime">
+          <ThemeToggle theme={theme} onSelect={selectTheme} />
+          <span className={`tiny-dot ${harnessStatus?.state ?? 'stopped'}`} />
+          <span>{harnessStatus?.model ?? 'Runtime offline'}</span>
+        </div>
       </header>
-      <main className={`workbench ${settingsMode ? 'settings-only' : ''} ${companyMode ? 'org-focus' : ''} ${leftCollapsed && !focusMode ? 'left-collapsed' : ''} ${rightCollapsed && !focusMode ? 'right-collapsed' : ''}`}>
-        {!focusMode ? (
-          <aside className={`left-sidebar ${leftCollapsed ? 'collapsed' : ''}`}>
+
+      <div className="product-body">
+        <nav className="product-nav" aria-label="ND-DSH navigation">
+          <div className="product-nav-main">
+            {navItems.map((item) => (
+              <button
+                key={item.id}
+                className={view === item.id ? 'active' : ''}
+                onClick={() => setView(item.id)}
+                title={item.label}
+              >
+                {item.icon}
+                <span>{item.label}</span>
+              </button>
+            ))}
+          </div>
+          <div className="product-nav-runtime" title={harnessStatus?.error}>
+            <span className={`tiny-dot ${harnessStatus?.state ?? 'stopped'}`} />
+            <small>{harnessStatus?.state ?? 'stopped'}</small>
+          </div>
+        </nav>
+
+        <main className="product-workspace">
+          <section className={`product-view ${view === 'company' ? 'active' : ''}`} aria-hidden={view !== 'company'}>
+            <OrganizationDashboard workspace={workspace} onOpenDeepSeek={() => setView('agent')} onError={setToast} />
+          </section>
+
+          <section className={`product-view product-agent-view ${view === 'agent' ? 'active' : ''}`} aria-hidden={view !== 'agent'}>
             <ChatPanel
               status={harnessStatus}
               {...(workspace?.name ? { workspaceName: workspace.name } : {})}
               onError={setToast}
-              onOpenSettings={() => setCenterView('settings')}
+              onOpenSettings={() => setView('settings')}
               onOpenFile={(path) => void openFile(path)}
               externalPrompt={externalPrompt}
               onExternalPromptConsumed={() => setExternalPrompt(null)}
             />
-          </aside>
-        ) : null}
-        <section className="center-workspace">
-          <div className="center-tabs">
-            <button className={`center-tab ${centerView === 'company' ? 'active' : ''}`} onClick={() => setCenterView('company')}>
-              <span className="org-tab-icon">CO</span><span>Company</span><span className="tab-dot ready" />
-            </button>
-            <button className={`center-tab ${centerView === 'dsh' ? 'active' : ''}`} onClick={() => setCenterView('dsh')}>
-              <SparkIcon /><span>DeepSeek</span><span className={`tab-dot ${dshView?.ready ? 'ready' : 'binding'}`} />
-            </button>
-            {selectedFile ? (
-              <button className={`center-tab ${centerView === 'editor' ? 'active' : ''}`} onClick={() => setCenterView('editor')}>
-                <FileIcon /><span>{fileName}</span><CloseIcon className="tab-close" />
-              </button>
-            ) : null}
-            <button className={`center-tab ${centerView === 'browser' ? 'active' : ''}`} onClick={() => setCenterView('browser')}>
-              <BrowserIcon /><span>Browser</span><span className={`tab-dot ${browserState?.agentBrowser ?? 'binding'}`} />
-            </button>
-          </div>
-          <div className="center-content">
-            <div className={centerView === 'company' ? 'view-layer active' : 'view-layer'}>
-              <OrganizationDashboard workspace={workspace} onOpenDeepSeek={() => setCenterView('dsh')} onError={setToast} />
-            </div>
-            <div className={centerView === 'dsh' ? 'view-layer active' : 'view-layer'}>
-              <DshPane active={centerView === 'dsh'} state={dshView} onError={setToast} />
-            </div>
-            <div className={centerView === 'editor' ? 'view-layer active' : 'view-layer'}>
-              <EditorPane
-                file={selectedFile}
-                onAgentPrompt={askAgent}
-                onError={setToast}
+          </section>
+
+          <section className={`product-view ${view === 'files' ? 'active' : ''}`} aria-hidden={view !== 'files'}>
+            <div className="product-files-layout">
+              <Explorer
+                workspace={workspace}
+                selectedPath={selectedFile?.relativePath}
+                onWorkspaceChanged={changeWorkspace}
+                onOpenFile={(path) => void openFile(path)}
               />
+              <div className="product-editor-wrap">
+                <EditorPane file={selectedFile} onAgentPrompt={askAgent} onError={setToast} />
+              </div>
             </div>
-            <div className={centerView === 'browser' ? 'view-layer active' : 'view-layer'}>
-              <BrowserPane
-                active={centerView === 'browser'}
-                state={browserState}
-                onSnapshot={() => undefined}
-                onError={setToast}
-              />
-            </div>
-            <div className={centerView === 'settings' ? 'view-layer active' : 'view-layer'}>
-              <Suspense fallback={<div className="view-loading"><div className="placeholder-ring" /></div>}>
-                <SettingsPane
-                  theme={theme}
-                  onSelectTheme={selectTheme}
-                  workspace={workspace}
-                  onWorkspaceChanged={(next) => { setWorkspace(next); setSelectedFile(null) }}
-                  harness={harnessStatus}
-                  browser={browserState}
-                  surface={surface}
-                  onSurfaceChanged={(next) => { setSurface(next) }}
-                  onError={setToast}
-                />
-              </Suspense>
-            </div>
-          </div>
-        </section>
-        {!focusMode ? (
-          <aside className={`explorer-rail ${rightCollapsed ? 'collapsed' : ''}`}>
-            <Explorer
-              workspace={workspace}
-              selectedPath={selectedFile?.relativePath}
-              onWorkspaceChanged={(next) => { setWorkspace(next); setSelectedFile(null) }}
-              onOpenFile={(path) => void openFile(path)}
+          </section>
+
+          <section className={`product-view product-browser-view ${view === 'browser' ? 'active' : ''}`} aria-hidden={view !== 'browser'}>
+            <BrowserPane
+              active={view === 'browser'}
+              state={browserState}
+              onSnapshot={() => setToast('Browser snapshot captured from the live page.')}
+              onError={setToast}
             />
-          </aside>
-        ) : null}
-      </main>
-      <StatusBar browser={browserState} harness={harnessStatus} workspace={workspace} surface={surface} />
+          </section>
+
+          <section className={`product-view ${view === 'settings' ? 'active' : ''}`} aria-hidden={view !== 'settings'}>
+            <Suspense fallback={<div className="view-loading"><div className="placeholder-ring" /></div>}>
+              <SettingsPane
+                theme={theme}
+                onSelectTheme={selectTheme}
+                workspace={workspace}
+                onWorkspaceChanged={changeWorkspace}
+                harness={harnessStatus}
+                browser={browserState}
+                onError={setToast}
+              />
+            </Suspense>
+          </section>
+        </main>
+      </div>
+
+      <StatusBar browser={browserState} harness={harnessStatus} workspace={workspace} />
       {toast ? <div className="toast" role="alert"><span>{toast}</span><button onClick={() => setToast(undefined)}><CloseIcon /></button></div> : null}
     </div>
   )
+}
+
+function viewLabel(view: ProductView): string {
+  if (view === 'company') return 'Company command center'
+  if (view === 'agent') return 'Agent console'
+  if (view === 'files') return 'Workspace files'
+  if (view === 'browser') return 'Agent browser'
+  return 'Settings'
 }
 
 function errorMessage(cause: unknown): string {
