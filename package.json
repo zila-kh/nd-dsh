@@ -19,6 +19,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
     "verify": "node scripts/verify.mjs",
+    "web:sidecar": "node scripts/web-sidecar.mjs",
+    "web:sidecar:mock": "node scripts/web-sidecar.mjs --mock",
     "dsh:build": "pnpm --dir vendor/deepseek-harness run build",
     "dsh:update": "node scripts/update-harness.mjs"
   },

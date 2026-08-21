@@ -132,11 +132,41 @@ Copy `.env.example` to `.env` and edit as needed:
 | `ND_DSH_HARNESS_ROOT` | `vendor/deepseek-harness` | optional upstream checkout override |
 | `ND_DSH_PATCH` | `configs/dsh/nd-dsh.patch.yml` | optional overlay override |
 | `ND_DSH_NODE_BIN` | `node` | Node 24 executable used for the Harness child |
+| `ND_DSH_WEB_SIDECAR_URL` | `http://127.0.0.1:8788` | web-mode sidecar probe address |
+| `ND_DSH_GATEWAY_URL` | — | optional already-running gateway for the sidecar to proxy |
 
 ND-DSH owns the composition — the patch overlay at
 `configs/dsh/nd-dsh.patch.yml` and the preset at
 `configs/dsh/agent-presets/nd-dsh/` — while all Harness implementation remains
 in the submodule.
+
+## Web fallback: the "rush sidecar"
+
+The same renderer bundle also runs in a plain browser tab (`http://localhost:5173`).
+Electron's preload bridge does not exist there, and the Harness gateway binds
+loopback with no CORS headers, so web mode falls back to a sidecar:
+
+- on load, the renderer probes `ND_DSH_WEB_SIDECAR_URL` (`/api/health`);
+- when the sidecar answers, the whole workbench drives **the real DeepSeek
+  Harness gateway** through it — sessions, history, model pickers, approvals,
+  and streamed events behave like the desktop app;
+- when no sidecar is reachable, the in-memory mocks take over so every panel
+  stays explorable (`session.list`, `session.history`, streaming assistant,
+  model/reasoning pickers, presets).
+
+Start the sidecar with the bundled harness (needs `pnpm bootstrap` + an API key
+for real turns), or in mock mode with no harness at all:
+
+```bash
+corepack pnpm web:sidecar        # spawns the pinned harness gateway
+corepack pnpm web:sidecar:mock   # in-memory gateway, no harness needed
+```
+
+`ND_DSH_GATEWAY_URL` points the sidecar at an already-running gateway instead
+of spawning one. The Desktop↔Web split is intentional: native `WebContentsView`
+surfaces (the DeepSeek UI pane and the live browser) only exist in Electron; the
+sidecar keeps everything else — chat, events, explorer, settings, models — on
+great behavior in both.
 
 ## Security model
 

@@ -6,6 +6,7 @@ import { DshPane } from './components/DshPane'
 import { EditorPane } from './components/EditorPane'
 import { Explorer } from './components/Explorer'
 import { BrowserIcon, CloseIcon, FileIcon, SparkIcon } from './components/Icons'
+import { LeftSidebarToggle } from './components/LeftSidebarToggle'
 import { OrganizationDashboard } from './components/OrganizationDashboard'
 import { RightSidebarToggle } from './components/RightSidebarToggle'
 import { StatusBar } from './components/StatusBar'
@@ -39,6 +40,7 @@ export default function App() {
   const [toast, setToast] = useState<string>()
   const [theme, setTheme] = useState<ThemeState | null>(null)
   const [rightCollapsed, setRightCollapsed] = useState(false)
+  const [leftCollapsed, setLeftCollapsed] = useState(false)
 
   useEffect(() => {
     void Promise.all([
@@ -124,7 +126,6 @@ export default function App() {
   const settingsMode = centerView === 'settings'
   const companyMode = centerView === 'company'
   const focusMode = settingsMode || companyMode
-  const dshMode = surface === 'dsh'
 
   const openFile = async (path: string): Promise<void> => {
     try {
@@ -141,12 +142,13 @@ export default function App() {
         <div className="title-brand"><span className="mini-logo">ND</span><strong>nd-dsh</strong><span className="title-separator">/</span><span>{workspace?.name ?? 'workspace'}</span></div>
         <div className="title-command">AI Company OS · one Harness execution engine</div>
         <div className="title-state">
+          {!focusMode ? <LeftSidebarToggle isCollapsed={leftCollapsed} onToggle={() => setLeftCollapsed((c) => !c)} /> : null}
           {!focusMode ? <RightSidebarToggle isCollapsed={rightCollapsed} onToggle={() => setRightCollapsed((current) => !current)} /> : null}
           <ThemeToggle theme={theme} onSelect={selectTheme} /><span className={`tiny-dot ${harnessStatus?.state ?? 'stopped'}`} />{harnessStatus?.model ?? 'DeepSeek'}</div>
       </header>
-      <main className={`workbench ${settingsMode ? 'settings-only' : ''} ${companyMode ? 'org-focus' : ''} ${rightCollapsed && !focusMode ? 'chat-collapsed' : ''}`}>
-        {!focusMode && !dshMode ? (
-          <aside className="chat-rail">
+      <main className={`workbench ${settingsMode ? 'settings-only' : ''} ${companyMode ? 'org-focus' : ''} ${leftCollapsed && !focusMode ? 'left-collapsed' : ''} ${rightCollapsed && !focusMode ? 'right-collapsed' : ''}`}>
+        {!focusMode ? (
+          <aside className={`left-sidebar ${leftCollapsed ? 'collapsed' : ''}`}>
             <ChatPanel
               status={harnessStatus}
               {...(workspace?.name ? { workspaceName: workspace.name } : {})}
@@ -215,7 +217,7 @@ export default function App() {
           </div>
         </section>
         {!focusMode ? (
-          <aside className={rightCollapsed ? 'explorer-rail collapsed' : 'explorer-rail'}>
+          <aside className={`explorer-rail ${rightCollapsed ? 'collapsed' : ''}`}>
             <Explorer
               workspace={workspace}
               selectedPath={selectedFile?.relativePath}

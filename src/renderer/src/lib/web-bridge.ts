@@ -14,6 +14,9 @@ import type {
   ThemeState,
 } from '../../../shared/contracts'
 import { MockWorkspaceService } from './web-mock'
+import { MockOrganizationService } from './web-organization-mock'
+import { MockSessionRuntime } from './web-chat'
+import { WebSidecarClient } from './web-sidecar'
 
 const THEME_STORAGE_KEY = 'nd-dsh:theme'
 const VALID_THEME_MODES: readonly ThemeMode[] = ['system', 'light', 'dark']
@@ -105,17 +108,27 @@ export function applyStoredWebTheme(): void {
 
 /**
  * Stand-in for Electron's preload bridge so the renderer shell can render in a
- * plain web tab or inside the built-in browser view, where the bridge does not
- * exist. The browser and harness services run against fixture data so every
- * panel is explorable for UI work. The workspace runs against fixture trees,
- * except that typed paths open a generic tree, and — where the browser exposes
- * the File System Access API — "Change folder" reads the picked directory for
- * real.
+ * plain web tab or inside the built-in browser view, where the preload bridge
+ * does not exist.
+ *
+ * Web mode falls back to the "rush sidecar" when one answers /api/health: a
+ * tiny CORS HTTP/SSE server that fronts the real DeepSeek Harness gateway, so
+ * sessions, model pickers, and live events behave exactly like the desktop
+ * app. When no sidecar is reachable, the in-memory mocks take over and every
+ * panel stays explorable for UI work.
  */
-export function installWebBridge(): void {
+export async function installWebBridge(): Promise<void> {
   document.documentElement.dataset.webMode = 'true'
 
+  const sidecar = await WebSidecarClient.detect()
+  if (sidecar) {
+    window.ndDsh = sidecar
+    window.ndDshOrganization = new MockOrganizationService()
+    return
+  }
+
   const workspace = new MockWorkspaceService()
+  const runtime = new MockSessionRuntime()
 
   // --- theme ---
   let themeChanged: ((state: ThemeState) => void) | undefined
@@ -138,13 +151,9 @@ export function installWebBridge(): void {
   }
   let harnessStatus: HarnessStatus = READY_HARNESS
   const statusListeners = new Set<(status: HarnessStatus) => void>()
-  const eventListeners = new Set<(frame: DshEventFrame) => void>()
   const emitStatus = (status: HarnessStatus): void => {
     harnessStatus = status
     for (const listener of statusListeners) listener(status)
-  }
-  const emitEvent = (frame: DshEventFrame): void => {
-    for (const listener of eventListeners) listener(frame)
   }
 
   // --- browser ---
@@ -256,40 +265,29 @@ export function installWebBridge(): void {
     harness: {
       status: async (): Promise<HarnessStatus> => ({ ...harnessStatus }),
       run: async (prompt: string, options?: { sessionId?: string }): Promise<HarnessRunResult> => {
-        const sessionId = options?.sessionId ?? 'web-preview'
         emitStatus({ ...READY_HARNESS, state: 'running' })
-        await delay(900)
-        emitEvent({
-          kind: 'session-event',
-          sessionId,
-          event: {
-            type: 'assistant/message',
-            seq: 1,
-            time: Date.now(),
-            data: { message: { role: 'assistant', content: [{ type: 'text', text: `Simulated agent reply (web preview).\n\nYou asked: "${prompt}"\n\nThe desktop app runs this through the DeepSeek Harness and drives the visible browser.` }] } },
-          },
-        })
-        emitStatus(READY_HARNESS)
-        return { sessionId }
+        try {
+          return await runtime.run(prompt, options)
+        } finally {
+          emitStatus(READY_HARNESS)
+        }
       },
       stop: async (): Promise<HarnessStatus> => {
+        await runtime.stop()
         emitStatus(READY_HARNESS)
         return { ...harnessStatus }
       },
-      getPermissionMode: async (): Promise<string> => 'workspace-write',
-      setPermissionMode: async (mode: string): Promise<string> => mode,
+      getPermissionMode: async (): Promise<string> => runtime.getPermissionMode(),
+      setPermissionMode: async (mode: string): Promise<string> => runtime.setPermissionMode(mode),
       onStatus: (listener) => {
         statusListeners.add(listener)
         return () => statusListeners.delete(listener)
       },
     },
     dsh: {
-      rpc: async (): Promise<GatewayRpcResult> => ({ ok: true, value: { items: [] } }),
-      respond: async (): Promise<void> => undefined,
-      onEvent: (listener) => {
-        eventListeners.add(listener)
-        return () => eventListeners.delete(listener)
-      },
+      rpc: async (method: string, payload?: unknown): Promise<GatewayRpcResult> => runtime.rpc(method, payload),
+      respond: async (rpcId: string, value: unknown): Promise<void> => runtime.respond(rpcId, value),
+      onEvent: (listener) => runtime.onFrame(listener),
     },
     surface: {
       state: async (): Promise<SurfaceState> => ({ surface: surfaceValue, view: { ...dshView } }),
@@ -333,6 +331,7 @@ export function installWebBridge(): void {
   }
 
   window.ndDsh = bridge
+  window.ndDshOrganization = new MockOrganizationService()
 }
 
 function hostLabel(url: string): string {
