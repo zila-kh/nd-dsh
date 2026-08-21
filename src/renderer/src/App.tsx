@@ -6,6 +6,7 @@ import { EditorPane } from './components/EditorPane'
 import { Explorer } from './components/Explorer'
 import { BrowserIcon, CloseIcon, FileIcon, SparkIcon } from './components/Icons'
 import { OrganizationDashboard } from './components/OrganizationDashboard'
+import { RuntimePrompts } from './components/RuntimePrompts'
 import { StatusBar } from './components/StatusBar'
 import { ThemeToggle } from './components/ThemeToggle'
 import './styles/organization.css'
@@ -188,6 +189,7 @@ export default function App() {
               externalPrompt={externalPrompt}
               onExternalPromptConsumed={() => setExternalPrompt(null)}
             />
+            <RuntimePrompts onError={setToast} />
           </section>
 
           <section className={`product-view ${view === 'files' ? 'active' : ''}`} aria-hidden={view !== 'files'}>
