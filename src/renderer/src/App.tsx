@@ -1,16 +1,17 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import type { BrowserState, DshViewState, DshSurface, HarnessStatus, SurfaceState, ThemeMode, ThemeState, WorkspaceFile, WorkspaceState } from '../../shared/contracts'
-import { ActivityRail } from './components/ActivityRail'
 import { BrowserPane } from './components/BrowserPane'
 import { ChatPanel } from './components/ChatPanel'
 import { DshPane } from './components/DshPane'
 import { EditorPane } from './components/EditorPane'
 import { Explorer } from './components/Explorer'
 import { BrowserIcon, CloseIcon, FileIcon, SparkIcon } from './components/Icons'
+import { OrganizationDashboard } from './components/OrganizationDashboard'
 import { RightSidebarToggle } from './components/RightSidebarToggle'
 import { StatusBar } from './components/StatusBar'
 import { ThemeToggle } from './components/ThemeToggle'
 import type { CenterView } from './lib/types'
+import './styles/organization.css'
 
 // Settings is only needed on demand, so it loads as its own chunk.
 const SettingsPane = lazy(() => import('./components/SettingsPane').then((module) => ({ default: module.SettingsPane })))
@@ -20,10 +21,10 @@ const SettingsPane = lazy(() => import('./components/SettingsPane').then((module
 const URL_ROUTING = typeof window !== 'undefined' && window.location.protocol.startsWith('http')
 
 function viewFromPath(): CenterView {
-  if (!URL_ROUTING) return 'browser'
+  if (!URL_ROUTING) return 'company'
   const path = window.location.pathname
   if (path === '/settings' || path.endsWith('/settings')) return 'settings'
-  return 'browser'
+  return 'company'
 }
 
 export default function App() {
@@ -47,7 +48,6 @@ export default function App() {
       window.ndDsh.surface.state().then((state) => {
         setSurface(state.surface)
         setDshView(state.view)
-        setCenterView((current) => (current === 'browser' && state.surface === 'dsh' ? 'dsh' : current))
       }),
     ]).catch((cause) => setToast(errorMessage(cause)))
     const offBrowser = window.ndDsh.browser.onState(setBrowserState)
@@ -56,7 +56,6 @@ export default function App() {
     const offSurface = window.ndDsh.surface.onChanged((state: SurfaceState) => {
       setSurface(state.surface)
       setDshView(state.view)
-      setCenterView(state.surface === 'dsh' ? 'dsh' : 'browser')
     })
     return () => {
       offBrowser()
@@ -123,6 +122,8 @@ export default function App() {
   const fileName = useMemo(() => selectedFile?.relativePath.split(/[\\/]/).at(-1), [selectedFile?.relativePath])
 
   const settingsMode = centerView === 'settings'
+  const companyMode = centerView === 'company'
+  const focusMode = settingsMode || companyMode
   const dshMode = surface === 'dsh'
 
   const openFile = async (path: string): Promise<void> => {
@@ -138,13 +139,13 @@ export default function App() {
     <div className="app-shell">
       <header className="title-bar">
         <div className="title-brand"><span className="mini-logo">ND</span><strong>nd-dsh</strong><span className="title-separator">/</span><span>{workspace?.name ?? 'workspace'}</span></div>
-        <div className="title-command">One engine · DeepSeek UI + ND-DSH workbench</div>
+        <div className="title-command">AI Company OS · one Harness execution engine</div>
         <div className="title-state">
-          {!settingsMode ? <RightSidebarToggle isCollapsed={rightCollapsed} onToggle={() => setRightCollapsed((current) => !current)} /> : null}
+          {!focusMode ? <RightSidebarToggle isCollapsed={rightCollapsed} onToggle={() => setRightCollapsed((current) => !current)} /> : null}
           <ThemeToggle theme={theme} onSelect={selectTheme} /><span className={`tiny-dot ${harnessStatus?.state ?? 'stopped'}`} />{harnessStatus?.model ?? 'DeepSeek'}</div>
       </header>
-      <main className={`workbench ${settingsMode ? 'settings-only' : ''} ${rightCollapsed && !settingsMode ? 'chat-collapsed' : ''}`}>
-        {!settingsMode && !dshMode ? (
+      <main className={`workbench ${settingsMode ? 'settings-only' : ''} ${companyMode ? 'org-focus' : ''} ${rightCollapsed && !focusMode ? 'chat-collapsed' : ''}`}>
+        {!focusMode && !dshMode ? (
           <aside className="chat-rail">
             <ChatPanel
               status={harnessStatus}
@@ -159,6 +160,9 @@ export default function App() {
         ) : null}
         <section className="center-workspace">
           <div className="center-tabs">
+            <button className={`center-tab ${centerView === 'company' ? 'active' : ''}`} onClick={() => setCenterView('company')}>
+              <span className="org-tab-icon">CO</span><span>Company</span><span className="tab-dot ready" />
+            </button>
             <button className={`center-tab ${centerView === 'dsh' ? 'active' : ''}`} onClick={() => setCenterView('dsh')}>
               <SparkIcon /><span>DeepSeek</span><span className={`tab-dot ${dshView?.ready ? 'ready' : 'binding'}`} />
             </button>
@@ -172,6 +176,9 @@ export default function App() {
             </button>
           </div>
           <div className="center-content">
+            <div className={centerView === 'company' ? 'view-layer active' : 'view-layer'}>
+              <OrganizationDashboard workspace={workspace} onOpenDeepSeek={() => setCenterView('dsh')} onError={setToast} />
+            </div>
             <div className={centerView === 'dsh' ? 'view-layer active' : 'view-layer'}>
               <DshPane active={centerView === 'dsh'} state={dshView} onError={setToast} />
             </div>
@@ -207,7 +214,7 @@ export default function App() {
             </div>
           </div>
         </section>
-        {!settingsMode ? (
+        {!focusMode ? (
           <aside className={rightCollapsed ? 'explorer-rail collapsed' : 'explorer-rail'}>
             <Explorer
               workspace={workspace}
