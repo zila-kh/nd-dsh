@@ -164,7 +164,8 @@ export class BrowserController {
     return this.state()
   }
 
-  clearSelection(): BrowserState {
+  clearSelection(expectedTargetId?: string): BrowserState {
+    if (expectedTargetId && this.stateValue.selectedTarget?.id !== expectedTargetId) return this.state()
     delete this.stateValue.selectedTarget
     this.emitState()
     return this.state()
