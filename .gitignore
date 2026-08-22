@@ -14,7 +14,7 @@ artifacts/
 !.dsh/skills/
 !.dsh/skills/**
 
-# Populated by pinned git submodules or scripts/bootstrap.mjs.
+# Pinned upstream infrastructure populated by git submodule/bootstrap.
 /vendor/deepseek-harness/
 /vendor/openpencil/
 !/vendor/README.md
@@ -22,8 +22,8 @@ artifacts/
 !/vendor/openpencil.json
 !/vendor/openpencil.LICENSE
 
-# Built OpenPencil runtime staged for packaging; never commit platform binaries.
-/resources/openpencil/bin/
+# Built ND Pencil runtime staged for packaging; never commit platform binaries.
+/resources/nd-pencil/bin/
 
 *.tsbuildinfo
 
