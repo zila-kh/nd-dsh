@@ -7,21 +7,21 @@ import { fileURLToPath } from 'node:url'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const harnessRoot = join(root, 'vendor', 'deepseek-harness')
-const openPencilRoot = join(root, 'vendor', 'openpencil')
+const ndPencilUpstreamRoot = join(root, 'vendor', 'openpencil')
 const harnessPin = JSON.parse(await fs.readFile(join(root, 'vendor', 'deepseek-harness.json'), 'utf8'))
-const openPencilPin = JSON.parse(await fs.readFile(join(root, 'vendor', 'openpencil.json'), 'utf8'))
+const ndPencilUpstreamPin = JSON.parse(await fs.readFile(join(root, 'vendor', 'openpencil.json'), 'utf8'))
 const harnessRepository = requireString(harnessPin.repository, 'vendor/deepseek-harness.json repository')
 const harnessCommit = requireCommit(harnessPin.commit, 'Harness commit')
-const openPencilRepository = requireString(openPencilPin.repository, 'vendor/openpencil.json repository')
-const openPencilCommit = requireCommit(openPencilPin.commit, 'OpenPencil commit')
+const ndPencilUpstreamRepository = requireString(ndPencilUpstreamPin.repository, 'vendor/openpencil.json repository')
+const ndPencilUpstreamCommit = requireCommit(ndPencilUpstreamPin.commit, 'ND Pencil upstream commit')
 const flags = new Set(process.argv.slice(2))
 
 if (flags.has('--help')) {
   console.log(`Usage: node scripts/bootstrap.mjs [options]\n\n` +
-    `  --check                Verify prerequisites and both pinned submodules only\n` +
+    `  --check                Verify prerequisites and pinned upstream sources only\n` +
     `  --skip-root-install    Skip the ND-DSH pnpm install\n` +
     `  --skip-dsh-build       Skip install/build inside DeepSeek Harness\n` +
-    `  --build-openpencil     Compile and stage the bundled ND Freeform runtime\n`)
+    `  --build-nd-pencil      Compile and stage the bundled ND Pencil runtime\n`)
   process.exit(0)
 }
 
@@ -39,18 +39,18 @@ await ensurePinnedSource({
   commit: harnessCommit,
 })
 await ensurePinnedSource({
-  name: 'OpenPencil',
-  root: openPencilRoot,
+  name: 'ND Pencil upstream',
+  root: ndPencilUpstreamRoot,
   marker: 'Cargo.toml',
   submodulePath: 'vendor/openpencil',
-  repository: openPencilRepository,
-  commit: openPencilCommit,
+  repository: ndPencilUpstreamRepository,
+  commit: ndPencilUpstreamCommit,
 })
 await verifyPinnedSource('Harness', harnessRoot, harnessCommit)
-await verifyPinnedSource('OpenPencil', openPencilRoot, openPencilCommit)
+await verifyPinnedSource('ND Pencil upstream', ndPencilUpstreamRoot, ndPencilUpstreamCommit)
 
 if (flags.has('--check')) {
-  console.log('Bootstrap check passed for DeepSeek Harness and OpenPencil.')
+  console.log('Bootstrap check passed for DeepSeek Harness and the ND Pencil upstream source.')
   process.exit(0)
 }
 
@@ -63,10 +63,10 @@ if (!flags.has('--skip-dsh-build')) {
   await run('corepack', ['pnpm', 'run', 'build'], harnessRoot)
 }
 
-if (flags.has('--build-openpencil')) {
-  await run(process.execPath, ['scripts/build-openpencil.mjs'], root)
+if (flags.has('--build-nd-pencil')) {
+  await run(process.execPath, ['scripts/build-nd-pencil.mjs'], root)
 } else {
-  console.log('\nOpenPencil source is pinned and ready. Run `pnpm openpencil:build` when developing the embedded Freeform canvas.')
+  console.log('\nND Pencil upstream source is pinned and ready. Run `pnpm nd-pencil:build` when developing the embedded Freeform canvas.')
 }
 
 await run(process.execPath, ['scripts/verify.mjs'], root)
