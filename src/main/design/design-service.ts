@@ -80,6 +80,7 @@ export class DesignService {
   private serverRoot: string | undefined
   private serverPort: number | undefined
   private devChild: ChildProcess | undefined
+  private devRoot: string | undefined
 
   constructor(
     private readonly workspace: WorkspaceService,
@@ -140,6 +141,7 @@ export class DesignService {
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     this.devChild = child
+    this.devRoot = project.root
 
     try {
       const url = await waitForDevUrl(child, project.devCommand)
@@ -153,12 +155,14 @@ export class DesignService {
       child.once('exit', () => {
         if (this.devChild !== child) return
         this.devChild = undefined
+        this.devRoot = undefined
         if (this.preview?.kind === 'dev-server' && this.preview.root === project.root) this.preview = undefined
       })
       await this.browser.navigate(url)
       return preview
     } catch (cause) {
       if (this.devChild === child) this.devChild = undefined
+      if (this.devRoot === project.root) this.devRoot = undefined
       if (child.exitCode === null && child.signalCode === null) child.kill()
       throw cause
     }
@@ -176,9 +180,10 @@ export class DesignService {
   async handleWorkspaceChanged(state: WorkspaceState): Promise<void> {
     this.cache = undefined
     const blocked = state.binding === 'unlinked' || state.binding === 'missing'
-    if (blocked || (this.preview && this.preview.root !== state.root) || (this.serverRoot && this.serverRoot !== state.root)) {
-      await this.stopPreview()
-    }
+    const managedRootChanged = (this.preview && this.preview.root !== state.root)
+      || (this.serverRoot && this.serverRoot !== state.root)
+      || (this.devRoot && this.devRoot !== state.root)
+    if (blocked || managedRootChanged) await this.stopPreview()
   }
 
   destroy(): void {
@@ -189,6 +194,7 @@ export class DesignService {
     this.server = undefined
     if (this.devChild?.exitCode === null && this.devChild.signalCode === null) this.devChild.kill()
     this.devChild = undefined
+    this.devRoot = undefined
   }
 
   private withPreview(project: Omit<DesignProjectState, 'preview'>): DesignProjectState {
@@ -277,10 +283,11 @@ export class DesignService {
   private async stopDevChild(): Promise<void> {
     const child = this.devChild
     this.devChild = undefined
+    this.devRoot = undefined
     if (!child || child.exitCode !== null || child.signalCode !== null) return
     await new Promise<void>((resolvePromise) => {
       const timer = setTimeout(() => {
-        try { child.kill() } catch { /* already stopped */ }
+        try { child.kill(process.platform === 'win32' ? undefined : 'SIGKILL') } catch { /* already stopped */ }
         resolvePromise()
       }, 3_000)
       child.once('exit', () => {
