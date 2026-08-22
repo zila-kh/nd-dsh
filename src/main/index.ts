@@ -14,6 +14,7 @@ import { EngineAssignmentStore } from './engines/engine-assignment-store.js'
 import { CodingEngineRegistry } from './engines/coding-engine-registry.js'
 import { HarnessService } from './harness/harness-service.js'
 import { registerIpc } from './ipc.js'
+import { OrganizationApprovalGate } from './organization/approval-gate.js'
 import { registerOrganizationIpc } from './organization/ipc.js'
 import { OrganizationOrchestrator } from './organization/orchestrator.js'
 import { OrganizationStore } from './organization/store.js'
@@ -22,7 +23,6 @@ import { ThemeService } from './theme.js'
 import { WorkspaceService } from './workspace/workspace-service.js'
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url))
-// 0 means "reserve a free loopback port" — 9222 is commonly occupied.
 const requestedCdpPort = parsePort(process.env.ND_DSH_CDP_PORT, 0)
 const startUrl = process.env.ND_DSH_BROWSER_URL?.trim() || DEFAULT_BROWSER_URL
 
@@ -49,8 +49,6 @@ app.on('second-instance', () => {
 async function createWindow(cdpPort: number): Promise<void> {
   const preload = join(currentDirectory, '../preload/index.cjs')
   const workspace = new WorkspaceService(process.env.ND_DSH_WORKSPACE?.trim() || process.cwd())
-  // safeStorage is only reliable after Electron has emitted `ready`, and
-  // createWindow is called after app.whenReady().
   const providers = new ProviderStore()
   const userData = app.getPath('userData')
   const engines = new CodingEngineRegistry(new EngineAssignmentStore(join(userData, 'engine-assignments.json')))
@@ -66,9 +64,7 @@ async function createWindow(cdpPort: number): Promise<void> {
     autoHideMenuBar: true,
     title: 'ND · AI Company OS',
     titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
-    ...(isMac
-      ? { trafficLightPosition: { x: 14, y: 13 } }
-      : { titleBarOverlay: theme.titleBarOverlay() }),
+    ...(isMac ? { trafficLightPosition: { x: 14, y: 13 } } : { titleBarOverlay: theme.titleBarOverlay() }),
     webPreferences: {
       preload,
       contextIsolation: true,
@@ -86,6 +82,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   const interruptedRuns = await organizationStore.reconcileInterruptedRuns()
   if (interruptedRuns > 0) console.warn(`Recovered ${interruptedRuns} interrupted organization run(s) from the previous app session.`)
   const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines)
+  const approvalGate = new OrganizationApprovalGate(organizationStore, harness)
   const disposeIpc = registerIpc({ window, browser, dshSurface, engines, harness, workspace, theme, providers })
   const disposeOrganizationIpc = registerOrganizationIpc(window, organizationStore, organization)
   mainWindow = window
@@ -119,6 +116,21 @@ async function createWindow(cdpPort: number): Promise<void> {
       void organization.handleHarnessEvent(frame).catch((error) => {
         console.error('Organization event handling failed:', error)
       })
+
+      if (frame.kind === 'approval-requested') {
+        void approvalGate.shouldForward(frame)
+          .then((forward) => {
+            if (forward && !window.isDestroyed()) window.webContents.send(IPC.dshEvent, frame)
+          })
+          .catch((error) => {
+            // Fail safe to the human approval UI; a policy-gate failure must
+            // never become an implicit allow.
+            console.error('Organization approval policy gate failed:', error)
+            if (!window.isDestroyed()) window.webContents.send(IPC.dshEvent, frame)
+          })
+        return
+      }
+
       if (!window.isDestroyed()) window.webContents.send(IPC.dshEvent, frame)
     },
     gatewayReady: (url) => {
