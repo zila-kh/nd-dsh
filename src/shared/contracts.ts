@@ -14,6 +14,12 @@ export interface UiSourceLocation {
   confidence: UiSourceConfidence
 }
 
+export interface UiReactInfo {
+  component?: string
+  hierarchy: string[]
+  source?: UiSourceLocation
+}
+
 export interface UiCssDeclaration {
   name: string
   value: string
@@ -44,11 +50,39 @@ export interface UiTarget {
   computedStyle: Record<string, string>
   matchedCssRules: UiCssRule[]
   source?: UiSourceLocation
-  react?: {
-    component?: string
-    hierarchy: string[]
-    source?: UiSourceLocation
-  }
+  react?: UiReactInfo
+}
+
+export interface UiAnnotationPoint {
+  x: number
+  y: number
+}
+
+export type UiAnnotationMarkKind = 'freehand' | 'rectangle' | 'point'
+
+export interface UiAnnotationMark {
+  kind: UiAnnotationMarkKind
+  points: UiAnnotationPoint[]
+  bounds: BrowserBounds
+}
+
+export interface UiAnnotationElementReference {
+  selector: string
+  tagName: string
+  text: string
+  bounds: BrowserBounds
+  source?: UiSourceLocation
+  react?: UiReactInfo
+}
+
+export interface UiAnnotation {
+  id: string
+  runtime: 'web'
+  capturedAt: number
+  url: string
+  viewport: { width: number; height: number }
+  marks: UiAnnotationMark[]
+  elements: UiAnnotationElementReference[]
 }
 
 export type AgentBrowserState = 'binding' | 'ready' | 'unavailable'
@@ -66,6 +100,8 @@ export interface BrowserState {
   agentBrowserError?: string
   inspectMode?: boolean
   selectedTarget?: UiTarget
+  annotationMode?: boolean
+  annotation?: UiAnnotation
 }
 
 export interface WorkspaceEntry {
@@ -295,6 +331,8 @@ export interface DesktopApi {
     snapshot(): Promise<unknown>
     setInspectMode?(enabled: boolean): Promise<BrowserState>
     clearSelection?(): Promise<BrowserState>
+    setAnnotationMode?(enabled: boolean): Promise<BrowserState>
+    clearAnnotation?(): Promise<BrowserState>
     openExternal(url: string): Promise<void>
     onState(listener: (state: BrowserState) => void): () => void
   }
@@ -348,6 +386,8 @@ export const IPC = {
   browserSnapshot: 'browser:snapshot',
   browserSetInspectMode: 'browser:set-inspect-mode',
   browserClearSelection: 'browser:clear-selection',
+  browserSetAnnotationMode: 'browser:set-annotation-mode',
+  browserClearAnnotation: 'browser:clear-annotation',
   browserOpenExternal: 'browser:open-external',
   browserStateEvent: 'browser:state-event',
   workspaceState: 'workspace:state',
