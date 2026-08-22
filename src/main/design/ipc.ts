@@ -2,9 +2,9 @@ import { ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
 import type { BrowserBounds } from '../../shared/contracts.js'
 import { DESIGN_IPC } from '../../shared/design.js'
 import type { DesignService } from './design-service.js'
-import type { OpenPencilController } from './openpencil-controller.js'
+import type { NdPencilController } from './openpencil-controller.js'
 
-export function registerDesignIpc(window: BrowserWindow, design: DesignService, openPencil: OpenPencilController): () => void {
+export function registerDesignIpc(window: BrowserWindow, design: DesignService, ndPencil: NdPencilController): () => void {
   const channels: string[] = []
   const handle = (channel: string, listener: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown | Promise<unknown>): void => {
     ipcMain.removeHandler(channel)
@@ -20,13 +20,13 @@ export function registerDesignIpc(window: BrowserWindow, design: DesignService, 
   handle(DESIGN_IPC.previewHtml, (_event, value) => design.previewHtml(asPath(value, 'Template path')))
   handle(DESIGN_IPC.startDevPreview, () => design.startDevPreview())
   handle(DESIGN_IPC.stopPreview, () => design.stopPreview())
-  handle(DESIGN_IPC.freeformState, () => openPencil.state())
-  handle(DESIGN_IPC.freeformSetBounds, (_event, value) => openPencil.setBounds(asBounds(value)))
-  handle(DESIGN_IPC.freeformSetVisible, (_event, value) => openPencil.setVisible(Boolean(value)))
-  handle(DESIGN_IPC.freeformOpen, (_event, value) => openPencil.open(asPath(value, 'Freeform path')))
-  handle(DESIGN_IPC.freeformCreate, (_event, value) => openPencil.create(asPath(value, 'Freeform path')))
-  handle(DESIGN_IPC.freeformSave, () => openPencil.save())
-  handle(DESIGN_IPC.freeformClose, () => openPencil.close())
+  handle(DESIGN_IPC.freeformState, () => ndPencil.state())
+  handle(DESIGN_IPC.freeformSetBounds, (_event, value) => ndPencil.setBounds(asBounds(value)))
+  handle(DESIGN_IPC.freeformSetVisible, (_event, value) => ndPencil.setVisible(Boolean(value)))
+  handle(DESIGN_IPC.freeformOpen, (_event, value) => ndPencil.open(asPath(value, 'Freeform path')))
+  handle(DESIGN_IPC.freeformCreate, (_event, value) => ndPencil.create(asPath(value, 'Freeform path')))
+  handle(DESIGN_IPC.freeformSave, () => ndPencil.save())
+  handle(DESIGN_IPC.freeformClose, () => ndPencil.close())
 
   return () => {
     for (const channel of channels) ipcMain.removeHandler(channel)
