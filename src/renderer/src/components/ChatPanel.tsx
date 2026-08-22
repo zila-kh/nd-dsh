@@ -14,12 +14,13 @@ import {
   CheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  ContextIcon,
+  FileIcon,
   FolderIcon,
   PlusIcon,
   SearchIcon,
   SettingsIcon,
   ShieldIcon,
-  SidebarToggleIcon,
   SparkIcon,
   SpinnerIcon,
   StopIcon,
@@ -28,6 +29,7 @@ import {
 interface ChatPanelProps {
   status: HarnessStatus | null
   workspaceName?: string
+  sessionsCollapsed: boolean
   onError(message: string): void
   onOpenSettings?(): void
   onOpenFile?(path: string): void
@@ -45,7 +47,7 @@ const RESULT_MAX_CHARS = 2_000
 
 const FS_WRITE_TOOL_NAMES = new Set(['fs_edit', 'fs_write', 'fs_write_text', 'fs_create', 'fs_apply_patch', 'fs_str_replace', 'apply_patch'])
 
-export function ChatPanel({ status, workspaceName, onError, onOpenSettings, onOpenFile, externalPrompt, onExternalPromptConsumed }: ChatPanelProps) {
+export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, onOpenSettings, onOpenFile, externalPrompt, onExternalPromptConsumed }: ChatPanelProps) {
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [threads, setThreads] = useState<Record<string, ThreadEntry[]>>({})
@@ -53,11 +55,11 @@ export function ChatPanel({ status, workspaceName, onError, onOpenSettings, onOp
   const [models, setModels] = useState<SessionModels | null>(null)
   const [permissionMode, setPermissionMode] = useState('workspace-write')
   const [prompt, setPrompt] = useState('')
-  const [sessionsCollapsed, setSessionsCollapsed] = useState(false)
   const [sessionsLoaded, setSessionsLoaded] = useState(false)
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false)
   const [thoughtMenuOpen, setThoughtMenuOpen] = useState(false)
   const [modelMenuOpen, setModelMenuOpen] = useState(false)
+  const [contextMenuOpen, setContextMenuOpen] = useState(false)
   const [changedFiles, setChangedFiles] = useState<string[]>([])
 
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -66,6 +68,7 @@ export function ChatPanel({ status, workspaceName, onError, onOpenSettings, onOp
 
   const activeSession = useMemo(() => sessions.find((s) => s.sessionId === activeSessionId) ?? null, [sessions, activeSessionId])
   const entries = useMemo(() => threads[activeSessionId ?? ''] ?? [], [threads, activeSessionId])
+  const threadContext = useMemo(() => collectThreadContext(entries), [entries])
   const busy = busySessions.has(activeSessionId ?? '')
 
   const refreshSessions = useCallback(async (): Promise<void> => {
@@ -120,6 +123,13 @@ export function ChatPanel({ status, workspaceName, onError, onOpenSettings, onOp
   useEffect(() => {
     void window.ndDsh.harness.getPermissionMode().then(setPermissionMode).catch(() => undefined)
   }, [])
+
+  useEffect(() => {
+    if (!activeSessionId) return
+    // Covers the auto-selected session on startup, not just manual clicks,
+    // so an existing thread shows its messages and context immediately.
+    if (!threads[activeSessionId]) void loadHistory(activeSessionId)
+  }, [activeSessionId, threads, loadHistory])
 
   useEffect(() => {
     if (!activeSessionId) return
@@ -198,6 +208,7 @@ export function ChatPanel({ status, workspaceName, onError, onOpenSettings, onOp
         setModelMenuOpen(false)
         setPermissionMenuOpen(false)
         setThoughtMenuOpen(false)
+        setContextMenuOpen(false)
       }
     }
     document.addEventListener('mousedown', handleOutsideClick)
@@ -315,21 +326,6 @@ export function ChatPanel({ status, workspaceName, onError, onOpenSettings, onOp
   return (
     <div className="chat-dual-sidebar-wrap">
       <aside className={`chat-sessions-sidebar ${sessionsCollapsed ? 'collapsed' : ''}`}>
-        <header className="chat-heading">
-          <div className="brand-title-group">
-            <SparkIcon className="logo-spark" />
-            <strong className="brand-name">deepseek</strong>
-            <span className="harness-tag">HARNESS</span>
-          </div>
-          <button
-            className="sidebar-toggle-btn"
-            title={sessionsCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            onClick={() => setSessionsCollapsed(!sessionsCollapsed)}
-          >
-            <SidebarToggleIcon collapsed={sessionsCollapsed} />
-          </button>
-        </header>
-
         <div className="session-action-container">
           <button className="new-session-btn" onClick={() => void handleNewSession()}>
             <PlusIcon className="plus-icon" />
@@ -395,18 +391,11 @@ export function ChatPanel({ status, workspaceName, onError, onOpenSettings, onOp
       <aside className="chat-thread-pane">
         <header className="chat-heading">
           <div className="active-thread-header-info">
-            {sessionsCollapsed ? (
-              <button
-                className="sidebar-toggle-btn expand-btn"
-                title="Expand sessions sidebar"
-                onClick={() => setSessionsCollapsed(false)}
-              >
-                <SidebarToggleIcon collapsed={true} />
-              </button>
-            ) : null}
             <div>
               <span className="eyebrow">ACTIVE THREAD</span>
-              <strong>{activeSession ? sessionTitle(activeSession) : 'No session'}</strong>
+              <strong title={activeSession ? sessionTitle(activeSession) : undefined}>
+                {activeSession ? sessionTitle(activeSession) : 'No session'}
+              </strong>
             </div>
           </div>
           <span className={`status-orb ${status?.state ?? 'stopped'}`} title={status?.error} />
@@ -443,6 +432,13 @@ export function ChatPanel({ status, workspaceName, onError, onOpenSettings, onOp
         ) : null}
 
         <div className="chat-scroll" ref={scrollRef}>
+          {entries.length === 0 && !busy ? (
+            <div className="chat-empty">
+              <span className="chat-empty-mark"><SparkIcon /></span>
+              <h3>ND Agent</h3>
+              <p>Ask anything about this workspace — open files, inspect the browser, or plan company goals. Context used during the thread appears on the composer badge.</p>
+            </div>
+          ) : null}
           {entries.map((entry) => (
             <ThreadEntryView
               key={entry.id}
@@ -497,6 +493,72 @@ export function ChatPanel({ status, workspaceName, onError, onOpenSettings, onOp
                         {permissionMode === mode.id ? <CheckIcon className="check-icon" /> : null}
                       </button>
                     ))}
+                  </div>
+                ) : null}
+              </div>
+              <div
+                className="menu-anchor context-anchor"
+                onMouseEnter={() => setContextMenuOpen(true)}
+                onMouseLeave={() => setContextMenuOpen(false)}
+              >
+                <button
+                  className="context-badge"
+                  title="Context used in this thread (hover to inspect)"
+                  onClick={() => setContextMenuOpen((open) => !open)}
+                >
+                  <ContextIcon />
+                  <span>{threadContext.readFiles.length + threadContext.editedFiles.length}</span>
+                </button>
+                {contextMenuOpen ? (
+                  <div className="popover-menu context-popover">
+                    <div className="context-popover-title">THREAD CONTEXT</div>
+                    {threadContext.readFiles.length === 0
+                      && threadContext.editedFiles.length === 0
+                      && threadContext.tools.length === 0 ? (
+                      <>
+                        <div className="context-tool"><span>Files</span><span>0</span></div>
+                        <div className="context-tool"><span>Tools</span><span>0</span></div>
+                      </>
+                    ) : (
+                      <>
+                        {threadContext.editedFiles.length > 0 ? (
+                          <div className="context-section">
+                            <small>EDITED</small>
+                            {threadContext.editedFiles.map((file) => (
+                              <button key={file} className="context-file" onClick={() => onOpenFile?.(file)} title={file}>
+                                <FileIcon />
+                                <span>{file}</span>
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
+                        {threadContext.readFiles.length > 0 ? (
+                          <div className="context-section">
+                            <small>READ</small>
+                            {threadContext.readFiles.map((file) => (
+                              <button key={file} className="context-file" onClick={() => onOpenFile?.(file)} title={file}>
+                                <FileIcon />
+                                <span>{file}</span>
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
+                        {threadContext.tools.length > 0 ? (
+                          <div className="context-section">
+                            <small>TOOLS</small>
+                            {threadContext.tools.map((tool) => (
+                              <div key={tool.name} className="context-tool">
+                                <span>{tool.name}</span>
+                                <span>×{tool.count}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
+                      </>
+                    )}
+                    <div className="context-meta">
+                      {threadContext.userMessages} prompt{threadContext.userMessages === 1 ? '' : 's'} · {threadContext.assistantMessages} repl{threadContext.assistantMessages === 1 ? 'y' : 'ies'}
+                    </div>
                   </div>
                 ) : null}
               </div>
@@ -854,6 +916,44 @@ function collectChangedFiles(entries: ThreadEntry[]): string[] {
     if (path) files.add(path)
   }
   return [...files]
+}
+
+interface ThreadContext {
+  readFiles: string[]
+  editedFiles: string[]
+  tools: Array<{ name: string; count: number }>
+  userMessages: number
+  assistantMessages: number
+}
+
+// Everything the agent pulled into this thread: files it read or edited and
+// the tools it invoked. Derived from the folded session events of this thread only.
+function collectThreadContext(entries: ThreadEntry[]): ThreadContext {
+  const read = new Set<string>()
+  const edited = new Set<string>()
+  const toolCounts = new Map<string, number>()
+  let userMessages = 0
+  let assistantMessages = 0
+  for (const entry of entries) {
+    if (entry.kind === 'user') userMessages += 1
+    else if (entry.kind === 'assistant') assistantMessages += 1
+    else if (entry.kind === 'tool') {
+      toolCounts.set(entry.name, (toolCounts.get(entry.name) ?? 0) + 1)
+      const path = toolPath(entry.args)
+      if (!path) continue
+      if (FS_WRITE_TOOL_NAMES.has(entry.name)) edited.add(path)
+      else read.add(path)
+    }
+  }
+  return {
+    readFiles: [...read].filter((path) => !edited.has(path)),
+    editedFiles: [...edited],
+    tools: [...toolCounts.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count),
+    userMessages,
+    assistantMessages,
+  }
 }
 
 function toolPath(args: unknown): string | undefined {

@@ -1,10 +1,10 @@
-import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import type { BrowserState, HarnessStatus, ThemeMode, ThemeState, WorkspaceFile, WorkspaceState } from '../../shared/contracts'
 import { BrowserPane } from './components/BrowserPane'
 import { ChatPanel } from './components/ChatPanel'
 import { EditorPane } from './components/EditorPane'
 import { Explorer } from './components/Explorer'
-import { BrowserIcon, CloseIcon, FileIcon, SparkIcon } from './components/Icons'
+import { BrowserIcon, CloseIcon, FileIcon, SidebarToggleIcon, SparkIcon } from './components/Icons'
 import { OrganizationDashboard } from './components/OrganizationDashboard'
 import { RuntimePrompts } from './components/RuntimePrompts'
 import { StatusBar } from './components/StatusBar'
@@ -14,22 +14,19 @@ import './styles/product-shell.css'
 
 const SettingsPane = lazy(() => import('./components/SettingsPane').then((module) => ({ default: module.SettingsPane })))
 
-type ProductView = 'company' | 'agent' | 'files' | 'browser' | 'settings'
+type ProductView = 'company' | 'agent' | 'settings'
 
-const URL_ROUTING = typeof window !== 'undefined' && window.location.protocol.startsWith('http')
+type AgentPane = 'files' | 'browser'
 
-function viewFromPath(): ProductView {
-  if (!URL_ROUTING) return 'company'
-  const path = window.location.pathname
-  if (path === '/agent' || path.endsWith('/agent')) return 'agent'
-  if (path === '/files' || path.endsWith('/files')) return 'files'
-  if (path === '/browser' || path.endsWith('/browser')) return 'browser'
-  if (path === '/settings' || path.endsWith('/settings')) return 'settings'
-  return 'company'
+const VIEWS: ProductView[] = ['company', 'agent', 'settings']
+
+function viewFromHash(): ProductView {
+  const route = window.location.hash.replace(/^#\/?/, '').split(/[/?]/)[0]
+  return VIEWS.includes(route as ProductView) ? (route as ProductView) : 'agent'
 }
 
-function pathForView(view: ProductView): string {
-  return view === 'company' ? '/' : `/${view}`
+function hashForView(view: ProductView): string {
+  return `#/${view}`
 }
 
 export default function App() {
@@ -37,7 +34,11 @@ export default function App() {
   const [browserState, setBrowserState] = useState<BrowserState | null>(null)
   const [harnessStatus, setHarnessStatus] = useState<HarnessStatus | null>(null)
   const [selectedFile, setSelectedFile] = useState<WorkspaceFile | null>(null)
-  const [view, setView] = useState<ProductView>(viewFromPath)
+  const [view, setView] = useState<ProductView>(viewFromHash)
+  const [agentPane, setAgentPane] = useState<AgentPane>('files')
+  const [chatWidth, setChatWidth] = useState(580)
+  const [sessionsCollapsed, setSessionsCollapsed] = useState(false)
+  const [workspaceCollapsed, setWorkspaceCollapsed] = useState(false)
   const [externalPrompt, setExternalPrompt] = useState<{ id: string; text: string } | null>(null)
   const [toast, setToast] = useState<string>()
   const [theme, setTheme] = useState<ThemeState | null>(null)
@@ -89,14 +90,18 @@ export default function App() {
   }, [theme])
 
   useEffect(() => {
-    if (!URL_ROUTING) return
-    const target = pathForView(view)
-    if (window.location.pathname !== target) window.history.pushState(null, '', target)
+    const target = hashForView(view)
+    if (window.location.hash === target) return
+    try {
+      window.history.pushState(null, '', target)
+    } catch {
+      // file:// origins may reject pushState; fall back to a plain hash change.
+      window.location.hash = target
+    }
   }, [view])
 
   useEffect(() => {
-    if (!URL_ROUTING) return
-    const onPopState = (): void => setView(viewFromPath())
+    const onPopState = (): void => setView(viewFromHash())
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
   }, [])
@@ -113,10 +118,29 @@ export default function App() {
   const openFile = async (path: string): Promise<void> => {
     try {
       setSelectedFile(await window.ndDsh.workspace.read(path))
-      setView('files')
+      setAgentPane('files')
+      setView('agent')
     } catch (cause) {
       setToast(errorMessage(cause))
     }
+  }
+
+  const startChatResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = chatWidth
+    // The thread pane inside keeps a 420px floor; the sessions sidebar adds 160px when open.
+    const minWidth = sessionsCollapsed ? 420 : 580
+    const onMove = (move: PointerEvent): void => {
+      const maxWidth = Math.max(minWidth, window.innerWidth - 480)
+      setChatWidth(Math.min(Math.max(minWidth, startWidth + move.clientX - startX), maxWidth))
+    }
+    const onUp = (): void => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
   }
 
   const askAgent = (prompt: string): void => {
@@ -127,8 +151,6 @@ export default function App() {
   const navItems: Array<{ id: ProductView; label: string; icon: ReactNode }> = [
     { id: 'company', label: 'Company', icon: <span className="product-nav-monogram">CO</span> },
     { id: 'agent', label: 'Agent', icon: <SparkIcon /> },
-    { id: 'files', label: 'Files', icon: <FileIcon /> },
-    { id: 'browser', label: 'Browser', icon: <BrowserIcon /> },
     { id: 'settings', label: 'Settings', icon: <span className="product-nav-monogram">SE</span> },
   ]
 
@@ -136,24 +158,19 @@ export default function App() {
     <div className="app-shell product-shell">
       <header className="product-titlebar">
         <div className="product-brand">
+          <button
+            className="titlebar-sidebar-toggle"
+            title={sessionsCollapsed ? 'Expand sessions sidebar' : 'Collapse sessions sidebar'}
+            onClick={() => setSessionsCollapsed((collapsed) => !collapsed)}
+          >
+            <SidebarToggleIcon collapsed={sessionsCollapsed} />
+          </button>
           <span className="product-logo">ND</span>
           <div>
             <strong>ND-DSH</strong>
             <span>{workspace?.name ?? 'No workspace'}</span>
           </div>
         </div>
-        <div className="product-title-center">
-          <span>AI Company Operating System</span>
-          <small>{viewLabel(view)}</small>
-        </div>
-        <div className="product-runtime">
-          <ThemeToggle theme={theme} onSelect={selectTheme} />
-          <span className={`tiny-dot ${harnessStatus?.state ?? 'stopped'}`} />
-          <span>{harnessStatus?.model ?? 'Runtime offline'}</span>
-        </div>
-      </header>
-
-      <div className="product-body">
         <nav className="product-nav" aria-label="ND-DSH navigation">
           <div className="product-nav-main">
             {navItems.map((item) => (
@@ -168,50 +185,87 @@ export default function App() {
               </button>
             ))}
           </div>
-          <div className="product-nav-runtime" title={harnessStatus?.error}>
-            <span className={`tiny-dot ${harnessStatus?.state ?? 'stopped'}`} />
-            <small>{harnessStatus?.state ?? 'stopped'}</small>
-          </div>
         </nav>
+        <div className="product-runtime">
+          <ThemeToggle theme={theme} onSelect={selectTheme} />
+          <span className={`tiny-dot ${harnessStatus?.state ?? 'stopped'}`} />
+          <span>{harnessStatus?.model ?? 'Runtime offline'}</span>
+          <button
+            className="titlebar-sidebar-toggle"
+            title={workspaceCollapsed ? 'Expand workspace pane' : 'Collapse workspace pane'}
+            onClick={() => setWorkspaceCollapsed((collapsed) => !collapsed)}
+          >
+            <SidebarToggleIcon collapsed={!workspaceCollapsed} />
+          </button>
+        </div>
+      </header>
 
+      <div className="product-body">
         <main className="product-workspace">
           <section className={`product-view ${view === 'company' ? 'active' : ''}`} aria-hidden={view !== 'company'}>
             <OrganizationDashboard workspace={workspace} onOpenDeepSeek={() => setView('agent')} onError={setToast} />
           </section>
 
           <section className={`product-view product-agent-view ${view === 'agent' ? 'active' : ''}`} aria-hidden={view !== 'agent'}>
-            <ChatPanel
-              status={harnessStatus}
-              {...(workspace?.name ? { workspaceName: workspace.name } : {})}
-              onError={setToast}
-              onOpenSettings={() => setView('settings')}
-              onOpenFile={(path) => void openFile(path)}
-              externalPrompt={externalPrompt}
-              onExternalPromptConsumed={() => setExternalPrompt(null)}
-            />
-          </section>
-
-          <section className={`product-view ${view === 'files' ? 'active' : ''}`} aria-hidden={view !== 'files'}>
-            <div className="product-files-layout">
-              <Explorer
-                workspace={workspace}
-                selectedPath={selectedFile?.relativePath}
-                onWorkspaceChanged={changeWorkspace}
-                onOpenFile={(path) => void openFile(path)}
-              />
-              <div className="product-editor-wrap">
-                <EditorPane file={selectedFile} onAgentPrompt={askAgent} onError={setToast} />
+            <div className="agent-split">
+              <div className="agent-chat-pane" style={{ width: workspaceCollapsed ? '100%' : chatWidth }}>
+                <ChatPanel
+                  status={harnessStatus}
+                  {...(workspace?.name ? { workspaceName: workspace.name } : {})}
+                  sessionsCollapsed={sessionsCollapsed}
+                  onError={setToast}
+                  onOpenSettings={() => setView('settings')}
+                  onOpenFile={(path) => void openFile(path)}
+                  externalPrompt={externalPrompt}
+                  onExternalPromptConsumed={() => setExternalPrompt(null)}
+                />
               </div>
+              {workspaceCollapsed ? null : (
+                <>
+                  <div
+                    className="agent-splitter"
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label="Resize chat pane"
+                    onPointerDown={startChatResize}
+                  />
+                  <div className="agent-workspace-pane">
+                <div className="agent-pane-tabs" role="tablist" aria-label="Agent workspace panes">
+                  <button className={agentPane === 'files' ? 'active' : ''} onClick={() => setAgentPane('files')}>
+                    <FileIcon />
+                    <span>Files</span>
+                  </button>
+                  <button className={agentPane === 'browser' ? 'active' : ''} onClick={() => setAgentPane('browser')}>
+                    <BrowserIcon />
+                    <span>Browser</span>
+                  </button>
+                </div>
+                <div className="agent-pane-body">
+                  {agentPane === 'files' ? (
+                    <div className="product-files-layout">
+                      <div className="product-editor-wrap">
+                        <EditorPane file={selectedFile} onAgentPrompt={askAgent} onError={setToast} />
+                      </div>
+                      <Explorer
+                        workspace={workspace}
+                        selectedPath={selectedFile?.relativePath}
+                        onWorkspaceChanged={changeWorkspace}
+                        onOpenFile={(path) => void openFile(path)}
+                      />
+                    </div>
+                  ) : (
+                    <BrowserPane
+                      active={view === 'agent'}
+                      state={browserState}
+                      onSnapshot={() => setToast('Browser snapshot captured from the live page.')}
+                      onError={setToast}
+                    />
+                  )}
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
-          </section>
-
-          <section className={`product-view product-browser-view ${view === 'browser' ? 'active' : ''}`} aria-hidden={view !== 'browser'}>
-            <BrowserPane
-              active={view === 'browser'}
-              state={browserState}
-              onSnapshot={() => setToast('Browser snapshot captured from the live page.')}
-              onError={setToast}
-            />
           </section>
 
           <section className={`product-view ${view === 'settings' ? 'active' : ''}`} aria-hidden={view !== 'settings'}>
@@ -235,14 +289,6 @@ export default function App() {
       {toast ? <div className="toast" role="alert"><span>{toast}</span><button onClick={() => setToast(undefined)}><CloseIcon /></button></div> : null}
     </div>
   )
-}
-
-function viewLabel(view: ProductView): string {
-  if (view === 'company') return 'Company command center'
-  if (view === 'agent') return 'Agent console'
-  if (view === 'files') return 'Workspace files'
-  if (view === 'browser') return 'Agent browser'
-  return 'Settings'
 }
 
 function errorMessage(cause: unknown): string {
