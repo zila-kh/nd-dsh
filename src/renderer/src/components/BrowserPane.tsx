@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import type { BrowserState } from '../../../shared/contracts'
-import { ArrowLeftIcon, ArrowRightIcon, CameraIcon, ExternalIcon, ReloadIcon } from './Icons'
+import { ArrowLeftIcon, ArrowRightIcon, CameraIcon, ContextIcon, ExternalIcon, ReloadIcon } from './Icons'
 
 interface BrowserPaneProps {
   active: boolean
@@ -78,6 +78,28 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
     }
   }
 
+  const toggleInspectMode = async (): Promise<void> => {
+    const setInspectMode = window.ndDsh.browser.setInspectMode
+    if (!setInspectMode) {
+      onError('UI inspect mode is available in the ND-DSH desktop app.')
+      return
+    }
+    await runBrowserAction(() => setInspectMode(!state?.inspectMode))
+  }
+
+  const clearSelection = async (): Promise<void> => {
+    const clear = window.ndDsh.browser.clearSelection
+    if (!clear) return
+    await runBrowserAction(() => clear())
+  }
+
+  const selected = state?.selectedTarget
+  const selectedSource = selected?.source ?? selected?.react?.source
+  const selectedName = selected?.react?.component ?? selected?.tagName
+  const selectedTitle = selected
+    ? `${selectedName ?? 'element'} · ${selectedSource ? `${selectedSource.file}:${selectedSource.line}` : selected.selector}`
+    : undefined
+
   return (
     <section className={`browser-pane ${active ? 'is-active' : ''}`} aria-label="Built-in browser">
       <div className="browser-toolbar">
@@ -97,6 +119,14 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
         </form>
         <button className="icon-button snapshot-button" onClick={() => void snapshot()} title="Interactive snapshot"><CameraIcon /></button>
         <button
+          className={`icon-button ${state?.inspectMode ? 'snapshot-button' : ''}`}
+          aria-pressed={Boolean(state?.inspectMode)}
+          onClick={() => void toggleInspectMode()}
+          title={state?.inspectMode ? 'Cancel UI inspect mode (Esc)' : 'Inspect UI element and attach runtime context to the agent'}
+        >
+          <ContextIcon />
+        </button>
+        <button
           className="icon-button"
           disabled={!state?.url || state.url === 'about:blank'}
           onClick={() => void runBrowserAction(() => window.ndDsh.browser.openExternal(state?.url ?? address))}
@@ -104,6 +134,11 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
         >
           <ExternalIcon />
         </button>
+        {selected ? (
+          <button className="bridge-pill ready" onClick={() => void clearSelection()} title={`${selectedTitle ?? 'Selected UI'} · click to clear`}>
+            <span />UI: {selectedName ?? 'element'}
+          </button>
+        ) : null}
         <span className={`bridge-pill ${state?.agentBrowser ?? 'binding'}`} title={state?.agentBrowserError}>
           <span />{state?.agentBrowser === 'ready' ? 'Agent linked' : state?.agentBrowser === 'unavailable' ? 'Agent offline' : 'Linking'}
         </span>
