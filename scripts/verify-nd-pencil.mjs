@@ -18,7 +18,7 @@ for (const path of [
   'resources/nd-pencil/LICENSE.openpencil',
   'resources/nd-pencil/README.md',
   'src/shared/design.ts',
-  'src/main/design/nd-pencil-controller.ts',
+  'src/main/design/openpencil-controller.ts',
   'src/preload/nd-pencil.ts',
   'scripts/build-nd-pencil.mjs',
 ]) {
@@ -70,10 +70,13 @@ if (existsSync(manifestPath)) {
   }
 }
 
-const controllerPath = join(root, 'src', 'main', 'design', 'nd-pencil-controller.ts')
+// This filename intentionally records the current upstream adapter provenance;
+// the exported class/product contract is ND Pencil and must stay that way.
+const controllerPath = join(root, 'src', 'main', 'design', 'openpencil-controller.ts')
 if (existsSync(controllerPath)) {
   const controller = await fs.readFile(controllerPath, 'utf8')
   for (const needle of [
+    'export class NdPencilController',
     "engine: 'nd-pencil'",
     'process.resourcesPath',
     "'nd-pencil'",
