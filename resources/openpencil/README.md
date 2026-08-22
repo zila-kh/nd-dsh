@@ -1,11 +1,21 @@
 # ND OpenPencil runtime staging
 
-`pnpm openpencil:build` compiles the pinned `vendor/openpencil` checkout and stages the platform-specific `op-host-web-server` binary under `resources/openpencil/bin/`.
+`pnpm openpencil:build` compiles the pinned `vendor/openpencil` checkout and stages a complete platform-specific Freeform runtime under `resources/openpencil/bin/`.
 
-The binary directory is generated and intentionally ignored by Git. Desktop packaging must copy this `openpencil` directory into Electron's `process.resourcesPath`, producing:
+The generated layout is:
 
 ```text
-<app resources>/openpencil/bin/op-host-web-server[.exe]
+resources/openpencil/bin/
+├── op-host-web-server[.exe]
+└── web-bundle/
+    ├── op_host_web.js
+    ├── op_host_web_bg.wasm
+    ├── assets/
+    └── canvaskit/
+        ├── canvaskit.js
+        └── canvaskit.wasm
 ```
 
-ND Design → Freeform resolves this bundled runtime first. Normal users should never need a separate OpenPencil installation or PATH configuration.
+The binary directory is generated and intentionally ignored by Git. Desktop packaging must copy `resources/openpencil` into Electron's `process.resourcesPath`, preserving that layout.
+
+ND Design → Freeform resolves this bundled runtime. Normal users should never need a separate OpenPencil installation, browser extension, or PATH configuration.
