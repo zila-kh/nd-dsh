@@ -10,6 +10,7 @@ import { BrowserController } from './browser/browser-controller.js'
 import { DEFAULT_BROWSER_URL } from './browser/browser-url.js'
 import { DshSurfaceController } from './dsh/dsh-surface.js'
 import { pickFreePort } from './dsh/gateway-client.js'
+import { EngineAssignmentStore } from './engines/engine-assignment-store.js'
 import { CodingEngineRegistry } from './engines/coding-engine-registry.js'
 import { HarnessService } from './harness/harness-service.js'
 import { registerIpc } from './ipc.js'
@@ -51,7 +52,8 @@ async function createWindow(cdpPort: number): Promise<void> {
   // safeStorage is only reliable after Electron has emitted `ready`, and
   // createWindow is called after app.whenReady().
   const providers = new ProviderStore()
-  const engines = new CodingEngineRegistry()
+  const userData = app.getPath('userData')
+  const engines = new CodingEngineRegistry(new EngineAssignmentStore(join(userData, 'engine-assignments.json')))
   const isMac = process.platform === 'darwin'
 
   const window = new BrowserWindow({
@@ -80,10 +82,10 @@ async function createWindow(cdpPort: number): Promise<void> {
   const browser = new BrowserController(window, cdpPort, projectRoot())
   const dshSurface = new DshSurfaceController(window)
   const harness = new HarnessService(workspace, browser, providers)
-  const organizationStore = new OrganizationStore(join(app.getPath('userData'), 'organization.json'))
+  const organizationStore = new OrganizationStore(join(userData, 'organization.json'))
   const interruptedRuns = await organizationStore.reconcileInterruptedRuns()
   if (interruptedRuns > 0) console.warn(`Recovered ${interruptedRuns} interrupted organization run(s) from the previous app session.`)
-  const organization = new OrganizationOrchestrator(organizationStore, harness, workspace)
+  const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines)
   const disposeIpc = registerIpc({ window, browser, dshSurface, engines, harness, workspace, theme, providers })
   const disposeOrganizationIpc = registerOrganizationIpc(window, organizationStore, organization)
   mainWindow = window

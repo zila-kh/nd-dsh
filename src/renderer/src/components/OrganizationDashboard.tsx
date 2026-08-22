@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
-import type { WorkspaceState } from '../../../shared/contracts'
+import type { CodingEngineDescriptor, WorkspaceState } from '../../../shared/contracts'
+import { ND_HARNESS_ENGINE_ID } from '../../../shared/coding-engines'
 import type { OrganizationPolicyEffect, OrganizationSnapshot, OrganizationTask, TaskPriority } from '../../../shared/organization'
 
 interface Props {
@@ -18,12 +19,26 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onError }: Pr
   const [projectDraft, setProjectDraft] = useState({ name: '', objective: '', workspacePath: workspace?.root ?? '' })
   const [taskDraft, setTaskDraft] = useState({ title: '', description: '', priority: 'medium' as TaskPriority })
   const [memoryDraft, setMemoryDraft] = useState({ title: '', content: '' })
+  const [engines, setEngines] = useState<CodingEngineDescriptor[]>([])
+  const [engineAssignments, setEngineAssignments] = useState<Record<string, string>>({})
 
   useEffect(() => {
     let mounted = true
     void window.ndDshOrganization.state().then((value) => { if (mounted) setState(value) }).catch((cause) => onError(errorMessage(cause)))
     const off = window.ndDshOrganization.onChanged(setState)
     return () => { mounted = false; off() }
+  }, [onError])
+
+  useEffect(() => {
+    let mounted = true
+    void Promise.all([window.ndDsh.engines.list(), window.ndDsh.engines.assignments()])
+      .then(([catalog, assignments]) => {
+        if (!mounted) return
+        setEngines(catalog)
+        setEngineAssignments(assignments)
+      })
+      .catch((cause) => onError(errorMessage(cause)))
+    return () => { mounted = false }
   }, [onError])
 
   const company = useMemo(() => state?.companies.find((item) => item.id === state.activeCompanyId) ?? null, [state])
@@ -83,6 +98,12 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onError }: Pr
     })
   }
 
+  async function assignEngine(agentId: string, engineId: string): Promise<void> {
+    await action(`engine-${agentId}`, async () => {
+      setEngineAssignments(await window.ndDsh.engines.assign(agentId, engineId))
+    })
+  }
+
   if (!state) return <div className="org-loading"><div className="placeholder-ring" />Loading AI Company OS…</div>
 
   if (!company) {
@@ -127,7 +148,10 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onError }: Pr
         <div className="org-board">{(['ready', 'in_progress', 'review', 'blocked', 'completed'] as const).map((status) => <section key={status}><header>{status.replace('_', ' ')} <b>{tasks.filter((item) => item.status === status).length}</b></header>{tasks.filter((item) => item.status === status).map((item) => <TaskCard key={item.id} task={item} state={state} busy={busy} run={action} />)}</section>)}</div>
       </Card> : null}
 
-      {section === 'workforce' ? <div className="org-grid"><Card title="Teams">{teams.map((team) => <div className="org-row" key={team.id}><div><strong>{team.name}</strong><small>{team.purpose}</small></div><span>{agents.filter((agent) => agent.teamId === team.id).length}</span></div>)}</Card><Card title="AI workers">{agents.map((agent) => <div className="org-row" key={agent.id}><div><strong>{agent.name}</strong><small>{roles.find((role) => role.id === agent.roleId)?.name ?? 'Role'} · {agent.status}</small></div></div>)}</Card><Card title="Skills" wide>{state.skills.filter((skill) => skill.scope === 'builtin' || skill.companyId === company.id || skill.projectId === project?.id).map((skill) => <div className="org-skill" key={skill.id}><small>{skill.scope}</small><strong>{skill.name}</strong><p>{skill.description}</p></div>)}</Card></div> : null}
+      {section === 'workforce' ? <div className="org-grid"><Card title="Teams">{teams.map((team) => <div className="org-row" key={team.id}><div><strong>{team.name}</strong><small>{team.purpose}</small></div><span>{agents.filter((agent) => agent.teamId === team.id).length}</span></div>)}</Card><Card title="AI workers">{agents.map((agent) => {
+        const engineId = engineAssignments[agent.id] ?? ND_HARNESS_ENGINE_ID
+        return <div className="org-row" key={agent.id}><div><strong>{agent.name}</strong><small>{roles.find((role) => role.id === agent.roleId)?.name ?? 'Role'} · {agent.status}</small></div><label title="Coding engine used when this employee executes an assigned task">Engine <select value={engineId} disabled={busy !== null} onChange={(event) => void assignEngine(agent.id, event.target.value)}>{engines.map((engine) => <option key={engine.id} value={engine.id} disabled={!engine.available}>{engine.name}{engine.available ? '' : ' (unavailable)'}</option>)}</select></label></div>
+      })}</Card><Card title="Skills" wide>{state.skills.filter((skill) => skill.scope === 'builtin' || skill.companyId === company.id || skill.projectId === project?.id).map((skill) => <div className="org-skill" key={skill.id}><small>{skill.scope}</small><strong>{skill.name}</strong><p>{skill.description}</p></div>)}</Card></div> : null}
 
       {section === 'knowledge' ? <div className="org-grid"><Card title="Memory"><form className="org-memory" onSubmit={(event) => void addMemory(event)}><input placeholder="Decision or lesson" value={memoryDraft.title} onChange={(event) => setMemoryDraft((value) => ({ ...value, title: event.target.value }))} required /><textarea placeholder="Durable context" value={memoryDraft.content} onChange={(event) => setMemoryDraft((value) => ({ ...value, content: event.target.value }))} required /><button>Add</button></form>{memory.slice().reverse().map((item) => <div className="org-memory-item" key={item.id}><strong>{item.title}</strong><small>{item.source}</small><p>{item.content}</p></div>)}</Card><Card title="Policies">{policies.map((policy) => <div className="org-policy" key={policy.id}><div><strong>{policy.action}</strong><small>{policy.description}</small></div><select value={policy.effect} onChange={(event) => void action(`policy-${policy.id}`, () => mutate({ type: 'policy.set', companyId: company.id, action: policy.action, effect: event.target.value as OrganizationPolicyEffect, description: policy.description }))}><option value="allow">ALLOW</option><option value="ask">ASK</option><option value="deny">DENY</option></select></div>)}</Card></div> : null}
     </main>

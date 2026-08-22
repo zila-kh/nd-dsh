@@ -12,6 +12,8 @@ const api: DesktopApi = {
   },
   engines: {
     list: () => ipcRenderer.invoke(IPC.enginesList),
+    assignments: () => ipcRenderer.invoke(IPC.enginesAssignments),
+    assign: (agentId, engineId) => ipcRenderer.invoke(IPC.enginesAssign, agentId, engineId),
   },
   browser: {
     state: () => ipcRenderer.invoke(IPC.browserState),

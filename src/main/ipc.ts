@@ -45,6 +45,11 @@ export function registerIpc(deps: IpcDependencies): () => void {
   }))
 
   handle(IPC.enginesList, () => deps.engines.list())
+  handle(IPC.enginesAssignments, () => deps.engines.assignments())
+  handle(IPC.enginesAssign, (_event, agentId, engineId) => deps.engines.assign(
+    asString(agentId, 'Agent id', 256),
+    asString(engineId, 'Engine id', 256),
+  ))
 
   handle(IPC.browserState, () => deps.browser.state())
   handle(IPC.browserSetBounds, (_event, value) => deps.browser.setBounds(asBounds(value)))

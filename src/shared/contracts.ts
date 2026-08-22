@@ -226,6 +226,8 @@ export interface DesktopApi {
   }
   engines: {
     list(): Promise<CodingEngineDescriptor[]>
+    assignments(): Promise<Record<string, string>>
+    assign(agentId: string, engineId: string): Promise<Record<string, string>>
   }
   browser: {
     state(): Promise<BrowserState>
@@ -316,4 +318,6 @@ export const IPC = {
   providersList: 'providers:list',
   providersSave: 'providers:save',
   enginesList: 'engines:list',
+  enginesAssignments: 'engines:assignments',
+  enginesAssign: 'engines:assign',
 } as const

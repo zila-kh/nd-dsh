@@ -1,5 +1,7 @@
 import type { DshEventFrame } from '../../shared/contracts.js'
+import { CODEX_ENGINE_ID, ND_HARNESS_ENGINE_ID } from '../../shared/coding-engines.js'
 import type { OrganizationRun, OrganizationRunReceipt, OrganizationTask, ProjectPlanInput } from '../../shared/organization.js'
+import type { CodingEngineRegistry } from '../engines/coding-engine-registry.js'
 import type { HarnessService } from '../harness/harness-service.js'
 import type { WorkspaceService } from '../workspace/workspace-service.js'
 import type { OrganizationStore } from './store.js'
@@ -24,6 +26,7 @@ export class OrganizationOrchestrator {
     private readonly store: OrganizationStore,
     private readonly harness: HarnessService,
     private readonly workspace: WorkspaceService,
+    private readonly engines?: Pick<CodingEngineRegistry, 'assignedEngine' | 'assertAvailable'>,
   ) {}
 
   async planProject(projectId: string, explicit = true): Promise<OrganizationRunReceipt> {
@@ -43,12 +46,14 @@ export class OrganizationOrchestrator {
     this.assertPolicy(await this.store.policy(context.company.id, 'task.execute'), explicit, 'task execution')
     if (!explicit && context.company.autonomyLevel < 3) throw new Error('Autonomy level 3+ is required for automatic execution')
     if (context.task.status !== 'ready' && context.task.status !== 'blocked') throw new Error(`Task is ${context.task.status}; only ready or blocked tasks can run`)
+    const engineId = await this.resolveTaskEngine(context.agent?.id)
+    const prompt = workerPrompt(context, engineId)
     await this.assertNoActiveRun(context.project.id)
     await this.prepareWorkspace(context.project.workspacePath)
     const sessionId = await this.harness.createSession()
     const run = await this.store.beginRun('task-execution', context.company.id, context.project.id, sessionId, context.task.id, context.task.goalId)
     await this.store.markExecution(context.task.id, sessionId)
-    await this.harness.run(workerPrompt(context), { sessionId })
+    await this.harness.run(prompt, { sessionId })
     return receipt(run)
   }
 
@@ -219,6 +224,13 @@ export class OrganizationOrchestrator {
     throw new Error(`Another project already has an active ${active.kind} run in session ${active.sessionId}`)
   }
 
+  private async resolveTaskEngine(agentId: string | undefined): Promise<string> {
+    const engineId = this.engines ? await this.engines.assignedEngine(agentId) : ND_HARNESS_ENGINE_ID
+    if (engineId !== ND_HARNESS_ENGINE_ID && engineId !== CODEX_ENGINE_ID) throw new Error(`Unsupported coding engine: ${engineId}`)
+    this.engines?.assertAvailable(engineId)
+    return engineId
+  }
+
   private async workflowKinds(projectId: string): Promise<Set<WorkflowKind>> {
     const workflow = await this.store.workflowForProject(projectId)
     const kinds = new Set<WorkflowKind>()
@@ -255,11 +267,14 @@ function pmPrompt(context: Awaited<ReturnType<OrganizationStore['projectContext'
   return `You are the AI Product Manager for ${context.company.name}.\nMission: ${context.company.mission}\nProject: ${context.project.name}\nObjective: ${context.project.objective}\n\nCreate a practical delivery plan. Respect company/project isolation. Use the existing teams and roles when assigning work. Return concise reasoning, then exactly one JSON object between <nd-dsh-plan> and </nd-dsh-plan>.\n\nSchema:\n<nd-dsh-plan>{"goal":{"title":"...","description":"..."},"milestones":[{"title":"...","description":"...","tasks":[{"title":"...","description":"...","priority":"medium","acceptanceCriteria":["..."],"dependsOn":["earlier task title"],"role":"Software Engineer"}]}],"memory":[{"title":"...","content":"...","tags":["plan"]}]}</nd-dsh-plan>\n\nAvailable roles:\n${roles}\nAvailable teams:\n${teams}\nKnown memory:\n${context.memory.map((item) => `- ${item.title}: ${item.content}`).join('\n') || '- none'}\nPolicies:\n${context.policies.map((item) => `- ${item.action}: ${item.effect}`).join('\n')}`
 }
 
-function workerPrompt(context: Awaited<ReturnType<OrganizationStore['taskContext']>>): string {
+function workerPrompt(context: Awaited<ReturnType<OrganizationStore['taskContext']>>, engineId: string): string {
   const reviewFeedback = context.task.reviewSummary
     ? `\nPrevious independent review feedback:\n${context.task.reviewSummary}\nResolve every relevant issue before declaring the task complete.\n`
     : ''
-  return `You are ${context.agent?.name ?? 'an AI worker'} acting as ${context.role?.name ?? 'Software Engineer'} inside company ${context.company.name}.\nCompany mission: ${context.company.mission}\nProject: ${context.project.name}\nObjective: ${context.project.objective}\nTask: ${context.task.title}\nDescription: ${context.task.description}\nAcceptance criteria:\n${context.task.acceptanceCriteria.map((item) => `- ${item}`).join('\n')}${reviewFeedback}\nResponsibilities: ${context.role?.responsibility ?? 'Complete the assigned work.'}\nRole instructions: ${context.role?.systemPrompt ?? 'Execute carefully and verify the result.'}\nRelevant skills:\n${context.skills.map((item) => `- ${item.name}: ${item.instructions}`).join('\n')}\nRelevant memory:\n${context.memory.map((item) => `- ${item.title}: ${item.content}`).join('\n') || '- none'}\nPolicies:\n${context.policies.map((item) => `- ${item.action}: ${item.effect}`).join('\n')}\n\nWork directly in the project workspace using available tools. Inspect before editing, run meaningful validation, and finish with a concise result summary for the independent reviewer.`
+  const engineInstructions = engineId === CODEX_ENGINE_ID
+    ? `\nExecution engine: Codex CLI (delegated through the ND runtime).\nYou MUST delegate the implementation to the subagent_codex tool as one self-contained task that includes the project objective, task description, acceptance criteria, and relevant review feedback. Do not implement the requested code changes yourself before that delegation. After Codex returns, inspect the actual workspace, run appropriate validation with your ND tools, and report an evidence-based result. If Codex authentication, project trust, sandbox policy, or execution fails, report the blocker clearly and do not invent completion.\n`
+    : `\nExecution engine: ND Harness. Work directly in the project workspace using the available ND tools.\n`
+  return `You are ${context.agent?.name ?? 'an AI worker'} acting as ${context.role?.name ?? 'Software Engineer'} inside company ${context.company.name}.\nCompany mission: ${context.company.mission}\nProject: ${context.project.name}\nObjective: ${context.project.objective}\nTask: ${context.task.title}\nDescription: ${context.task.description}\nAcceptance criteria:\n${context.task.acceptanceCriteria.map((item) => `- ${item}`).join('\n')}${reviewFeedback}\nResponsibilities: ${context.role?.responsibility ?? 'Complete the assigned work.'}\nRole instructions: ${context.role?.systemPrompt ?? 'Execute carefully and verify the result.'}\nRelevant skills:\n${context.skills.map((item) => `- ${item.name}: ${item.instructions}`).join('\n')}\nRelevant memory:\n${context.memory.map((item) => `- ${item.title}: ${item.content}`).join('\n') || '- none'}\nPolicies:\n${context.policies.map((item) => `- ${item.action}: ${item.effect}`).join('\n')}${engineInstructions}\nInspect before editing, run meaningful validation, and finish with a concise result summary for the independent reviewer.`
 }
 
 function reviewPrompt(task: OrganizationTask, context: Awaited<ReturnType<OrganizationStore['taskContext']>>): string {
