@@ -16,16 +16,31 @@ interface SuggestIndexCache {
   entries: WorkspaceSuggestion[]
 }
 
+type WorkspaceContext = Omit<WorkspaceState, 'root' | 'name'>
+
 export class WorkspaceService {
   private root: string
   private suggestIndex: SuggestIndexCache | null = null
+  private context: WorkspaceContext = { binding: 'standalone' }
+  private onStateChanged?: (state: WorkspaceState) => void
 
   constructor(initialRoot: string) {
     this.root = resolve(initialRoot)
   }
 
   state(): WorkspaceState {
-    return { root: this.root, name: basename(this.root) || this.root }
+    return { root: this.root, name: basename(this.root) || this.root, ...this.context }
+  }
+
+  setStateListener(listener: ((state: WorkspaceState) => void) | undefined): void {
+    this.onStateChanged = listener
+    listener?.(this.state())
+  }
+
+  setContext(context: WorkspaceContext): WorkspaceState {
+    this.context = { ...context }
+    this.emitState()
+    return this.state()
   }
 
   async pick(): Promise<WorkspaceState> {
@@ -35,7 +50,10 @@ export class WorkspaceService {
       properties: ['openDirectory', 'createDirectory'],
     })
     const selected = result.filePaths[0]
-    if (!result.canceled && selected) this.root = resolve(selected)
+    if (!result.canceled && selected) {
+      this.root = resolve(selected)
+      this.emitState()
+    }
     return this.state()
   }
 
@@ -44,10 +62,12 @@ export class WorkspaceService {
     const stats = await fs.stat(candidate)
     if (!stats.isDirectory()) throw new Error('The selected path is not a directory')
     this.root = candidate
+    this.emitState()
     return this.state()
   }
 
   async list(relativePath = '.'): Promise<WorkspaceEntry[]> {
+    this.assertWorkspaceAvailable()
     const absolute = await this.resolveExisting(relativePath)
     const stats = await fs.stat(absolute)
     if (!stats.isDirectory()) throw new Error('The selected path is not a directory')
@@ -71,6 +91,7 @@ export class WorkspaceService {
   }
 
   async read(relativePath: string): Promise<WorkspaceFile> {
+    this.assertWorkspaceAvailable()
     const absolute = await this.resolveExisting(relativePath)
     const stats = await fs.stat(absolute)
     if (!stats.isFile()) throw new Error('The selected path is not a file')
@@ -119,6 +140,15 @@ export class WorkspaceService {
     })
     this.suggestIndex = { root, at: now, entries }
     return entries
+  }
+
+  private assertWorkspaceAvailable(): void {
+    if (this.context.binding === 'unlinked') throw new Error('The active project has no workspace linked. Select a workspace for this project first.')
+    if (this.context.binding === 'missing') throw new Error(this.context.warning ?? 'The active project workspace is unavailable. Relocate the project workspace first.')
+  }
+
+  private emitState(): void {
+    this.onStateChanged?.(this.state())
   }
 
   private async resolveExisting(relativePath: string): Promise<string> {

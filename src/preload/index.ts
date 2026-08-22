@@ -1,3 +1,4 @@
+import './design.js'
 import './organization.js'
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC, type DesktopApi } from '../shared/contracts.js'
@@ -50,6 +51,11 @@ const api: DesktopApi = {
     list: (relativePath) => ipcRenderer.invoke(IPC.workspaceList, relativePath),
     read: (relativePath) => ipcRenderer.invoke(IPC.workspaceRead, relativePath),
     suggest: (query) => ipcRenderer.invoke(IPC.workspaceSuggest, query),
+    onState: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: Parameters<typeof listener>[0]) => listener(state)
+      ipcRenderer.on(IPC.workspaceStateEvent, handler)
+      return () => ipcRenderer.removeListener(IPC.workspaceStateEvent, handler)
+    },
   },
   harness: {
     status: () => ipcRenderer.invoke(IPC.harnessStatus),
