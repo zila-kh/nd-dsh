@@ -297,6 +297,7 @@ function normalizeSourceFile(input: string): string {
   }
 
   value = value
+    .replaceAll('\\', '/')
     .replace(/^webpack:\/\/\/?/, '')
     .replace(/^vite:\/\/\/?/, '')
     .replace(/^\/@fs\//, '/')
@@ -382,7 +383,9 @@ function selectionOverlayScript(token: string): string {
     const cleanup = () => {
       document.removeEventListener('pointermove', update, true);
       document.removeEventListener('pointerdown', block, true);
+      document.removeEventListener('pointerup', block, true);
       document.removeEventListener('mousedown', block, true);
+      document.removeEventListener('mouseup', block, true);
       document.removeEventListener('click', select, true);
       document.removeEventListener('keydown', keydown, true);
       overlay.remove();
@@ -406,7 +409,9 @@ function selectionOverlayScript(token: string): string {
 
     document.addEventListener('pointermove', update, true);
     document.addEventListener('pointerdown', block, true);
+    document.addEventListener('pointerup', block, true);
     document.addEventListener('mousedown', block, true);
+    document.addEventListener('mouseup', block, true);
     document.addEventListener('click', select, true);
     document.addEventListener('keydown', keydown, true);
     window[KEY] = { cleanup, computedNames: ${computedNames} };
