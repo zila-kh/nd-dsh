@@ -50,9 +50,9 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve('src/preload/index.ts'),
-          openpencil: resolve('src/preload/openpencil.ts'),
+          'nd-pencil': resolve('src/preload/nd-pencil.ts'),
         },
-        // Both the product renderer and the isolated OpenPencil host run with
+        // Both the product renderer and the isolated ND Pencil host run with
         // `sandbox: true`, so their preload scripts must remain CommonJS.
         output: { format: 'cjs' },
       },
