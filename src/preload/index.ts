@@ -24,6 +24,10 @@ const api: DesktopApi = {
     forward: () => ipcRenderer.invoke(IPC.browserForward),
     reload: () => ipcRenderer.invoke(IPC.browserReload),
     snapshot: () => ipcRenderer.invoke(IPC.browserSnapshot),
+    setInspectMode: (enabled) => ipcRenderer.invoke(IPC.browserSetInspectMode, enabled),
+    clearSelection: () => ipcRenderer.invoke(IPC.browserClearSelection),
+    setAnnotationMode: (enabled) => ipcRenderer.invoke(IPC.browserSetAnnotationMode, enabled),
+    clearAnnotation: () => ipcRenderer.invoke(IPC.browserClearAnnotation),
     openExternal: (url) => ipcRenderer.invoke(IPC.browserOpenExternal, url),
     onState: (listener) => {
       const handler = (_event: Electron.IpcRendererEvent, state: Parameters<typeof listener>[0]) => listener(state)

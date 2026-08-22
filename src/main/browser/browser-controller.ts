@@ -1,12 +1,18 @@
 import { BrowserWindow, WebContentsView, session, type Rectangle } from 'electron'
-import type { BrowserBounds, BrowserState } from '../../shared/contracts.js'
+import type { BrowserBounds, BrowserState, UiAnnotation, UiTarget } from '../../shared/contracts.js'
 import { AgentBrowserClient } from './agent-browser-client.js'
 import { DEFAULT_BROWSER_URL, isAllowedBrowserUrl, normalizeBrowserUrl } from './browser-url.js'
+import { UiAnnotator, type UiAnnotationImage } from './ui-annotator.js'
+import { UiInspector } from './ui-inspector.js'
+
 const BROWSER_PARTITION = 'persist:nd-dsh-browser'
 
 export class BrowserController {
   private readonly view: WebContentsView
   private readonly agentBrowser: AgentBrowserClient
+  private readonly inspector: UiInspector
+  private readonly annotator: UiAnnotator
+  private annotationImage: UiAnnotationImage | undefined
   private stateValue: BrowserState
   private onStateChanged?: (state: BrowserState) => void
   private binding: Promise<void> | undefined
@@ -36,6 +42,31 @@ export class BrowserController {
     this.view.setVisible(false)
 
     this.agentBrowser = new AgentBrowserClient(cdpPort, projectRoot)
+    this.inspector = new UiInspector(this.view.webContents, {
+      selected: (target) => {
+        this.stateValue.inspectMode = false
+        delete this.stateValue.agentBrowserError
+        this.stateValue.selectedTarget = target
+        this.emitState()
+      },
+      canceled: () => {
+        this.stateValue.inspectMode = false
+        this.emitState()
+      },
+      error: (error) => {
+        this.stateValue.inspectMode = false
+        this.stateValue.agentBrowserError = `UI inspection failed: ${error.message}`
+        this.emitState()
+      },
+    })
+    this.annotator = new UiAnnotator(this.view.webContents, {
+      canceled: () => {
+        this.annotationImage = undefined
+        this.stateValue.annotationMode = false
+        delete this.stateValue.annotation
+        this.emitState()
+      },
+    })
     this.stateValue = {
       url: 'about:blank',
       title: 'Browser',
@@ -45,6 +76,8 @@ export class BrowserController {
       visible: false,
       cdpPort,
       agentBrowser: 'binding',
+      inspectMode: false,
+      annotationMode: false,
     }
     this.installListeners()
   }
@@ -71,6 +104,19 @@ export class BrowserController {
       agentBrowser: agentStatus.state,
       ...(agentStatus.error ? { agentBrowserError: agentStatus.error } : {}),
     }
+  }
+
+  selectedUiTarget(): UiTarget | undefined {
+    return this.stateValue.selectedTarget
+  }
+
+  selectedUiAnnotation(): UiAnnotation | undefined {
+    return this.stateValue.annotation
+  }
+
+  selectedUiAnnotationImage(expectedAnnotationId?: string): UiAnnotationImage | undefined {
+    if (expectedAnnotationId && this.stateValue.annotation?.id !== expectedAnnotationId) return undefined
+    return this.annotationImage
   }
 
   agentBrowserEnvironment(): NodeJS.ProcessEnv {
@@ -125,6 +171,80 @@ export class BrowserController {
     return this.agentBrowser.snapshot()
   }
 
+  async setInspectMode(enabled: boolean): Promise<BrowserState> {
+    if (enabled) {
+      if (this.stateValue.annotationMode) {
+        await this.annotator.cancel()
+        this.stateValue.annotationMode = false
+      }
+      delete this.stateValue.selectedTarget
+      delete this.stateValue.agentBrowserError
+      await this.inspector.start()
+      this.stateValue.inspectMode = true
+    } else {
+      await this.inspector.stop()
+      this.stateValue.inspectMode = false
+    }
+    this.emitState()
+    return this.state()
+  }
+
+  clearSelection(expectedTargetId?: string): BrowserState {
+    if (expectedTargetId && this.stateValue.selectedTarget?.id !== expectedTargetId) return this.state()
+    delete this.stateValue.selectedTarget
+    this.emitState()
+    return this.state()
+  }
+
+  async setAnnotationMode(enabled: boolean): Promise<BrowserState> {
+    if (enabled) {
+      if (this.stateValue.inspectMode) {
+        await this.inspector.stop()
+        this.stateValue.inspectMode = false
+      }
+      this.annotationImage = undefined
+      delete this.stateValue.annotation
+      delete this.stateValue.agentBrowserError
+      await this.annotator.start()
+      this.stateValue.annotationMode = true
+      this.emitState()
+      return this.state()
+    }
+
+    if (!this.stateValue.annotationMode) return this.state()
+    try {
+      const capture = await this.annotator.finish()
+      this.stateValue.annotationMode = false
+      if (capture) {
+        this.stateValue.annotation = capture.annotation
+        this.annotationImage = capture.image
+      } else {
+        delete this.stateValue.annotation
+        this.annotationImage = undefined
+      }
+      this.emitState()
+      return this.state()
+    } catch (cause) {
+      const error = cause instanceof Error ? cause : new Error(String(cause))
+      this.stateValue.annotationMode = false
+      this.annotationImage = undefined
+      delete this.stateValue.annotation
+      this.stateValue.agentBrowserError = `UI annotation failed: ${error.message}`
+      this.emitState()
+      throw error
+    }
+  }
+
+  async clearAnnotation(expectedAnnotationId?: string): Promise<BrowserState> {
+    if (expectedAnnotationId && this.stateValue.annotation?.id !== expectedAnnotationId) return this.state()
+    if (this.stateValue.annotationMode) await this.annotator.cancel()
+    this.stateValue.annotationMode = false
+    this.annotationImage = undefined
+    delete this.stateValue.annotation
+    this.emitState()
+    return this.state()
+  }
+
   async ensureAgentReady(): Promise<void> {
     await this.ensureAgentBinding()
     const status = this.agentBrowser.status()
@@ -134,6 +254,8 @@ export class BrowserController {
   }
 
   destroy(): void {
+    void this.inspector.stop()
+    void this.annotator.cancel()
     if (!this.window.isDestroyed()) {
       try {
         this.window.contentView.removeChildView(this.view)
@@ -150,10 +272,21 @@ export class BrowserController {
       void this.navigate(url).catch(() => undefined)
       return { action: 'deny' }
     })
+    contents.on('console-message', (details) => {
+      this.inspector.handleConsoleMessage(details.message)
+      this.annotator.handleConsoleMessage(details.message)
+    })
     contents.on('will-navigate', (event, url) => {
       if (!isAllowedBrowserUrl(url)) event.preventDefault()
     })
     contents.on('did-start-loading', () => {
+      this.inspector.reset()
+      this.annotator.reset()
+      this.stateValue.inspectMode = false
+      this.stateValue.annotationMode = false
+      this.annotationImage = undefined
+      delete this.stateValue.selectedTarget
+      delete this.stateValue.annotation
       this.stateValue.loading = true
       this.emitState()
     })
@@ -169,6 +302,11 @@ export class BrowserController {
       this.emitState()
     })
     contents.on('did-navigate-in-page', (_event, url) => {
+      if (this.stateValue.annotationMode) void this.annotator.cancel()
+      this.stateValue.annotationMode = false
+      this.annotationImage = undefined
+      delete this.stateValue.selectedTarget
+      delete this.stateValue.annotation
       this.stateValue.url = url
       this.refreshNavigationState()
       this.emitState()
@@ -186,6 +324,13 @@ export class BrowserController {
       this.emitState()
     })
     contents.on('render-process-gone', (_event, details) => {
+      this.inspector.reset()
+      this.annotator.reset()
+      this.stateValue.inspectMode = false
+      this.stateValue.annotationMode = false
+      this.annotationImage = undefined
+      delete this.stateValue.selectedTarget
+      delete this.stateValue.annotation
       this.stateValue.loading = false
       this.stateValue.title = `Browser renderer exited: ${details.reason}`
       delete this.stateValue.targetId
