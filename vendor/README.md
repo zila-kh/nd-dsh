@@ -1,6 +1,6 @@
 # Vendored upstreams
 
-ND-DSH pins runtime/design engines as Git submodules so product code can target tested upstream revisions without copying their cores into the ND control plane.
+ND-DSH pins implementation/runtime upstreams as Git submodules so product code can target tested revisions without mixing third-party product identity into the ND control plane.
 
 ## DeepSeek Harness
 
@@ -11,15 +11,19 @@ ND-DSH pins runtime/design engines as Git submodules so product code can target 
 
 DeepSeek Harness is ND's pinned agent runtime adapter.
 
-## OpenPencil
+## ND Pencil upstream implementation
 
-- repository: `https://github.com/ZSeven-W/openpencil.git`
+ND Pencil is ND's native **Design → Freeform** product surface. Its current low-level editor/runtime implementation is derived from the MIT-licensed OpenPencil project pinned here:
+
+- upstream repository: `https://github.com/ZSeven-W/openpencil.git`
 - commit: `9c810776dab546076a5d9db791a49d9e8048dbd7`
 - release at that commit: `0.8.4`
 - license: MIT
-- metadata: `openpencil.json`
-- license notice: `openpencil.LICENSE`
+- metadata/provenance: `openpencil.json`
+- required upstream notice: `openpencil.LICENSE`
 
-OpenPencil is the embedded engine for **Design → Freeform**. ND owns the shell, project/workspace lifecycle, save/conflict behavior, and distribution. Normal users do not install OpenPencil separately; release builds stage the tested `op-host-web-server` runtime with ND. In a source checkout run `corepack pnpm openpencil:build` to compile and stage the local development runtime.
+The upstream checkout is implementation source, not a second product inside ND. ND owns the Freeform UI, active project/workspace, document lifecycle, agent bridge, provider routing, security policy and distribution. Account/login, teams/collaboration, cloud tenancy, upstream AI/provider settings, updates/billing and standalone-app workflows are not part of ND Pencil.
 
-Run `corepack pnpm bootstrap` from the repository root. Bootstrap supports both a Git checkout and a downloaded source archive. Pass `--build-openpencil` when you also want the Freeform runtime compiled during bootstrap.
+Normal users install only ND. Release builds stage the tested local engine under `resources/nd-pencil`; ND never requires an external OpenPencil install or PATH entry. In a source checkout run `corepack pnpm nd-pencil:build` to compile and stage the development runtime.
+
+Run `corepack pnpm bootstrap` from the repository root. Bootstrap supports both a Git checkout and a downloaded source archive. Pass `--build-nd-pencil` when you also want the Freeform runtime compiled during bootstrap.
