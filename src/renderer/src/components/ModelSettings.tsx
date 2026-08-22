@@ -220,6 +220,7 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
                     value={selected.apiKey}
                     placeholder="••••••••••••••••••••"
                     spellCheck={false}
+                    autoComplete="off"
                     onChange={(event) => updateSelected({ apiKey: event.target.value })}
                   />
                   <button
@@ -231,6 +232,7 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
                     {showApiKey ? <EyeOffIcon /> : <EyeIcon />}
                   </button>
                 </div>
+                <span className="settings-path">Desktop API keys are stored with OS-backed encryption. If a secure key store is unavailable, the key stays memory-only and must be entered again after restart.</span>
               </div>
             </form>
 

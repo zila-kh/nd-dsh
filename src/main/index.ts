@@ -35,7 +35,6 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) app.quit()
 
 const theme = new ThemeService()
-const providers = new ProviderStore()
 
 app.on('second-instance', () => {
   if (!mainWindow) return
@@ -47,6 +46,9 @@ app.on('second-instance', () => {
 async function createWindow(cdpPort: number): Promise<void> {
   const preload = join(currentDirectory, '../preload/index.cjs')
   const workspace = new WorkspaceService(process.env.ND_DSH_WORKSPACE?.trim() || process.cwd())
+  // safeStorage is only reliable after Electron has emitted `ready`, and
+  // createWindow is called after app.whenReady().
+  const providers = new ProviderStore()
   const isMac = process.platform === 'darwin'
 
   const window = new BrowserWindow({
