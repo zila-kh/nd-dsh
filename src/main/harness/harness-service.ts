@@ -7,6 +7,7 @@ import type {
   GatewayRpcResult,
   HarnessRunResult,
   HarnessStatus,
+  UiTarget,
 } from '../../shared/contracts.js'
 import { dshPatchPath, harnessCliBinPath, harnessRoot, presetSourceDir } from '../app-paths.js'
 import type { BrowserController } from '../browser/browser-controller.js'
@@ -79,9 +80,11 @@ export class HarnessService {
     this.activeSessionId = sessionId
     this.canceledSessions.delete(sessionId)
 
+    const selectedUiTarget = this.browser.selectedUiTarget()
+    const runtimePrompt = selectedUiTarget ? attachUiContext(cleaned, selectedUiTarget) : cleaned
     const result = await gateway.rpc('session.prompt', {
       sessionId,
-      content: [{ type: 'text', text: cleaned }],
+      content: [{ type: 'text', text: runtimePrompt }],
     })
     if (!result.ok) throw new Error(rpcFailureMessage('session.prompt', result))
     const value = result.value as { messageId?: unknown } | undefined
@@ -337,6 +340,33 @@ export class HarnessService {
     this.statusValue = this.computeStatus(state, error)
     this.onStatusChanged?.(this.status())
   }
+}
+
+function attachUiContext(prompt: string, target: UiTarget): string {
+  const payload = {
+    kind: 'nd-dsh-ui-target',
+    runtime: target.runtime,
+    url: target.url,
+    selector: target.selector,
+    tagName: target.tagName,
+    text: target.text,
+    source: target.source,
+    react: target.react,
+    bounds: target.bounds,
+    attributes: target.attributes,
+    computedStyle: target.computedStyle,
+    outerHtml: target.outerHtml.slice(0, 3_000),
+    matchedCssRules: target.matchedCssRules.slice(0, 10).map((rule) => ({
+      selector: rule.selector,
+      origin: rule.origin,
+      source: rule.source,
+      sourceUrl: rule.sourceUrl,
+      sourceMapUrl: rule.sourceMapUrl,
+      declarations: rule.declarations.slice(0, 18),
+    })),
+  }
+  const context = JSON.stringify(payload, null, 2)
+  return `${prompt}\n\n[ND-DSH LIVE UI CONTEXT]\nThe user selected this exact element in the running app. Use exact/framework source locations and matched CSS ranges as navigation hints; inspect the workspace before editing inferred locations.\n${context}\n[/ND-DSH LIVE UI CONTEXT]`
 }
 
 function rpcFailureMessage(method: string, result: GatewayRpcResult): string {
