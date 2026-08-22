@@ -20,6 +20,7 @@ import { OrganizationOrchestrator } from './organization/orchestrator.js'
 import { OrganizationStore } from './organization/store.js'
 import { ProviderStore } from './providers.js'
 import { ThemeService } from './theme.js'
+import { ProjectWorkspaceCoordinator } from './workspace/project-workspace-coordinator.js'
 import { WorkspaceService } from './workspace/workspace-service.js'
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url))
@@ -81,15 +82,20 @@ async function createWindow(cdpPort: number): Promise<void> {
   const organizationStore = new OrganizationStore(join(userData, 'organization.json'))
   const interruptedRuns = await organizationStore.reconcileInterruptedRuns()
   if (interruptedRuns > 0) console.warn(`Recovered ${interruptedRuns} interrupted organization run(s) from the previous app session.`)
+  const projectWorkspace = new ProjectWorkspaceCoordinator(organizationStore, workspace, harness)
+  await projectWorkspace.initialize()
   const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines)
   const approvalGate = new OrganizationApprovalGate(organizationStore, harness)
-  const disposeIpc = registerIpc({ window, browser, dshSurface, engines, harness, workspace, theme, providers })
-  const disposeOrganizationIpc = registerOrganizationIpc(window, organizationStore, organization)
+  const disposeIpc = registerIpc({ window, browser, dshSurface, engines, harness, projectWorkspace, theme, providers })
+  const disposeOrganizationIpc = registerOrganizationIpc(window, organizationStore, organization, projectWorkspace)
   mainWindow = window
   activeHarness = harness
 
   organizationStore.setOnChanged((state) => {
     if (!window.isDestroyed()) window.webContents.send(ORGANIZATION_IPC.changed, state)
+  })
+  workspace.setStateListener((state) => {
+    if (!window.isDestroyed()) window.webContents.send(IPC.workspaceStateEvent, state)
   })
   theme.attach(window, (color) => {
     browser.setBackgroundColor(color)
@@ -123,8 +129,6 @@ async function createWindow(cdpPort: number): Promise<void> {
             if (forward && !window.isDestroyed()) window.webContents.send(IPC.dshEvent, frame)
           })
           .catch((error) => {
-            // Fail safe to the human approval UI; a policy-gate failure must
-            // never become an implicit allow.
             console.error('Organization approval policy gate failed:', error)
             if (!window.isDestroyed()) window.webContents.send(IPC.dshEvent, frame)
           })
@@ -162,6 +166,7 @@ async function createWindow(cdpPort: number): Promise<void> {
 
   window.on('closed', () => {
     organizationStore.setOnChanged(undefined)
+    workspace.setStateListener(undefined)
     disposeOrganizationIpc()
     disposeIpc()
     browser.destroy()

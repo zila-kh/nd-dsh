@@ -1,0 +1,146 @@
+import { promises as fs } from 'node:fs'
+import { resolve } from 'node:path'
+import type { WorkspaceState } from '../../shared/contracts.js'
+import type { OrganizationMutation, OrganizationSnapshot, Project } from '../../shared/organization.js'
+import type { HarnessService } from '../harness/harness-service.js'
+import type { WorkspaceService } from './workspace-service.js'
+import type { OrganizationStore } from '../organization/store.js'
+
+const ACTIVE_CONTEXT_MUTATIONS = new Set<OrganizationMutation['type']>([
+  'company.activate',
+  'project.create',
+  'project.activate',
+])
+
+export class ProjectWorkspaceCoordinator {
+  constructor(
+    private readonly store: OrganizationStore,
+    private readonly workspace: WorkspaceService,
+    private readonly harness: HarnessService,
+  ) {}
+
+  state(): WorkspaceState {
+    return this.workspace.state()
+  }
+
+  async initialize(): Promise<WorkspaceState> {
+    return this.syncToOrganization(await this.store.state(), false)
+  }
+
+  async assertCanMutate(mutation: OrganizationMutation): Promise<void> {
+    if (!ACTIVE_CONTEXT_MUTATIONS.has(mutation.type)) return
+    const active = (await this.store.state()).runs.find((run) => run.status === 'running')
+    if (active) throw new Error(`Cannot switch projects while ${active.kind} is running. Cancel the active run first.`)
+  }
+
+  async afterOrganizationMutation(mutation: OrganizationMutation, state: OrganizationSnapshot): Promise<WorkspaceState> {
+    if (ACTIVE_CONTEXT_MUTATIONS.has(mutation.type)) return this.syncToOrganization(state, true)
+    if (mutation.type === 'project.update' && mutation.patch.workspacePath !== undefined && state.activeProjectId === mutation.id) {
+      return this.syncToOrganization(state, true)
+    }
+    return this.workspace.state()
+  }
+
+  async pick(): Promise<WorkspaceState> {
+    await this.assertNoRunningOrganizationRun('change workspace')
+    const previous = this.workspace.state()
+    await this.harness.close()
+    const selected = await this.workspace.pick()
+    if (selected.root === previous.root) return this.workspace.state()
+    return this.bindSelectedRoot(selected.root)
+  }
+
+  async setRoot(path: string): Promise<WorkspaceState> {
+    await this.assertNoRunningOrganizationRun('change workspace')
+    await this.harness.close()
+    const selected = await this.workspace.setRoot(path)
+    return this.bindSelectedRoot(selected.root)
+  }
+
+  list(relativePath?: string) {
+    return this.workspace.list(relativePath)
+  }
+
+  read(relativePath: string) {
+    return this.workspace.read(relativePath)
+  }
+
+  private async bindSelectedRoot(root: string): Promise<WorkspaceState> {
+    const state = await this.store.state()
+    const project = activeProject(state)
+    const company = project ? state.companies.find((item) => item.id === project.companyId) : undefined
+    if (!project || !company) {
+      return this.workspace.setContext({ binding: 'standalone' })
+    }
+
+    const updated = await this.store.mutate({ type: 'project.update', id: project.id, patch: { workspacePath: root } })
+    const updatedProject = activeProject(updated)
+    const updatedCompany = updatedProject ? updated.companies.find((item) => item.id === updatedProject.companyId) : undefined
+    return this.workspace.setContext({
+      binding: 'project',
+      ...(updatedProject ? {
+        projectId: updatedProject.id,
+        projectName: updatedProject.name,
+        projectWorkspacePath: root,
+      } : {}),
+      ...(updatedCompany ? { companyId: updatedCompany.id, companyName: updatedCompany.name } : {}),
+    })
+  }
+
+  private async syncToOrganization(state: OrganizationSnapshot, closeHarness: boolean): Promise<WorkspaceState> {
+    const project = activeProject(state)
+    const company = project ? state.companies.find((item) => item.id === project.companyId) : undefined
+    if (!project || !company) return this.workspace.setContext({ binding: 'standalone' })
+
+    const path = project.workspacePath?.trim()
+    if (!path) {
+      if (closeHarness) await this.harness.close()
+      return this.workspace.setContext({
+        binding: 'unlinked',
+        companyId: company.id,
+        companyName: company.name,
+        projectId: project.id,
+        projectName: project.name,
+        warning: `Project “${project.name}” has no workspace linked.`,
+      })
+    }
+
+    const absolute = resolve(path)
+    try {
+      const stats = await fs.stat(absolute)
+      if (!stats.isDirectory()) throw new Error('not a directory')
+    } catch {
+      if (closeHarness) await this.harness.close()
+      return this.workspace.setContext({
+        binding: 'missing',
+        companyId: company.id,
+        companyName: company.name,
+        projectId: project.id,
+        projectName: project.name,
+        projectWorkspacePath: path,
+        warning: `Project workspace is unavailable: ${path}`,
+      })
+    }
+
+    if (this.workspace.state().root !== absolute && closeHarness) await this.harness.close()
+    if (this.workspace.state().root !== absolute) await this.workspace.setRoot(absolute)
+    return this.workspace.setContext({
+      binding: 'project',
+      companyId: company.id,
+      companyName: company.name,
+      projectId: project.id,
+      projectName: project.name,
+      projectWorkspacePath: absolute,
+    })
+  }
+
+  private async assertNoRunningOrganizationRun(action: string): Promise<void> {
+    const active = (await this.store.state()).runs.find((run) => run.status === 'running')
+    if (active) throw new Error(`Cannot ${action} while ${active.kind} is running. Cancel the active run first.`)
+  }
+}
+
+function activeProject(state: OrganizationSnapshot): Project | undefined {
+  if (!state.activeProjectId) return undefined
+  return state.projects.find((project) => project.id === state.activeProjectId)
+}

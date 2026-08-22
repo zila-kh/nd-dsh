@@ -8,7 +8,7 @@ import type { CodingEngineRegistry } from './engines/coding-engine-registry.js'
 import type { HarnessService } from './harness/harness-service.js'
 import type { ProviderStore } from './providers.js'
 import type { ThemeService } from './theme.js'
-import type { WorkspaceService } from './workspace/workspace-service.js'
+import type { ProjectWorkspaceCoordinator } from './workspace/project-workspace-coordinator.js'
 
 interface IpcDependencies {
   window: BrowserWindow
@@ -16,7 +16,7 @@ interface IpcDependencies {
   dshSurface: DshSurfaceController
   engines: CodingEngineRegistry
   harness: HarnessService
-  workspace: WorkspaceService
+  projectWorkspace: ProjectWorkspaceCoordinator
   theme: ThemeService
   providers: ProviderStore
 }
@@ -65,17 +65,11 @@ export function registerIpc(deps: IpcDependencies): () => void {
   handle(IPC.browserClearAnnotation, () => deps.browser.clearAnnotation())
   handle(IPC.browserOpenExternal, (_event, value) => openExternal(asString(value, 'URL', 8_192)))
 
-  handle(IPC.workspaceState, () => deps.workspace.state())
-  handle(IPC.workspacePick, async () => {
-    await deps.harness.stop()
-    return deps.workspace.pick()
-  })
-  handle(IPC.workspaceSetRoot, async (_event, value) => {
-    await deps.harness.stop()
-    return deps.workspace.setRoot(asString(value, 'Workspace path', 4_096))
-  })
-  handle(IPC.workspaceList, (_event, value) => deps.workspace.list(value === undefined ? '.' : asString(value, 'Workspace path', 4_096)))
-  handle(IPC.workspaceRead, (_event, value) => deps.workspace.read(asString(value, 'Workspace file path', 4_096)))
+  handle(IPC.workspaceState, () => deps.projectWorkspace.state())
+  handle(IPC.workspacePick, () => deps.projectWorkspace.pick())
+  handle(IPC.workspaceSetRoot, (_event, value) => deps.projectWorkspace.setRoot(asString(value, 'Workspace path', 4_096)))
+  handle(IPC.workspaceList, (_event, value) => deps.projectWorkspace.list(value === undefined ? '.' : asString(value, 'Workspace path', 4_096)))
+  handle(IPC.workspaceRead, (_event, value) => deps.projectWorkspace.read(asString(value, 'Workspace file path', 4_096)))
 
   handle(IPC.harnessStatus, () => deps.harness.status())
   handle(IPC.harnessRun, (_event, value, options) => deps.harness.run(asString(value, 'Prompt', 100_000), asSessionOptions(options)))

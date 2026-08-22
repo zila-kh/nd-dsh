@@ -41,6 +41,11 @@ const api: DesktopApi = {
     setRoot: (path) => ipcRenderer.invoke(IPC.workspaceSetRoot, path),
     list: (relativePath) => ipcRenderer.invoke(IPC.workspaceList, relativePath),
     read: (relativePath) => ipcRenderer.invoke(IPC.workspaceRead, relativePath),
+    onState: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: Parameters<typeof listener>[0]) => listener(state)
+      ipcRenderer.on(IPC.workspaceStateEvent, handler)
+      return () => ipcRenderer.removeListener(IPC.workspaceStateEvent, handler)
+    },
   },
   harness: {
     status: () => ipcRenderer.invoke(IPC.harnessStatus),

@@ -110,9 +110,18 @@ export interface WorkspaceEntry {
   kind: 'file' | 'directory'
 }
 
+export type WorkspaceBinding = 'standalone' | 'project' | 'unlinked' | 'missing'
+
 export interface WorkspaceState {
   root: string
   name: string
+  binding?: WorkspaceBinding
+  companyId?: string
+  companyName?: string
+  projectId?: string
+  projectName?: string
+  projectWorkspacePath?: string
+  warning?: string
 }
 
 export interface WorkspaceFile {
@@ -342,6 +351,7 @@ export interface DesktopApi {
     setRoot(path: string): Promise<WorkspaceState>
     list(relativePath?: string): Promise<WorkspaceEntry[]>
     read(relativePath: string): Promise<WorkspaceFile>
+    onState(listener: (state: WorkspaceState) => void): () => void
   }
   harness: {
     status(): Promise<HarnessStatus>
@@ -395,6 +405,7 @@ export const IPC = {
   workspaceSetRoot: 'workspace:set-root',
   workspaceList: 'workspace:list',
   workspaceRead: 'workspace:read',
+  workspaceStateEvent: 'workspace:state-event',
   harnessStatus: 'harness:status',
   harnessRun: 'harness:run',
   harnessStop: 'harness:stop',

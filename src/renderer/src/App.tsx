@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useState, type PointerEvent as ReactPointerE
 import type { BrowserState, HarnessStatus, ThemeMode, ThemeState, WorkspaceFile, WorkspaceState } from '../../shared/contracts'
 import { BrowserPane } from './components/BrowserPane'
 import { ChatPanel } from './components/ChatPanel'
+import { DesignView } from './components/DesignView'
 import { EditorPane } from './components/EditorPane'
 import { Explorer } from './components/Explorer'
 import { BrowserIcon, CloseIcon, FileIcon, SidebarToggleIcon, SparkIcon } from './components/Icons'
@@ -9,16 +10,17 @@ import { OrganizationDashboard } from './components/OrganizationDashboard'
 import { RuntimePrompts } from './components/RuntimePrompts'
 import { StatusBar } from './components/StatusBar'
 import { ThemeToggle } from './components/ThemeToggle'
+import './styles/design.css'
 import './styles/organization.css'
 import './styles/product-shell.css'
 
 const SettingsPane = lazy(() => import('./components/SettingsPane').then((module) => ({ default: module.SettingsPane })))
 
-type ProductView = 'company' | 'agent' | 'settings'
+type ProductView = 'company' | 'agent' | 'design' | 'settings'
 
 type AgentPane = 'files' | 'browser'
 
-const VIEWS: ProductView[] = ['company', 'agent', 'settings']
+const VIEWS: ProductView[] = ['company', 'agent', 'design', 'settings']
 
 function viewFromHash(): ProductView {
   const route = window.location.hash.replace(/^#\/?/, '').split(/[/?]/)[0]
@@ -50,14 +52,17 @@ export default function App() {
       window.ndDsh.harness.status().then(setHarnessStatus),
     ]).catch((cause) => setToast(errorMessage(cause)))
 
-    // ND-DSH owns the renderer surface. The legacy Harness web UI remains
-    // available as runtime infrastructure but is never presented as a product.
     void window.ndDsh.surface.set('workbench').catch((cause) => setToast(errorMessage(cause)))
     void window.ndDsh.dshView.setVisible(false).catch(() => undefined)
 
+    const offWorkspace = window.ndDsh.workspace.onState((next) => {
+      setWorkspace(next)
+      setSelectedFile(null)
+    })
     const offBrowser = window.ndDsh.browser.onState(setBrowserState)
     const offHarness = window.ndDsh.harness.onStatus(setHarnessStatus)
     return () => {
+      offWorkspace()
       offBrowser()
       offHarness()
       void window.ndDsh.browser.setVisible(false)
@@ -95,7 +100,6 @@ export default function App() {
     try {
       window.history.pushState(null, '', target)
     } catch {
-      // file:// origins may reject pushState; fall back to a plain hash change.
       window.location.hash = target
     }
   }, [view])
@@ -129,7 +133,6 @@ export default function App() {
     event.preventDefault()
     const startX = event.clientX
     const startWidth = chatWidth
-    // The thread pane inside keeps a 420px floor; the sessions sidebar adds 160px when open.
     const minWidth = sessionsCollapsed ? 420 : 580
     const onMove = (move: PointerEvent): void => {
       const maxWidth = Math.max(minWidth, window.innerWidth - 480)
@@ -151,6 +154,7 @@ export default function App() {
   const navItems: Array<{ id: ProductView; label: string; icon: ReactNode }> = [
     { id: 'company', label: 'Company', icon: <span className="product-nav-monogram">CO</span> },
     { id: 'agent', label: 'Agent', icon: <SparkIcon /> },
+    { id: 'design', label: 'Design', icon: <span className="product-nav-monogram">DE</span> },
     { id: 'settings', label: 'Settings', icon: <span className="product-nav-monogram">SE</span> },
   ]
 
@@ -168,7 +172,7 @@ export default function App() {
           <span className="product-logo">ND</span>
           <div>
             <strong>ND-DSH</strong>
-            <span>{workspace?.name ?? 'No workspace'}</span>
+            <span>{workspace?.projectName ?? workspace?.name ?? 'No workspace'}</span>
           </div>
         </div>
         <nav className="product-nav" aria-label="ND-DSH navigation">
@@ -187,6 +191,7 @@ export default function App() {
           </div>
         </nav>
         <div className="product-runtime">
+          {workspace?.binding === 'project' ? <span className="workspace-sync-badge">SYNC</span> : null}
           <ThemeToggle theme={theme} onSelect={selectTheme} />
           <span className={`tiny-dot ${harnessStatus?.state ?? 'stopped'}`} />
           <span>{harnessStatus?.model ?? 'Runtime offline'}</span>
@@ -211,7 +216,7 @@ export default function App() {
               <div className="agent-chat-pane" style={{ width: workspaceCollapsed ? '100%' : chatWidth }}>
                 <ChatPanel
                   status={harnessStatus}
-                  {...(workspace?.name ? { workspaceName: workspace.name } : {})}
+                  {...(workspace?.projectName || workspace?.name ? { workspaceName: workspace.projectName ?? workspace.name } : {})}
                   sessionsCollapsed={sessionsCollapsed}
                   onError={setToast}
                   onOpenSettings={() => setView('settings')}
@@ -230,42 +235,54 @@ export default function App() {
                     onPointerDown={startChatResize}
                   />
                   <div className="agent-workspace-pane">
-                <div className="agent-pane-tabs" role="tablist" aria-label="Agent workspace panes">
-                  <button className={agentPane === 'files' ? 'active' : ''} onClick={() => setAgentPane('files')}>
-                    <FileIcon />
-                    <span>Files</span>
-                  </button>
-                  <button className={agentPane === 'browser' ? 'active' : ''} onClick={() => setAgentPane('browser')}>
-                    <BrowserIcon />
-                    <span>Browser</span>
-                  </button>
-                </div>
-                <div className="agent-pane-body">
-                  {agentPane === 'files' ? (
-                    <div className="product-files-layout">
-                      <div className="product-editor-wrap">
-                        <EditorPane file={selectedFile} onAgentPrompt={askAgent} onError={setToast} />
-                      </div>
-                      <Explorer
-                        workspace={workspace}
-                        selectedPath={selectedFile?.relativePath}
-                        onWorkspaceChanged={changeWorkspace}
-                        onOpenFile={(path) => void openFile(path)}
-                      />
+                    <div className="agent-pane-tabs" role="tablist" aria-label="Agent workspace panes">
+                      <button className={agentPane === 'files' ? 'active' : ''} onClick={() => setAgentPane('files')}>
+                        <FileIcon />
+                        <span>Files</span>
+                      </button>
+                      <button className={agentPane === 'browser' ? 'active' : ''} onClick={() => setAgentPane('browser')}>
+                        <BrowserIcon />
+                        <span>Browser</span>
+                      </button>
                     </div>
-                  ) : (
-                    <BrowserPane
-                      active={view === 'agent'}
-                      state={browserState}
-                      onSnapshot={() => setToast('Browser snapshot captured from the live page.')}
-                      onError={setToast}
-                    />
-                  )}
+                    <div className="agent-pane-body">
+                      {agentPane === 'files' ? (
+                        <div className="product-files-layout">
+                          <div className="product-editor-wrap">
+                            <EditorPane file={selectedFile} onAgentPrompt={askAgent} onError={setToast} />
+                          </div>
+                          <Explorer
+                            workspace={workspace}
+                            selectedPath={selectedFile?.relativePath}
+                            onWorkspaceChanged={changeWorkspace}
+                            onOpenFile={(path) => void openFile(path)}
+                          />
+                        </div>
+                      ) : (
+                        <BrowserPane
+                          active={view === 'agent'}
+                          state={browserState}
+                          onSnapshot={() => setToast('Browser snapshot captured from the live page.')}
+                          onError={setToast}
+                        />
+                      )}
                     </div>
                   </div>
                 </>
               )}
             </div>
+          </section>
+
+          <section className={`product-view ${view === 'design' ? 'active' : ''}`} aria-hidden={view !== 'design'}>
+            <DesignView
+              active={view === 'design'}
+              workspace={workspace}
+              browser={browserState}
+              harness={harnessStatus}
+              onWorkspaceChanged={changeWorkspace}
+              onAskAgent={askAgent}
+              onError={setToast}
+            />
           </section>
 
           <section className={`product-view ${view === 'settings' ? 'active' : ''}`} aria-hidden={view !== 'settings'}>
