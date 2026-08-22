@@ -43,8 +43,9 @@ if (!flags.has('--skip-dsh-build')) {
 }
 
 await run(process.execPath, ['scripts/verify.mjs'], root)
-console.log('\nND-DSH bootstrap complete. Add DEEPSEEK_API_KEY to .env, then run:')
+console.log('\nND-DSH bootstrap complete. Configure a model provider in Settings (or use DEEPSEEK_API_KEY for the compatibility route), then run:')
 console.log('  corepack pnpm dev')
+console.log('Codex CLI is available as an optional coding engine when native Codex authentication is configured.')
 
 async function ensureHarnessSource() {
   const packagePath = join(harnessRoot, 'package.json')
@@ -52,22 +53,22 @@ async function ensureHarnessSource() {
 
   await fs.mkdir(dirname(harnessRoot), { recursive: true })
   if (existsSync(join(root, '.git'))) {
-    console.log('Initializing DeepSeek Harness submodule...')
+    console.log('Initializing pinned Harness submodule...')
     await run('git', ['submodule', 'sync', '--', 'vendor/deepseek-harness'], root)
     await run('git', ['submodule', 'update', '--init', '--recursive', '--', 'vendor/deepseek-harness'], root)
   } else {
-    console.log('Source archive detected; cloning the pinned DeepSeek Harness checkout...')
+    console.log('Source archive detected; cloning the pinned Harness checkout...')
     await run('git', ['clone', '--filter=blob:none', '--no-checkout', harnessRepository, harnessRoot], root)
     await run('git', ['fetch', '--depth=1', 'origin', harnessCommit], harnessRoot)
     await run('git', ['checkout', '--detach', harnessCommit], harnessRoot)
   }
 
-  if (!existsSync(packagePath)) throw new Error('DeepSeek Harness source was not initialized correctly.')
+  if (!existsSync(packagePath)) throw new Error('Pinned Harness source was not initialized correctly.')
 }
 
 async function verifyHarnessPin() {
   const status = await capture('git', ['status', '--porcelain'], harnessRoot)
-  if (status.trim()) throw new Error('DeepSeek Harness submodule has local changes. Clean it before bootstrapping.')
+  if (status.trim()) throw new Error('Harness submodule has local changes. Clean it before bootstrapping.')
 
   let current = (await capture('git', ['rev-parse', 'HEAD'], harnessRoot)).trim()
   if (current !== harnessCommit) {
@@ -77,7 +78,7 @@ async function verifyHarnessPin() {
     current = (await capture('git', ['rev-parse', 'HEAD'], harnessRoot)).trim()
   }
   if (current !== harnessCommit) throw new Error(`Harness pin mismatch: expected ${harnessCommit}, found ${current}`)
-  console.log(`DeepSeek Harness pinned at ${current.slice(0, 12)}.`)
+  console.log(`Harness pinned at ${current.slice(0, 12)}.`)
 }
 
 function requireString(value, field) {

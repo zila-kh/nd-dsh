@@ -1,239 +1,161 @@
 # ND-DSH
 
-A Cursor-style Electron IDE that shells the complete DeepSeek Harness product —
-its official web UI, agent presets (Creator mode, Code mode), approvals,
-sessions, and the HTTP API gateway — and adds the differentiators the harness
-does not ship: a live embedded browser pane, a file explorer, and a workbench
-layout, all on **one engine**.
+ND-DSH is a desktop **AI Company Operating System for software delivery**. Instead of treating an AI model as a single chat box, ND owns companies, projects, roles, teams, agents, tasks, workflows, skills, memory, policies, model-provider routes, and coding-engine capabilities.
 
-The operator and the agent share **the same Chromium target**:
+The current product is coding-first: an AI PM plans work, assigned workers operate the real workspace and browser, an independent reviewer verifies the result, failed reviews can return to rework, durable memory is recorded, dependencies unlock, and the next task can continue automatically according to company autonomy and policy.
+
+## Product boundary
+
+ND-DSH is the product and control plane. Runtime vendors are replaceable implementation dependencies.
 
 ```text
-One DeepSeek Harness runtime (dsh --profile web + ND-DSH patch overlay)
-  ├─ official DeepSeek UI  ── WebContentsView ── http://127.0.0.1:<gateway>
-  ├─ ND-DSH workbench ── React ── narrow IPC ── gateway client (HTTP + WebSocket)
-  │                                             └─ /api sessions, approvals, presets, models
-  └─ browser MCP ── agent-browser ── visible WebContentsView ◄── exact CDP target pin
+ND-DSH desktop UI
+        |
+        v
+ND company / project / role / agent / task control plane
+        |
+        +--> ND provider routes
+        |      +--> DeepSeek compatibility route
+        |      +--> OpenAI-compatible routes
+        |      +--> Responses-compatible routes
+        |      +--> Anthropic-compatible routes
+        |      +--> provider-native/catalog routes
+        |
+        +--> ND coding-engine registry
+               +--> ND Harness (primary)
+               +--> Codex CLI (delegated one-shot engine)
+               +--> future engine adapters
 ```
 
-A Settings toggle picks the active surface (default: the official DeepSeek UI);
-the workbench chrome — Explorer and the Browser tab — stays available in both.
+ND owns identity, configuration, authorization, orchestration, and durable state. Coding engines own execution details such as the agent loop, shell/process mechanics, filesystem operations, model transport, and product-specific protocol handling.
 
-## Implemented
+## Current coding engines
 
-- secure Electron desktop shell with two surfaces: the official DeepSeek
-  Harness UI (served by the runtime on loopback) and the ND-DSH workbench
-- native `WebContentsView` browser pane inside the IDE
-- exact CDP target discovery, selection, and strict reattachment
-- `agent-browser` accessibility snapshots, interactions, console, network,
-  cookies, storage, tabs, screenshots, and React diagnostics through MCP
-- DeepSeek Harness as a **pinned Git submodule**, booted through its own
-  `web` profile plus ND-DSH's `--patch` overlay — no fork, no patch
-- real sessions sidebar (list/create/resume/history), streamed assistant
-  chunks, tool cards, todos, approval cards, and user-question cards in the
-  workbench
-- agent presets: ND-DSH default, shipped standard, code (PTC), and cordis
-  (Creator mode), with a Presets settings tab
-- per-session model selection and reasoning effort, process-level permission
-  modes, real changed-files banner from fs tool events
-- workspace-scoped filesystem and shell providers, skills, persistence,
-  checkpointing, compaction, jobs, and in-process subagents
-- persistent browser profile and DSH sessions under Electron application data
+### ND Harness
 
-DeepSeek Harness is intentionally not forked. Its source lives at
-`vendor/deepseek-harness`, currently pinned to commit
-`141eb6fef83422698aef7a981029e843e8161534` (`0.1.0-rc.8`). The machine-readable
-pin is `vendor/deepseek-harness.json`; the Git index stores the same commit as a
-submodule gitlink.
+The primary engine is the pinned DeepSeek Harness runtime, used as infrastructure rather than product identity. ND adds its own provider routing, workspace scope, permissions, browser MCP, agent preset, organization context, and desktop lifecycle around it.
 
-## Requirements
+Pinned upstream release: **0.1.0-rc.8**  
+Pinned upstream commit: **141eb6fef83422698aef7a981029e843e8161534**
+
+### Codex CLI
+
+The pinned Harness contains `@deepseek-ai/dsh-subagent-codex`, which depends on the official `@openai/codex` package and starts its package-local `codex app-server --stdio` process in the ND workspace. ND exposes that implementation as the `codex` coding-engine capability.
+
+The current Codex integration is deliberately one-shot and delegated. Native Codex authentication, `HOME` / `CODEX_HOME`, model selection, project trust, and account settings remain authoritative. ND does not copy model-provider API keys into Codex credentials.
+
+## AI company workflow
+
+A normal autonomous delivery cycle is:
+
+```text
+Company objective
+      |
+      v
+AI PM plan
+      |
+      v
+Goal -> milestones -> dependency-aware tasks
+      |
+      v
+Assigned worker
+      |
+      +--> workspace files
+      +--> shell / tests
+      +--> visible browser
+      +--> skills / MCP
+      +--> optional Codex delegation
+      |
+      v
+Independent reviewer
+      |
+      +--> pass -> durable memory -> unlock next task
+      |
+      +--> fail -> blocked or bounded automatic rework
+```
+
+Company autonomy levels control how much of that workflow may continue without another explicit human start. Sensitive product actions still need policy enforcement and approval work before ND should be considered an enterprise GA release.
+
+## Development setup
+
+Requirements:
 
 - Node.js 24+
-- Corepack and pnpm 11
+- pnpm 11 through Corepack
 - Git
-- a DeepSeek API key for real model turns
-- macOS, Linux, or Windows
+- a supported Electron desktop OS
 
-`agent-browser` attaches to Electron Chromium over CDP, so ND-DSH does **not**
-start a second hidden browser for agent tasks.
+Clone with submodules, or let bootstrap initialize the pinned Harness checkout:
 
-## First run
-
-From a Git clone:
-
-```bash
-git clone --recursive <your-private-repo-url> nd-dsh
+```sh
+git clone --recurse-submodules https://github.com/zila-kh/nd-dsh.git
 cd nd-dsh
 corepack enable
-cp .env.example .env
-# Add DEEPSEEK_API_KEY to .env
 corepack pnpm bootstrap
 corepack pnpm dev
 ```
 
-From the downloadable source archive, extract it and run the same setup
-commands. `bootstrap` detects the absence of repository metadata and clones the
-exact Harness commit recorded in `vendor/deepseek-harness.json`.
+Configure model providers from **Settings -> Models**. `DEEPSEEK_API_KEY` remains an optional compatibility environment variable for the seeded DeepSeek route. Desktop API keys entered through Settings are stored with Electron OS-backed secure storage when a secure backend is available.
 
-Bootstrap performs four operations:
+Codex authentication is native to Codex. The ND adapter does not create or migrate a Codex account.
 
-1. initializes and verifies the Harness pin;
-2. installs ND-DSH desktop dependencies;
-3. installs and builds the independent Harness workspace;
-4. runs repository verification.
+## Verification
 
-Later starts only need:
+Before publishing a change:
 
-```bash
-corepack pnpm dev
-```
-
-Start the web app you want to inspect at `http://localhost:5173`, or set
-`ND_DSH_BROWSER_URL` in `.env`. If that server is not running yet, the desktop
-still opens and the address bar remains usable.
-
-## Runtime flow
-
-1. Electron starts with a loopback-only remote-debugging port (auto-picked
-   unless `ND_DSH_CDP_PORT` pins one).
-2. A persistent `WebContentsView` loads the configured app URL.
-3. Electron asks CDP for that view's exact target id.
-4. The desktop selects that target once without strict pinning, then enables
-   strict `agent-browser` tab pinning for all later CLI and MCP calls.
-5. On first use (eagerly when the DeepSeek surface is active), the desktop
-   spawns the pinned harness CLI: `dsh --profile web --patch
-   configs/dsh/nd-dsh.patch.yml --no-open --port <free port>`. The runtime
-   serves the official UI and the `/api` gateway on loopback.
-6. The official UI surface renders that origin in a sandboxed
-   `WebContentsView`; the workbench drives the same gateway over HTTP and
-   receives live events over the `/api/events.*` WebSocket downlinks.
-7. DSH's MCP client launches `agent-browser mcp` with the same config and
-   session, so every model browser action appears in the visible pane.
-
-The MCP tools are exposed to the model as
-`mcp__browser__agent_browser_<action>`. The `live-browser` skill (bundled in
-the ND-DSH preset and in `.dsh/skills/`) teaches snapshot-first interaction
-using semantic accessibility references.
-
-## Configuration
-
-Copy `.env.example` to `.env` and edit as needed:
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `DEEPSEEK_API_KEY` | — | required for model turns |
-| `ND_DSH_PROVIDER` | `deepseek-official` | Harness provider route |
-| `ND_DSH_MODEL` | `deepseek-v4-flash` | Harness model |
-| `ND_DSH_MAX_TOKENS` | `49152` | maximum output tokens per model request |
-| `ND_DSH_BROWSER_URL` | `http://localhost:5173` | initial visible page |
-| `ND_DSH_CDP_PORT` | auto-picked | loopback CDP port |
-| `ND_DSH_WORKSPACE` | process cwd | initial workspace |
-| `ND_DSH_PERMISSION_MODE` | `workspace-write` | `read-only`, `workspace-write`, or `danger-full-access` |
-| `ND_DSH_HARNESS_ROOT` | `vendor/deepseek-harness` | optional upstream checkout override |
-| `ND_DSH_PATCH` | `configs/dsh/nd-dsh.patch.yml` | optional overlay override |
-| `ND_DSH_NODE_BIN` | `node` | Node 24 executable used for the Harness child |
-| `ND_DSH_WEB_SIDECAR_URL` | `http://127.0.0.1:8788` | web-mode sidecar probe address |
-| `ND_DSH_GATEWAY_URL` | — | optional already-running gateway for the sidecar to proxy |
-
-ND-DSH owns the composition — the patch overlay at
-`configs/dsh/nd-dsh.patch.yml` and the preset at
-`configs/dsh/agent-presets/nd-dsh/` — while all Harness implementation remains
-in the submodule.
-
-## Web fallback: the "rush sidecar"
-
-The same renderer bundle also runs in a plain browser tab (`http://localhost:5173`).
-Electron's preload bridge does not exist there, and the Harness gateway binds
-loopback with no CORS headers, so web mode falls back to a sidecar:
-
-- on load, the renderer probes `ND_DSH_WEB_SIDECAR_URL` (`/api/health`);
-- when the sidecar answers, the whole workbench drives **the real DeepSeek
-  Harness gateway** through it — sessions, history, model pickers, approvals,
-  and streamed events behave like the desktop app;
-- when no sidecar is reachable, the in-memory mocks take over so every panel
-  stays explorable (`session.list`, `session.history`, streaming assistant,
-  model/reasoning pickers, presets).
-
-Start the sidecar with the bundled harness (needs `pnpm bootstrap` + an API key
-for real turns), or in mock mode with no harness at all:
-
-```bash
-corepack pnpm web:sidecar        # spawns the pinned harness gateway
-corepack pnpm web:sidecar:mock   # in-memory gateway, no harness needed
-```
-
-`ND_DSH_GATEWAY_URL` points the sidecar at an already-running gateway instead
-of spawning one. The Desktop↔Web split is intentional: native `WebContentsView`
-surfaces (the DeepSeek UI pane and the live browser) only exist in Electron; the
-sidecar keeps everything else — chat, events, explorer, settings, models — on
-great behavior in both.
-
-## Security model
-
-- the harness gateway binds `127.0.0.1` only; the desktop never passes
-  `--host`.
-- CDP listens on `127.0.0.1`, not the LAN.
-- browser permission prompts are denied by default.
-- renderer Node integration is disabled; context isolation and sandboxing are
-  enabled; the DeepSeek UI view gets the same hardening.
-- renderer IPC is limited to the main workbench frame and validated inputs;
-  gateway RPCs pass a method-name allowlist.
-- workspace reads reject traversal and symbolic-link escapes.
-- filesystem mutations and shell commands default to the DSH
-  `workspace-write` sandbox policy.
-- interactive Harness approvals follow the engine default (`ask`): the
-  official UI answers them directly, and the workbench answers through the
-  gateway `respond` endpoint.
-- cookies, storage, console output, screenshots, and network bodies can contain
-  secrets; browser MCP tools are privileged local capabilities.
-- the MCP stdio command is trusted executable code started outside the model's
-  sandbox. Keep both upstream pins reviewed.
-
-Use `ND_DSH_PERMISSION_MODE=read-only` when inspecting an untrusted workspace.
-Use `danger-full-access` only for an explicitly trusted project and host.
-
-## Development checks
-
-```bash
+```sh
 corepack pnpm verify
 corepack pnpm typecheck
 corepack pnpm test
 corepack pnpm build
 ```
 
-`pnpm verify` can run before dependency installation. It checks pins, submodule
-metadata, the patch overlay and preset composition, security invariants,
-relative imports, Node script syntax, CSS brace balance, and TypeScript
-transpile syntax when a TypeScript installation is available. The remaining
-commands require a completed bootstrap.
+GitHub Actions runs the same repository invariants, type checks, unit tests, and production desktop build on branch/PR changes.
 
-## Updating DeepSeek Harness
+## Updating the pinned Harness
 
-Never update the submodule by implicitly following `master`. Supply a reviewed
-tag or full commit explicitly:
+Harness is a pinned git submodule and must never silently track a moving upstream branch. Update it only through an explicit tag or full commit and review the resulting runtime/config compatibility:
 
-```bash
-corepack pnpm run dsh:update -- <tag-or-commit>
-corepack pnpm bootstrap
-corepack pnpm typecheck
-corepack pnpm test
-corepack pnpm build
+```sh
+corepack pnpm dsh:update -- <tag-or-commit>
 ```
 
-The update command checks out the fetched ref detached and records the resulting
-full SHA and release in the pin metadata. Review upstream breaking changes and
-ND-DSH adapters before committing the updated gitlink.
+The pin metadata in `vendor/deepseek-harness.json`, the submodule gitlink, this README, and `vendor/README.md` must remain aligned. The current required pin is release **0.1.0-rc.8** at **141eb6fef83422698aef7a981029e843e8161534**.
 
-## Remaining boundaries
+## Public beta status
 
-ND-DSH intentionally does not reimplement Chromium, CDP, accessibility
-snapshots, click targeting, console capture, or network capture. Still to come:
-a writable editor surface with a real diff view, a PTY terminal, LSP UI, Git
-panels, a trajectory (event ledger) tab, extension packaging, and signed
-installers. Future IDE surfaces should project Harness services through narrow
-IPC contracts without introducing a second browser or patching the Harness
-agent loop.
+The repository is being hardened for a desktop public beta. The runtime path is real; the product renderer must not fall back to mock companies, mock sessions, fake workspaces, or demo provider state when its trusted preload is unavailable.
 
-See [`docs/architecture.md`](docs/architecture.md) for subsystem ownership and
-failure boundaries, and [`docs/roadmap.md`](docs/roadmap.md) for the next
-milestones.
+Remaining release work is tracked separately and includes packaged runtime distribution, installer/signing/notarization, installed-app E2E coverage, normalized policy enforcement at the action/tool boundary across engines, Codex onboarding/auth status, and release/update infrastructure.
+
+## Security boundaries
+
+- Renderer: context isolation on, Node integration off, sandbox on.
+- Browser pane: isolated Electron `WebContentsView`; permissions denied by default.
+- Browser automation: attaches to the exact visible pane through loopback CDP; no hidden second browser.
+- IPC: main-frame sender validation and narrow contracts.
+- Workspace: path containment and symlink protections.
+- Provider credentials: separated from provider metadata and encrypted at rest when OS secure storage is available.
+- Codex delegated mode: fail-closed `never` approval policy by default; dangerous bypass is not selected by ND.
+- Organization state: atomic writes, last-known-good backup, validation, and interrupted-run reconciliation.
+
+## Repository layout
+
+```text
+src/main/                 Electron main process and ND services
+src/main/organization/    AI company durable state and orchestration
+src/main/engines/         coding-engine capability registry
+src/main/harness/         primary Harness adapter
+src/main/browser/         visible browser + agent-browser integration
+src/preload/              trusted renderer bridge
+src/renderer/             ND product UI
+src/shared/               cross-process contracts
+configs/dsh/              ND Harness overlay and agent preset
+.dsh/skills/              repository-local ND skills
+tests/                    product/unit contracts
+vendor/deepseek-harness/  pinned runtime submodule
+```
+
+## License
+
+See `LICENSE` and upstream dependency licenses. DeepSeek Harness and Codex remain third-party runtime dependencies governed by their respective licenses and distribution terms.

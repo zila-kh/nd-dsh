@@ -22,6 +22,8 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
   const [nameDraft, setNameDraft] = useState('')
   const [editingModelId, setEditingModelId] = useState<string | null>(null)
   const [modelDraft, setModelDraft] = useState('')
+  const [editingContextModelId, setEditingContextModelId] = useState<string | null>(null)
+  const [contextDraft, setContextDraft] = useState('')
 
   useEffect(() => {
     let mounted = true
@@ -38,8 +40,6 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
   }, [])
 
   const selected = providers.find((provider) => provider.id === selectedId) ?? providers[0] ?? null
-  const builtins = providers.filter((provider) => provider.id === 'deepseek')
-  const customs = providers.filter((provider) => provider.id !== 'deepseek')
 
   const commit = (next: ModelProvider[]): void => {
     setProviders(next)
@@ -65,10 +65,9 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
   }
 
   const addProvider = (): void => {
-    const index = providers.length + 1
     const provider: ModelProvider = {
-      id: `custom-${index}`,
-      name: `Custom provider ${index}`,
+      id: `custom-${crypto.randomUUID().slice(0, 8)}`,
+      name: 'Custom provider',
       enabled: false,
       baseUrl: '',
       apiFormat: 'OpenAI compatible (/v1/chat/completions)',
@@ -97,19 +96,31 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
     setEditingModelId(null)
   }
 
+  const commitContextEdit = (): void => {
+    if (editingContextModelId && contextDraft.trim()) {
+      updateSelected({
+        models: (selected?.models ?? []).map((model) => (model.id === editingContextModelId ? { ...model, context: contextDraft.trim() } : model)),
+      })
+    }
+    setEditingContextModelId(null)
+  }
+
   return (
     <section className="models-settings" aria-label="Model settings">
       <header className="models-header">
         <div>
           <h2>Model settings</h2>
-          <p>Configure provider routes independently from ND-DSH. Enabled routes become available to Harness sessions on the next prompt.</p>
+          <p>Configure provider routes independently from coding engines. Enabled routes become available to ND Harness sessions on the next prompt.</p>
         </div>
         <button
           className="models-refresh"
           title="Reload providers from storage"
           aria-label="Refresh model settings"
           onClick={() => {
-            void window.ndDsh.providers.list().then(setProviders).catch((cause) => {
+            void window.ndDsh.providers.list().then((loaded) => {
+              setProviders(loaded)
+              setSelectedId((current) => loaded.some((provider) => provider.id === current) ? current : (loaded[0]?.id ?? ''))
+            }).catch((cause) => {
               onError(cause instanceof Error ? cause.message : String(cause))
             })
           }}
@@ -120,17 +131,8 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
 
       <div className="models-body">
         <aside className="providers-list" aria-label="Providers">
-          <div className="provider-group-label">Compatibility provider</div>
-          {builtins.map((provider) => (
-            <ProviderItem
-              key={provider.id}
-              provider={provider}
-              selected={provider.id === selectedId}
-              onSelect={() => setSelectedId(provider.id)}
-            />
-          ))}
-          <div className="provider-group-label">Additional providers</div>
-          {customs.map((provider) => (
+          <div className="provider-group-label">Providers</div>
+          {providers.map((provider) => (
             <ProviderItem
               key={provider.id}
               provider={provider}
@@ -260,12 +262,28 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
                     <span className="model-name">{model.id}</span>
                   )}
                   <div className="model-item-actions">
-                    <span className="model-context">{model.context}</span>
+                    {editingContextModelId === model.id ? (
+                      <input
+                        className="model-name-input"
+                        aria-label={`Context window for ${model.id}`}
+                        value={contextDraft}
+                        autoFocus
+                        onChange={(event) => setContextDraft(event.target.value)}
+                        onBlur={commitContextEdit}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') commitContextEdit()
+                          if (event.key === 'Escape') setEditingContextModelId(null)
+                        }}
+                      />
+                    ) : <span className="model-context">{model.context}</span>}
                     <button
                       className="icon-button-mini"
                       title="Edit model context"
                       aria-label={`Edit context of ${model.id}`}
-                      onClick={() => onError('Model context editing is not wired yet.')}
+                      onClick={() => {
+                        setContextDraft(model.context)
+                        setEditingContextModelId(model.id)
+                      }}
                     >
                       <PlugIcon />
                     </button>

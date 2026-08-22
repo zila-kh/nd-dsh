@@ -7,8 +7,10 @@ import { IPC } from '../shared/contracts.js'
 import { ORGANIZATION_IPC } from '../shared/organization.js'
 import { projectRoot } from './app-paths.js'
 import { BrowserController } from './browser/browser-controller.js'
+import { DEFAULT_BROWSER_URL } from './browser/browser-url.js'
 import { DshSurfaceController } from './dsh/dsh-surface.js'
 import { pickFreePort } from './dsh/gateway-client.js'
+import { CodingEngineRegistry } from './engines/coding-engine-registry.js'
 import { HarnessService } from './harness/harness-service.js'
 import { registerIpc } from './ipc.js'
 import { registerOrganizationIpc } from './organization/ipc.js'
@@ -21,7 +23,7 @@ import { WorkspaceService } from './workspace/workspace-service.js'
 const currentDirectory = dirname(fileURLToPath(import.meta.url))
 // 0 means "reserve a free loopback port" — 9222 is commonly occupied.
 const requestedCdpPort = parsePort(process.env.ND_DSH_CDP_PORT, 0)
-const startUrl = process.env.ND_DSH_BROWSER_URL?.trim() || 'http://localhost:5173'
+const startUrl = process.env.ND_DSH_BROWSER_URL?.trim() || DEFAULT_BROWSER_URL
 
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
 app.enableSandbox()
@@ -49,6 +51,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   // safeStorage is only reliable after Electron has emitted `ready`, and
   // createWindow is called after app.whenReady().
   const providers = new ProviderStore()
+  const engines = new CodingEngineRegistry()
   const isMac = process.platform === 'darwin'
 
   const window = new BrowserWindow({
@@ -81,7 +84,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   const interruptedRuns = await organizationStore.reconcileInterruptedRuns()
   if (interruptedRuns > 0) console.warn(`Recovered ${interruptedRuns} interrupted organization run(s) from the previous app session.`)
   const organization = new OrganizationOrchestrator(organizationStore, harness, workspace)
-  const disposeIpc = registerIpc({ window, browser, dshSurface, harness, workspace, theme, providers })
+  const disposeIpc = registerIpc({ window, browser, dshSurface, engines, harness, workspace, theme, providers })
   const disposeOrganizationIpc = registerOrganizationIpc(window, organizationStore, organization)
   mainWindow = window
   activeHarness = harness
@@ -189,7 +192,7 @@ app.on('window-all-closed', () => {
 function beginHarnessClose(harness: HarnessService): void {
   let task: Promise<void>
   task = harness.close()
-    .catch((error) => console.error('Failed to close DeepSeek Harness cleanly:', error))
+    .catch((error) => console.error('Failed to close ND runtime cleanly:', error))
     .finally(() => closingHarnesses.delete(task))
   closingHarnesses.add(task)
 }

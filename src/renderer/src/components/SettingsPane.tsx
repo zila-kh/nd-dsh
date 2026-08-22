@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import type { AppInfo, BrowserState, HarnessStatus, ThemeMode, ThemeState, WorkspaceState } from '../../../shared/contracts'
 import { MonitorIcon, MoonIcon, SunIcon } from './Icons'
+import { EngineSettings } from './EngineSettings'
 import { ModelSettings } from './ModelSettings'
 import { PresetSettings } from './PresetSettings'
 
@@ -14,12 +15,13 @@ interface SettingsPaneProps {
   onError(message: string): void
 }
 
-type SettingsTab = 'general' | 'appearance' | 'models' | 'presets'
+type SettingsTab = 'general' | 'appearance' | 'models' | 'engines' | 'presets'
 
 const TABS: { id: SettingsTab; label: string }[] = [
   { id: 'general', label: 'General' },
   { id: 'appearance', label: 'Appearance' },
   { id: 'models', label: 'Models' },
+  { id: 'engines', label: 'Coding engines' },
   { id: 'presets', label: 'Agent presets' },
 ]
 
@@ -88,6 +90,8 @@ export function SettingsPane({ theme, onSelectTheme, workspace, onWorkspaceChang
       <div className="settings-tab-content">
         {tab === 'models' ? (
           <ModelSettings onError={onError} />
+        ) : tab === 'engines' ? (
+          <EngineSettings onError={onError} />
         ) : tab === 'presets' ? (
           <PresetSettings onError={onError} />
         ) : (
@@ -110,18 +114,18 @@ export function SettingsPane({ theme, onSelectTheme, workspace, onWorkspaceChang
                 </section>
 
                 <section className="settings-section">
-                  <h2>Execution engine</h2>
+                  <h2>ND runtime</h2>
                   <div className="settings-row">
-                    <div><strong>Runtime</strong><span>The Harness runtime powers ND agents, tools, approvals, and sessions.</span></div>
+                    <div><strong>Primary adapter</strong><span>ND Harness currently owns durable sessions, tools, approvals, and organization run events. Additional coding engines are registered separately.</span></div>
                     <span className={`status-dot ${dotClass}`} />
                   </div>
                   <div className="settings-row">
-                    <div><strong>Model</strong><span>{harness?.model ?? 'Not connected'}</span></div>
+                    <div><strong>Model route</strong><span>{harness?.model ?? 'Not connected'}</span></div>
                     <span className="settings-value">{harness?.provider ?? '—'}</span>
                   </div>
                   <div className="settings-row">
-                    <div><strong>API key</strong><span>{harness?.apiKeyPresent ? 'Provider credentials configured' : 'Provider API key is missing'}</span></div>
-                    <span className={`settings-status ${harness?.apiKeyPresent ? 'good' : 'warn'}`}>{harness?.apiKeyPresent ? 'Ready' : 'Missing'}</span>
+                    <div><strong>Provider credential</strong><span>{harness?.apiKeyPresent ? 'Provider credentials configured' : 'No API-key credential on the active route'}</span></div>
+                    <span className={`settings-status ${harness?.apiKeyPresent ? 'good' : 'warn'}`}>{harness?.apiKeyPresent ? 'Ready' : 'Check route'}</span>
                   </div>
                   {harness?.sessionId ? <div className="settings-row"><div><strong>Active session</strong><span className="settings-path" title={harness.sessionId}>{harness.sessionId}</span></div></div> : null}
                   {harness?.error ? <div className="settings-row"><div><strong>Runtime error</strong><span>{harness.error}</span></div><span className="settings-status warn">Attention</span></div> : null}
@@ -145,11 +149,11 @@ export function SettingsPane({ theme, onSelectTheme, workspace, onWorkspaceChang
                 <section className="settings-section">
                   <h2>Product architecture</h2>
                   <div className="settings-row">
-                    <div><strong>Interface</strong><span>ND-DSH is the only product surface. The Harness web interface is not exposed.</span></div>
+                    <div><strong>Control plane</strong><span>ND-DSH owns companies, projects, roles, agents, tasks, skills, memory, policies, provider routes, and engine registration.</span></div>
                     <span className="settings-status good">ND-DSH</span>
                   </div>
                   <div className="settings-row">
-                    <div><strong>Runtime boundary</strong><span>Company → Project → Team → Agent → Task context resolves into real Harness sessions.</span></div>
+                    <div><strong>Execution boundary</strong><span>Coding engines are replaceable adapters. Vendor runtime interfaces are infrastructure, not product identity.</span></div>
                   </div>
                 </section>
 

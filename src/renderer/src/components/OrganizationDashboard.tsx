@@ -107,7 +107,7 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onError }: Pr
       <div className="org-company"><span>{initials(company.name)}</span><div><small>COMPANY</small><select value={company.id} onChange={(event) => void action('company-switch', () => mutate({ type: 'company.activate', id: event.target.value }))}>{state.companies.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div></div>
       <div className="org-actions">
         <label>Autonomy <select value={company.autonomyLevel} onChange={(event) => void action('autonomy', () => mutate({ type: 'company.update', id: company.id, patch: { autonomyLevel: Number(event.target.value) as 0 | 1 | 2 | 3 | 4 } }))}><option value={0}>0 Ask</option><option value={1}>1 Plan</option><option value={2}>2 Internal</option><option value={3}>3 Workflow</option><option value={4}>4 Autopilot</option></select></label>
-        <button onClick={onOpenDeepSeek}>DeepSeek ↗</button>
+        <button onClick={onOpenDeepSeek}>Agent ↗</button>
         <button className="org-primary" disabled={!project || busy !== null} onClick={() => project && void action('next', () => window.ndDshOrganization.runNext(project.id))}>Run next</button>
       </div>
     </header>

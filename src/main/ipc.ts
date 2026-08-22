@@ -4,6 +4,7 @@ import { IPC } from '../shared/contracts.js'
 import { projectRoot } from './app-paths.js'
 import type { BrowserController } from './browser/browser-controller.js'
 import type { DshSurfaceController } from './dsh/dsh-surface.js'
+import type { CodingEngineRegistry } from './engines/coding-engine-registry.js'
 import type { HarnessService } from './harness/harness-service.js'
 import type { ProviderStore } from './providers.js'
 import type { ThemeService } from './theme.js'
@@ -13,6 +14,7 @@ interface IpcDependencies {
   window: BrowserWindow
   browser: BrowserController
   dshSurface: DshSurfaceController
+  engines: CodingEngineRegistry
   harness: HarnessService
   workspace: WorkspaceService
   theme: ThemeService
@@ -41,6 +43,8 @@ export function registerIpc(deps: IpcDependencies): () => void {
     platform: process.platform,
     projectRoot: projectRoot(),
   }))
+
+  handle(IPC.enginesList, () => deps.engines.list())
 
   handle(IPC.browserState, () => deps.browser.state())
   handle(IPC.browserSetBounds, (_event, value) => deps.browser.setBounds(asBounds(value)))

@@ -37,6 +37,19 @@
     provider: !!js process.env.ND_DSH_DEFAULT_PROVIDER ?? process.env.ND_DSH_PROVIDER ?? 'deepseek-official'
     model: !!js process.env.ND_DSH_DEFAULT_MODEL ?? process.env.ND_DSH_MODEL ?? 'deepseek-v4-flash'
 
+# ── coding engines ────────────────────────────────────────────────────────────
+
+# Codex is a separate coding engine, not an ND model provider. The pinned
+# Harness package launches its package-local official Codex wrapper through
+# `app-server --stdio`, keeps native Codex authentication/config authoritative,
+# and returns one safe final result through the shared subagent contract.
+- insert:
+    - id: subagent-codex
+      name: '@deepseek-ai/dsh-subagent-codex'
+      config:
+        providerName: codex
+        permissionMode: !!js process.env.ND_DSH_CODEX_PERMISSION_MODE ?? 'never'
+
 # ── session search: durable full-text index inside the harness home ───────────
 
 - id: session-query-sqlite

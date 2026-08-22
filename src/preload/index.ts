@@ -6,6 +6,13 @@ const api: DesktopApi = {
   app: {
     info: () => ipcRenderer.invoke(IPC.appInfo),
   },
+  providers: {
+    list: () => ipcRenderer.invoke(IPC.providersList),
+    save: (providers) => ipcRenderer.invoke(IPC.providersSave, providers),
+  },
+  engines: {
+    list: () => ipcRenderer.invoke(IPC.enginesList),
+  },
   browser: {
     state: () => ipcRenderer.invoke(IPC.browserState),
     setBounds: (bounds) => ipcRenderer.invoke(IPC.browserSetBounds, bounds),
@@ -77,10 +84,6 @@ const api: DesktopApi = {
       ipcRenderer.on(IPC.themeChangedEvent, handler)
       return () => ipcRenderer.removeListener(IPC.themeChangedEvent, handler)
     },
-  },
-  providers: {
-    list: () => ipcRenderer.invoke(IPC.providersList),
-    save: (providers) => ipcRenderer.invoke(IPC.providersSave, providers),
   },
 }
 

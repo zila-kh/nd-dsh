@@ -56,6 +56,31 @@ export interface HarnessRunResult {
   messageId?: string
 }
 
+export type CodingEngineIntegration = 'primary' | 'delegated'
+
+export interface CodingEngineCapabilities {
+  workspace: boolean
+  filesystem: boolean
+  shell: boolean
+  browser: boolean
+  skills: boolean
+  mcp: boolean
+  modelProviderRouting: boolean
+  humanApprovals: boolean
+  streaming: boolean
+  persistentSessions: boolean
+}
+
+export interface CodingEngineDescriptor {
+  id: string
+  name: string
+  integration: CodingEngineIntegration
+  available: boolean
+  description: string
+  unavailableReason?: string
+  capabilities: CodingEngineCapabilities
+}
+
 // ── DSH gateway surface ──────────────────────────────────────────────────────
 
 export type DshSurface = 'dsh' | 'workbench'
@@ -199,6 +224,9 @@ export interface DesktopApi {
     list(): Promise<ModelProvider[]>
     save(providers: ModelProvider[]): Promise<ModelProvider[]>
   }
+  engines: {
+    list(): Promise<CodingEngineDescriptor[]>
+  }
   browser: {
     state(): Promise<BrowserState>
     setBounds(bounds: BrowserBounds): Promise<void>
@@ -287,4 +315,5 @@ export const IPC = {
   themeChangedEvent: 'theme:changed',
   providersList: 'providers:list',
   providersSave: 'providers:save',
+  enginesList: 'engines:list',
 } as const

@@ -1,4 +1,4 @@
-export const DEFAULT_BROWSER_URL = 'http://localhost:5173'
+export const DEFAULT_BROWSER_URL = 'about:blank'
 
 const LOOPBACK_HOST = /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:[/?#]|$)/i
 const DOMAIN_WITH_PORT = /^(?:[a-z0-9-]+\.)+[a-z0-9-]+:\d+(?:[/?#]|$)/i

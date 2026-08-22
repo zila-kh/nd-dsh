@@ -23,23 +23,40 @@ const required = [
   'configs/dsh/agent-presets/nd-dsh/skills/live-browser/SKILL.md',
   '.dsh/skills/live-browser/SKILL.md',
   'docs/architecture.md',
+  'docs/coding-engine-architecture.md',
   'docs/roadmap.md',
   'src/main/index.ts',
   'src/main/browser/browser-controller.ts',
   'src/main/dsh/gateway-client.ts',
   'src/main/dsh/dsh-surface.ts',
+  'src/main/engines/coding-engine-registry.ts',
   'src/main/harness/harness-service.ts',
   'src/preload/index.ts',
   'src/renderer/index.html',
   'src/renderer/src/App.tsx',
-  'src/renderer/src/components/DshPane.tsx',
+  'src/shared/coding-engines.ts',
   'src/shared/contracts.ts',
   'vendor/deepseek-harness.json',
 ]
 for (const path of required) {
   if (!existsSync(join(root, path))) errors.push(`missing required file: ${path}`)
 }
-for (const stale of ['configs/dsh/cordis.yml', 'docs/ARCHITECTURE.md', 'docs/ROADMAP.md', 'tsconfig.node.tsbuildinfo', 'tsconfig.web.tsbuildinfo']) {
+for (const stale of [
+  'configs/dsh/cordis.yml',
+  'docs/ARCHITECTURE.md',
+  'docs/ROADMAP.md',
+  'tsconfig.node.tsbuildinfo',
+  'tsconfig.web.tsbuildinfo',
+  'src/renderer/src/components/MockWebPage.tsx',
+  'src/renderer/src/components/DshPane.tsx',
+  'src/renderer/src/lib/web-bridge.ts',
+  'src/renderer/src/lib/web-chat.ts',
+  'src/renderer/src/lib/web-mock.ts',
+  'src/renderer/src/lib/web-organization-mock.ts',
+  'src/renderer/src/lib/web-sidecar.ts',
+  'src/shared/web-sidecar.ts',
+  'scripts/web-sidecar.mjs',
+]) {
   // Compare against real directory entries: existsSync is case-insensitive on
   // Windows, so the legacy uppercase prototypes would always look present.
   if (await caseSensitiveExists(join(root, stale))) {
@@ -69,6 +86,9 @@ if (packageJson.dependencies?.react !== '19.2.8' || packageJson.dependencies?.['
 }
 if (!String(packageJson.engines?.node ?? '').includes('24')) errors.push('package.json must require Node 24+')
 if (!String(packageJson.packageManager ?? '').startsWith('pnpm@11.')) errors.push('packageManager must pin pnpm 11')
+if (Object.keys(packageJson.scripts ?? {}).some((name) => name.includes('mock') || name.includes('sidecar'))) {
+  errors.push('package.json must not expose the retired mock/web-sidecar prototype as a product script')
+}
 
 const gitmodules = await fs.readFile(join(root, '.gitmodules'), 'utf8')
 if (!gitmodules.includes(harnessRepository)) errors.push('DeepSeek Harness submodule URL is missing or differs from pin metadata')
@@ -87,6 +107,9 @@ if (!projectReadme.includes('dsh:update -- <tag-or-commit>')) {
 const patch = await fs.readFile(join(root, 'configs/dsh/nd-dsh.patch.yml'), 'utf8')
 for (const needle of [
   '@deepseek-ai/dsh-mcp-client',
+  '@deepseek-ai/dsh-subagent-codex',
+  'providerName: codex',
+  'ND_DSH_CODEX_PERMISSION_MODE',
   'ND_DSH_AGENT_BROWSER_ENTRY',
   'core,network,state,debug,tabs,react',
   'failOnStartupError: true',
@@ -98,7 +121,7 @@ for (const needle of [
   if (!patch.includes(needle)) errors.push(`configs/dsh/nd-dsh.patch.yml is missing ${needle}`)
 }
 if (patch.includes('policy: never')) {
-  errors.push('configs/dsh/nd-dsh.patch.yml must not pin the approval policy to never (the engine default ask backs the approval UI)')
+  errors.push('configs/dsh/nd-dsh.patch.yml must not pin the Harness approval policy to never (the engine default ask backs the approval UI)')
 }
 
 const preset = await fs.readFile(join(root, 'configs/dsh/agent-presets/nd-dsh/agent.cordis.yml'), 'utf8')
@@ -110,8 +133,14 @@ for (const needle of [
   '@deepseek-ai/dsh-tool-web',
   '@deepseek-ai/dsh-plan-mode',
   '@deepseek-ai/dsh-compaction-basic',
+  'provider: codex',
+  'toolName: subagent_codex',
 ]) {
   if (!preset.includes(needle)) errors.push(`configs/dsh/agent-presets/nd-dsh/agent.cordis.yml is missing ${needle}`)
+}
+const codexToolBlock = /- id: tool-subagent-codex\b([\s\S]*?)(?=\n\s*- id:|$)/.exec(preset)?.[1] ?? ''
+if (!codexToolBlock || /disabled:\s*true/.test(codexToolBlock)) {
+  errors.push('ND-DSH Codex coding-engine tool must be enabled in the standard agent preset')
 }
 const presetMeta = await fs.readFile(join(root, 'configs/dsh/agent-presets/nd-dsh/preset.yml'), 'utf8')
 if (!presetMeta.includes('name: ND-DSH')) errors.push('configs/dsh/agent-presets/nd-dsh/preset.yml must name the ND-DSH preset')
@@ -138,12 +167,27 @@ const rendererHtml = await fs.readFile(join(root, 'src/renderer/index.html'), 'u
 for (const directive of ["default-src 'self'", "script-src 'self'", "connect-src 'self'"]) {
   if (!rendererHtml.includes(directive)) errors.push(`renderer CSP is missing ${directive}`)
 }
+const rendererMain = await fs.readFile(join(root, 'src/renderer/src/main.tsx'), 'utf8')
+if (!rendererMain.includes('ND runtime unavailable') || rendererMain.includes('installWebBridge')) {
+  errors.push('renderer must fail closed without the trusted desktop runtime and must not install a mock web bridge')
+}
+const browserUrl = await fs.readFile(join(root, 'src/main/browser/browser-url.ts'), 'utf8')
+if (!browserUrl.includes("DEFAULT_BROWSER_URL = 'about:blank'")) {
+  errors.push('product browser must default to about:blank instead of a development server')
+}
 
 const sourceFiles = await walk(join(root, 'src'))
 const testFiles = await walk(join(root, 'tests'))
 const scriptFiles = await walk(join(root, 'scripts'))
 const typescriptFiles = [...sourceFiles, ...testFiles].filter((path) => ['.ts', '.tsx'].includes(extname(path)))
-const staleTerms = ['agent-browser-bridge', 'AgentBrowserBridge', 'HarnessRuntime']
+const staleTerms = [
+  'agent-browser-bridge',
+  'AgentBrowserBridge',
+  'HarnessRuntime',
+  'MockOrganizationService',
+  'MockSessionRuntime',
+  'MockWorkspaceService',
+]
 const thisVerifier = fileURLToPath(import.meta.url)
 for (const file of typescriptFiles) {
   if (file === thisVerifier) continue
@@ -151,6 +195,7 @@ for (const file of typescriptFiles) {
   for (const term of staleTerms) {
     if (content.includes(term)) errors.push(`${relative(root, file)} still references discarded prototype ${term}`)
   }
+  if (content.includes('DeepSeek ↗')) errors.push(`${relative(root, file)} exposes a vendor-specific DeepSeek product shortcut`)
 }
 
 for (const file of typescriptFiles) {
