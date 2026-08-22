@@ -76,8 +76,12 @@ export class OrganizationOrchestrator {
     if (!company) throw new Error('Company not found')
     if (!explicit && company.autonomyLevel < 3) return null
 
-    const active = await this.store.activeRun(id)
-    if (active) return receipt(active)
+    const active = state.runs.find((item) => item.status === 'running')
+    if (active) {
+      if (active.projectId === id) return receipt(active)
+      if (explicit) throw new Error(`Another project already has an active ${active.kind} run in session ${active.sessionId}`)
+      return null
+    }
 
     const workflow = await this.workflowKinds(id)
     const reviewing = state.tasks.find((task) => task.projectId === id && task.status === 'review' && !task.reviewSessionId)
@@ -115,6 +119,10 @@ export class OrganizationOrchestrator {
     }
 
     if (frame.kind === 'agent-error' && run) {
+      if (this.harness.consumeCanceledSession(sessionId)) {
+        await this.handleCanceledRun(run, sessionId)
+        return
+      }
       await this.store.completeRun(run.id, this.finalText.get(sessionId), frame.message ?? 'Agent error')
       if (run.taskId) await this.failTask(run.taskId, frame.message ?? 'Agent error')
       this.cleanupSession(sessionId)
@@ -123,6 +131,13 @@ export class OrganizationOrchestrator {
     }
 
     if (frame.kind !== 'session-status' || frame.running !== false) return
+
+    const canceled = this.harness.consumeCanceledSession(sessionId)
+    if (canceled) {
+      if (run) await this.handleCanceledRun(run, sessionId)
+      else this.cleanupSession(sessionId)
+      return
+    }
 
     if (run?.kind === 'task-execution' && run.taskId) {
       const output = this.finalText.get(sessionId) ?? 'Worker session finished.'
@@ -174,6 +189,13 @@ export class OrganizationOrchestrator {
     this.autoAdvance.set(sessionId, projectId)
   }
 
+  private async handleCanceledRun(run: OrganizationRun, sessionId: string): Promise<void> {
+    const message = 'Canceled by user before the run completed.'
+    await this.store.completeRun(run.id, this.finalText.get(sessionId), message)
+    if (run.taskId) await this.failTask(run.taskId, message)
+    this.cleanupSession(sessionId)
+  }
+
   private async continueProject(projectId: string): Promise<void> {
     try {
       await this.runNext(projectId, false)
@@ -191,8 +213,10 @@ export class OrganizationOrchestrator {
   }
 
   private async assertNoActiveRun(projectId: string): Promise<void> {
-    const active = await this.store.activeRun(projectId)
-    if (active) throw new Error(`Project already has an active ${active.kind} run in session ${active.sessionId}`)
+    const active = (await this.store.state()).runs.find((item) => item.status === 'running')
+    if (!active) return
+    if (active.projectId === projectId) throw new Error(`Project already has an active ${active.kind} run in session ${active.sessionId}`)
+    throw new Error(`Another project already has an active ${active.kind} run in session ${active.sessionId}`)
   }
 
   private async workflowKinds(projectId: string): Promise<Set<WorkflowKind>> {

@@ -7,10 +7,13 @@ import { OrganizationStore } from '../src/main/organization/store.js'
 
 class FakeHarness {
   private counter = 0
+  private canceled = new Set<string>()
   prompts: Array<{ prompt: string; sessionId?: string }> = []
   async createSession(): Promise<string> { this.counter += 1; return `session-${this.counter}` }
   async run(prompt: string, options?: { sessionId?: string }): Promise<{ sessionId: string }> { this.prompts.push({ prompt, ...(options?.sessionId ? { sessionId: options.sessionId } : {}) }); return { sessionId: options?.sessionId ?? 'session' } }
   async close(): Promise<void> {}
+  cancel(sessionId: string): void { this.canceled.add(sessionId) }
+  consumeCanceledSession(sessionId: string): boolean { return this.canceled.delete(sessionId) }
 }
 class FakeWorkspace {
   private root = '/workspace'
@@ -147,6 +150,37 @@ describe('OrganizationOrchestrator', () => {
     expect(state.tasks[0]?.status).toBe('blocked')
     expect(await store.executionAttemptCount(state.tasks[0]!.id)).toBe(3)
     expect(await store.activeRun(project.id)).toBeUndefined()
+  })
+
+  it('treats user cancellation as a failed blocked run instead of successful work', async () => {
+    const { store, project, harness, orchestrator } = await fixture()
+    await store.applyPlan(project.id, { goal: { title: 'Goal', description: 'Goal' }, milestones: [{ title: 'M1', description: 'M1', tasks: [{ title: 'Cancelable task', description: 'Do work' }] }] })
+    const task = (await store.state()).tasks[0]!
+    const run = await orchestrator.runTask(task.id)
+
+    harness.cancel(run.sessionId)
+    await orchestrator.handleHarnessEvent(stopped(run.sessionId))
+
+    const state = await store.state()
+    expect(state.tasks.find((item) => item.id === task.id)?.status).toBe('blocked')
+    expect(state.runs.find((item) => item.id === run.runId)?.status).toBe('failed')
+    expect(state.runs.find((item) => item.id === run.runId)?.error).toMatch(/canceled by user/i)
+    expect(state.runs.some((item) => item.kind === 'task-review')).toBe(false)
+  })
+
+  it('prevents a second project from taking the shared Harness while work is active', async () => {
+    const { store, company, project, orchestrator } = await fixture()
+    await store.applyPlan(project.id, { goal: { title: 'Goal A', description: 'Goal A' }, milestones: [{ title: 'M1', description: 'M1', tasks: [{ title: 'Task A', description: 'Do A' }] }] })
+    const taskA = (await store.state()).tasks.find((item) => item.projectId === project.id)!
+    await orchestrator.runTask(taskA.id)
+
+    let state = await store.mutate({ type: 'project.create', companyId: company.id, name: 'Second app', objective: 'Ship v2', workspacePath: '/workspace-two' })
+    const secondProject = state.projects.find((item) => item.id !== project.id)!
+    await store.applyPlan(secondProject.id, { goal: { title: 'Goal B', description: 'Goal B' }, milestones: [{ title: 'M2', description: 'M2', tasks: [{ title: 'Task B', description: 'Do B' }] }] })
+    state = await store.state()
+    const taskB = state.tasks.find((item) => item.projectId === secondProject.id)!
+
+    await expect(orchestrator.runTask(taskB.id)).rejects.toThrow(/another project already has an active/i)
   })
 
   it('honors deny policy even for explicit execution', async () => {

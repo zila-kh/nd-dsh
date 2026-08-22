@@ -189,7 +189,6 @@ export default function App() {
               externalPrompt={externalPrompt}
               onExternalPromptConsumed={() => setExternalPrompt(null)}
             />
-            <RuntimePrompts onError={setToast} />
           </section>
 
           <section className={`product-view ${view === 'files' ? 'active' : ''}`} aria-hidden={view !== 'files'}>
@@ -232,6 +231,7 @@ export default function App() {
       </div>
 
       <StatusBar browser={browserState} harness={harnessStatus} workspace={workspace} />
+      <RuntimePrompts onError={setToast} />
       {toast ? <div className="toast" role="alert"><span>{toast}</span><button onClick={() => setToast(undefined)}><CloseIcon /></button></div> : null}
     </div>
   )

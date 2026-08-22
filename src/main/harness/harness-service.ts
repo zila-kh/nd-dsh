@@ -28,6 +28,7 @@ export class HarnessService {
   private statusValue: HarnessStatus
   private startPromise: Promise<GatewayClient> | undefined
   private stopping = false
+  private canceledSessions = new Set<string>()
   private onStatusChanged?: (status: HarnessStatus) => void
   private onEvent?: (frame: DshEventFrame) => void
   private onGatewayReady?: (url: string) => void
@@ -55,6 +56,11 @@ export class HarnessService {
     return { ...this.statusValue }
   }
 
+  /** Consume the user's cancellation intent for one session exactly once. */
+  consumeCanceledSession(sessionId: string): boolean {
+    return this.canceledSessions.delete(sessionId)
+  }
+
   /**
    * Send one prompt to the active session (created lazily on first use).
    * The turn's progress arrives over the gateway event stream; the result
@@ -68,6 +74,7 @@ export class HarnessService {
     const gateway = await this.ensureStarted()
     const sessionId = options?.sessionId?.trim() || this.activeSessionId || await this.createSession()
     this.activeSessionId = sessionId
+    this.canceledSessions.delete(sessionId)
 
     const result = await gateway.rpc('session.prompt', {
       sessionId,
@@ -113,10 +120,16 @@ export class HarnessService {
   /** Cancel the active session's pending turn; the runtime stays up. */
   async stop(): Promise<HarnessStatus> {
     if (this.activeSessionId && this.gateway) {
+      const sessionId = this.activeSessionId
+      // Mark intent before the RPC: the gateway may emit running:false before
+      // the cancellation response reaches this process.
+      this.canceledSessions.add(sessionId)
       try {
-        await this.gateway.rpc('session.cancel', { sessionId: this.activeSessionId })
+        const result = await this.gateway.rpc('session.cancel', { sessionId })
+        if (!result.ok) this.canceledSessions.delete(sessionId)
       } catch {
-        // Cancellation is best-effort; the child teardown below is the backstop.
+        this.canceledSessions.delete(sessionId)
+        // Cancellation is best-effort; the runtime remains available.
       }
     }
     this.updateStatus('ready')
@@ -181,6 +194,9 @@ export class HarnessService {
   }
 
   private async start(): Promise<GatewayClient> {
+    // close() marks the current child as expected-to-stop; a fresh child must
+    // return to normal unexpected-exit detection.
+    this.stopping = false
     await this.browser.ensureAgentReady()
 
     const cliBin = harnessCliBinPath()
