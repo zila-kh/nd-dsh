@@ -174,7 +174,7 @@ export function DesignView({ active, workspace, browser, harness, onWorkspaceCha
     if (!path) return
     try {
       if (freeform.dirty) setFreeform(await window.ndDshDesign.freeformSave())
-      onAskAgent(`Build the OpenPencil Freeform design at ${path} into the active project's real application source. Treat the .op document as design intent, reuse existing project components and shadcn/ui where possible, preserve design tokens and accessibility, start or reuse the project runtime, and verify the result in Design Mode. Do not replace production source with a detached generated mockup.`)
+      onAskAgent(`Build the ND Pencil Freeform design at ${path} into the active project's real application source. Treat the .op document as design intent, reuse existing project components and shadcn/ui where possible, preserve design tokens and accessibility, start or reuse the project runtime, and verify the result in Design Mode. Do not replace production source with a detached generated mockup.`)
     } catch (cause) {
       onError(errorMessage(cause))
     }
@@ -219,7 +219,7 @@ export function DesignView({ active, workspace, browser, harness, onWorkspaceCha
             <span>Code canvas</span><b>NEW</b>
           </button>
           <button className={surface === 'freeform' ? 'active' : ''} onClick={() => setSurface('freeform')}>
-            <span>Freeform</span><b>{project?.freeform.documents.length ?? 0}</b>
+            <span>ND Pencil</span><b>{project?.freeform.documents.length ?? 0}</b>
           </button>
           <button className="design-refresh" disabled={busy === 'scan' || bindingBlocked} onClick={() => void refreshProject()}>
             {busy === 'scan' ? 'Scanning…' : 'Refresh project index'}
@@ -229,8 +229,8 @@ export function DesignView({ active, workspace, browser, harness, onWorkspaceCha
         <section className="design-section">
           <header>AI design actions</header>
           {surface === 'freeform' && freeform?.documentPath ? <>
-            <button onClick={() => void buildFreeform()}>Build Freeform into app</button>
-            <button onClick={() => onAskAgent(`Review the OpenPencil design at ${freeform.documentPath} for layout consistency, hierarchy, accessibility, and design-system reuse. Improve the .op design while keeping it a Freeform artifact; do not change production application code unless I ask.`)}>Improve Freeform</button>
+            <button onClick={() => void buildFreeform()}>Build ND Pencil into app</button>
+            <button onClick={() => onAskAgent(`Review the ND Pencil design at ${freeform.documentPath} for layout consistency, hierarchy, accessibility, and design-system reuse. Improve the .op design through the ND Pencil editor while keeping it a Freeform artifact; do not change production application code unless I ask.`)}>Improve ND Pencil</button>
           </> : <>
             <button disabled={!selected} onClick={() => selected && onAskAgent('Improve the selected UI while preserving the project design language. Edit the real source and verify the result in Design Mode.')}>Improve selected</button>
             <button disabled={!selected} onClick={() => selected && onAskAgent('Make the selected UI responsive and verify it at mobile, tablet, and desktop widths.')}>Make responsive</button>
@@ -244,7 +244,7 @@ export function DesignView({ active, workspace, browser, harness, onWorkspaceCha
             <strong>{workspace?.binding === 'project' ? 'Project workspace linked' : workspace?.binding === 'missing' ? 'Workspace missing' : workspace?.binding === 'unlinked' ? 'Workspace not linked' : 'Standalone workspace'}</strong>
             <span>{workspace?.projectWorkspacePath ?? workspace?.root ?? 'Select a workspace'}</span>
           </div>
-          {surface === 'freeform' ? <div className={`design-runtime-hint ${freeform?.available ? 'ready' : 'missing'}`}><span>Freeform engine</span><code>{freeform?.available ? `OpenPencil ${freeform.version ?? 'built in'}` : 'OpenPencil unavailable'}</code></div> : null}
+          {surface === 'freeform' ? <div className={`design-runtime-hint ${freeform?.available ? 'ready' : 'missing'}`}><span>Freeform engine</span><code>{freeform?.available ? `ND Pencil ${freeform.version ?? 'built in'}` : 'ND Pencil unavailable'}</code></div> : null}
           {project?.devCommand ? <>
             <div className="design-runtime-hint"><span>Dev runtime</span><code>{project.devCommand}</code></div>
             <button className="design-primary" disabled={busy !== null} onClick={() => void startDevPreview()}>{busy === 'dev' ? 'Starting runtime…' : project.preview?.kind === 'dev-server' ? 'Restart dev preview' : 'Start dev preview'}</button>
@@ -260,7 +260,7 @@ export function DesignView({ active, workspace, browser, harness, onWorkspaceCha
           <textarea
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
-            placeholder={selected ? 'Ask AI to change the selected UI…' : surface === 'canvas' ? 'Describe what to create on the code canvas…' : surface === 'freeform' ? 'Ask ND about this Freeform design…' : 'Describe the design change…'}
+            placeholder={selected ? 'Ask AI to change the selected UI…' : surface === 'canvas' ? 'Describe what to create on the code canvas…' : surface === 'freeform' ? 'Ask ND to edit this ND Pencil canvas…' : 'Describe the design change…'}
           />
           <button disabled={!prompt.trim() || bindingBlocked || harness?.state === 'running'}>Open in Agent</button>
         </form>
@@ -344,35 +344,35 @@ function FreeformSurface({ active, project, state, busy, onOpen, onCreate, onSav
 }) {
   if (!state?.available) {
     return <div className="design-browser-surface">
-      <header className="design-surface-header"><div><small>FREEFORM · OPENPENCIL</small><h2>The Freeform engine is bundled with ND.</h2><p>In a source checkout the pinned runtime must be compiled once. Distributed ND builds package it automatically; users do not install OpenPencil separately.</p></div><span>ENGINE</span></header>
-      <SurfaceEmpty title="OpenPencil runtime is not built" text={state?.error ?? 'Build the pinned runtime to enable the editable vector canvas.'} />
-      <div className="design-command-card"><code>pnpm openpencil:build</code></div>
+      <header className="design-surface-header"><div><small>FREEFORM · ND PENCIL</small><h2>ND Pencil is built into ND.</h2><p>In a source checkout the pinned engine implementation must be compiled once. Distributed ND builds package it automatically; users never install a separate design application.</p></div><span>ENGINE</span></header>
+      <SurfaceEmpty title="ND Pencil runtime is not built" text={state?.error ?? 'Build the pinned runtime to enable the editable vector canvas.'} />
+      <div className="design-command-card"><code>pnpm nd-pencil:build</code></div>
     </div>
   }
 
   if (state.documentPath) {
-    return <OpenPencilPane active={active} state={state} busy={busy} onSave={onSave} onClose={onClose} onBuild={onBuild} onError={onError} />
+    return <NdPencilPane active={active} state={state} busy={busy} onSave={onSave} onClose={onClose} onBuild={onBuild} onError={onError} />
   }
 
   const documents = project?.freeform.documents ?? []
   return <div className="design-browser-surface">
     <header className="design-surface-header">
-      <div><small>FREEFORM · OPENPENCIL</small><h2>Explore visually before production code.</h2><p>Freeform documents are real versionable <code>.op</code> files inside this project. ND embeds the OpenPencil editor; no external app is launched.</p></div>
-      <button className="design-header-action" disabled={busy !== null} onClick={onCreate}>{busy === 'freeform:new' ? 'Creating…' : 'New Freeform'}</button>
+      <div><small>FREEFORM · ND PENCIL</small><h2>Explore visually before production code.</h2><p>ND Pencil designs are real versionable <code>.op</code> files inside this project. The editor is native to ND and always follows the active workspace.</p></div>
+      <button className="design-header-action" disabled={busy !== null} onClick={onCreate}>{busy === 'freeform:new' ? 'Creating…' : 'New ND Pencil'}</button>
     </header>
     {documents.length ? <div className="design-card-grid">
       {documents.map((document) => <article className="design-source-card" key={document.path}>
-        <div className="design-card-icon">OP</div>
+        <div className="design-card-icon">NP</div>
         <strong>{document.name}</strong>
         <code>{document.path}</code>
-        <small>OpenPencil · editable Freeform canvas</small>
+        <small>ND Pencil · editable Freeform canvas</small>
         <footer><button disabled={busy !== null} onClick={() => onOpen(document)}>{busy === `freeform:${document.path}` ? 'Opening…' : 'Open canvas'}</button></footer>
       </article>)}
-    </div> : <div className="design-empty-stack"><SurfaceEmpty title="No Freeform designs yet" text="Create one to sketch frames, layouts, flows, or visual alternatives without turning the design artifact into production source." /><button className="design-large-action" onClick={onCreate}>Create first Freeform</button></div>}
+    </div> : <div className="design-empty-stack"><SurfaceEmpty title="No ND Pencil designs yet" text="Create one to sketch frames, layouts, flows, or visual alternatives without turning the design artifact into production source." /><button className="design-large-action" onClick={onCreate}>Create first ND Pencil design</button></div>}
   </div>
 }
 
-function OpenPencilPane({ active, state, busy, onSave, onClose, onBuild, onError }: {
+function NdPencilPane({ active, state, busy, onSave, onClose, onBuild, onError }: {
   active: boolean
   state: DesignFreeformState
   busy: string | null
@@ -416,9 +416,9 @@ function OpenPencilPane({ active, state, busy, onSave, onClose, onBuild, onError
 
   return <section className="openpencil-pane">
     <div className="openpencil-toolbar">
-      <div className="openpencil-document"><span className={`openpencil-status ${state.status}`} /> <strong>{state.documentName}</strong>{state.dirty ? <b>●</b> : null}<small>Freeform</small></div>
+      <div className="openpencil-document"><span className={`openpencil-status ${state.status}`} /> <strong>{state.documentName}</strong>{state.dirty ? <b>●</b> : null}<small>ND Pencil</small></div>
       <div className="openpencil-actions">
-        <span>{state.version ? `OpenPencil ${state.version}` : 'OpenPencil'}</span>
+        <span>{state.version ? `ND Pencil engine ${state.version}` : 'ND Pencil'}</span>
         <button disabled={busy !== null || state.status !== 'ready' || !state.dirty} onClick={onSave}>{busy === 'freeform:save' ? 'Saving…' : 'Save'}</button>
         <button className="design-primary" disabled={state.status !== 'ready'} onClick={onBuild}>Build this</button>
         <button disabled={busy !== null} onClick={onClose}>Close</button>
@@ -427,7 +427,7 @@ function OpenPencilPane({ active, state, busy, onSave, onClose, onBuild, onError
     <div className="openpencil-native-surface" ref={surfaceRef}>
       <div className="openpencil-placeholder">
         {state.status === 'starting' ? <div className="placeholder-ring" /> : null}
-        <span>{state.status === 'starting' ? 'Starting ND Freeform canvas…' : state.error ?? 'OpenPencil canvas'}</span>
+        <span>{state.status === 'starting' ? 'Starting ND Pencil canvas…' : state.error ?? 'ND Pencil canvas'}</span>
       </div>
     </div>
   </section>
@@ -436,14 +436,14 @@ function OpenPencilPane({ active, state, busy, onSave, onClose, onBuild, onError
 function FreeformInspector({ state, project, onBuild }: { state: DesignFreeformState | null; project: DesignProjectState | null; onBuild(): void }) {
   return <>
     <section className="design-section design-properties">
-      <header>Freeform</header>
-      <Property label="Engine" value="OpenPencil · built in" />
+      <header>ND Pencil</header>
+      <Property label="Engine" value="ND Pencil · built in" />
       <Property label="Status" value={state?.status ?? 'loading'} />
       {state?.documentPath ? <Property label="Document" value={state.documentPath} /> : null}
       <Property label="Saved" value={state?.dirty ? 'Unsaved changes' : 'Up to date'} />
       <Property label="Files" value={String(project?.freeform.documents.length ?? 0)} />
     </section>
-    {state?.documentPath ? <section className="design-section"><header>Handoff</header><button className="design-primary" onClick={onBuild}>Build Freeform into live app</button><p className="design-inspector-note">The .op document remains a design artifact. ND builds the selected concept into the project's real HTML/React/shadcn source.</p></section> : null}
+    {state?.documentPath ? <section className="design-section"><header>Handoff</header><button className="design-primary" onClick={onBuild}>Build ND Pencil into live app</button><p className="design-inspector-note">The .op document remains a design artifact. ND builds the selected concept into the project's real HTML/React/shadcn source.</p></section> : null}
   </>
 }
 
@@ -493,7 +493,7 @@ function CodeCanvas({ project, onAgent }: { project: DesignProjectState | null; 
 function ProjectInspector({ project, surface }: { project: DesignProjectState | null; surface: DesignSurface }) {
   if (!project) return <div className="design-inspector-empty">Design Mode is indexing the active workspace.</div>
   return <>
-    <section className="design-section design-properties"><header>Project design index</header><Property label="Mode" value={project.kind} /><Property label="Stack" value={project.frameworks.join(', ') || 'No framework detected'} /><Property label="Templates" value={String(project.templates.length)} /><Property label="shadcn" value={project.shadcn.detected ? `${project.shadcn.components.length} components` : 'Not detected'} /><Property label="Freeform" value={`${project.freeform.documents.length} .op documents`} /></section>
+    <section className="design-section design-properties"><header>Project design index</header><Property label="Mode" value={project.kind} /><Property label="Stack" value={project.frameworks.join(', ') || 'No framework detected'} /><Property label="Templates" value={String(project.templates.length)} /><Property label="shadcn" value={project.shadcn.detected ? `${project.shadcn.components.length} components` : 'Not detected'} /><Property label="ND Pencil" value={`${project.freeform.documents.length} .op documents`} /></section>
     <div className="design-inspector-empty">{surface === 'live' ? 'Select an element in the live canvas to attach component, source, CSS, and runtime context.' : 'This source is indexed from the active workspace. Production changes still go through real project files.'}</div>
   </>
 }
@@ -526,7 +526,7 @@ function projectLabel(project: DesignProjectState): string {
   if (project.kind === 'shadcn') return `shadcn · ${project.frameworks.join(' + ') || 'web'}`
   if (project.frameworks.length) return project.frameworks.join(' + ')
   if (project.templates.length) return `${project.templates.length} template${project.templates.length === 1 ? '' : 's'}`
-  if (project.freeform.documents.length) return `${project.freeform.documents.length} Freeform design${project.freeform.documents.length === 1 ? '' : 's'}`
+  if (project.freeform.documents.length) return `${project.freeform.documents.length} ND Pencil design${project.freeform.documents.length === 1 ? '' : 's'}`
   return 'Code canvas ready'
 }
 
@@ -534,12 +534,12 @@ function surfaceTitle(surface: DesignSurface): string {
   if (surface === 'templates') return 'Template source'
   if (surface === 'library') return 'Component library'
   if (surface === 'canvas') return 'Code canvas'
-  if (surface === 'freeform') return 'Freeform canvas'
+  if (surface === 'freeform') return 'ND Pencil canvas'
   return 'Nothing selected'
 }
 
 function inspectorSubtitle(surface: DesignSurface, freeform: DesignFreeformState | null): string {
-  if (surface === 'freeform') return freeform?.documentPath ?? 'Open or create a Freeform design'
+  if (surface === 'freeform') return freeform?.documentPath ?? 'Open or create an ND Pencil design'
   return 'Source of truth: active workspace'
 }
 
@@ -547,7 +547,7 @@ function designSurfaceContext(surface: DesignSurface, project: DesignProjectStat
   if (surface === 'templates') return '\n\nDesign source: the active workspace HTML/template library. Work from existing templates and edit real source files.'
   if (surface === 'library') return '\n\nDesign source: the active project shadcn/component library. Reuse installed components rather than recreating them visually.'
   if (surface === 'canvas') return `\n\nDesign source: code-first canvas. Detect the project stack (${project?.frameworks.join(', ') || 'currently unknown'}) and create/edit real production source; make the running app the canvas.`
-  if (surface === 'freeform') return `\n\nDesign source: ND Freeform powered by the bundled OpenPencil engine.${freeform?.documentPath ? ` Active .op document: ${freeform.documentPath}.` : ''} Treat .op as exploratory design intent unless I explicitly ask to build it into production source.`
+  if (surface === 'freeform') return `\n\nDesign source: ND Pencil Freeform.${freeform?.documentPath ? ` Active .op document: ${freeform.documentPath}.` : ''} Treat .op as exploratory design intent unless I explicitly ask to build it into production source.`
   return '\n\nDesign source: the live running application. Edit real source and verify the result in the runtime.'
 }
 
