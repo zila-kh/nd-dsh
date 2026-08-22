@@ -26,10 +26,11 @@ export interface DesignShadcnState {
 }
 
 export interface DesignPreviewState {
-  kind: 'static-html'
+  kind: 'static-html' | 'dev-server'
   root: string
-  templatePath: string
   url: string
+  templatePath?: string
+  command?: string
 }
 
 export interface DesignProjectState {
@@ -53,6 +54,7 @@ export interface DesignDesktopApi {
   state(): Promise<DesignProjectState>
   refresh(): Promise<DesignProjectState>
   previewHtml(path: string): Promise<DesignPreviewState>
+  startDevPreview(): Promise<DesignPreviewState>
   stopPreview(): Promise<void>
 }
 
@@ -60,5 +62,6 @@ export const DESIGN_IPC = {
   state: 'design:state',
   refresh: 'design:refresh',
   previewHtml: 'design:preview-html',
+  startDevPreview: 'design:start-dev-preview',
   stopPreview: 'design:stop-preview',
 } as const
