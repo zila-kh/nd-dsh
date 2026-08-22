@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type KeyboardEvent } from 'react'
 import type {
+  CodingEngineDescriptor,
   DshEventFrame,
+  EngineSessionSummary,
   ExternalElementAttachmentView,
   HarnessStatus,
   ModelProviderGroup,
@@ -9,6 +11,7 @@ import type {
   SessionSummary,
   WorkspaceSuggestion,
 } from '../../../shared/contracts'
+import { CODEX_CLI_ENGINE_ID, ND_HARNESS_ENGINE_ID } from '../../../shared/coding-engines'
 import type { AskQuestion, ThreadEntry, TodoItem } from '../lib/types'
 import { FOLDER_ACCENT, SKILL_ACCENT, fileExtensionOf, fileAccent } from '../lib/file-accents'
 import { applyMention, detectMentionTrigger } from '../../../shared/mentions'
@@ -102,6 +105,13 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
   const [skillsState, setSkillsState] = useState<'idle' | 'loading' | 'ready' | 'unavailable'>('idle')
   const [fileItems, setFileItems] = useState<WorkspaceSuggestion[]>([])
   const [elementChips, setElementChips] = useState<ExternalElementAttachmentView[]>([])
+  // Catalog-driven engine support: non-harness engines (e.g. the direct Codex
+  // CLI) appear as extra "New … chat" actions and extra sidebar sections.
+  const [engines, setEngines] = useState<CodingEngineDescriptor[]>([])
+  const [engineSessions, setEngineSessions] = useState<EngineSessionSummary[]>([])
+  // Engine id for a chat that is drafted but not created yet; the session is
+  // created by the first send (router-side), never via gateway session.create.
+  const [draftEngineId, setDraftEngineId] = useState<string | null>(null)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -111,6 +121,18 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
   const entries = useMemo(() => threads[activeSessionId ?? ''] ?? [], [threads, activeSessionId])
   const threadContext = useMemo(() => collectThreadContext(entries), [entries])
   const busy = busySessions.has(activeSessionId ?? '')
+  // Non-harness sessions (and drafts of one) hide harness-only composer controls.
+  const engineSessionIds = useMemo(() => new Set(engineSessions.map((session) => session.sessionId)), [engineSessions])
+  const activeEngineSession = activeSessionId !== null ? engineSessions.find((session) => session.sessionId === activeSessionId) : undefined
+  const activeEngineId = activeEngineSession
+    ? activeEngineSession.engineId
+    : activeSessionId === null && draftEngineId !== null
+      ? draftEngineId
+      : ND_HARNESS_ENGINE_ID
+  const onHarnessThread = activeEngineId === ND_HARNESS_ENGINE_ID
+  const activeEngineName = engines.find((engine) => engine.id === activeEngineId)?.name ?? 'Codex CLI'
+  // Extra chat engines come straight from the catalog; unavailable ones never render.
+  const chatEngines = useMemo(() => engines.filter((engine) => engine.available && engine.id !== ND_HARNESS_ENGINE_ID), [engines])
 
   const refreshSessions = useCallback(async (): Promise<void> => {
     try {
@@ -132,6 +154,36 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
       const entries = foldHistory(events.flatMap((item) => (item.event ? [item.event] : [])))
       setThreads((current) => ({ ...current, [sessionId]: entries }))
       setChangedFiles(collectChangedFiles(entries))
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }, [onError])
+
+  // Engine catalog + non-harness sessions: optional surfaces that never block
+  // the primary chat panel when unavailable.
+  useEffect(() => {
+    void window.ndDsh.engines.list().then(setEngines).catch(() => undefined)
+  }, [])
+
+  const refreshEngineSessions = useCallback(async (): Promise<void> => {
+    try {
+      setEngineSessions(await window.ndDsh.engines.sessions())
+    } catch {
+      // Engine chat listing stays empty; not an error surface.
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshEngineSessions()
+  }, [refreshEngineSessions])
+
+  /** Restore a non-harness thread by replaying its stored session events. */
+  const loadEngineTranscript = useCallback(async (sessionId: string): Promise<void> => {
+    try {
+      const result = await window.ndDsh.engines.transcript(sessionId)
+      const restored = foldHistory(result.events)
+      setThreads((current) => ({ ...current, [sessionId]: restored }))
+      setChangedFiles(collectChangedFiles(restored))
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : String(cause))
     }
@@ -160,9 +212,23 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
   }, [onError])
 
   const selectSession = useCallback((session: SessionSummary): void => {
+    setDraftEngineId(null)
     setActiveSessionId(session.sessionId)
     if (!threads[session.sessionId]) void loadHistory(session.sessionId)
   }, [threads, loadHistory])
+
+  const selectEngineSession = useCallback((summary: EngineSessionSummary): void => {
+    setDraftEngineId(null)
+    setActiveSessionId(summary.sessionId)
+    if (!threads[summary.sessionId]) void loadEngineTranscript(summary.sessionId)
+  }, [threads, loadEngineTranscript])
+
+  /** Draft a chat on a non-harness engine; creation happens on first send. */
+  const startEngineDraft = useCallback((engineId: string): void => {
+    setDraftEngineId(engineId)
+    setActiveSessionId(null)
+    setChangedFiles([])
+  }, [])
 
   const handleNewSession = useCallback(async (): Promise<void> => {
     try {
@@ -173,6 +239,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
       setSessions((current) => [created, ...current])
       setThreads((current) => ({ ...current, [sessionId]: [] }))
       setActiveSessionId(sessionId)
+      setDraftEngineId(null)
       setChangedFiles([])
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : String(cause))
@@ -189,19 +256,23 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
 
   useEffect(() => {
     if (!activeSessionId) return
+    // Engine-backed threads restore from their ND-side transcript instead of
+    // the gateway history store.
+    if (engineSessionIds.has(activeSessionId)) return
     // Covers the auto-selected session on startup, not just manual clicks,
     // so an existing thread shows its messages and context immediately.
     if (!threads[activeSessionId]) void loadHistory(activeSessionId)
-  }, [activeSessionId, threads, loadHistory])
+  }, [activeSessionId, threads, loadHistory, engineSessionIds])
 
   useEffect(() => {
-    if (!activeSessionId) return
+    // The gateway model catalog only applies to harness sessions.
+    if (!activeSessionId || engineSessionIds.has(activeSessionId)) return
     void window.ndDsh.dsh.rpc('session.models', { sessionId: activeSessionId })
       .then((result) => {
         if (result.ok) setModels(result.value as SessionModels)
       })
       .catch(() => setModels(null))
-  }, [activeSessionId])
+  }, [activeSessionId, engineSessionIds])
 
   // Opening the model picker probes every provider route for real: the main
   // process sends an authenticated request to each provider server and the
@@ -250,6 +321,11 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
   const skillsLoadedFor = useRef<string | null>(null)
   useEffect(() => {
     if (mentionTrigger?.kind !== 'skill' || !activeSessionId) return
+    // The runtime skill catalog is a harness capability; engine chats have none.
+    if (engineSessionIds.has(activeSessionId)) {
+      setSkillsState('unavailable')
+      return
+    }
     if (skillsLoadedFor.current === activeSessionId) return
     skillsLoadedFor.current = activeSessionId
     setSkillsState('loading')
@@ -268,7 +344,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
         setSkillItems([])
         setSkillsState('unavailable')
       })
-  }, [mentionTrigger?.kind, activeSessionId])
+  }, [mentionTrigger?.kind, activeSessionId, engineSessionIds])
 
   useEffect(() => {
     if (mentionTrigger?.kind !== 'file') return
@@ -353,6 +429,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
       }
       if (frame.kind === 'session-added' || frame.kind === 'session-removed') {
         void refreshSessions()
+        void refreshEngineSessions()
         return
       }
       if (frame.kind === 'session-event' && frame.event) {
@@ -407,15 +484,27 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
     setPrompt('')
     setMentionCaret(0)
     setMentionDismissed(null)
+    // A drafted engine chat has no session yet: the first send creates it on
+    // that engine (router-side); harness sends stay exactly as before.
+    const draftEngine = activeSessionId === null ? draftEngineId : null
+    const options = activeSessionId !== null
+      ? { sessionId: activeSessionId }
+      : draftEngine !== null
+        ? { engineId: draftEngine }
+        : undefined
     try {
-      const result = await window.ndDsh.harness.run(input, activeSessionId ? { sessionId: activeSessionId } : undefined)
+      const result = await window.ndDsh.harness.run(input, options)
       setActiveSessionId(result.sessionId)
+      if (draftEngine !== null) {
+        setDraftEngineId(null)
+        void refreshEngineSessions()
+      }
       void refreshElementChips()
       setThreads((current) => ({
         ...current,
         [result.sessionId]: [...(current[result.sessionId] ?? []), { kind: 'user', id: crypto.randomUUID(), text: input }],
       }))
-      if (result.sessionId && !sessions.some((s) => s.sessionId === result.sessionId)) void refreshSessions()
+      if (!sessions.some((s) => s.sessionId === result.sessionId)) void refreshSessions()
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : String(cause))
     }
@@ -520,6 +609,17 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
             <PlusIcon className="plus-icon" />
             <span>New Session</span>
           </button>
+          {chatEngines.map((engine) => (
+            <button
+              key={engine.id}
+              className="new-session-btn secondary"
+              title={`${engine.description}${engine.unavailableReason ? `\n${engine.unavailableReason}` : ''}`}
+              onClick={() => startEngineDraft(engine.id)}
+            >
+              <PlusIcon className="plus-icon" />
+              <span>New {engine.name} chat</span>
+            </button>
+          ))}
         </div>
 
         <div className="workspaces-section">
@@ -548,23 +648,41 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
           <div className="sessions-list">
             {!sessionsLoaded ? (
               <div className="sessions-empty">Loading sessions…</div>
-            ) : sessions.length === 0 ? (
+            ) : sessions.length === 0 && engineSessions.length === 0 ? (
               <div className="sessions-empty">No sessions yet</div>
             ) : (
-              sessions.filter((session) => !session.blank || session.sessionId === activeSessionId).map((session) => (
-                <button
-                  key={session.sessionId}
-                  className={`session-thread-card ${activeSessionId === session.sessionId ? 'active' : ''}`}
-                  onClick={() => selectSession(session)}
-                >
-                  <div className="card-left">
-                    <span className={`dot-active ${busySessions.has(session.sessionId) ? 'on' : 'off'}`} />
-                    <ChatIcon className="thread-icon" />
-                    <span className="thread-title">{sessionTitle(session)}</span>
-                  </div>
-                  <span className="thread-time">{sessionTime(session)}</span>
-                </button>
-              ))
+              <>
+                {sessions.filter((session) => !session.blank || session.sessionId === activeSessionId).map((session) => (
+                  <button
+                    key={session.sessionId}
+                    className={`session-thread-card ${activeSessionId === session.sessionId ? 'active' : ''}`}
+                    onClick={() => selectSession(session)}
+                  >
+                    <div className="card-left">
+                      <span className={`dot-active ${busySessions.has(session.sessionId) ? 'on' : 'off'}`} />
+                      <ChatIcon className="thread-icon" />
+                      <span className="thread-title">{sessionTitle(session)}</span>
+                    </div>
+                    <span className="thread-time">{sessionTime(session)}</span>
+                  </button>
+                ))}
+                {engineSessions.map((session) => (
+                  <button
+                    key={session.sessionId}
+                    className={`session-thread-card engine ${activeSessionId === session.sessionId ? 'active' : ''}`}
+                    title={`${engines.find((engine) => engine.id === session.engineId)?.name ?? session.engineId} chat`}
+                    onClick={() => selectEngineSession(session)}
+                  >
+                    <div className="card-left">
+                      <span className={`dot-active ${busySessions.has(session.sessionId) ? 'on' : 'off'}`} />
+                      <ChatIcon className="thread-icon" />
+                      <span className="thread-title">{session.title}</span>
+                      <span className="thread-engine-chip">{engines.find((engine) => engine.id === session.engineId)?.name ?? session.engineId}</span>
+                    </div>
+                    <span className="thread-time">{sessionTime({ updatedAt: session.updatedAt } as SessionSummary)}</span>
+                  </button>
+                ))}
+              </>
             )}
           </div>
         </div>
@@ -581,9 +699,13 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
         <header className="chat-heading">
           <div className="active-thread-header-info">
             <div>
-              <span className="eyebrow">ACTIVE THREAD</span>
+              <span className="eyebrow">{onHarnessThread ? 'ACTIVE THREAD' : 'ENGINE THREAD'}</span>
               <strong title={activeSession ? sessionTitle(activeSession) : undefined}>
-                {activeSession ? sessionTitle(activeSession) : 'No session'}
+                {activeSession
+                  ? sessionTitle(activeSession)
+                  : draftEngineId !== null
+                    ? `New ${activeEngineName} chat`
+                    : 'No session'}
               </strong>
             </div>
           </div>
@@ -639,7 +761,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
           {busy ? (
             <div className="agent-working">
               <span /><span /><span />
-              <em>{status?.state === 'starting' ? 'Starting pinned runtime' : 'Harness is working'}</em>
+              <em>{status?.state === 'starting' && onHarnessThread ? 'Starting pinned runtime' : onHarnessThread ? 'Harness is working' : `${activeEngineName} is working`}</em>
             </div>
           ) : null}
         </div>
@@ -754,30 +876,39 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
 
           <div className="composer-actions-bar">
             <div className="action-group-left">
-              <div className="menu-anchor">
-                <button
-                  className="permission-badge"
-                  onClick={() => { setPermissionMenuOpen(!permissionMenuOpen); setModelMenuOpen(false); setThoughtMenuOpen(false); closeMention() }}
-                >
+              {onHarnessThread ? (
+                <div className="menu-anchor">
+                  <button
+                    className="permission-badge"
+                    onClick={() => { setPermissionMenuOpen(!permissionMenuOpen); setModelMenuOpen(false); setThoughtMenuOpen(false); closeMention() }}
+                  >
+                    <ShieldIcon />
+                    <span>{PERMISSION_MODES.find((mode) => mode.id === permissionMode)?.label ?? permissionMode}</span>
+                    <ChevronDownIcon />
+                  </button>
+                  {permissionMenuOpen ? (
+                    <div className="popover-menu shadow-flyout">
+                      {PERMISSION_MODES.map((mode) => (
+                        <button
+                          key={mode.id}
+                          className={`menu-item ${permissionMode === mode.id ? 'active' : ''}`}
+                          onClick={() => void setSessionPermission(mode.id)}
+                        >
+                          {mode.label}
+                          {permissionMode === mode.id ? <CheckIcon className="check-icon" /> : null}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                // Engine threads manage their own permission policy (Codex runs
+                // fail-closed unless an approval card is answered).
+                <span className="permission-badge static" title={`${activeEngineName} manages its own sandbox and approval policy`}>
                   <ShieldIcon />
-                  <span>{PERMISSION_MODES.find((mode) => mode.id === permissionMode)?.label ?? permissionMode}</span>
-                  <ChevronDownIcon />
-                </button>
-                {permissionMenuOpen ? (
-                  <div className="popover-menu shadow-flyout">
-                    {PERMISSION_MODES.map((mode) => (
-                      <button
-                        key={mode.id}
-                        className={`menu-item ${permissionMode === mode.id ? 'active' : ''}`}
-                        onClick={() => void setSessionPermission(mode.id)}
-                      >
-                        {mode.label}
-                        {permissionMode === mode.id ? <CheckIcon className="check-icon" /> : null}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
+                  <span>{activeEngineName}</span>
+                </span>
+              )}
               <div
                 className="menu-anchor context-anchor"
                 onMouseEnter={() => setContextMenuOpen(true)}
@@ -849,6 +980,9 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
             <div className="action-group-right">
               {busy ? <SpinnerIcon className="busy-spinner" /> : null}
 
+              {/* Model/reasoning routing is an ND Harness capability; engine
+                  chats keep their native model configuration. */}
+              {onHarnessThread ? (<>
               <div className="menu-anchor">
                 <button
                   className="model-picker-button"
@@ -921,6 +1055,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
                   ) : null}
                 </div>
               ) : null}
+              </>) : null}
 
               {busy ? (
                 <button className="send-pill-button stop" onClick={() => void stop()} title="Cancel the running turn">

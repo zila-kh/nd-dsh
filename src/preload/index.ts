@@ -16,10 +16,12 @@ const api: DesktopApi = {
     list: () => ipcRenderer.invoke(IPC.enginesList),
     assignments: () => ipcRenderer.invoke(IPC.enginesAssignments),
     assign: (agentId, engineId) => ipcRenderer.invoke(IPC.enginesAssign, agentId, engineId),
+    sessions: () => ipcRenderer.invoke(IPC.enginesSessions),
+    transcript: (sessionId) => ipcRenderer.invoke(IPC.enginesTranscript, sessionId),
   },
   capture: {
-    inspectApp: (copyToClipboard) => ipcRenderer.invoke(IPC.captureInspectApp, copyToClipboard),
-    inspectElement: () => ipcRenderer.invoke(IPC.captureInspectElement),
+    inspectApp: (copyToClipboard, scope) => ipcRenderer.invoke(IPC.captureInspectApp, copyToClipboard, scope),
+    inspectElement: (scope) => ipcRenderer.invoke(IPC.captureInspectElement, scope),
     stageElement: (element, targetTitle) => ipcRenderer.invoke(IPC.captureStageElement, element, targetTitle),
     elementAttachments: () => ipcRenderer.invoke(IPC.captureElementAttachments),
     removeElement: (id) => ipcRenderer.invoke(IPC.captureRemoveElement, id),
@@ -108,6 +110,40 @@ const api: DesktopApi = {
       const handler = (_event: Electron.IpcRendererEvent, state: Parameters<typeof listener>[0]) => listener(state)
       ipcRenderer.on(IPC.themeChangedEvent, handler)
       return () => ipcRenderer.removeListener(IPC.themeChangedEvent, handler)
+    },
+  },
+  git: {
+    state: () => ipcRenderer.invoke(IPC.gitState),
+    refresh: () => ipcRenderer.invoke(IPC.gitRefresh),
+    stage: (relativePaths) => ipcRenderer.invoke(IPC.gitStage, relativePaths),
+    unstage: (relativePaths) => ipcRenderer.invoke(IPC.gitUnstage, relativePaths),
+    discard: (relativePaths) => ipcRenderer.invoke(IPC.gitDiscard, relativePaths),
+    commit: (message) => ipcRenderer.invoke(IPC.gitCommit, message),
+    diff: (relativePath, staged) => ipcRenderer.invoke(IPC.gitDiff, relativePath, staged),
+    checkout: (branch) => ipcRenderer.invoke(IPC.gitCheckout, branch),
+    createBranch: (name) => ipcRenderer.invoke(IPC.gitCreateBranch, name),
+    push: () => ipcRenderer.invoke(IPC.gitPush),
+    pull: () => ipcRenderer.invoke(IPC.gitPull),
+    fetch: () => ipcRenderer.invoke(IPC.gitFetch),
+    onState: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: Parameters<typeof listener>[0]) => listener(state)
+      ipcRenderer.on(IPC.gitStateEvent, handler)
+      return () => ipcRenderer.removeListener(IPC.gitStateEvent, handler)
+    },
+  },
+  qa: {
+    state: () => ipcRenderer.invoke(IPC.qaState),
+    run: (suite) => ipcRenderer.invoke(IPC.qaRun, suite),
+    stop: () => ipcRenderer.invoke(IPC.qaStop),
+    onState: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: Parameters<typeof listener>[0]) => listener(state)
+      ipcRenderer.on(IPC.qaStateEvent, handler)
+      return () => ipcRenderer.removeListener(IPC.qaStateEvent, handler)
+    },
+    onOutput: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, chunk: Parameters<typeof listener>[0]) => listener(chunk)
+      ipcRenderer.on(IPC.qaOutputEvent, handler)
+      return () => ipcRenderer.removeListener(IPC.qaOutputEvent, handler)
     },
   },
 }

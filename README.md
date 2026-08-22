@@ -28,6 +28,7 @@ ND company / project / role / agent / task control plane
         |
         +--> ND coding-engine registry
                +--> ND Harness (primary)
+               +--> Codex CLI (direct, ND-managed app-server)
                +--> Codex CLI (delegated one-shot engine)
                +--> future engine adapters
 ```
@@ -43,13 +44,17 @@ The primary engine is the pinned DeepSeek Harness runtime, used as infrastructur
 Pinned upstream release: **0.1.0-rc.8**  
 Pinned upstream commit: **141eb6fef83422698aef7a981029e843e8161534**
 
-### Codex CLI
+### Codex CLI (direct)
 
-The pinned Harness contains `@deepseek-ai/dsh-subagent-codex`, which depends on the official `@openai/codex` package and starts its package-local `codex app-server --stdio` process in the ND workspace. ND exposes that implementation as the `codex` coding-engine capability.
+ND's main process spawns and manages the official Codex app-server itself, using the `@openai/codex` package pinned inside the vendored runtime (`ND_DSH_CODEX_BINARY` is a developer-only override). Each chat is a native Codex thread; progress streams into the workbench chat panel, interactive threads can request human approvals through ND's approval cards, and unassigned-to-Codex organization runs execute directly on this engine with a fail-closed `never` approval policy.
 
-The current Codex integration is deliberately one-shot and delegated. Native Codex authentication, `HOME` / `CODEX_HOME`, model selection, project trust, and account settings remain authoritative. ND does not copy model-provider API keys into Codex credentials.
+Native Codex authentication, `HOME` / `CODEX_HOME`, model selection, project trust, and account settings remain authoritative. ND strips its own runtime variables before spawning and never copies model-provider API keys into Codex credentials. Threads are in-memory per app run for now, so the catalog honestly reports persistent sessions as unavailable.
 
-AI employees can be assigned an available coding engine from Workforce. The assignment is durable ND state. Codex-routed worker tasks delegate implementation to the Codex engine, then the ND parent validates the actual workspace before the normal independent review step.
+### Codex CLI (delegated fallback)
+
+The pinned Harness also contains `@deepseek-ai/dsh-subagent-codex`, which starts its package-local `codex app-server --stdio` process as a one-shot delegate inside an ND Harness run (engine id `codex`). It remains available as a fallback when the direct engine is not usable.
+
+AI employees can be assigned an available coding engine from Workforce. The assignment is durable ND state. Engine-specific worker guidance ships with each engine descriptor, so organization workflow code never branches on engine ids: delegated workers hand implementation to Codex and then validate the workspace themselves, while direct workers implement natively in Codex before the normal independent review step.
 
 ## AI company workflow
 
@@ -119,6 +124,15 @@ corepack pnpm test
 corepack pnpm build
 ```
 
+End-to-end specs drive the real built app through Playwright's Electron launcher; they run locally (not in CI) and need a fresh production build first:
+
+```sh
+corepack pnpm build
+corepack pnpm e2e
+```
+
+The QA view in the app runs the same unit and e2e suites from inside ND-DSH and streams their output; it requires a development checkout with runners installed.
+
 GitHub Actions runs the same repository invariants, type checks, unit tests, and production desktop build on branch/PR changes.
 
 ## Updating the pinned Harness
@@ -149,6 +163,7 @@ A **Public Beta** still requires packaged runtime distribution, signed/notarized
 | Organization state | 🚢 Shipped | Companies, projects, teams, roles, AI employees, goals, milestones, tasks, memory, policies, run receipts |
 | Delivery loop | 🚢 Shipped | AI PM → assigned worker → independent reviewer; dependency-aware progression and bounded rework |
 | Coding engines | 🚢 Shipped | ND Harness (primary) + Codex CLI as a delegated one-shot engine, assigned per employee |
+| Source Control | 🚢 Shipped | Built-in Git panel (status groups, stage/commit, diffs, branches, fetch/pull/push) derived from microsoft/vscode extensions/git (MIT) — see [`docs/source-control.md`](docs/source-control.md) |
 | Policy gate | 🚢 Shipped | Main-process DENY/ALLOW/ASK enforcement for approval-bearing organization runs |
 | Packaging & installers | 🛠 Planned | Bundled runtime, signed/notarized installers, offline install without dev tooling |
 | Codex onboarding | 🛠 Planned | Native authentication and health checks in first-run onboarding |

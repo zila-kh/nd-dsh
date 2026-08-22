@@ -21,7 +21,7 @@ import { asText, CodexAppServerWire, isObject, pickDecision, type JsonObject } f
 export type CodexRunMode = 'interactive' | 'unattended'
 
 /** Thread policies per run mode. Unattended runs stay fail-closed (`never`). */
-const THREAD_POLICY: Record<CodexRunMode, JsonObject> = {
+const THREAD_POLICY: Record<CodexRunMode, { approvalPolicy: string; sandbox?: string }> = {
   interactive: { approvalPolicy: 'on-request', sandbox: 'workspace-write' },
   unattended: { approvalPolicy: 'never' },
 }
@@ -34,9 +34,16 @@ interface PendingApproval {
   availableDecisions: unknown
 }
 
+interface TurnOutcome {
+  status: string
+  failureMessage?: string
+}
+
 interface CodexSession {
   sessionId: string
   threadId: string
+  /** Which app-server child owns this thread; stale ids are recreated lazily. */
+  threadGeneration: number
   cwd?: string
   mode: CodexRunMode
   title: string
@@ -46,12 +53,26 @@ interface CodexSession {
   turnId?: string
   sequence: number
   transcript: SessionEventEnvelope[]
-  turnSettled?: PromiseWithResolvers<{ status: string; failureMessage?: string }>
+  turnSettled?: Deferred<TurnOutcome>
+}
+
+/** Minimal single-shot deferred: turns settle exactly once via notification. */
+interface Deferred<T> {
+  promise: Promise<T>
+  resolve: (value: T) => void
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((resolveRef) => { resolve = resolveRef })
+  return { promise, resolve }
 }
 
 export interface CodexCliEngineOptions {
   /** Diagnostic sink for app-server stderr and lifecycle warnings. */
   log?: (line: string) => void
+  /** Test seam: process spawner (defaults to node:child_process.spawn). */
+  spawnProcess?: typeof spawn
 }
 
 export class CodexCliEngine {
@@ -59,6 +80,8 @@ export class CodexCliEngine {
   private wire: CodexAppServerWire | undefined
   private startPromise: Promise<void> | undefined
   private stopping = false
+  /** Bumped every time a fresh app-server child is spawned; threads from an older generation no longer exist. */
+  private generation = 0
   private readonly sessions = new Map<string, CodexSession>()
   private readonly sessionsByThread = new Map<string, CodexSession>()
   private readonly pendingApprovals = new Map<string, PendingApproval>()
@@ -73,6 +96,16 @@ export class CodexCliEngine {
 
   ready(): boolean {
     return codexBinPath() !== undefined
+  }
+
+  /** Whether a session id belongs to this engine (run routing). */
+  ownsSession(sessionId: string): boolean {
+    return this.sessions.has(sessionId)
+  }
+
+  /** Whether an approval rpcId is pending on this engine (respond routing). */
+  handlesApproval(rpcId: string): boolean {
+    return this.pendingApprovals.has(rpcId)
   }
 
   listSessions(): EngineSessionSummary[] {
@@ -98,17 +131,12 @@ export class CodexCliEngine {
   async createSession(input: { cwd?: string; mode?: CodexRunMode } = {}): Promise<{ sessionId: string }> {
     const wire = await this.ensureStarted()
     const sessionId = `codex-${randomUUID()}`
-    const threadId = await wire.startThread({
-      cwd: input.cwd,
-      approvalPolicy: asText(THREAD_POLICY[input.mode ?? 'interactive'].approvalPolicy, 'approval policy'),
-      ...('sandbox' in THREAD_POLICY[input.mode ?? 'interactive']
-        ? { sandbox: THREAD_POLICY[input.mode ?? 'interactive'].sandbox as string }
-        : {}),
-    })
+    const threadId = await wire.startThread(this.threadStartParams(input.mode ?? 'interactive', input.cwd))
     const now = Date.now()
     const session: CodexSession = {
       sessionId,
       threadId,
+      threadGeneration: this.generation,
       ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
       mode: input.mode ?? 'interactive',
       title: 'New Codex chat',
@@ -133,58 +161,68 @@ export class CodexCliEngine {
     if (!cleaned) throw new Error('Prompt cannot be empty')
     if (cleaned.length > 100_000) throw new Error('Prompt exceeds the 100,000 character limit')
 
-    let session = options.sessionId ? this.sessions.get(options.sessionId) : undefined
-    if (options.sessionId && !session) throw new Error(`Unknown ${CODEX_CLI_ENGINE_ID} session: ${options.sessionId}`)
-    if (!session) session = (await this.createSession({ cwd: options.cwd })).sessionId ? this.sessions.get((await Promise.resolve()) as never) : undefined
+    let session = options.sessionId !== undefined ? this.sessions.get(options.sessionId) : undefined
+    if (options.sessionId !== undefined && !session) throw new Error(`Unknown ${CODEX_CLI_ENGINE_ID} session: ${options.sessionId}`)
+    if (!session) {
+      const created = await this.createSession(options.cwd === undefined ? {} : { cwd: options.cwd })
+      session = this.sessions.get(created.sessionId)
+    }
     if (!session) throw new Error(`${CODEX_CLI_ENGINE_ID} session could not be created`)
-    if (session.running) throw new Error('This Codex chat already has an active turn')
-    if (session.turnSettled) throw new Error('This Codex chat is still settling its previous turn')
+    const activeSession = session
+    if (activeSession.running) throw new Error('This Codex chat already has an active turn')
 
-    const settled = Promise.withResolvers<{ status: string; failureMessage?: string }>()
-    session.turnSettled = settled
+    const settled = deferred<TurnOutcome>()
+    activeSession.turnSettled = settled
     try {
-      const wire = await this.ensureStarted()
-      this.recordUserMessage(session, cleaned)
-      if (!session.running) {
-        // Title once from the first prompt; later prompts keep it stable.
+      let wire = await this.ensureStarted()
+      this.recordUserMessage(activeSession, cleaned)
+      if (activeSession.title === 'New Codex chat') activeSession.title = cleaned.slice(0, 80)
+      // Threads die with their app-server child. If the child restarted since
+      // this session's thread was created (or the server lost the thread),
+      // recreate it transparently instead of failing the run.
+      if (activeSession.threadGeneration !== this.generation) {
+        await this.recreateThread(activeSession)
+        wire = await this.ensureStarted()
       }
-      if (session.title === 'New Codex chat') session.title = cleaned.slice(0, 80)
-      const turnId = await wire.startTurn(session.threadId, [cleaned])
-      session.turnId = turnId
-      session.running = true
-      session.updatedAt = Date.now()
-      this.emitFrame({ kind: 'session-status', sessionId: session.sessionId, running: true })
+      let turnId: string
+      try {
+        turnId = await wire.startTurn(activeSession.threadId, [cleaned])
+      } catch (error: unknown) {
+        if (!isThreadNotFound(error)) throw error
+        await this.recreateThread(activeSession)
+        wire = await this.ensureStarted()
+        turnId = await wire.startTurn(activeSession.threadId, [cleaned])
+      }
+      activeSession.turnId = turnId
+      activeSession.running = true
+      activeSession.updatedAt = Date.now()
+      this.emitFrame({ kind: 'session-status', sessionId: activeSession.sessionId, running: true })
       const terminal = await settled.promise
-      session.running = false
-      session.turnId = undefined
-      session.turnSettled = undefined
-      session.updatedAt = Date.now()
-      this.emitFrame({ kind: 'session-status', sessionId: session.sessionId, running: false })
+      this.finishTurn(activeSession)
       if (terminal.status === 'failed') {
         const message = terminal.failureMessage ?? 'Codex turn failed'
-        this.emitFrame({ kind: 'agent-error', sessionId: session.sessionId, message })
+        this.emitFrame({ kind: 'agent-error', sessionId: activeSession.sessionId, message })
         throw new Error(message)
       }
-      return { sessionId: session.sessionId }
+      return { sessionId: activeSession.sessionId }
     } catch (error: unknown) {
-      session.running = false
-      session.turnId = undefined
-      session.turnSettled = undefined
-      session.updatedAt = Date.now()
-      if (settled.pending) {
-        this.emitFrame({ kind: 'session-status', sessionId: session.sessionId, running: false })
+      // The turn never published (startup/startup-turn failure): clean up here.
+      if (activeSession.turnSettled === settled) {
+        this.finishTurn(activeSession)
         const message = error instanceof Error ? error.message : String(error)
-        this.emitFrame({ kind: 'agent-error', sessionId: session.sessionId, message })
+        this.emitFrame({ kind: 'agent-error', sessionId: activeSession.sessionId, message })
       }
       throw error
     }
   }
 
-  /** Interrupt the active turn of one codex-backed session. */
+  /** Interrupt the active turn of one codex-backed session (or every session). */
   async stop(sessionId?: string): Promise<void> {
-    const targets = sessionId ? [this.sessions.get(sessionId)] : [...this.sessions.values()].filter((item) => item.running)
+    const targets = sessionId !== undefined
+      ? [this.sessions.get(sessionId)]
+      : [...this.sessions.values()].filter((item) => item.running)
     for (const session of targets) {
-      if (!session?.running || !session.turnId) continue
+      if (!session?.running || session.turnId === undefined) continue
       this.wire?.interrupt(session.threadId, session.turnId)
     }
   }
@@ -206,7 +244,7 @@ export class CodexCliEngine {
 
   async close(): Promise<void> {
     this.stopping = true
-    for (const [rpcId, pending] of this.pendingApprovals) {
+    for (const [rpcId, pending] of [...this.pendingApprovals]) {
       this.pendingApprovals.delete(rpcId)
       pending.resolve({ decision: 'decline' })
     }
@@ -216,9 +254,7 @@ export class CodexCliEngine {
     this.child = undefined
     for (const session of this.sessions.values()) {
       if (!session.running) continue
-      session.running = false
-      session.turnId = undefined
-      session.turnSettled = undefined
+      this.finishTurn(session)
       this.emitFrame({ kind: 'agent-error', sessionId: session.sessionId, message: 'Codex engine stopped before the turn completed.' })
     }
     await killProcessTree(child)
@@ -227,7 +263,10 @@ export class CodexCliEngine {
 
   private async ensureStarted(): Promise<CodexAppServerWire> {
     if (this.wire && this.child) return this.wire
-    if (this.startPromise) return this.startPromise.then(() => this.wire as CodexAppServerWire)
+    if (this.startPromise) {
+      await this.startPromise
+      return this.wire as CodexAppServerWire
+    }
     this.startPromise = this.start().finally(() => {
       this.startPromise = undefined
     })
@@ -235,7 +274,39 @@ export class CodexCliEngine {
     return this.wire as CodexAppServerWire
   }
 
+  /** Wire parameters for one native thread under this run mode. */
+  private threadStartParams(mode: CodexRunMode, cwd?: string): { cwd: string; approvalPolicy: string; sandbox?: string } {
+    const policy = THREAD_POLICY[mode]
+    return {
+      cwd: cwd ?? process.cwd(),
+      approvalPolicy: asText(policy.approvalPolicy, 'approval policy'),
+      ...(policy.sandbox === undefined ? {} : { sandbox: policy.sandbox }),
+    }
+  }
+
+  /**
+   * Recreate a session's native thread on the current app-server child. Used
+   * when the child restarted (generation mismatch) or the server lost the
+   * thread; conversation history already rendered stays intact in ND.
+   */
+  private async recreateThread(session: CodexSession): Promise<void> {
+    if (session.turnId !== undefined) throw new Error('Cannot recreate a thread while a turn is active')
+    this.sessionsByThread.delete(session.threadId)
+    const wire = await this.ensureStarted()
+    session.threadId = await wire.startThread(this.threadStartParams(session.mode, session.cwd))
+    session.threadGeneration = this.generation
+    this.sessionsByThread.set(session.threadId, session)
+    session.updatedAt = Date.now()
+    // Visible in diagnostics; the chat itself continues in the fresh thread.
+    this.emitFrame({
+      kind: 'stream-error',
+      sessionId: session.sessionId,
+      message: 'Codex runtime restarted; continuing this chat in a fresh Codex thread.',
+    })
+  }
+
   private async start(): Promise<void> {
+    this.generation += 1
     const bin = codexBinPath()
     if (!bin) throw new Error('The pinned Codex CLI payload is not installed. Run the product bootstrap to install it.')
 
@@ -247,7 +318,8 @@ export class CodexCliEngine {
     }
 
     const log = this.options.log ?? ((line: string) => console.warn(line))
-    const child = spawn(argv[0] as string, argv.slice(1), {
+    const spawnProcess = this.options.spawnProcess ?? spawn
+    const child = spawnProcess(argv[0] as string, argv.slice(1), {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: environment,
       // A process group lets POSIX teardown take the whole tree down; Windows
@@ -266,12 +338,10 @@ export class CodexCliEngine {
       const message = `Codex app-server exited (${signal ?? String(code ?? 'unknown')}).`
       for (const session of this.sessions.values()) {
         if (!session.running) continue
-        session.running = false
-        session.turnId = undefined
         session.turnSettled?.resolve({ status: 'failed', failureMessage: message })
-        session.turnSettled = undefined
+        this.finishTurn(session)
       }
-      for (const [rpcId, pending] of this.pendingApprovals) {
+      for (const [rpcId, pending] of [...this.pendingApprovals]) {
         this.pendingApprovals.delete(rpcId)
         pending.resolve({ decision: 'decline' })
       }
@@ -288,7 +358,7 @@ export class CodexCliEngine {
 
   private handleNotification(method: string, params: JsonObject): void {
     const threadId = typeof params.threadId === 'string' ? params.threadId : undefined
-    const session = threadId ? this.sessionsByThread.get(threadId) : undefined
+    const session = threadId !== undefined ? this.sessionsByThread.get(threadId) : undefined
     if (!session) return
 
     if (method === 'turn/started') return
@@ -304,8 +374,9 @@ export class CodexCliEngine {
       const status = typeof turn?.status === 'string' ? turn.status : 'failed'
       const failure = isObject(turn?.error) ? turn.error : isObject(params.error) ? params.error : undefined
       const failureMessage = failure && typeof failure.message === 'string' ? failure.message : undefined
-      if (session.turnSettled && (!session.turnId || turn?.id === undefined || turn.id === session.turnId)) {
-        session.turnSettled.resolve({ status, failureMessage })
+      const matchesActiveTurn = session.turnId === undefined || turn?.id === undefined || turn.id === session.turnId
+      if (session.turnSettled && matchesActiveTurn) {
+        session.turnSettled.resolve(failureMessage === undefined ? { status } : { status, failureMessage })
       }
     }
   }
@@ -313,8 +384,7 @@ export class CodexCliEngine {
   private handleItem(session: CodexSession, started: boolean, item: JsonObject): void {
     const type = item.type
     if (type === 'agentMessage') {
-      if (started) return
-      if (item.phase === 'commentary') return
+      if (started || item.phase === 'commentary') return
       const text = typeof item.text === 'string' ? item.text : ''
       if (!text.trim()) return
       this.recordAssistantMessage(session, text)
@@ -322,10 +392,10 @@ export class CodexCliEngine {
     }
     if (type === 'reasoning' || type === 'todoList') return
 
+    const callId = typeof item.id === 'string' ? item.id : `${session.sequence + 1}`
     if (type === 'commandExecution') {
-      const callId = typeof item.id === 'string' ? item.id : `${session.sequence + 1}`
-      const command = typeof item.command === 'string' ? item.command : 'command'
       if (started) {
+        const command = typeof item.command === 'string' ? item.command : 'command'
         this.recordToolCall(session, callId, 'command execution', { command, ...(typeof item.cwd === 'string' ? { cwd: item.cwd } : {}) })
         return
       }
@@ -333,7 +403,6 @@ export class CodexCliEngine {
       return
     }
     if (type === 'fileChange') {
-      const callId = typeof item.id === 'string' ? item.id : `${session.sequence + 1}`
       if (started) {
         this.recordToolCall(session, callId, 'file change', { files: item.files ?? item.changes ?? {} })
         return
@@ -342,14 +411,12 @@ export class CodexCliEngine {
       return
     }
     if (type === 'mcpToolCall' || type === 'webSearch' || type === 'tool') {
-      const callId = typeof item.id === 'string' ? item.id : `${session.sequence + 1}`
       const name = typeof item.tool === 'string' ? item.tool : type
       if (started) {
         this.recordToolCall(session, callId, name, { arguments: item.arguments ?? item.input ?? null })
         return
       }
-      const output = item.result ?? item.output
-      this.recordToolResult(session, callId, summarize(output))
+      this.recordToolResult(session, callId, summarize(item.result ?? item.output))
       return
     }
     if (type === 'error' && !started) {
@@ -358,7 +425,7 @@ export class CodexCliEngine {
     }
   }
 
-  private handleServerRequest(method: string, params: JsonObject): Promise<unknown> {
+  private handleServerRequest(method: string, params: JsonObject): Promise<JsonObject> {
     switch (method) {
       case 'item/commandExecution/requestApproval':
       case 'item/fileChange/requestApproval':
@@ -406,14 +473,21 @@ export class CodexCliEngine {
     this.options.log?.(`[codex app-server] protocol error: ${error.message}`)
     for (const session of this.sessions.values()) {
       if (!session.running) continue
-      session.running = false
-      session.turnId = undefined
       session.turnSettled?.resolve({ status: 'failed', failureMessage: error.message })
-      session.turnSettled = undefined
-      this.emitFrame({ kind: 'session-status', sessionId: session.sessionId, running: false })
+      this.finishTurn(session)
     }
     this.child = undefined
     this.wire = undefined
+  }
+
+  private finishTurn(session: CodexSession): void {
+    const wasActive = session.running || session.turnSettled !== undefined
+    if (!wasActive) return
+    session.running = false
+    delete session.turnId
+    delete session.turnSettled
+    session.updatedAt = Date.now()
+    this.emitFrame({ kind: 'session-status', sessionId: session.sessionId, running: false })
   }
 
   private recordUserMessage(session: CodexSession, text: string): void {
@@ -458,8 +532,13 @@ export class CodexCliEngine {
   }
 }
 
-function extractOutcome(value: unknown): 'allowed-once' | 'rejected' {
-  if (isObject(value)) {
+/** Server-side "thread not found" means the child no longer knows the thread. */
+function isThreadNotFound(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /thread/i.test(message) && /not\s*found/i.test(message)
+}
+
+function extractOutcome(value: unknown): 'allowed-once' | 'rejected' {  if (isObject(value)) {
     const outcome = value.outcome
     if (outcome === 'allowed-once' || outcome === 'allow' || outcome === true) return 'allowed-once'
   }

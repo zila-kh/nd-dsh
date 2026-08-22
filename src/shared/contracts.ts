@@ -156,6 +156,47 @@ export interface WorkspaceSuggestion {
   kind: 'file' | 'directory'
 }
 
+/** One changed path from `git status --porcelain -z`: x = index status, y = worktree status. Derived from microsoft/vscode extensions/git (MIT). */
+export interface GitFileChange {
+  path: string
+  originalPath?: string | undefined
+  x: string
+  y: string
+}
+
+export interface GitCommitInfo {
+  hash: string
+  message: string
+  authorName: string
+  authorEmail: string
+  date: string
+}
+
+export interface GitBranch {
+  name: string
+  current: boolean
+  upstream?: string | undefined
+  ahead?: number | undefined
+  behind?: number | undefined
+}
+
+export interface GitStatusSnapshot {
+  root: string
+  /** Worktree root of the containing repository, or null when the workspace is not inside a Git repository. */
+  repoRoot: string | null
+  branch: string | null
+  ahead: number
+  behind: number
+  heads: GitCommitInfo[]
+  branches: GitBranch[]
+  staged: GitFileChange[]
+  unstaged: GitFileChange[]
+  untracked: GitFileChange[]
+  conflicts: GitFileChange[]
+  remotes: string[]
+  timestamp: number
+}
+
 export type HarnessState = 'stopped' | 'starting' | 'ready' | 'running' | 'error'
 
 export interface HarnessStatus {
@@ -376,6 +417,13 @@ export interface ProviderPingResult {
   at: number
 }
 
+/**
+ * Which app the titlebar inspect buttons aim at: 'external' targets another
+ * application (screen capture, loopback CDP picker); 'self' targets this
+ * ND-DSH window (window capture, in-renderer picker).
+ */
+export type InspectScope = 'external' | 'self'
+
 /** Cross-app inspect: a screen capture bridged into the ND chat session. */
 export interface AppInspectResult {
   sessionId: string
@@ -418,6 +466,34 @@ export interface ExternalElementAttachmentView {
   hover: string
 }
 
+/** Suites executable from the QA panel against the current project checkout. */
+export type QaSuiteId = 'unit' | 'e2e'
+
+export type QaRunStatus = 'idle' | 'running' | 'passed' | 'failed' | 'unavailable'
+
+export interface QaSuiteState {
+  id: QaSuiteId
+  label: string
+  runner: string
+  command: string
+  status: QaRunStatus
+  lastExitCode?: number
+  lastDurationMs?: number
+  lastFinishedAt?: number
+}
+
+export interface QaState {
+  suites: QaSuiteState[]
+  activeRun: QaSuiteId | null
+}
+
+/** One decoded stdout/stderr chunk streamed from a running suite. */
+export interface QaOutputChunk {
+  suite: QaSuiteId
+  stream: 'stdout' | 'stderr'
+  text: string
+}
+
 export interface DesktopApi {
   app: {
     info(): Promise<AppInfo>
@@ -437,8 +513,8 @@ export interface DesktopApi {
     transcript(sessionId: string): Promise<EngineSessionTranscript>
   }
   capture: {
-    inspectApp(copyToClipboard: boolean): Promise<AppInspectResult>
-    inspectElement(): Promise<ExternalElementPickResult>
+    inspectApp(copyToClipboard: boolean, scope?: InspectScope): Promise<AppInspectResult>
+    inspectElement(scope?: InspectScope): Promise<ExternalElementPickResult>
     stageElement(element: ExternalElementPickView, targetTitle: string): Promise<ExternalElementAttachmentView[]>
     elementAttachments(): Promise<ExternalElementAttachmentView[]>
     removeElement(id: string): Promise<ExternalElementAttachmentView[]>
@@ -500,6 +576,28 @@ export interface DesktopApi {
     state(): Promise<ThemeState>
     set(mode: ThemeMode): Promise<ThemeState>
     onChanged(listener: (state: ThemeState) => void): () => void
+  }
+  git: {
+    state(): Promise<GitStatusSnapshot>
+    refresh(): Promise<GitStatusSnapshot>
+    stage(relativePaths: string[]): Promise<GitStatusSnapshot>
+    unstage(relativePaths: string[]): Promise<GitStatusSnapshot>
+    discard(relativePaths: string[]): Promise<GitStatusSnapshot>
+    commit(message: string): Promise<GitStatusSnapshot>
+    diff(relativePath: string, staged?: boolean): Promise<string>
+    checkout(branch: string): Promise<GitStatusSnapshot>
+    createBranch(name: string): Promise<GitStatusSnapshot>
+    push(): Promise<GitStatusSnapshot>
+    pull(): Promise<GitStatusSnapshot>
+    fetch(): Promise<GitStatusSnapshot>
+    onState(listener: (state: GitStatusSnapshot) => void): () => void
+  }
+  qa: {
+    state(): Promise<QaState>
+    run(suite: QaSuiteId): Promise<QaState>
+    stop(): Promise<QaState>
+    onState(listener: (state: QaState) => void): () => void
+    onOutput(listener: (chunk: QaOutputChunk) => void): () => void
   }
 }
 
@@ -564,4 +662,22 @@ export const IPC = {
   captureStageElement: 'capture:stage-element',
   captureElementAttachments: 'capture:element-attachments',
   captureRemoveElement: 'capture:remove-element',
+  gitState: 'git:state',
+  gitRefresh: 'git:refresh',
+  gitStage: 'git:stage',
+  gitUnstage: 'git:unstage',
+  gitDiscard: 'git:discard',
+  gitCommit: 'git:commit',
+  gitDiff: 'git:diff',
+  gitCheckout: 'git:checkout',
+  gitCreateBranch: 'git:create-branch',
+  gitPush: 'git:push',
+  gitPull: 'git:pull',
+  gitFetch: 'git:fetch',
+  gitStateEvent: 'git:state-event',
+  qaState: 'qa:state',
+  qaRun: 'qa:run',
+  qaStop: 'qa:stop',
+  qaStateEvent: 'qa:state-event',
+  qaOutputEvent: 'qa:output-event',
 } as const

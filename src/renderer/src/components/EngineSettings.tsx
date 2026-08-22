@@ -56,7 +56,10 @@ export function EngineSettings({ onError }: EngineSettingsProps) {
           <div><strong>ND Harness</strong><span>Primary durable runtime for ND agents, browser, MCP, skills, approvals, and provider-routed models.</span></div>
         </div>
         <div className="settings-row">
-          <div><strong>Codex CLI</strong><span>Official Codex app-server is available as a one-shot coding delegate. Codex account, model, project trust, and authentication remain native to Codex.</span></div>
+          <div><strong>Codex CLI (direct)</strong><span>ND spawns and manages the official Codex app-server: streamed chat threads in the workbench, approval prompts, and workspace-scoped unattended runs. Codex account, model, project trust, and authentication remain native to Codex.</span></div>
+        </div>
+        <div className="settings-row">
+          <div><strong>Codex (delegated)</strong><span>Fallback route where the ND runtime delegates one-shot implementation work through its pinned Codex adapter. Useful when the direct engine is unavailable.</span></div>
         </div>
       </section>
     </div>

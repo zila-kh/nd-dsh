@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import App from './App'
 import './styles.css'
 import './component.css'
+import './index.css'
 
 // Apply a best-effort system theme before the preload-backed theme service
 // returns the user's persisted preference.

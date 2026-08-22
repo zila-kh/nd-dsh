@@ -1,4 +1,4 @@
-import { desktopCapturer, screen } from 'electron'
+import { desktopCapturer, screen, type BrowserWindow } from 'electron'
 
 /**
  * Cross-application UI capture. The browser pane has DOM-level inspection
@@ -44,5 +44,26 @@ export async function capturePrimaryDisplay(): Promise<AppCaptureImage> {
     width: size.width,
     height: size.height,
     displayLabel: `${primary.size.width}x${primary.size.height}`,
+  }
+}
+
+/** Self-inspect: render this ND-DSH window's own contents, no screen capture. */
+export async function captureSelfWindow(window: BrowserWindow): Promise<AppCaptureImage> {
+  if (window.isDestroyed() || window.webContents.isDestroyed()) throw new Error('The ND-DSH window is no longer available')
+  const image = await window.webContents.capturePage()
+  if (image.isEmpty()) throw new Error('The window capture returned an empty image')
+  const full = image.getSize()
+  const scale = Math.min(1, MAX_CAPTURE_WIDTH / Math.max(1, full.width))
+  const scaled = scale < 1 ? image.resize({ width: Math.round(full.width * scale) }) : image
+  const png = scaled.toPNG()
+  if (png.length === 0) throw new Error('The window capture returned an empty image')
+  const size = scaled.getSize()
+  return {
+    data: png.toString('base64'),
+    mediaType: 'image/png',
+    name: `self-capture-${new Date().toISOString().replace(/[:.]/g, '-')}.png`,
+    width: size.width,
+    height: size.height,
+    displayLabel: `${full.width}x${full.height}`,
   }
 }

@@ -1,25 +1,28 @@
 import { lazy, Suspense, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import type { BrowserState, ExternalElementPickView, HarnessStatus, ThemeMode, ThemeState, WorkspaceFile, WorkspaceState } from '../../shared/contracts'
+import type { BrowserState, ExternalElementPickView, HarnessStatus, InspectScope, ThemeMode, ThemeState, WorkspaceFile, WorkspaceState } from '../../shared/contracts'
 import { BrowserPane } from './components/BrowserPane'
 import { ChatPanel } from './components/ChatPanel'
 import { DesignView } from './components/DesignView'
+import { DiffView } from './components/DiffView'
 import { EditorPane } from './components/EditorPane'
 import { Explorer } from './components/Explorer'
-import { BrowserIcon, CameraIcon, CloseIcon, CrosshairIcon, FileIcon, SidebarToggleIcon, SparkIcon } from './components/Icons'
+import { BrowserIcon, CameraIcon, CloseIcon, CrosshairIcon, ExternalIcon, FileIcon, MonitorIcon, SidebarToggleIcon, SparkIcon } from './components/Icons'
 import { OrganizationDashboard } from './components/OrganizationDashboard'
+import { QaView } from './components/QaView'
 import { RuntimePrompts } from './components/RuntimePrompts'
 import { ThemeToggle } from './components/ThemeToggle'
 import './styles/design.css'
 import './styles/organization.css'
 import './styles/product-shell.css'
+import './styles/qa.css'
 
 const SettingsPane = lazy(() => import('./components/SettingsPane').then((module) => ({ default: module.SettingsPane })))
 
-type ProductView = 'company' | 'agent' | 'design' | 'settings'
+type ProductView = 'company' | 'agent' | 'design' | 'qa' | 'settings'
 
 type AgentPane = 'files' | 'browser'
 
-const VIEWS: ProductView[] = ['company', 'agent', 'design', 'settings']
+const VIEWS: ProductView[] = ['company', 'agent', 'design', 'qa', 'settings']
 
 function viewFromHash(): ProductView {
   const route = window.location.hash.replace(/^#\/?/, '').split(/[/?]/)[0]
@@ -35,6 +38,7 @@ export default function App() {
   const [browserState, setBrowserState] = useState<BrowserState | null>(null)
   const [harnessStatus, setHarnessStatus] = useState<HarnessStatus | null>(null)
   const [selectedFile, setSelectedFile] = useState<WorkspaceFile | null>(null)
+  const [activeDiff, setActiveDiff] = useState<{ relativePath: string; staged: boolean } | null>(null)
   const [view, setView] = useState<ProductView>(viewFromHash)
   const [agentPane, setAgentPane] = useState<AgentPane>('files')
   const [chatWidth, setChatWidth] = useState(580)
@@ -44,7 +48,9 @@ export default function App() {
   const [toast, setToast] = useState<string>()
   const [theme, setTheme] = useState<ThemeState | null>(null)
   const [appInspectCountdown, setAppInspectCountdown] = useState<number | null>(null)
+  const [appInspectInFlight, setAppInspectInFlight] = useState(false)
   const [elementInspectActive, setElementInspectActive] = useState(false)
+  const [inspectScope, setInspectScope] = useState<InspectScope>('external')
   const [pendingPick, setPendingPick] = useState<{ element: ExternalElementPickView; targetTitle: string; shortName: string; hover: string } | null>(null)
   const [elementAttachmentVersion, setElementAttachmentVersion] = useState(0)
   const appInspectTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
@@ -52,10 +58,25 @@ export default function App() {
   // Cross-app inspect: after a short countdown (so the user can focus the
   // target app), the trusted main process captures the screen, bridges the
   // screenshot into the ND chat session, and copies it to the clipboard.
+  // In 'self' scope there is nothing to switch to, so capture immediately.
   const startAppInspect = (): void => {
-    if (appInspectCountdown !== null) return
+    if (appInspectCountdown !== null || appInspectInFlight) return
+    const selfScope = inspectScope === 'self'
     let remaining = 3
-    setAppInspectCountdown(remaining)
+    if (!selfScope) setAppInspectCountdown(remaining)
+    const fire = (): void => {
+      setAppInspectInFlight(true)
+      void window.ndDsh.capture.inspectApp(true, inspectScope)
+        .then((result) => setToast(result.copiedToClipboard
+          ? `Screenshot of ${selfScope ? 'this app' : 'the screen'} sent to the agent and copied to the clipboard.`
+          : `Screenshot of ${selfScope ? 'this app' : 'the screen'} sent to the agent.`))
+        .catch((cause) => setToast(errorMessage(cause)))
+        .finally(() => setAppInspectInFlight(false))
+    }
+    if (selfScope) {
+      fire()
+      return
+    }
     appInspectTimer.current = setInterval(() => {
       remaining -= 1
       if (remaining > 0) {
@@ -65,11 +86,7 @@ export default function App() {
       clearInterval(appInspectTimer.current)
       appInspectTimer.current = undefined
       setAppInspectCountdown(null)
-      void window.ndDsh.capture.inspectApp(true)
-        .then((result) => setToast(result.copiedToClipboard
-          ? 'Screenshot sent to the agent and copied to the clipboard.'
-          : 'Screenshot sent to the agent.'))
-        .catch((cause) => setToast(errorMessage(cause)))
+      fire()
     }, 1_000)
   }
 
@@ -94,13 +111,14 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   })
 
-  // Element-level inspect for an external Electron app: ND injects a picker
-  // through the target's loopback debug port; the picked element is offered
+  // Element-level inspect: in 'external' scope the picker is injected into
+  // an external Electron app over its loopback debug port; in 'self' scope
+  // it runs inside this app's own renderer. The picked element is offered
   // as an Add-to-chat chip (multiple chips can queue before one prompt).
   const startElementInspect = (): void => {
     if (elementInspectActive) return
     setElementInspectActive(true)
-    void window.ndDsh.capture.inspectElement()
+    void window.ndDsh.capture.inspectElement(inspectScope)
       .then((result) => {
         if (result.outcome === 'picked' && result.element && result.targetTitle && result.shortName && result.hover) {
           setPendingPick({
@@ -144,6 +162,7 @@ export default function App() {
     const offWorkspace = window.ndDsh.workspace.onState((next) => {
       setWorkspace(next)
       setSelectedFile(null)
+      setActiveDiff(null)
     })
     const offBrowser = window.ndDsh.browser.onState(setBrowserState)
     const offHarness = window.ndDsh.harness.onStatus(setHarnessStatus)
@@ -203,16 +222,22 @@ export default function App() {
   const changeWorkspace = (next: WorkspaceState): void => {
     setWorkspace(next)
     setSelectedFile(null)
+    setActiveDiff(null)
   }
 
   const openFile = async (path: string): Promise<void> => {
     try {
       setSelectedFile(await window.ndDsh.workspace.read(path))
+      setActiveDiff(null)
       setAgentPane('files')
       setView('agent')
     } catch (cause) {
       setToast(errorMessage(cause))
     }
+  }
+
+  const openDiff = (relativePath: string, staged: boolean): void => {
+    setActiveDiff({ relativePath, staged })
   }
 
   const startChatResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
@@ -241,6 +266,7 @@ export default function App() {
     { id: 'company', label: 'Company', icon: <span className="product-nav-monogram">CO</span> },
     { id: 'agent', label: 'Agent', icon: <SparkIcon /> },
     { id: 'design', label: 'Design', icon: <span className="product-nav-monogram">DE</span> },
+    { id: 'qa', label: 'QA', icon: <span className="product-nav-monogram">QA</span> },
     { id: 'settings', label: 'Settings', icon: <span className="product-nav-monogram">SE</span> },
   ]
 
@@ -279,16 +305,29 @@ export default function App() {
         <div className="product-runtime">
           {workspace?.binding === 'project' ? <span className="workspace-sync-badge">SYNC</span> : null}
           <button
+            className={`titlebar-sidebar-toggle ${inspectScope === 'self' ? 'scope-active' : ''}`}
+            title={inspectScope === 'external'
+              ? 'Inspect target: external apps — the camera captures the screen, the crosshair needs a debug port. Click to target this ND-DSH app instead.'
+              : 'Inspect target: this ND-DSH app — the camera captures this window, the crosshair picks elements here. Click to target external apps instead.'}
+            onClick={() => setInspectScope((scope) => (scope === 'external' ? 'self' : 'external'))}
+          >
+            {inspectScope === 'external' ? <ExternalIcon /> : <MonitorIcon />}
+          </button>
+          <button
             className="titlebar-sidebar-toggle"
-            title="Inspect any app (Ctrl+Alt+C) — captures the screen in 3s, sends it to the ND chat agent, and copies it to the clipboard"
-            disabled={appInspectCountdown !== null}
+            title={inspectScope === 'external'
+              ? 'Inspect any app (Ctrl+Alt+C) — captures the screen in 3s, sends it to the ND chat agent, and copies it to the clipboard'
+              : 'Inspect this app (Ctrl+Alt+C) — captures this ND-DSH window, sends it to the ND chat agent, and copies it to the clipboard'}
+            disabled={appInspectCountdown !== null || appInspectInFlight}
             onClick={startAppInspect}
           >
             <CameraIcon />
           </button>
           <button
             className="titlebar-sidebar-toggle"
-            title="Inspect an element in an external Electron app (Ctrl+Alt+E) — launch it with --remote-debugging-port=9333, pick the element there, then Add to chat"
+            title={inspectScope === 'external'
+              ? 'Inspect an element in an external Electron app (Ctrl+Alt+E) — launch it with --remote-debugging-port=9333, pick the element there, then Add to chat'
+              : 'Inspect an element in this app (Ctrl+Alt+E) — hover and click any element in ND-DSH, then Add to chat'}
             disabled={elementInspectActive}
             onClick={startElementInspect}
           >
@@ -352,13 +391,24 @@ export default function App() {
                       {agentPane === 'files' ? (
                         <div className="product-files-layout">
                           <div className="product-editor-wrap">
-                            <EditorPane file={selectedFile} onAgentPrompt={askAgent} onError={setToast} />
+                            {activeDiff ? (
+                              <DiffView
+                                relativePath={activeDiff.relativePath}
+                                staged={activeDiff.staged}
+                                onClose={() => setActiveDiff(null)}
+                                onError={setToast}
+                              />
+                            ) : (
+                              <EditorPane file={selectedFile} onAgentPrompt={askAgent} onError={setToast} />
+                            )}
                           </div>
                           <Explorer
                             workspace={workspace}
                             selectedPath={selectedFile?.relativePath}
                             onWorkspaceChanged={changeWorkspace}
                             onOpenFile={(path) => void openFile(path)}
+                            onOpenDiff={openDiff}
+                            onError={setToast}
                           />
                         </div>
                       ) : (
@@ -386,6 +436,10 @@ export default function App() {
               onAskAgent={askAgent}
               onError={setToast}
             />
+          </section>
+
+          <section className={`product-view ${view === 'qa' ? 'active' : ''}`} aria-hidden={view !== 'qa'}>
+            <QaView active={view === 'qa'} onError={setToast} />
           </section>
 
           <section className={`product-view ${view === 'settings' ? 'active' : ''}`} aria-hidden={view !== 'settings'}>
@@ -423,7 +477,9 @@ export default function App() {
         </div>
       ) : elementInspectActive ? (
         <div className="toast" role="status">
-          <span>Element picker active — switch to your Electron app and click an element (Esc cancels)</span>
+          <span>{inspectScope === 'self'
+            ? 'Element picker active — click any element in this ND-DSH window (Esc cancels)'
+            : 'Element picker active — switch to your Electron app and click an element (Esc cancels)'}</span>
         </div>
       ) : toast ? <div className="toast" role="alert"><span>{toast}</span><button onClick={() => setToast(undefined)}><CloseIcon /></button></div> : null}
     </div>

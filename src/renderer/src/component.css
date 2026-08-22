@@ -405,6 +405,25 @@
   width: 14px;
   height: 14px;
 }
+/* Catalog-driven extra chat engines (e.g. Codex CLI) render as quieter siblings. */
+.new-session-btn.secondary {
+  background: transparent;
+  color: var(--text-faint, var(--text-soft));
+  border-style: dashed;
+}
+
+/* Engine badge on non-harness session cards. */
+.thread-engine-chip {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border-soft);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-soft);
+}
 
 /* Workspaces Section & Settings CTA */
 .workspaces-section {
@@ -876,6 +895,11 @@
   white-space: nowrap;
   cursor: pointer;
   flex-shrink: 0;
+}
+/* Non-interactive engine label replacing the permission menu on engine threads. */
+span.permission-badge.static {
+  cursor: default;
+  opacity: 0.85;
 }
 .permission-badge:hover {
   background: rgba(245, 158, 11, 0.18);
@@ -1397,3 +1421,39 @@
   background: rgba(167, 139, 250, 0.25);
   color: var(--text);
 }
+
+/* Source Control — git CLI plumbing derived from microsoft/vscode extensions/git (MIT) */
+.scm-panel{display:flex;flex-direction:column;width:100%;height:100%;min-height:0;overflow:hidden}
+.scm-panel .sidebar-placeholder{flex:1}
+.scm-toolbar{display:flex;align-items:center;gap:4px;padding:6px 8px;border-bottom:1px solid var(--border-soft)}
+.scm-branch-select{flex:1;min-width:0;height:24px;padding:0 6px;border:1px solid var(--border);border-radius:5px;background:var(--button-bg);color:var(--text-soft);font-size:11px}
+.scm-icon-button{display:grid;width:24px;height:24px;flex:0 0 24px;place-items:center;border:1px solid var(--border);border-radius:5px;background:var(--button-bg);color:var(--muted);cursor:pointer}.scm-icon-button:hover{background:var(--hover-soft);color:var(--text)}.scm-icon-button svg{width:12px;height:12px}
+.scm-branch-form{display:flex;gap:4px;padding:6px 8px;border-bottom:1px solid var(--border-soft)}
+.scm-branch-form input{flex:1;min-width:0;height:24px;padding:0 7px;border:1px solid var(--border-strong);border-radius:5px;background:transparent;color:var(--text);font-size:11px;outline:0}.scm-branch-form input:focus{border-color:var(--accent-border-strong)}
+.scm-sync-row{display:flex;align-items:center;gap:5px;padding:6px 8px;border-bottom:1px solid var(--border-soft);color:var(--faint);font-size:10px}
+.scm-flex{flex:1}
+.scm-badge{padding:1px 6px;border-radius:8px;background:var(--accent-soft);color:var(--accent);font-size:9px;font-weight:700}.scm-badge.down{background:var(--warning-soft);color:var(--warning-text)}
+.scm-text-button{height:22px;padding:0 8px;border:1px solid var(--border);border-radius:5px;background:var(--button-bg);color:var(--text-soft);font-size:10px;cursor:pointer}.scm-text-button:hover:not(:disabled){background:var(--button-bg-hover);color:var(--text)}.scm-text-button:disabled{opacity:.45;cursor:default}
+.scm-commit-box{display:flex;flex-direction:column;gap:6px;padding:8px;border-bottom:1px solid var(--border-soft)}
+.scm-commit-box textarea{width:100%;min-height:54px;resize:none;padding:7px 8px;border:1px solid var(--border-strong);border-radius:6px;background:var(--composer-bg);color:var(--text);font-size:11px;line-height:1.45;outline:0}.scm-commit-box textarea:focus{border-color:var(--accent-border-strong)}.scm-commit-box textarea::placeholder{color:var(--faint)}
+.scm-commit-button{height:24px;border:1px solid var(--accent-border);border-radius:6px;background:var(--accent-soft);color:var(--accent-strong);font-size:10px;font-weight:650;cursor:pointer}.scm-commit-button:hover:not(:disabled){filter:brightness(1.08)}.scm-commit-button:disabled{opacity:.45;cursor:default}
+.scm-scroll{flex:1;min-height:0;overflow:auto;padding-bottom:10px}
+.scm-group-label{display:flex;align-items:center;gap:5px;height:24px;padding:0 10px;color:var(--faint);font-size:9px;font-weight:650;letter-spacing:.08em}.scm-group-label .count{color:var(--muted)}
+.scm-row{display:flex;align-items:center;gap:6px;height:23px;padding:0 8px 0 10px;font-size:12px;color:var(--text-soft);cursor:default}.scm-row:hover{background:var(--hover-soft);color:var(--text)}
+.scm-row-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.scm-row-dir{overflow:hidden;color:var(--fainter);font-size:10px;text-overflow:ellipsis;white-space:nowrap}
+.scm-row-actions{display:none;flex:0 0 auto;align-items:center;gap:2px;margin-left:auto}.scm-row:hover .scm-row-actions{display:flex}.scm-row-actions .scm-icon-button{width:18px;height:18px;flex-basis:18px;border:0;background:transparent}.scm-row-actions .scm-icon-button:hover{background:var(--hover-soft)}.scm-row-actions .scm-icon-button.armed{color:var(--danger)}
+.scm-status{display:grid;width:14px;height:14px;flex:0 0 14px;place-items:center;border-radius:3px;font-family:"SFMono-Regular",Consolas,monospace;font-size:9px;font-weight:700}
+.scm-status.modified{background:var(--warning-soft);color:var(--warning-text)}
+.scm-status.added{background:var(--accent-soft);color:var(--accent-strong)}
+.scm-status.deleted{background:var(--danger-soft);color:var(--danger)}
+.scm-status.renamed{background:var(--blue-soft-2);color:var(--blue-text)}
+.scm-status.conflict{background:var(--danger);color:var(--text-strong)}
+.scm-credit{margin:0;padding:7px 10px;border-top:1px solid var(--border-soft);color:var(--fainter);font-size:9px}
+.diff-view{position:relative}
+.diff-close{display:grid;width:22px;height:22px;flex:0 0 22px;place-items:center;margin:4px 6px 4px auto;border:0;border-radius:5px;background:transparent;color:var(--faint);cursor:pointer}.diff-close:hover{background:var(--hover-soft);color:var(--text)}.diff-close svg{width:12px;height:12px}
+.diff-code{margin:0;padding:12px 16px 40px;background:var(--code-bg);color:var(--text-soft);font-family:"SFMono-Regular",Consolas,monospace;font-size:11px;line-height:1.62;white-space:pre;overflow:visible}
+.diff-add{display:block;background:var(--accent-soft);color:var(--text)}
+.diff-del{display:block;background:var(--danger-soft);color:var(--text)}
+.diff-hunk{display:block;color:var(--blue-text)}
+.diff-meta{display:block;color:var(--fainter)}
+.diff-ctx{display:block}

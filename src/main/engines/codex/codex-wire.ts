@@ -65,7 +65,7 @@ export class CodexAppServerWire {
       capabilities: { experimentalApi: false, requestAttestation: false },
     }).then((result) => {
       asRecord(result, 'initialize response')
-      this.notify('initialized')
+      this.send({ method: 'initialized' })
     }, (error: Error) => this.fail(error))
   }
 

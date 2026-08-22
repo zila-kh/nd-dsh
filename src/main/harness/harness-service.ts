@@ -21,7 +21,6 @@ const COMPAT_DEFAULT_PROVIDER = 'deepseek-official'
 const COMPAT_DEFAULT_MODEL = 'deepseek-v4-flash'
 const READY_TIMEOUT_MS = 120_000
 const READY_POLL_MS = 300
-const READY_URL_PATTERN = /dsh web:\s+(https?:\/\/\S+)/
 const UI_CONTEXT_MARKER = '\n\n[ND-DSH LIVE UI CONTEXT]'
 
 /**
@@ -123,12 +122,13 @@ export class HarnessService {
         ]
       : textContent
 
-    let result = await gateway.rpc('session.prompt', { sessionId, mode: 'queue', content })
+    const promptRpc = await this.rpcWithRecovery(this.gateway ?? gateway, 'session.prompt', { sessionId, mode: 'queue', content })
+    let result = promptRpc.result
     // The pinned Harness rejects unsupported image modalities before publishing
     // the user event. Retrying text-only preserves the annotation geometry and
     // source references for text-only routes without duplicating a turn.
     if (!result.ok && promptImage && isUnsupportedImageResult(result)) {
-      result = await gateway.rpc('session.prompt', { sessionId, mode: 'queue', content: textContent })
+      result = (await this.rpcWithRecovery(promptRpc.gateway, 'session.prompt', { sessionId, mode: 'queue', content: textContent })).result
     }
     if (!result.ok) throw new Error(rpcFailureMessage('session.prompt', result))
 
@@ -142,7 +142,7 @@ export class HarnessService {
   /** Create a session on the workspace root (the deployment default preset applies). */
   async createSession(): Promise<string> {
     const gateway = await this.ensureStarted(true)
-    const result = await gateway.rpc('session.create', { cwd: this.workspace.state().root })
+    const { result } = await this.rpcWithRecovery(gateway, 'session.create', { cwd: this.workspace.state().root })
     if (!result.ok) throw new Error(rpcFailureMessage('session.create', result))
     const sessionId = (result.value as { sessionId?: unknown } | undefined)?.sessionId
     if (typeof sessionId !== 'string') throw new Error('session.create returned no session id')
@@ -153,15 +153,8 @@ export class HarnessService {
 
   /** Whitelisted gateway call for read-oriented UI needs (sessions, models, presets…). */
   async gatewayRpc(method: string, payload?: unknown): Promise<GatewayRpcResult> {
-    const gateway = await this.ensureStarted()
-    let result = await gateway.rpc(method, payload)
-    if (!result.ok && result.error?.code === 'gateway-unreachable') {
-      // The runtime child may have exited and been replaced between calls;
-      // retry once on the fresh gateway so a restart never surfaces as a
-      // renderer-facing transport error.
-      const replacement = await this.ensureStarted()
-      if (replacement !== gateway) result = await replacement.rpc(method, payload)
-    }
+    const started = await this.ensureStarted()
+    const { result } = await this.rpcWithRecovery(started, method, payload)
     return method === 'session.history' ? sanitizeHistoryResult(result) : result
   }
 
@@ -257,6 +250,28 @@ export class HarnessService {
     return this.startPromise
   }
 
+  /**
+   * One gateway call with a single transparent recovery attempt: the runtime
+   * child may have exited (or been replaced) between calls, and a dead
+   * transport must surface as restart-and-retry, never as a raw fetch failure
+   * through IPC. Returns the client the result belongs to, so follow-up RPCs
+   * in the same flow stay on the live connection.
+   */
+  private async rpcWithRecovery(
+    active: GatewayClient,
+    method: string,
+    payload: unknown,
+  ): Promise<{ gateway: GatewayClient; result: GatewayRpcResult }> {
+    const first = await active.rpc(method, payload)
+    if (first.ok || first.error?.code !== 'gateway-unreachable') return { gateway: active, result: first }
+    if (this.gateway === active) {
+      await this.close()
+    }
+    const replacement = await this.ensureStarted()
+    if (replacement === active) return { gateway: active, result: first }
+    return { gateway: replacement, result: await replacement.rpc(method, payload) }
+  }
+
   private async start(): Promise<GatewayClient> {
     // close() marks the current child as expected-to-stop; a fresh child must
     // return to normal unexpected-exit detection.
@@ -337,35 +352,24 @@ export class HarnessService {
     return gateway
   }
 
+  /**
+   * Readiness requires an answered HTTP request. The child prints its banner
+   * before the listener binds, so stdout alone proves nothing; polling is the
+   * only trustworthy signal.
+   */
   private async waitUntilReady(child: ChildProcess, baseUrl: string): Promise<void> {
     const deadline = Date.now() + READY_TIMEOUT_MS
-    const printedUrl = new Promise<void>((resolve) => {
-      if (!child.stdout) return resolve()
-      const onData = (chunk: string): void => {
-        const match = READY_URL_PATTERN.exec(chunk)
-        if (match) {
-          child.stdout?.off('data', onData)
-          resolve()
-        }
+    while (Date.now() < deadline) {
+      if (child.exitCode !== null) break
+      try {
+        const response = await fetch(baseUrl, { signal: AbortSignal.timeout(2_000) })
+        if (response.status < 500) return
+      } catch {
+        // Not accepting connections yet.
       }
-      child.stdout.on('data', onData)
-      // The URL line is a readiness signal only; a child that never prints it
-      // still resolves through the poll below, so keep the listener harmless.
-    })
-    const polled = (async () => {
-      while (Date.now() < deadline) {
-        if (child.exitCode !== null) break
-        try {
-          const response = await fetch(baseUrl, { signal: AbortSignal.timeout(2_000) })
-          if (response.status < 500) return
-        } catch {
-          // Not up yet.
-        }
-        await new Promise((resolve) => setTimeout(resolve, READY_POLL_MS))
-      }
-      throw new Error('Runtime did not become ready within the timeout')
-    })()
-    await Promise.race([printedUrl, polled])
+      await new Promise((resolve) => setTimeout(resolve, READY_POLL_MS))
+    }
+    throw new Error('Runtime did not become ready within the timeout')
   }
 
   private handleEvent(frame: DshEventFrame): void {

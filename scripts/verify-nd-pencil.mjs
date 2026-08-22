@@ -126,9 +126,14 @@ if (existsSync(bootstrapPath)) {
   }
 }
 
-const designContractsPath = join(root, 'src', 'shared', 'design.ts')
-if (existsSync(designContractsPath)) {
-  const contracts = await fs.readFile(designContractsPath, 'utf8')
+// The ND Pencil contract spans two shared modules: the design surface
+// (design.ts) and the sandboxed child-view host bridge (nd-pencil-host.ts).
+const designContractPaths = [
+  join(root, 'src', 'shared', 'design.ts'),
+  join(root, 'src', 'shared', 'nd-pencil-host.ts'),
+].filter((path) => existsSync(path))
+if (designContractPaths.length > 0) {
+  const contracts = (await Promise.all(designContractPaths.map((path) => fs.readFile(path, 'utf8')))).join('\n')
   for (const needle of ["engine: 'nd-pencil'", 'ND_PENCIL_HOST_IPC', 'freeformOpen', 'freeformSave', 'freeformSetVisible']) {
     if (!contracts.includes(needle)) errors.push(`ND Pencil design contract is missing ${needle}`)
   }

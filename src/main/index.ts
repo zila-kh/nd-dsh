@@ -4,7 +4,7 @@ import { createServer } from 'node:net'
 import { dirname, join } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { IPC } from '../shared/contracts.js'
+import { IPC, type DshEventFrame } from '../shared/contracts.js'
 import { DESIGN_IPC } from '../shared/design.js'
 import { ORGANIZATION_IPC } from '../shared/organization.js'
 import { projectRoot } from './app-paths.js'
@@ -16,8 +16,11 @@ import { registerDesignIpc } from './design/ipc.js'
 import { NdPencilController } from './design/nd-pencil-controller.js'
 import { DshSurfaceController } from './dsh/dsh-surface.js'
 import { pickFreePort } from './dsh/gateway-client.js'
+import { CodexCliEngine } from './engines/codex/codex-cli-engine.js'
 import { EngineAssignmentStore } from './engines/engine-assignment-store.js'
 import { CodingEngineRegistry } from './engines/coding-engine-registry.js'
+import { EngineSessionRouter } from './engines/engine-session-router.js'
+import { GitService } from './git/git-service.js'
 import { HarnessService } from './harness/harness-service.js'
 import { registerIpc } from './ipc.js'
 import { OrganizationApprovalGate } from './organization/approval-gate.js'
@@ -25,6 +28,7 @@ import { registerOrganizationIpc } from './organization/ipc.js'
 import { OrganizationOrchestrator } from './organization/orchestrator.js'
 import { OrganizationStore } from './organization/store.js'
 import { ProviderStore } from './providers.js'
+import { QaService } from './qa/qa-service.js'
 import { ThemeService } from './theme.js'
 import { ProjectWorkspaceCoordinator } from './workspace/project-workspace-coordinator.js'
 import { WorkspaceRegistry } from './workspace/workspace-registry.js'
@@ -39,6 +43,7 @@ app.enableSandbox()
 
 let mainWindow: BrowserWindow | undefined
 let activeHarness: HarnessService | undefined
+let activeCodexEngine: CodexCliEngine | undefined
 let activeNdPencil: NdPencilController | undefined
 let shutdownStarted = false
 const closingServices = new Set<Promise<void>>()
@@ -92,6 +97,9 @@ async function createWindow(cdpPort: number): Promise<void> {
   const dshSurface = new DshSurfaceController(window)
   const externalElements = new ExternalElementStage()
   const harness = new HarnessService(workspace, browser, providers, externalElements)
+  const codexEngine = new CodexCliEngine({ log: (line) => console.log(line) })
+  activeCodexEngine = codexEngine
+  const engineRouter = new EngineSessionRouter(harness, codexEngine, workspace)
   const organizationStore = new OrganizationStore(join(userData, 'organization.json'))
   const interruptedRuns = await organizationStore.reconcileInterruptedRuns()
   if (interruptedRuns > 0) console.warn(`Recovered ${interruptedRuns} interrupted organization run(s) from the previous app session.`)
@@ -100,9 +108,11 @@ async function createWindow(cdpPort: number): Promise<void> {
   const design = new DesignService(workspace, browser)
   const ndPencil = new NdPencilController(window, workspace, projectRoot(), ndPencilPreload)
   await ndPencil.initialize()
-  const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines)
+  const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter)
   const approvalGate = new OrganizationApprovalGate(organizationStore, harness)
-  const disposeIpc = registerIpc({ window, browser, dshSurface, engines, harness, projectWorkspace, workspaces, theme, providers, externalElements })
+  const git = new GitService(workspace)
+  const qa = new QaService()
+  const disposeIpc = registerIpc({ window, browser, dshSurface, engines, engineRouter, harness, projectWorkspace, workspaces, theme, providers, externalElements, git, qa })
   const disposeDesignIpc = registerDesignIpc(window, design, ndPencil)
   const disposeOrganizationIpc = registerOrganizationIpc(window, organizationStore, organization, projectWorkspace)
   mainWindow = window
@@ -117,6 +127,11 @@ async function createWindow(cdpPort: number): Promise<void> {
     const rootChanged = lastWorkspaceRoot !== state.root
     lastWorkspaceRoot = state.root
     if (rootChanged) void ndPencil.setVisible(false)
+    if (rootChanged) {
+      void git.handleWorkspaceChanged().catch((error) => {
+        console.warn('Git workspace synchronization failed:', error instanceof Error ? error.message : String(error))
+      })
+    }
     if (!window.isDestroyed()) window.webContents.send(IPC.workspaceStateEvent, state)
     void design.handleWorkspaceChanged(state).catch((error) => {
       console.warn('Design workspace synchronization failed:', error instanceof Error ? error.message : String(error))
@@ -124,6 +139,17 @@ async function createWindow(cdpPort: number): Promise<void> {
     void ndPencil.handleWorkspaceChanged(state.root).catch((error) => {
       console.warn('ND Pencil workspace synchronization failed:', error instanceof Error ? error.message : String(error))
     })
+  })
+  git.setStateListener((state) => {
+    if (!window.isDestroyed()) window.webContents.send(IPC.gitStateEvent, state)
+  })
+  void git.refresh().catch((error) => {
+    console.warn('Initial Git status failed:', error instanceof Error ? error.message : String(error))
+  })
+  qa.setListener((event) => {
+    if (window.isDestroyed()) return
+    if (event.kind === 'state') window.webContents.send(IPC.qaStateEvent, event.state)
+    else window.webContents.send(IPC.qaOutputEvent, event.chunk)
   })
   theme.attach(window, (color) => {
     browser.setBackgroundColor(color)
@@ -146,34 +172,39 @@ async function createWindow(cdpPort: number): Promise<void> {
   dshSurface.setStateListener((state) => {
     if (!window.isDestroyed()) window.webContents.send(IPC.dshViewStateEvent, state)
   })
+  // Every engine's translated frames share one fan-out: the organization
+  // orchestrator consumes run semantics, and the renderer sees the same
+  // DshEventFrame vocabulary regardless of which engine produced it.
+  const dispatchEngineFrame = (frame: DshEventFrame): void => {
+    void organization.handleHarnessEvent(frame).catch((error) => {
+      console.error('Organization event handling failed:', error)
+    })
+
+    if (frame.kind === 'approval-requested') {
+      void approvalGate.shouldForward(frame)
+        .then((forward) => {
+          if (forward && !window.isDestroyed()) window.webContents.send(IPC.dshEvent, frame)
+        })
+        .catch((error) => {
+          console.error('Organization approval policy gate failed:', error)
+          if (!window.isDestroyed()) window.webContents.send(IPC.dshEvent, frame)
+        })
+      return
+    }
+
+    if (!window.isDestroyed()) window.webContents.send(IPC.dshEvent, frame)
+  }
   harness.setListeners({
     status: (status) => {
       if (!window.isDestroyed()) window.webContents.send(IPC.harnessStatusEvent, status)
     },
-    event: (frame) => {
-      void organization.handleHarnessEvent(frame).catch((error) => {
-        console.error('Organization event handling failed:', error)
-      })
-
-      if (frame.kind === 'approval-requested') {
-        void approvalGate.shouldForward(frame)
-          .then((forward) => {
-            if (forward && !window.isDestroyed()) window.webContents.send(IPC.dshEvent, frame)
-          })
-          .catch((error) => {
-            console.error('Organization approval policy gate failed:', error)
-            if (!window.isDestroyed()) window.webContents.send(IPC.dshEvent, frame)
-          })
-        return
-      }
-
-      if (!window.isDestroyed()) window.webContents.send(IPC.dshEvent, frame)
-    },
+    event: dispatchEngineFrame,
     gatewayReady: (url) => {
       console.log(`ND-DSH gateway ready at ${url}`)
       dshSurface.setTarget(url)
     },
   })
+  codexEngine.setEmitter(dispatchEngineFrame)
 
   const rendererUrl = process.env.ELECTRON_RENDERER_URL || process.env.VITE_DEV_SERVER_URL
   const rendererFile = join(currentDirectory, '../renderer/index.html')
@@ -221,6 +252,7 @@ async function createWindow(cdpPort: number): Promise<void> {
     disposeOrganizationIpc()
     disposeDesignIpc()
     disposeIpc()
+    void qa.dispose()
     design.destroy()
     if (activeNdPencil === ndPencil) activeNdPencil = undefined
     void ndPencil.destroy()
@@ -228,6 +260,8 @@ async function createWindow(cdpPort: number): Promise<void> {
     dshSurface.destroy()
     if (mainWindow === window) mainWindow = undefined
     if (activeHarness === harness) activeHarness = undefined
+    if (activeCodexEngine === codexEngine) activeCodexEngine = undefined
+    beginCodexClose(codexEngine)
     beginHarnessClose(harness)
   })
 }
@@ -253,6 +287,11 @@ app.on('before-quit', (event) => {
     const harness = activeHarness
     activeHarness = undefined
     beginHarnessClose(harness)
+  }
+  if (activeCodexEngine) {
+    const codexEngine = activeCodexEngine
+    activeCodexEngine = undefined
+    beginCodexClose(codexEngine)
   }
   if (activeNdPencil) {
     const ndPencil = activeNdPencil
@@ -280,6 +319,10 @@ app.on('window-all-closed', () => {
 
 function beginHarnessClose(harness: HarnessService): void {
   trackClose(harness.close().catch((error) => console.error('Failed to close ND runtime cleanly:', error)))
+}
+
+function beginCodexClose(codexEngine: CodexCliEngine): void {
+  trackClose(codexEngine.close().catch((error) => console.error('Failed to close the Codex engine cleanly:', error)))
 }
 
 function beginNdPencilClose(ndPencil: NdPencilController): void {

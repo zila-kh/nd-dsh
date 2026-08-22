@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import type { WebContents } from 'electron'
 
 /**
  * Element-level inspection for EXTERNAL Electron apps during development.
@@ -153,6 +154,26 @@ export async function pickElementInExternalApp(
     }
   } finally {
     connection.close()
+  }
+}
+
+/**
+ * Self-inspect variant of the crosshair: runs the identical picker inside
+ * ND-DSH's own renderer, so "internal" mode needs no debug port and no app
+ * switch. Resolves with the clicked element, or null on Escape/timeout.
+ */
+export async function pickElementInSelfWindow(contents: WebContents): Promise<ExternalPickOutcome> {
+  if (contents.isDestroyed()) return { kind: 'unreachable', message: 'The ND-DSH window is no longer available.' }
+  let element: ExternalElementCapture | null
+  try {
+    element = await contents.executeJavaScript(PICKER_EXPRESSION, true) as ExternalElementCapture | null
+  } catch (cause) {
+    return { kind: 'unreachable', message: cause instanceof Error ? cause.message : String(cause) }
+  }
+  if (!element) return { kind: 'canceled' }
+  return {
+    kind: 'picked',
+    pick: { element, targetTitle: `${element.pageTitle ?? 'ND-DSH'} (this app)` },
   }
 }
 

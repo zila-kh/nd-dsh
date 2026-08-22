@@ -2,17 +2,20 @@ import { useCallback, useEffect, useState } from 'react'
 import type { WorkspaceEntry, WorkspaceState } from '../../../shared/contracts'
 import { FOLDER_ACCENT, fileAccent } from '../lib/file-accents'
 import { ChevronDownIcon, ChevronRightIcon, FileIcon, FilesIcon, FolderIcon, GitIcon, SearchIcon } from './Icons'
+import { SourceControlPanel } from './SourceControlPanel'
 
 interface ExplorerProps {
   workspace: WorkspaceState | null
   selectedPath: string | undefined
   onWorkspaceChanged(workspace: WorkspaceState): void
   onOpenFile(path: string): void
+  onOpenDiff(relativePath: string, staged: boolean): void
+  onError(message: string): void
 }
 
 type ExplorerTab = 'files' | 'search' | 'git'
 
-export function Explorer({ workspace, selectedPath, onWorkspaceChanged, onOpenFile }: ExplorerProps) {
+export function Explorer({ workspace, selectedPath, onWorkspaceChanged, onOpenFile, onOpenDiff, onError }: ExplorerProps) {
   const [rootEntries, setRootEntries] = useState<WorkspaceEntry[]>([])
   const [error, setError] = useState<string>()
   const [activeTab, setActiveTab] = useState<ExplorerTab>('files')
@@ -92,10 +95,12 @@ export function Explorer({ workspace, selectedPath, onWorkspaceChanged, onOpenFi
       )}
 
       {activeTab === 'git' && (
-        <div className="sidebar-placeholder">
-          <strong>Source Control</strong>
-          <p>Git repository tracking ready.</p>
-        </div>
+        <SourceControlPanel
+          workspace={workspace}
+          onOpenFile={onOpenFile}
+          onOpenDiff={onOpenDiff}
+          onError={onError}
+        />
       )}
     </aside>
   )

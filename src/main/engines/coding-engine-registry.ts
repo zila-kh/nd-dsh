@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { CodingEngineDescriptor } from '../../shared/contracts.js'
 import { buildCodingEngineCatalog, ND_HARNESS_ENGINE_ID } from '../../shared/coding-engines.js'
-import { dshPatchPath, harnessCliBinPath, harnessRoot, presetSourceDir } from '../app-paths.js'
+import { codexBinPath, dshPatchPath, harnessCliBinPath, harnessRoot, presetSourceDir } from '../app-paths.js'
 import type { EngineAssignmentStore } from './engine-assignment-store.js'
 
 /**
@@ -21,7 +21,10 @@ export class CodingEngineRegistry {
       harnessRoot(),
       'packages/subagent/subagent-codex/lib/index.js',
     ))
-    return buildCodingEngineCatalog({ harnessReady, codexReady })
+    // The direct engine needs only the pinned Codex CLI payload; it does not
+    // depend on the ND runtime bootstrap.
+    const codexCliReady = codexBinPath() !== undefined
+    return buildCodingEngineCatalog({ harnessReady, codexReady, codexCliReady })
   }
 
   assignments(): Promise<Record<string, string>> {
