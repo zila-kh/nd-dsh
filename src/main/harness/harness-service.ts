@@ -467,16 +467,14 @@ function sanitizeUiContextValue(value: unknown): unknown {
   if (!value || typeof value !== 'object') return value
 
   const record = value as Record<string, unknown>
-  if (record.type === 'image') {
-    return {
-      type: 'image',
-      ...(typeof record.mediaType === 'string' ? { mediaType: record.mediaType } : {}),
-      ...(typeof record.name === 'string' ? { name: record.name } : {}),
-    }
-  }
-
   const next: Record<string, unknown> = {}
-  for (const [key, item] of Object.entries(record)) next[key] = sanitizeUiContextValue(item)
+  for (const [key, item] of Object.entries(record)) {
+    // Prompt-wire image uploads carry raw base64 in `data`. Durable Harness
+    // image blocks instead carry an `attachment` reference and must survive
+    // renderer/history sanitization intact.
+    if (record.type === 'image' && key === 'data' && typeof item === 'string') continue
+    next[key] = sanitizeUiContextValue(item)
+  }
   return next
 }
 
