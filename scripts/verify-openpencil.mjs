@@ -14,6 +14,8 @@ for (const path of [
   '.gitmodules',
   'vendor/openpencil.json',
   'vendor/openpencil.LICENSE',
+  'resources/openpencil/LICENSE',
+  'resources/openpencil/README.md',
   'src/shared/design.ts',
   'src/main/design/openpencil-controller.ts',
   'src/preload/openpencil.ts',
@@ -41,11 +43,16 @@ if (existsSync(manifestPath)) {
     if (/\[submodule "vendor\/openpencil"\][\s\S]*?^\s*branch\s*=/m.test(gitmodules)) errors.push('Pinned OpenPencil submodule must not track a moving branch')
   }
 
-  const licensePath = join(root, 'vendor', 'openpencil.LICENSE')
-  if (existsSync(licensePath)) {
-    const licenseText = await fs.readFile(licensePath, 'utf8')
+  const vendorLicensePath = join(root, 'vendor', 'openpencil.LICENSE')
+  const runtimeLicensePath = join(root, 'resources', 'openpencil', 'LICENSE')
+  if (existsSync(vendorLicensePath)) {
+    const licenseText = await fs.readFile(vendorLicensePath, 'utf8')
     if (!licenseText.startsWith('MIT License') || !licenseText.includes('Copyright (c) 2026 ZSeven—W')) {
       errors.push('vendor/openpencil.LICENSE must preserve the upstream MIT notice')
+    }
+    if (existsSync(runtimeLicensePath)) {
+      const runtimeLicenseText = await fs.readFile(runtimeLicensePath, 'utf8')
+      if (runtimeLicenseText !== licenseText) errors.push('resources/openpencil/LICENSE must exactly match the tracked upstream MIT notice')
     }
   }
 
@@ -65,11 +72,29 @@ if (existsSync(manifestPath)) {
 const controllerPath = join(root, 'src', 'main', 'design', 'openpencil-controller.ts')
 if (existsSync(controllerPath)) {
   const controller = await fs.readFile(controllerPath, 'utf8')
-  for (const needle of ['process.resourcesPath', 'vendor', 'openpencil', 'target', 'release', 'ND_OPENPENCIL_BINARY', '--managed', '--allow-origin']) {
+  for (const needle of ['process.resourcesPath', 'resources', 'openpencil', 'bin', 'ND_OPENPENCIL_BINARY', '--managed', '--allow-origin', 'contextIsolation: true', 'sandbox: true']) {
     if (!controller.includes(needle)) errors.push(`OpenPencil controller is missing required bundled-runtime invariant: ${needle}`)
   }
   for (const forbidden of ['openpencil-desktop', 'which openpencil', 'where openpencil']) {
     if (controller.includes(forbidden)) errors.push(`OpenPencil controller must not require a separately installed runtime (${forbidden})`)
+  }
+}
+
+const buildScriptPath = join(root, 'scripts', 'build-openpencil.mjs')
+if (existsSync(buildScriptPath)) {
+  const buildScript = await fs.readFile(buildScriptPath, 'utf8')
+  for (const needle of [
+    "'-p', 'op-host-web-server'",
+    "'-p', 'op-host-web'",
+    "'--features', 'canvaskit'",
+    "'wasm-bindgen'",
+    "'web-bundle'",
+    "'op_host_web_bg.wasm'",
+    "'canvaskit.wasm'",
+    "'prompt_center_previews'",
+    "'scene_templates'",
+  ]) {
+    if (!buildScript.includes(needle)) errors.push(`OpenPencil build staging is incomplete; missing ${needle}`)
   }
 }
 
