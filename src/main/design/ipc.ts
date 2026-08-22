@@ -2,7 +2,7 @@ import { ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
 import type { BrowserBounds } from '../../shared/contracts.js'
 import { DESIGN_IPC } from '../../shared/design.js'
 import type { DesignService } from './design-service.js'
-import type { NdPencilController } from './openpencil-controller.js'
+import type { NdPencilController } from './nd-pencil-controller.js'
 
 export function registerDesignIpc(window: BrowserWindow, design: DesignService, ndPencil: NdPencilController): () => void {
   const channels: string[] = []
