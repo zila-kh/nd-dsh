@@ -9,23 +9,31 @@ A coding engine is not a model provider. A provider answers LLM requests; an eng
 ## Control plane
 
 ```text
-ND company / project / role / agent / task
+ND company / project / role / AI employee / task
                  |
                  +---- provider route ----> model vendor/gateway
                  |
-                 +---- engine registry ----> execution adapter
+                 `---- employee engine ---> ND engine registry
                                              |-- ND Harness
                                              |-- Codex CLI
                                              `-- future engines
 ```
 
-ND domain code must not branch on vendor package names. Engine-specific filesystem paths, process protocols, authentication details, or sandbox vocabulary belong inside adapters/probes.
+Engine-specific filesystem paths, process protocols, authentication details, or sandbox vocabulary stay inside adapters/probes. Company/task/workflow semantics do not branch on vendor package names.
+
+## Employee engine routing
+
+ND persists explicit non-default employee assignments in `engine-assignments.json`. Employees with no row use `nd-harness`.
+
+The Workforce UI reads the engine catalog from the main process and lets the user select only available engines. Before an organization task creates a run receipt, the orchestrator resolves the assigned employee's engine and checks availability. This prevents an unavailable engine from leaving a false running task behind.
+
+The current engine route applies to **assigned task execution**. PM planning and independent review remain on the primary ND Harness path for this beta. That boundary is intentional and should be generalized only when additional engines expose equivalent structured planning/review contracts.
 
 ## Current engines
 
 ### `nd-harness`
 
-Primary runtime. Capabilities currently advertised by ND:
+Primary runtime. Capabilities advertised by ND:
 
 - workspace execution
 - filesystem and shell
@@ -39,26 +47,38 @@ Primary runtime. Capabilities currently advertised by ND:
 
 ### `codex`
 
-Delegated one-shot coding engine backed by the pinned Harness `subagent-codex` package and the official package-local Codex app-server. Current ND integration intentionally advertises only the capabilities ND actually connects today:
+Delegated one-shot coding engine backed by the pinned Harness `subagent-codex` package and its package-local official Codex app-server.
+
+Capabilities ND currently advertises:
 
 - same workspace
 - filesystem
 - shell
 - one-shot final result
 
-It does **not** currently advertise ND browser, ND skill compilation, ND MCP compilation, ND provider routing, a human approval bridge, streaming child activity, or persistent Codex threads. Codex itself may support additional native features; ND must not claim them until its adapter/control plane wires and governs them.
+For a Codex-routed employee, ND starts the normal organization run in its primary runtime, instructs the parent agent to delegate the complete implementation through `subagent_codex`, and then requires the parent to inspect the real workspace and run validation before it reports the worker result. The independent ND reviewer still verifies the task afterward.
 
-Native Codex authentication, `HOME` / `CODEX_HOME`, model configuration, project trust, and account state remain authoritative. The default ND profile uses Codex permission mode `never`, which fails closed on approval-requiring operations. ND does not silently select the dangerous sandbox bypass.
+ND does **not** currently advertise the delegated Codex route as having ND browser integration, ND skill/MCP compilation, human approval streaming, provider routing, or persistent Codex threads. Native Codex authentication, `HOME` / `CODEX_HOME`, model configuration, project trust, and account state remain authoritative.
+
+The default ND Codex provider configuration uses the pinned adapter's fail-closed `never` permission mode. ND never selects the dangerous sandbox bypass implicitly.
 
 ## Capability registry
 
-The renderer never decides engine availability. The main process probes the installed/built runtime and returns `CodingEngineDescriptor` objects through a narrow IPC method. The UI therefore displays capabilities from the runtime control plane rather than maintaining a second hard-coded engine list.
+The renderer never decides engine availability. `CodingEngineRegistry` probes the installed/built runtime and returns `CodingEngineDescriptor` values through narrow IPC.
 
-An unavailable engine is still a known product capability and includes a reason. Availability is not the same as authentication or service health; those states should become separate fields as adapters gain richer lifecycle APIs.
+Engine state should eventually distinguish:
 
-## Next adapter contract
+- installed/available
+- authenticated
+- healthy/degraded
+- rate-limited
+- policy-compatible for the requested task
 
-The registry is intentionally smaller than a full execution interface in the first beta increment. The next stage should promote adapters behind a contract shaped around ND concepts:
+Today the registry implements installation/build availability and durable employee routing. Authentication/health probes are a public-beta release follow-up.
+
+## Target direct-adapter contract
+
+The current Codex path reuses the pinned Harness provider because that is the shortest safe integration and avoids duplicating the official app-server protocol. If one-shot delegation becomes limiting, a direct adapter should implement an ND contract rather than leaking Codex protocol types into the organization domain:
 
 ```ts
 interface CodingEngine {
@@ -70,11 +90,11 @@ interface CodingEngine {
 }
 ```
 
-The input is compiled from ND company/project/role/agent/task state. Engine adapters may translate that into Harness sessions, Codex threads, another CLI protocol, or a remote runtime without changing organization workflow semantics.
+That can later support persistent Codex threads, richer child progress, direct cancellation, or a completely different local/remote coding engine without changing Company, Project, Role, Task, Skill, or Workflow data.
 
 ## Skills and MCP
 
-ND skills and MCP configuration must become control-plane objects, not Harness- or Codex-owned product state.
+ND skills and MCP configuration are product concepts even when an engine implements the protocol.
 
 ```text
 ND Skill / MCP Registry
@@ -84,12 +104,26 @@ ND Skill / MCP Registry
         `--> future engine compiler
 ```
 
-Until a compiler exists for an engine, its descriptor must report that capability as false even if the underlying product supports something similar natively.
+The current organization already owns scoped skill objects, while Harness supplies the execution/tool implementation. A durable ND MCP registry and engine-specific compilers are still future work. Until an engine compiler exists, its descriptor must report the corresponding capability as false even if the underlying product supports something similar natively.
+
+## Policy boundary
+
+Organization plan/execute/review policies are checked before workflow stages start. Approval-bearing organization runs also pass through `OrganizationApprovalGate` in the Electron main process before React sees them:
+
+- explicit `DENY` -> rejected before UI
+- explicit `ALLOW` -> allow-once
+- `ASK` -> human approval UI
+- uncertain classification or gate failure -> human approval UI
+
+The pinned Harness approval wire currently exposes tool name/reason but not arbitrary tool arguments. The classifier is therefore deliberately conservative. Full enterprise policy consistency requires ND action envelopes from browser/MCP/engine adapters for operations that may not emit a Harness approval frame.
+
+Codex's current one-shot path does not expose an ND human-approval stream; its default permission mode is therefore fail-closed rather than silently auto-escalating.
 
 ## Public-beta safety
 
-- Production renderer fails closed when the trusted desktop bridges are missing; it does not install mock runtime services.
+- Production renderer fails closed when trusted desktop bridges are missing; no mock runtime is installed.
 - Engine capability claims are conservative.
+- Employee engine assignments are durable and validated before organization runs start.
 - Codex remains one-shot and fail-closed by default.
-- Organization policy still requires a future action/tool-boundary enforcement layer before ND can claim enterprise-grade policy control across all engines.
-- Runtime packaging and installed-app E2E remain release gates.
+- Main-process organization approvals respect company policy before reaching the renderer.
+- Runtime packaging, signing, installed-app E2E, Codex auth/health onboarding, and normalized cross-engine action metadata remain release gates.
