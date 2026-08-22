@@ -1,3 +1,4 @@
+import { spawn, type ChildProcess } from 'node:child_process'
 import { promises as fs, type Dirent } from 'node:fs'
 import { createServer, type Server, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -17,6 +18,7 @@ import type { WorkspaceService } from '../workspace/workspace-service.js'
 
 const MAX_SCAN_DEPTH = 6
 const MAX_SCAN_ENTRIES = 2_000
+const DEV_START_TIMEOUT_MS = 45_000
 const SKIPPED = new Set([
   '.git', '.dsh', '.sessions', '.next', '.turbo', '.cache',
   'node_modules', 'dist', 'out', 'build', 'coverage', 'vendor',
@@ -77,6 +79,7 @@ export class DesignService {
   private server: Server | undefined
   private serverRoot: string | undefined
   private serverPort: number | undefined
+  private devChild: ChildProcess | undefined
 
   constructor(
     private readonly workspace: WorkspaceService,
@@ -104,6 +107,7 @@ export class DesignService {
     if (!template) throw new Error(`HTML template is not part of the active workspace: ${requested}`)
     if (!template.previewable) throw new Error(`${template.name} requires the project runtime and cannot be served as static HTML`)
 
+    await this.stopPreview()
     const port = await this.ensureStaticServer(project.root)
     const url = `http://127.0.0.1:${port}/${encodeRelativePath(template.path)}`
     const preview: DesignPreviewState = {
@@ -122,10 +126,48 @@ export class DesignService {
     return preview
   }
 
+  async startDevPreview(): Promise<DesignPreviewState> {
+    const project = await this.refresh()
+    if (!project.devCommand) throw new Error('The active project has no package.json dev script')
+
+    await this.stopPreview()
+    const invocation = devInvocation(project.packageManager)
+    const child = spawn(invocation.command, invocation.args, {
+      cwd: project.root,
+      env: { ...process.env, BROWSER: 'none' },
+      windowsHide: true,
+      shell: process.platform === 'win32',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    this.devChild = child
+
+    try {
+      const url = await waitForDevUrl(child, project.devCommand)
+      const preview: DesignPreviewState = {
+        kind: 'dev-server',
+        root: project.root,
+        url,
+        command: project.devCommand,
+      }
+      this.preview = preview
+      child.once('exit', () => {
+        if (this.devChild !== child) return
+        this.devChild = undefined
+        if (this.preview?.kind === 'dev-server' && this.preview.root === project.root) this.preview = undefined
+      })
+      await this.browser.navigate(url)
+      return preview
+    } catch (cause) {
+      if (this.devChild === child) this.devChild = undefined
+      if (child.exitCode === null && child.signalCode === null) child.kill()
+      throw cause
+    }
+  }
+
   async stopPreview(): Promise<void> {
     const origin = this.preview ? new URL(this.preview.url).origin : undefined
     this.preview = undefined
-    await this.closeServer()
+    await Promise.all([this.closeServer(), this.stopDevChild()])
     if (origin && this.browser.state().url.startsWith(origin)) {
       await this.browser.navigate('about:blank').catch(() => undefined)
     }
@@ -145,6 +187,8 @@ export class DesignService {
     this.serverPort = undefined
     this.server?.close()
     this.server = undefined
+    if (this.devChild?.exitCode === null && this.devChild.signalCode === null) this.devChild.kill()
+    this.devChild = undefined
   }
 
   private withPreview(project: Omit<DesignProjectState, 'preview'>): DesignProjectState {
@@ -164,13 +208,16 @@ export class DesignService {
     const files = await walkWorkspace(root)
     const fileSet = new Set(files)
     const packageJson = await readJsonRecord(root, 'package.json')
-    const componentsJson = fileSet.has('components.json') ? await readJsonRecord(root, 'components.json') : undefined
+    const componentsConfigPath = files
+      .filter((path) => path === 'components.json' || path.endsWith('/components.json'))
+      .sort((left, right) => pathDepth(left) - pathDepth(right) || left.localeCompare(right))[0]
+    const componentsJson = componentsConfigPath ? await readJsonRecord(root, componentsConfigPath) : undefined
     const dependencies = dependencyNames(packageJson)
     const frameworks = detectFrameworks(dependencies)
     const packageManager = detectPackageManager(fileSet)
     const devCommand = detectDevCommand(packageJson, packageManager)
     const templates = detectTemplates(files)
-    const shadcn = detectShadcn(files, componentsJson)
+    const shadcn = detectShadcn(files, componentsConfigPath, componentsJson)
     const kind = detectKind(shadcn, frameworks, templates)
     const project: Omit<DesignProjectState, 'preview'> = {
       root,
@@ -225,6 +272,26 @@ export class DesignService {
     this.serverPort = undefined
     if (!server) return
     await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()))
+  }
+
+  private async stopDevChild(): Promise<void> {
+    const child = this.devChild
+    this.devChild = undefined
+    if (!child || child.exitCode !== null || child.signalCode !== null) return
+    await new Promise<void>((resolvePromise) => {
+      const timer = setTimeout(() => {
+        try { child.kill() } catch { /* already stopped */ }
+        resolvePromise()
+      }, 3_000)
+      child.once('exit', () => {
+        clearTimeout(timer)
+        resolvePromise()
+      })
+      try { child.kill(process.platform === 'win32' ? undefined : 'SIGTERM') } catch {
+        clearTimeout(timer)
+        resolvePromise()
+      }
+    })
   }
 }
 
@@ -283,7 +350,7 @@ function detectTemplates(files: string[]): DesignTemplateEntry[] {
   }).sort((left, right) => Number(right.entry) - Number(left.entry) || pathDepth(left.path) - pathDepth(right.path) || left.path.localeCompare(right.path))
 }
 
-function detectShadcn(files: string[], config: Record<string, unknown> | undefined): DesignShadcnState {
+function detectShadcn(files: string[], configPath: string | undefined, config: Record<string, unknown> | undefined): DesignShadcnState {
   const components: DesignComponentEntry[] = files.flatMap((path) => {
     const match = /(?:^|\/)(?:src\/)?components\/ui\/([^/]+)\.(?:tsx|jsx|ts|js)$/i.exec(path)
     if (!match?.[1]) return []
@@ -294,8 +361,8 @@ function detectShadcn(files: string[], config: Record<string, unknown> | undefin
     ? config.tailwind as Record<string, unknown>
     : undefined
   return {
-    detected: Boolean(config) || components.length > 0,
-    ...(config ? { configPath: 'components.json' } : {}),
+    detected: Boolean(configPath) || components.length > 0,
+    ...(configPath ? { configPath } : {}),
     ...(typeof config?.style === 'string' ? { style: config.style } : {}),
     ...(typeof tailwind?.baseColor === 'string' ? { baseColor: tailwind.baseColor } : {}),
     ...(typeof tailwind?.cssVariables === 'boolean' ? { cssVariables: tailwind.cssVariables } : {}),
@@ -355,6 +422,48 @@ function detectDevCommand(packageJson: Record<string, unknown> | undefined, pack
   if (!scripts || typeof scripts !== 'object' || typeof (scripts as Record<string, unknown>).dev !== 'string') return undefined
   const runner = packageManager ?? 'npm'
   return runner === 'npm' ? 'npm run dev' : `${runner} dev`
+}
+
+function devInvocation(packageManager: DesignProjectState['packageManager']): { command: string; args: string[] } {
+  if (packageManager === 'pnpm') return { command: 'pnpm', args: ['dev'] }
+  if (packageManager === 'yarn') return { command: 'yarn', args: ['dev'] }
+  if (packageManager === 'bun') return { command: 'bun', args: ['dev'] }
+  return { command: 'npm', args: ['run', 'dev'] }
+}
+
+async function waitForDevUrl(child: ChildProcess, command: string): Promise<string> {
+  return new Promise<string>((resolvePromise, reject) => {
+    let settled = false
+    let output = ''
+    const finish = (error?: Error, url?: string): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      child.stdout?.off('data', onData)
+      child.stderr?.off('data', onData)
+      child.off('error', onError)
+      child.off('exit', onExit)
+      if (error) reject(error)
+      else if (url) resolvePromise(url)
+      else reject(new Error(`Dev runtime ${command} did not report a URL`))
+    }
+    const onData = (chunk: Buffer | string): void => {
+      output = `${output}${String(chunk)}`.slice(-16_384)
+      const clean = stripAnsi(output)
+      const match = /https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)(?:\/[^\s]*)?/i.exec(clean)
+      if (match?.[0]) finish(undefined, match[0].replace(/[),.;]+$/, ''))
+    }
+    const onError = (error: Error): void => finish(error)
+    const onExit = (code: number | null, signal: NodeJS.Signals | null): void => {
+      const tail = stripAnsi(output).trim().split(/\r?\n/).slice(-4).join(' | ')
+      finish(new Error(`Dev runtime exited before it became ready (${signal ?? String(code ?? 'unknown')})${tail ? `: ${tail}` : ''}`))
+    }
+    const timer = setTimeout(() => finish(new Error(`Dev runtime ${command} did not become ready within ${Math.round(DEV_START_TIMEOUT_MS / 1_000)} seconds`)), DEV_START_TIMEOUT_MS)
+    child.stdout?.on('data', onData)
+    child.stderr?.on('data', onData)
+    child.once('error', onError)
+    child.once('exit', onExit)
+  })
 }
 
 async function readJsonRecord(root: string, relativePath: string): Promise<Record<string, unknown> | undefined> {
@@ -453,4 +562,8 @@ function componentName(fileName: string): string {
 
 function pathDepth(path: string): number {
   return path.split('/').length
+}
+
+function stripAnsi(value: string): string {
+  return value.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '')
 }
