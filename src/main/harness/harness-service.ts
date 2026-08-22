@@ -103,12 +103,12 @@ export class HarnessService {
         ]
       : textContent
 
-    let result = await gateway.rpc('session.prompt', { sessionId, content })
+    let result = await gateway.rpc('session.prompt', { sessionId, mode: 'queue', content })
     // The pinned Harness rejects unsupported image modalities before publishing
     // the user event. Retrying text-only preserves the annotation geometry and
     // source references for text-only routes without duplicating a turn.
     if (!result.ok && annotationImage && isUnsupportedImageResult(result)) {
-      result = await gateway.rpc('session.prompt', { sessionId, content: textContent })
+      result = await gateway.rpc('session.prompt', { sessionId, mode: 'queue', content: textContent })
     }
     if (!result.ok) throw new Error(rpcFailureMessage('session.prompt', result))
 
