@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import type { BrowserState, HarnessStatus, ThemeMode, ThemeState, WorkspaceFile, WorkspaceState } from '../../shared/contracts'
+import type { BrowserState, ExternalElementPickView, HarnessStatus, ThemeMode, ThemeState, WorkspaceFile, WorkspaceState } from '../../shared/contracts'
 import { BrowserPane } from './components/BrowserPane'
 import { ChatPanel } from './components/ChatPanel'
 import { EditorPane } from './components/EditorPane'
@@ -44,6 +44,8 @@ export default function App() {
   const [theme, setTheme] = useState<ThemeState | null>(null)
   const [appInspectCountdown, setAppInspectCountdown] = useState<number | null>(null)
   const [elementInspectActive, setElementInspectActive] = useState(false)
+  const [pendingPick, setPendingPick] = useState<{ element: ExternalElementPickView; targetTitle: string; shortName: string; hover: string } | null>(null)
+  const [elementAttachmentVersion, setElementAttachmentVersion] = useState(0)
   const appInspectTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
 
   // Cross-app inspect: after a short countdown (so the user can focus the
@@ -75,17 +77,20 @@ export default function App() {
   }, [])
 
   // Element-level inspect for an external Electron app: ND injects a picker
-  // through the target's loopback debug port; the picked element plus a
-  // screenshot are bridged into the chat session.
+  // through the target's loopback debug port; the picked element is offered
+  // as an Add-to-chat chip (multiple chips can queue before one prompt).
   const startElementInspect = (): void => {
     if (elementInspectActive) return
     setElementInspectActive(true)
-    void window.ndDsh.capture.inspectElement(true)
+    void window.ndDsh.capture.inspectElement()
       .then((result) => {
-        if (result.outcome === 'picked') {
-          setToast(result.copiedToClipboard
-            ? 'Element sent to the agent and copied to the clipboard.'
-            : 'Element sent to the agent.')
+        if (result.outcome === 'picked' && result.element && result.targetTitle && result.shortName && result.hover) {
+          setPendingPick({
+            element: result.element,
+            targetTitle: result.targetTitle,
+            shortName: result.shortName,
+            hover: result.hover,
+          })
         } else if (result.outcome === 'canceled') {
           setToast('Element pick canceled.')
         } else {
@@ -94,6 +99,18 @@ export default function App() {
       })
       .catch((cause) => setToast(errorMessage(cause)))
       .finally(() => setElementInspectActive(false))
+  }
+
+  const addElementToChat = async (): Promise<void> => {
+    const pick = pendingPick
+    if (!pick) return
+    try {
+      await window.ndDsh.capture.stageElement(pick.element, pick.targetTitle)
+      setPendingPick(null)
+      setElementAttachmentVersion((version) => version + 1)
+    } catch (cause) {
+      setToast(errorMessage(cause))
+    }
   }
 
   useEffect(() => {
@@ -287,6 +304,7 @@ export default function App() {
                   onOpenFile={(path) => void openFile(path)}
                   externalPrompt={externalPrompt}
                   onExternalPromptConsumed={() => setExternalPrompt(null)}
+                  elementAttachmentVersion={elementAttachmentVersion}
                 />
               </div>
               {workspaceCollapsed ? null : (
@@ -355,7 +373,19 @@ export default function App() {
 
       <StatusBar browser={browserState} harness={harnessStatus} workspace={workspace} />
       <RuntimePrompts onError={setToast} />
-      {appInspectCountdown !== null ? (
+      {pendingPick ? (
+        <div className="element-pick-popover" role="dialog" aria-label="Picked element">
+          <div className="element-pick-head" title={pendingPick.hover}>
+            <CrosshairIcon />
+            <strong>{pendingPick.shortName}</strong>
+            <span>{pendingPick.targetTitle}</span>
+          </div>
+          <div className="element-pick-actions">
+            <button type="button" className="toggle-button" onClick={() => void addElementToChat()}>Add to chat</button>
+            <button type="button" className="toggle-button" onClick={() => setPendingPick(null)}>Discard</button>
+          </div>
+        </div>
+      ) : appInspectCountdown !== null ? (
         <div className="toast" role="status">
           <span>{`Screen capture in ${appInspectCountdown}s — switch to the app you want to inspect`}</span>
         </div>

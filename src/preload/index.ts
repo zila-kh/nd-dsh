@@ -18,7 +18,10 @@ const api: DesktopApi = {
   },
   capture: {
     inspectApp: (copyToClipboard) => ipcRenderer.invoke(IPC.captureInspectApp, copyToClipboard),
-    inspectElement: (copyToClipboard) => ipcRenderer.invoke(IPC.captureInspectElement, copyToClipboard),
+    inspectElement: () => ipcRenderer.invoke(IPC.captureInspectElement),
+    stageElement: (element, targetTitle) => ipcRenderer.invoke(IPC.captureStageElement, element, targetTitle),
+    elementAttachments: () => ipcRenderer.invoke(IPC.captureElementAttachments),
+    removeElement: (id) => ipcRenderer.invoke(IPC.captureRemoveElement, id),
   },
   browser: {
     state: () => ipcRenderer.invoke(IPC.browserState),

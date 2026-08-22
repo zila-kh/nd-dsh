@@ -1302,3 +1302,99 @@
   background: transparent;
   color: var(--faint);
 }
+
+/* Picked-element popup (after crosshair pick) and staged element chips */
+.element-pick-popover {
+  position: fixed;
+  right: 16px;
+  bottom: 46px;
+  z-index: 150;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 280px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface-1);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+}
+.element-pick-head {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  cursor: help;
+}
+.element-pick-head svg {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  color: var(--accent);
+}
+.element-pick-head strong {
+  overflow: hidden;
+  color: var(--text);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.element-pick-head span {
+  overflow: hidden;
+  color: var(--faint);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.element-pick-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.element-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 7px;
+}
+.element-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 4px 2px 7px;
+  border: 1px solid rgba(167, 139, 250, 0.35);
+  border-radius: 999px;
+  background: rgba(167, 139, 250, 0.1);
+  color: #a78bfa;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+  cursor: help;
+}
+.element-chip-icon {
+  width: 10px;
+  height: 10px;
+}
+.element-chip-label {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.element-chip-remove {
+  display: grid;
+  width: 14px;
+  height: 14px;
+  place-items: center;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.element-chip-remove:hover {
+  background: rgba(167, 139, 250, 0.25);
+  color: var(--text);
+}

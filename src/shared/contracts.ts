@@ -332,20 +332,35 @@ export interface AppInspectResult {
 }
 
 /** Element picked in an external Electron app via the injected CDP inspector. */
-export interface ExternalElementInspectResult {
-  sessionId: string
-  messageId?: string
+export interface ExternalElementPickView {
+  tag: string
+  id?: string
+  classes?: string[]
+  role?: string
+  ariaLabel?: string
+  text?: string
+  attributes?: string[]
+  html?: string
+  box: { x: number; y: number; width: number; height: number }
+  url?: string
+  pageTitle?: string
+}
+
+/** One pick round from the crosshair button; the renderer offers Add-to-chat. */
+export interface ExternalElementPickResult {
   outcome: 'picked' | 'canceled' | 'unreachable'
   message?: string
-  element?: {
-    tag: string
-    id?: string
-    role?: string
-    ariaLabel?: string
-    text?: string
-    box: { x: number; y: number; width: number; height: number }
-  }
-  copiedToClipboard: boolean
+  element?: ExternalElementPickView
+  targetTitle?: string
+  shortName?: string
+  hover?: string
+}
+
+/** A staged element chip waiting in the composer for the next prompt. */
+export interface ExternalElementAttachmentView {
+  id: string
+  shortName: string
+  hover: string
 }
 
 export interface DesktopApi {
@@ -366,7 +381,10 @@ export interface DesktopApi {
   }
   capture: {
     inspectApp(copyToClipboard: boolean): Promise<AppInspectResult>
-    inspectElement(copyToClipboard: boolean): Promise<ExternalElementInspectResult>
+    inspectElement(): Promise<ExternalElementPickResult>
+    stageElement(element: ExternalElementPickView, targetTitle: string): Promise<ExternalElementAttachmentView[]>
+    elementAttachments(): Promise<ExternalElementAttachmentView[]>
+    removeElement(id: string): Promise<ExternalElementAttachmentView[]>
   }
   browser: {
     state(): Promise<BrowserState>
@@ -474,4 +492,7 @@ export const IPC = {
   enginesAssign: 'engines:assign',
   captureInspectApp: 'capture:inspect-app',
   captureInspectElement: 'capture:inspect-element',
+  captureStageElement: 'capture:stage-element',
+  captureElementAttachments: 'capture:element-attachments',
+  captureRemoveElement: 'capture:remove-element',
 } as const

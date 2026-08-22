@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type KeyboardEvent } from 'react'
 import type {
   DshEventFrame,
+  ExternalElementAttachmentView,
   HarnessStatus,
   ModelProviderGroup,
   ProviderPingResult,
@@ -19,6 +20,7 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   ContextIcon,
+  CrosshairIcon,
   FileIcon,
   FolderIcon,
   PlusIcon,
@@ -39,6 +41,8 @@ interface ChatPanelProps {
   onOpenFile?(path: string): void
   externalPrompt?: { id: string; text: string } | null
   onExternalPromptConsumed?(): void
+  /** Bumped by the titlebar when a picked element is staged or removed. */
+  elementAttachmentVersion?: number
 }
 
 const PERMISSION_MODES = [
@@ -76,7 +80,7 @@ function fileMentionTag(relativePath: string): string {
   return extension ? extension.toUpperCase().slice(0, 5) : 'FILE'
 }
 
-export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, onOpenSettings, onOpenFile, externalPrompt, onExternalPromptConsumed }: ChatPanelProps) {
+export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, onOpenSettings, onOpenFile, externalPrompt, onExternalPromptConsumed, elementAttachmentVersion }: ChatPanelProps) {
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [threads, setThreads] = useState<Record<string, ThreadEntry[]>>({})
@@ -97,6 +101,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
   const [skillItems, setSkillItems] = useState<SkillSuggestion[]>([])
   const [skillsState, setSkillsState] = useState<'idle' | 'loading' | 'ready' | 'unavailable'>('idle')
   const [fileItems, setFileItems] = useState<WorkspaceSuggestion[]>([])
+  const [elementChips, setElementChips] = useState<ExternalElementAttachmentView[]>([])
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -127,6 +132,28 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
       const entries = foldHistory(events.flatMap((item) => (item.event ? [item.event] : [])))
       setThreads((current) => ({ ...current, [sessionId]: entries }))
       setChangedFiles(collectChangedFiles(entries))
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }, [onError])
+
+  // Staged external-element chips: compact labels above the composer; the
+  // full element data rides along with the next prompt from the main process.
+  const refreshElementChips = useCallback(async (): Promise<void> => {
+    try {
+      setElementChips(await window.ndDsh.capture.elementAttachments())
+    } catch {
+      // Attachments are optional context; never block the composer.
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshElementChips()
+  }, [refreshElementChips, elementAttachmentVersion])
+
+  const removeElementChip = useCallback(async (id: string): Promise<void> => {
+    try {
+      setElementChips(await window.ndDsh.capture.removeElement(id))
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : String(cause))
     }
@@ -383,6 +410,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
     try {
       const result = await window.ndDsh.harness.run(input, activeSessionId ? { sessionId: activeSessionId } : undefined)
       setActiveSessionId(result.sessionId)
+      void refreshElementChips()
       setThreads((current) => ({
         ...current,
         [result.sessionId]: [...(current[result.sessionId] ?? []), { kind: 'user', id: crypto.randomUUID(), text: input }],
@@ -617,6 +645,24 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
         </div>
 
         <div className="composer-container" ref={menuRef}>
+          {elementChips.length > 0 ? (
+            <div className="element-chip-row" aria-label="Staged UI elements">
+              {elementChips.map((chip) => (
+                <span key={chip.id} className="element-chip" title={chip.hover}>
+                  <CrosshairIcon className="element-chip-icon" />
+                  <span className="element-chip-label">{chip.shortName}</span>
+                  <button
+                    type="button"
+                    className="element-chip-remove"
+                    title="Remove this element"
+                    onClick={() => void removeElementChip(chip.id)}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          ) : null}
           <div className="mention-anchor">
             {mentionTrigger ? (
               <div className="mention-menu shadow-flyout">

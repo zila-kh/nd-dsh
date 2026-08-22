@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+
 /**
  * Element-level inspection for EXTERNAL Electron apps during development.
  *
@@ -184,6 +186,62 @@ export function summarizeElement(pick: ExternalPick): ExternalElementSummary {
     ...(element.text ? { text: element.text.slice(0, 120) } : {}),
     box: element.box,
   }
+}
+
+export interface ExternalElementDescription {
+  shortName: string
+  hover: string
+}
+
+/** Chip label + hover text for a picked element (kept compact in the composer). */
+export function describePick(pick: ExternalPick): ExternalElementDescription {
+  const el = pick.element
+  const label = el.id ? `#${el.id}` : el.classes?.length ? `.${el.classes[0]}` : ''
+  const shortName = `${el.tag}${label}`
+  const hover = [
+    `<${el.tag}>${label ? ` ${label}` : ''}`,
+    el.role ? `role: ${el.role}` : '',
+    el.ariaLabel ? `aria: ${el.ariaLabel}` : '',
+    el.text ? `text: ${el.text.slice(0, 80)}` : '',
+    el.box ? `box: ${el.box.x},${el.box.y} ${el.box.width}x${el.box.height}` : '',
+    pick.targetTitle,
+  ].filter(Boolean).join(' · ')
+  return { shortName, hover }
+}
+
+/**
+ * Staged element attachments: picked elements wait here as compact chips in
+ * the composer (multiple allowed) and ride along with the next prompt.
+ */
+export class ExternalElementStage {
+  private readonly items: Array<{ id: string; pick: ExternalPick }> = []
+
+  stage(pick: ExternalPick): ExternalElementAttachmentView[] {
+    if (this.items.length >= 12) throw new Error('Too many staged elements (limit 12); send or remove some first')
+    this.items.push({ id: randomUUID(), pick })
+    return this.views()
+  }
+
+  remove(id: string): ExternalElementAttachmentView[] {
+    const index = this.items.findIndex((item) => item.id === id)
+    if (index >= 0) this.items.splice(index, 1)
+    return this.views()
+  }
+
+  views(): ExternalElementAttachmentView[] {
+    return this.items.map((item) => ({ id: item.id, ...describePick(item.pick) }))
+  }
+
+  /** Drain everything staged; the next prompt consumes the attachments. */
+  consumeAll(): ExternalPick[] {
+    return this.items.splice(0, this.items.length).map((item) => item.pick)
+  }
+}
+
+export interface ExternalElementAttachmentView {
+  id: string
+  shortName: string
+  hover: string
 }
 
 /**

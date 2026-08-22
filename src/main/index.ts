@@ -9,6 +9,7 @@ import { ORGANIZATION_IPC } from '../shared/organization.js'
 import { projectRoot } from './app-paths.js'
 import { BrowserController } from './browser/browser-controller.js'
 import { DEFAULT_BROWSER_URL } from './browser/browser-url.js'
+import { ExternalElementStage } from './capture/external-inspect.js'
 import { DshSurfaceController } from './dsh/dsh-surface.js'
 import { pickFreePort } from './dsh/gateway-client.js'
 import { EngineAssignmentStore } from './engines/engine-assignment-store.js'
@@ -78,13 +79,14 @@ async function createWindow(cdpPort: number): Promise<void> {
 
   const browser = new BrowserController(window, cdpPort, projectRoot())
   const dshSurface = new DshSurfaceController(window)
-  const harness = new HarnessService(workspace, browser, providers)
+  const externalElements = new ExternalElementStage()
+  const harness = new HarnessService(workspace, browser, providers, externalElements)
   const organizationStore = new OrganizationStore(join(userData, 'organization.json'))
   const interruptedRuns = await organizationStore.reconcileInterruptedRuns()
   if (interruptedRuns > 0) console.warn(`Recovered ${interruptedRuns} interrupted organization run(s) from the previous app session.`)
   const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines)
   const approvalGate = new OrganizationApprovalGate(organizationStore, harness)
-  const disposeIpc = registerIpc({ window, browser, dshSurface, engines, harness, workspace, theme, providers })
+  const disposeIpc = registerIpc({ window, browser, dshSurface, engines, harness, workspace, theme, providers, externalElements })
   const disposeOrganizationIpc = registerOrganizationIpc(window, organizationStore, organization)
   mainWindow = window
   activeHarness = harness

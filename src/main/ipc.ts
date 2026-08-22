@@ -3,7 +3,7 @@ import type { BrowserBounds, DshSurface, ThemeMode } from '../shared/contracts.j
 import { IPC } from '../shared/contracts.js'
 import { projectRoot } from './app-paths.js'
 import { capturePrimaryDisplay } from './capture/app-capture.js'
-import { formatExternalElementContext, pickElementInExternalApp, summarizeElement } from './capture/external-inspect.js'
+import { describePick, ExternalElementStage, pickElementInExternalApp, type ExternalPick } from './capture/external-inspect.js'
 import type { BrowserController } from './browser/browser-controller.js'
 import type { DshSurfaceController } from './dsh/dsh-surface.js'
 import type { CodingEngineRegistry } from './engines/coding-engine-registry.js'
@@ -21,6 +21,7 @@ interface IpcDependencies {
   workspace: WorkspaceService
   theme: ThemeService
   providers: ProviderStore
+  externalElements: ExternalElementStage
 }
 
 type Handler = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown | Promise<unknown>
@@ -60,37 +61,30 @@ export function registerIpc(deps: IpcDependencies): () => void {
   ))
 
   // Element-level inspect for external Electron apps: attach to the target's
-  // loopback debug port, inject the picker via CDP Runtime.evaluate, then
-  // bridge the picked element (plus a screen capture) into the chat session.
-  handle(IPC.captureInspectElement, async (_event, copyFlag) => {
-    const wantsClipboardCopy = copyFlag === true
+  // loopback debug port and inject the picker via CDP Runtime.evaluate. The
+  // pick returns to the renderer, which offers Add-to-chat; staged elements
+  // ride along with the next prompt (see ExternalElementStage).
+  handle(IPC.captureInspectElement, async () => {
     const outcome = await pickElementInExternalApp()
-    if (outcome.kind !== 'picked') {
-      return {
-        sessionId: '',
-        outcome: outcome.kind,
-        ...(outcome.kind === 'unreachable' ? { message: outcome.message } : {}),
-        copiedToClipboard: false,
-      }
-    }
-    const capture = await capturePrimaryDisplay()
-    if (wantsClipboardCopy) {
-      clipboard.write({
-        image: nativeImage.createFromBuffer(Buffer.from(capture.data, 'base64')),
-        text: JSON.stringify(summarizeElement(outcome.pick), null, 2),
-      })
-    }
-    const result = await deps.harness.run(formatExternalElementContext(outcome.pick), {
-      image: { data: capture.data, mediaType: capture.mediaType, name: capture.name },
-    })
+    if (outcome.kind === 'unreachable') return { outcome: 'unreachable' as const, message: outcome.message }
+    if (outcome.kind === 'canceled') return { outcome: 'canceled' as const }
+    const description = describePick(outcome.pick)
     return {
-      sessionId: result.sessionId,
-      ...(result.messageId ? { messageId: result.messageId } : {}),
       outcome: 'picked' as const,
-      element: summarizeElement(outcome.pick),
-      copiedToClipboard: wantsClipboardCopy,
+      element: outcome.pick.element,
+      targetTitle: outcome.pick.targetTitle,
+      shortName: description.shortName,
+      hover: description.hover,
     }
   })
+
+  handle(IPC.captureStageElement, (_event, element, targetTitle) => deps.externalElements.stage(
+    { element: asExternalElement(element), targetTitle: asString(targetTitle, 'Target title', 256) },
+  ))
+
+  handle(IPC.captureElementAttachments, () => deps.externalElements.views())
+
+  handle(IPC.captureRemoveElement, (_event, id) => deps.externalElements.remove(asString(id, 'Element id', 128)))
 
   // Cross-app inspect: capture the primary display, bridge the screenshot
   // straight into the ND chat session, and optionally place it on the
@@ -224,6 +218,49 @@ function asPermissionMode(value: unknown): string {
 function asGatewayMethod(value: unknown): string {
   if (typeof value !== 'string' || value.length > GATEWAY_METHOD_MAX_LENGTH || !GATEWAY_METHOD_PATTERN.test(value)) throw new Error('Gateway method must be a dotted name like "session.list"')
   return value
+}
+
+/** Validate a round-tripped external element capture from the renderer. */
+function asExternalElement(value: unknown): ExternalPick['element'] {
+  if (!value || typeof value !== 'object') throw new Error('Element capture is required')
+  const record = value as Record<string, unknown>
+  const tag = typeof record.tag === 'string' && record.tag.trim() ? record.tag.trim().toLowerCase() : ''
+  if (!tag) throw new Error('Element capture is missing its tag')
+  const box = record.box as { x?: unknown; y?: unknown; width?: unknown; height?: unknown } | undefined
+  const numbers = [box?.x, box?.y, box?.width, box?.height]
+  if (!box || !numbers.every((item) => typeof item === 'number' && Number.isFinite(item))) {
+    throw new Error('Element capture is missing its bounding box')
+  }
+  const optional = (key: string, max: number): string | undefined => {
+    const item = record[key]
+    return typeof item === 'string' && item.trim() ? item.slice(0, max) : undefined
+  }
+  const id = optional('id', 256)
+  const role = optional('role', 128)
+  const ariaLabel = optional('ariaLabel', 256)
+  const text = optional('text', 300)
+  const html = optional('html', 1_200)
+  const url = optional('url', 2_048)
+  const pageTitle = optional('pageTitle', 256)
+  const classes = Array.isArray(record.classes)
+    ? record.classes.filter((item): item is string => typeof item === 'string').slice(0, 12)
+    : undefined
+  const attributes = Array.isArray(record.attributes)
+    ? record.attributes.filter((item): item is string => typeof item === 'string').slice(0, 24).map((item) => item.slice(0, 160))
+    : undefined
+  return {
+    tag,
+    ...(id !== undefined ? { id } : {}),
+    ...(classes !== undefined && classes.length > 0 ? { classes } : {}),
+    ...(role !== undefined ? { role } : {}),
+    ...(ariaLabel !== undefined ? { ariaLabel } : {}),
+    ...(text !== undefined ? { text } : {}),
+    ...(attributes !== undefined && attributes.length > 0 ? { attributes } : {}),
+    ...(html !== undefined ? { html } : {}),
+    ...(url !== undefined ? { url } : {}),
+    ...(pageTitle !== undefined ? { pageTitle } : {}),
+    box: { x: box.x as number, y: box.y as number, width: box.width as number, height: box.height as number },
+  }
 }
 
 function asSessionOptions(value: unknown): { sessionId?: string } {

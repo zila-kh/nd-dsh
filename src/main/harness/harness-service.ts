@@ -12,6 +12,7 @@ import type {
 } from '../../shared/contracts.js'
 import { dshPatchPath, harnessCliBinPath, harnessRoot, presetSourceDir } from '../app-paths.js'
 import type { BrowserController } from '../browser/browser-controller.js'
+import { formatExternalElementContext, type ExternalElementStage } from '../capture/external-inspect.js'
 import { GatewayClient, pickFreePort } from '../dsh/gateway-client.js'
 import type { ProviderStore } from '../providers.js'
 import type { WorkspaceService } from '../workspace/workspace-service.js'
@@ -51,6 +52,7 @@ export class HarnessService {
     private readonly workspace: WorkspaceService,
     private readonly browser: BrowserController,
     private readonly providers: ProviderStore,
+    private readonly externalElements: ExternalElementStage,
   ) {
     this.statusValue = this.computeStatus('stopped')
   }
@@ -100,9 +102,14 @@ export class HarnessService {
     const selectedAnnotation = captureImage ? undefined : this.browser.selectedUiAnnotation()
     const promptImage = captureImage
       ?? (selectedAnnotation ? this.browser.selectedUiAnnotationImage(selectedAnnotation.id) : undefined)
-    const runtimePrompt = selectedUiTarget || selectedAnnotation
+    // Staged external-app elements ride along with this prompt, then drain.
+    const stagedElements = this.externalElements.consumeAll()
+    const browserPrompt = selectedUiTarget || selectedAnnotation
       ? attachUiContext(cleaned, selectedUiTarget, selectedAnnotation)
       : cleaned
+    const runtimePrompt = stagedElements.length > 0
+      ? `${browserPrompt}\n\n${stagedElements.map((pick) => formatExternalElementContext(pick)).join('\n\n')}`
+      : browserPrompt
     const textContent = [{ type: 'text', text: runtimePrompt }]
     const content = promptImage
       ? [

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { externalCdpPort, formatExternalElementContext, summarizeElement, type ExternalPick } from '../src/main/capture/external-inspect.js'
+import { describePick, externalCdpPort, formatExternalElementContext, summarizeElement, type ExternalPick } from '../src/main/capture/external-inspect.js'
 
 const pick: ExternalPick = {
   targetTitle: 'Todo (Electron demo)',
@@ -34,6 +34,27 @@ describe('formatExternalElementContext', () => {
     expect(text).not.toContain('id:')
     expect(text).not.toContain('class:')
     expect(text).toContain('element: <div>')
+  })
+})
+
+describe('describePick', () => {
+  it('builds a compact chip name from id or first class', () => {
+    expect(describePick(pick).shortName).toBe('button#todo-add')
+    expect(describePick({
+      targetTitle: 'app',
+      element: { tag: 'div', classes: ['todo-item', 'row'], box: { x: 0, y: 0, width: 1, height: 1 } },
+    }).shortName).toBe('div.todo-item')
+    expect(describePick({
+      targetTitle: 'app',
+      element: { tag: 'span', box: { x: 0, y: 0, width: 1, height: 1 } },
+    }).shortName).toBe('span')
+  })
+
+  it('joins hover facts and always names the target app', () => {
+    const { hover } = describePick(pick)
+    expect(hover).toContain('<button> #todo-add')
+    expect(hover).toContain('text: Add')
+    expect(hover).toContain('Todo (Electron demo)')
   })
 })
 
