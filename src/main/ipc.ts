@@ -3,6 +3,7 @@ import type { BrowserBounds, DshSurface, ThemeMode } from '../shared/contracts.j
 import { IPC } from '../shared/contracts.js'
 import { projectRoot } from './app-paths.js'
 import { capturePrimaryDisplay } from './capture/app-capture.js'
+import { formatExternalElementContext, pickElementInExternalApp, summarizeElement } from './capture/external-inspect.js'
 import type { BrowserController } from './browser/browser-controller.js'
 import type { DshSurfaceController } from './dsh/dsh-surface.js'
 import type { CodingEngineRegistry } from './engines/coding-engine-registry.js'
@@ -57,6 +58,39 @@ export function registerIpc(deps: IpcDependencies): () => void {
     asString(agentId, 'Agent id', 256),
     asString(engineId, 'Engine id', 256),
   ))
+
+  // Element-level inspect for external Electron apps: attach to the target's
+  // loopback debug port, inject the picker via CDP Runtime.evaluate, then
+  // bridge the picked element (plus a screen capture) into the chat session.
+  handle(IPC.captureInspectElement, async (_event, copyFlag) => {
+    const wantsClipboardCopy = copyFlag === true
+    const outcome = await pickElementInExternalApp()
+    if (outcome.kind !== 'picked') {
+      return {
+        sessionId: '',
+        outcome: outcome.kind,
+        ...(outcome.kind === 'unreachable' ? { message: outcome.message } : {}),
+        copiedToClipboard: false,
+      }
+    }
+    const capture = await capturePrimaryDisplay()
+    if (wantsClipboardCopy) {
+      clipboard.write({
+        image: nativeImage.createFromBuffer(Buffer.from(capture.data, 'base64')),
+        text: JSON.stringify(summarizeElement(outcome.pick), null, 2),
+      })
+    }
+    const result = await deps.harness.run(formatExternalElementContext(outcome.pick), {
+      image: { data: capture.data, mediaType: capture.mediaType, name: capture.name },
+    })
+    return {
+      sessionId: result.sessionId,
+      ...(result.messageId ? { messageId: result.messageId } : {}),
+      outcome: 'picked' as const,
+      element: summarizeElement(outcome.pick),
+      copiedToClipboard: wantsClipboardCopy,
+    }
+  })
 
   // Cross-app inspect: capture the primary display, bridge the screenshot
   // straight into the ND chat session, and optionally place it on the

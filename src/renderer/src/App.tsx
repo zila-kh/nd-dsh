@@ -4,7 +4,7 @@ import { BrowserPane } from './components/BrowserPane'
 import { ChatPanel } from './components/ChatPanel'
 import { EditorPane } from './components/EditorPane'
 import { Explorer } from './components/Explorer'
-import { BrowserIcon, CameraIcon, CloseIcon, FileIcon, SidebarToggleIcon, SparkIcon } from './components/Icons'
+import { BrowserIcon, CameraIcon, CloseIcon, CrosshairIcon, FileIcon, SidebarToggleIcon, SparkIcon } from './components/Icons'
 import { OrganizationDashboard } from './components/OrganizationDashboard'
 import { RuntimePrompts } from './components/RuntimePrompts'
 import { StatusBar } from './components/StatusBar'
@@ -43,6 +43,7 @@ export default function App() {
   const [toast, setToast] = useState<string>()
   const [theme, setTheme] = useState<ThemeState | null>(null)
   const [appInspectCountdown, setAppInspectCountdown] = useState<number | null>(null)
+  const [elementInspectActive, setElementInspectActive] = useState(false)
   const appInspectTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
 
   // Cross-app inspect: after a short countdown (so the user can focus the
@@ -72,6 +73,28 @@ export default function App() {
   useEffect(() => () => {
     if (appInspectTimer.current !== undefined) clearInterval(appInspectTimer.current)
   }, [])
+
+  // Element-level inspect for an external Electron app: ND injects a picker
+  // through the target's loopback debug port; the picked element plus a
+  // screenshot are bridged into the chat session.
+  const startElementInspect = (): void => {
+    if (elementInspectActive) return
+    setElementInspectActive(true)
+    void window.ndDsh.capture.inspectElement(true)
+      .then((result) => {
+        if (result.outcome === 'picked') {
+          setToast(result.copiedToClipboard
+            ? 'Element sent to the agent and copied to the clipboard.'
+            : 'Element sent to the agent.')
+        } else if (result.outcome === 'canceled') {
+          setToast('Element pick canceled.')
+        } else {
+          setToast(result.message ?? 'No external app debug port found.')
+        }
+      })
+      .catch((cause) => setToast(errorMessage(cause)))
+      .finally(() => setElementInspectActive(false))
+  }
 
   useEffect(() => {
     void Promise.all([
@@ -225,6 +248,14 @@ export default function App() {
           >
             <CameraIcon />
           </button>
+          <button
+            className="titlebar-sidebar-toggle"
+            title="Inspect an element in an external Electron app (launch it with --remote-debugging-port=9333) — pick the element there, then it goes to the ND chat agent"
+            disabled={elementInspectActive}
+            onClick={startElementInspect}
+          >
+            <CrosshairIcon />
+          </button>
           <ThemeToggle theme={theme} onSelect={selectTheme} />
           <span className={`tiny-dot ${harnessStatus?.state ?? 'stopped'}`} />
           <span>{harnessStatus?.model ?? 'Runtime offline'}</span>
@@ -327,6 +358,10 @@ export default function App() {
       {appInspectCountdown !== null ? (
         <div className="toast" role="status">
           <span>{`Screen capture in ${appInspectCountdown}s — switch to the app you want to inspect`}</span>
+        </div>
+      ) : elementInspectActive ? (
+        <div className="toast" role="status">
+          <span>Element picker active — switch to your Electron app and click an element (Esc cancels)</span>
         </div>
       ) : toast ? <div className="toast" role="alert"><span>{toast}</span><button onClick={() => setToast(undefined)}><CloseIcon /></button></div> : null}
     </div>

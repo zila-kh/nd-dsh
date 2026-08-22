@@ -157,7 +157,7 @@ A **Public Beta** still requires packaged runtime distribution, signed/notarized
 
 ## Roadmap
 
-The full, ordered roadmap lives in [`docs/roadmap.md`](docs/roadmap.md). Summary:
+The full, ordered roadmap lives in [`docs/roadmap.md`](docs/roadmap.md), and the complete feature inventory / product requirements for contributors live in [`docs/prd-full.md`](docs/prd-full.md). Summary:
 
 1. **Shipped foundation** — the coding-first vertical slice above, on real state.
 2. **Public Beta P0** — runtime distribution, installers, installed-app E2E, onboarding.

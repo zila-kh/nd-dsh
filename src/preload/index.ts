@@ -18,6 +18,7 @@ const api: DesktopApi = {
   },
   capture: {
     inspectApp: (copyToClipboard) => ipcRenderer.invoke(IPC.captureInspectApp, copyToClipboard),
+    inspectElement: (copyToClipboard) => ipcRenderer.invoke(IPC.captureInspectElement, copyToClipboard),
   },
   browser: {
     state: () => ipcRenderer.invoke(IPC.browserState),

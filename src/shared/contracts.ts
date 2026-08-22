@@ -331,6 +331,23 @@ export interface AppInspectResult {
   displayLabel: string
 }
 
+/** Element picked in an external Electron app via the injected CDP inspector. */
+export interface ExternalElementInspectResult {
+  sessionId: string
+  messageId?: string
+  outcome: 'picked' | 'canceled' | 'unreachable'
+  message?: string
+  element?: {
+    tag: string
+    id?: string
+    role?: string
+    ariaLabel?: string
+    text?: string
+    box: { x: number; y: number; width: number; height: number }
+  }
+  copiedToClipboard: boolean
+}
+
 export interface DesktopApi {
   app: {
     info(): Promise<AppInfo>
@@ -349,6 +366,7 @@ export interface DesktopApi {
   }
   capture: {
     inspectApp(copyToClipboard: boolean): Promise<AppInspectResult>
+    inspectElement(copyToClipboard: boolean): Promise<ExternalElementInspectResult>
   }
   browser: {
     state(): Promise<BrowserState>
@@ -455,4 +473,5 @@ export const IPC = {
   enginesAssignments: 'engines:assignments',
   enginesAssign: 'engines:assign',
   captureInspectApp: 'capture:inspect-app',
+  captureInspectElement: 'capture:inspect-element',
 } as const

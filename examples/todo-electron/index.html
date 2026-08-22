@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'" />
+  <title>Todo (Electron demo)</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 18px; height: 100vh; display: flex; flex-direction: column;
+      gap: 14px; background: #0d1117; color: #d7dde5;
+      font: 13px/1.5 system-ui, "Segoe UI", sans-serif;
+    }
+    h1 { margin: 0; font-size: 15px; letter-spacing: 0.04em; color: #9fb1c5; }
+    .todo-form { display: flex; gap: 8px; }
+    .todo-input {
+      flex: 1; padding: 9px 11px; border: 1px solid #272f39; border-radius: 8px;
+      background: #131920; color: #d7dde5; font: inherit; outline: none;
+    }
+    .todo-input:focus { border-color: #4f8cff; }
+    .todo-add {
+      padding: 9px 14px; border: none; border-radius: 8px; background: #4f8cff;
+      color: #fff; font: inherit; font-weight: 600; cursor: pointer;
+    }
+    .todo-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+    .todo-item {
+      display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+      border: 1px solid #1c232c; border-radius: 8px; background: #131920;
+    }
+    .todo-item.done .todo-text { text-decoration: line-through; color: #626d7b; }
+    .todo-check { width: 16px; height: 16px; accent-color: #4ade80; cursor: pointer; }
+    .todo-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .todo-delete {
+      border: none; background: transparent; color: #f87171; font-size: 15px;
+      cursor: pointer; padding: 2px 6px; border-radius: 5px;
+    }
+    .todo-delete:hover { background: rgba(248, 113, 113, 0.12); }
+    .todo-empty { color: #626d7b; font-size: 12px; text-align: center; margin-top: 24px; }
+    .todo-count { color: #626d7b; font-size: 11px; }
+  </style>
+</head>
+<body>
+  <h1>TODO — Electron demo target</h1>
+  <form class="todo-form" id="todo-form">
+    <input class="todo-input" id="todo-input" placeholder="What needs doing?" aria-label="New todo" autocomplete="off" />
+    <button class="todo-add" type="submit" id="todo-add">Add</button>
+  </form>
+  <div class="todo-list" id="todo-list" role="list"></div>
+  <div class="todo-count" id="todo-count"></div>
+  <script>
+    const list = document.getElementById('todo-list')
+    const form = document.getElementById('todo-form')
+    const input = document.getElementById('todo-input')
+    const count = document.getElementById('todo-count')
+    let todos = [
+      { id: 1, text: 'Launch this app with --remote-debugging-port=9333', done: true },
+      { id: 2, text: 'Click the crosshair in ND-DSH and pick an element here', done: false },
+      { id: 3, text: 'Ask the agent about the picked element', done: false },
+    ]
+    function render() {
+      list.innerHTML = ''
+      for (const todo of todos) {
+        const item = document.createElement('div')
+        item.className = 'todo-item' + (todo.done ? ' done' : '')
+        item.dataset.todoId = String(todo.id)
+        item.setAttribute('role', 'listitem')
+        const check = document.createElement('input')
+        check.type = 'checkbox'; check.className = 'todo-check'; check.checked = todo.done
+        check.addEventListener('change', () => { todo.done = check.checked; render() })
+        const text = document.createElement('span')
+        text.className = 'todo-text'; text.textContent = todo.text
+        const del = document.createElement('button')
+        del.className = 'todo-delete'; del.type = 'button'; del.textContent = '×'
+        del.addEventListener('click', () => { todos = todos.filter((t) => t.id !== todo.id); render() })
+        item.append(check, text, del)
+        list.appendChild(item)
+      }
+      const open = todos.filter((t) => !t.done).length
+      count.textContent = `${open} open · ${todos.length - open} done`
+    }
+    form.addEventListener('submit', (event) => {
+      event.preventDefault()
+      const text = input.value.trim()
+      if (!text) return
+      todos.push({ id: Date.now(), text, done: false })
+      input.value = ''
+      render()
+    })
+    render()
+  </script>
+</body>
+</html>

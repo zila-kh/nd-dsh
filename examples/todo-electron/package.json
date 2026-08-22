@@ -1,0 +1,7 @@
+{
+  "name": "nd-dsh-todo-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Demo Electron target app for ND-DSH external element inspection. Run from the nd-dsh repo root: pnpm exec electron examples/todo-electron --remote-debugging-port=9333",
+  "main": "main.js"
+}
