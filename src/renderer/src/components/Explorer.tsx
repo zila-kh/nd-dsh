@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { WorkspaceEntry, WorkspaceState } from '../../../shared/contracts'
+import { FOLDER_ACCENT, fileAccent } from '../lib/file-accents'
 import { ChevronDownIcon, ChevronRightIcon, FileIcon, FilesIcon, FolderIcon, GitIcon, SearchIcon } from './Icons'
 
 interface ExplorerProps {
@@ -139,7 +140,9 @@ function TreeEntry({ entry, depth, selectedPath, onOpenFile }: {
         <span className="tree-chevron">
           {entry.kind === 'directory' ? open ? <ChevronDownIcon /> : <ChevronRightIcon /> : null}
         </span>
-        {entry.kind === 'directory' ? <FolderIcon className="folder-icon" /> : <FileIcon className="file-icon" />}
+        {entry.kind === 'directory'
+          ? <FolderIcon className="folder-icon" style={{ color: FOLDER_ACCENT }} />
+          : <FileIcon className="file-icon" style={{ color: fileAccent(entry.name) }} />}
         <span className="tree-label">{entry.name}</span>
         {loading ? <span className="tree-loading">…</span> : null}
       </button>

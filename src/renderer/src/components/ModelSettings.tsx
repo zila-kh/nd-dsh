@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import type { ModelProvider } from '../../../shared/contracts'
+import type { ModelProvider, ProviderPingResult } from '../../../shared/contracts'
 import { BoxIcon, EyeIcon, EyeOffIcon, PencilIcon, PlugIcon, PlusIcon, RotateIcon, TrashIcon } from './Icons'
 
 interface ModelSettingsProps {
@@ -26,6 +26,8 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
   const [modelDraft, setModelDraft] = useState('')
   const [editingContextModelId, setEditingContextModelId] = useState<string | null>(null)
   const [contextDraft, setContextDraft] = useState('')
+  const [testing, setTesting] = useState(false)
+  const [pingResult, setPingResult] = useState<ProviderPingResult | null>(null)
 
   useEffect(() => {
     let mounted = true
@@ -43,6 +45,7 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
   useEffect(() => {
     setApiKeyDraft('')
     setShowApiKey(false)
+    setPingResult(null)
   }, [selectedId])
 
   const selected = providers.find((provider) => provider.id === selectedId) ?? providers[0] ?? null
@@ -149,6 +152,27 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
     }
   }
 
+  // Real probe: the trusted main process sends an authenticated request to
+  // this provider's server and reports state, HTTP status, and latency.
+  const testConnection = async (): Promise<void> => {
+    if (!selected || testing) return
+    setTesting(true)
+    setPingResult(null)
+    try {
+      setPingResult(await window.ndDsh.providers.ping(selected.id, true))
+    } catch (cause) {
+      onError(errorMessage(cause))
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  const pingLabel = (ping: ProviderPingResult): string => {
+    if (ping.state === 'ok') return `Online · ${ping.latencyMs ?? '?'}ms${ping.status !== undefined ? ` · HTTP ${ping.status}` : ''}`
+    if (ping.state === 'auth') return `Reachable · credential rejected${ping.status !== undefined ? ` · HTTP ${ping.status}` : ''}`
+    return 'No answer · timeout or network error'
+  }
+
   return (
     <section className="models-settings" aria-label="Model settings">
       <header className="models-header">
@@ -198,6 +222,8 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
               <div className="provider-status-actions">
                 <span className={selected.enabled ? 'badge-enabled' : 'badge-disabled'}>{selected.enabled ? 'Enabled' : 'Disabled'}</span>
                 <button className="toggle-button" onClick={() => updateSelected({ enabled: !selected.enabled })}>{selected.enabled ? 'Disable' : 'Enable'}</button>
+                <button type="button" className="toggle-button" disabled={testing} onClick={() => void testConnection()}>{testing ? 'Testing…' : 'Test connection'}</button>
+                {pingResult ? <span className={`ping-result ${pingResult.state}`}>{pingLabel(pingResult)}</span> : null}
                 <button className="icon-button-mini danger" title="Delete provider" aria-label="Delete provider" onClick={() => removeProvider(selected.id)}><TrashIcon /></button>
               </div>
             </header>

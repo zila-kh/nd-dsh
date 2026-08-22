@@ -104,7 +104,15 @@ export class HarnessService {
   /** Whitelisted gateway call for read-oriented UI needs (sessions, models, presets…). */
   async gatewayRpc(method: string, payload?: unknown): Promise<GatewayRpcResult> {
     const gateway = await this.ensureStarted()
-    return gateway.rpc(method, payload)
+    const result = await gateway.rpc(method, payload)
+    if (!result.ok && result.error?.code === 'gateway-unreachable') {
+      // The runtime child may have exited and been replaced between calls;
+      // retry once on the fresh gateway so a restart never surfaces as a
+      // renderer-facing transport error.
+      const replacement = await this.ensureStarted()
+      if (replacement !== gateway) return replacement.rpc(method, payload)
+    }
+    return result
   }
 
   /** Boot the runtime eagerly. */

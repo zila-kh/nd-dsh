@@ -9,6 +9,7 @@ const api: DesktopApi = {
     save: (providers) => ipcRenderer.invoke(IPC.providersSave, providers),
     setApiKey: (providerId, apiKey) => ipcRenderer.invoke(IPC.providersSetApiKey, providerId, apiKey),
     clearApiKey: (providerId) => ipcRenderer.invoke(IPC.providersClearApiKey, providerId),
+    ping: (providerId, force) => ipcRenderer.invoke(IPC.providersPing, providerId, force),
   },
   engines: {
     list: () => ipcRenderer.invoke(IPC.enginesList),
@@ -37,6 +38,7 @@ const api: DesktopApi = {
     setRoot: (path) => ipcRenderer.invoke(IPC.workspaceSetRoot, path),
     list: (relativePath) => ipcRenderer.invoke(IPC.workspaceList, relativePath),
     read: (relativePath) => ipcRenderer.invoke(IPC.workspaceRead, relativePath),
+    suggest: (query) => ipcRenderer.invoke(IPC.workspaceSuggest, query),
   },
   harness: {
     status: () => ipcRenderer.invoke(IPC.harnessStatus),

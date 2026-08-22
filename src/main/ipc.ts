@@ -72,6 +72,8 @@ export function registerIpc(deps: IpcDependencies): () => void {
   })
   handle(IPC.workspaceList, (_event, value) => deps.workspace.list(value === undefined ? '.' : asString(value, 'Workspace path', 4_096)))
   handle(IPC.workspaceRead, (_event, value) => deps.workspace.read(asString(value, 'Workspace file path', 4_096)))
+  // An empty query is valid here: it surfaces the workspace's top entries.
+  handle(IPC.workspaceSuggest, (_event, value) => deps.workspace.suggest(typeof value === 'string' ? value.slice(0, 256) : ''))
 
   handle(IPC.harnessStatus, () => deps.harness.status())
   handle(IPC.harnessRun, (_event, value, options) => deps.harness.run(asString(value, 'Prompt', 100_000), asSessionOptions(options)))
@@ -106,6 +108,7 @@ export function registerIpc(deps: IpcDependencies): () => void {
     asString(apiKey, 'API key', 32_768),
   ))
   handle(IPC.providersClearApiKey, (_event, providerId) => deps.providers.clearApiKey(asString(providerId, 'Provider id', 256)))
+  handle(IPC.providersPing, (_event, providerId, force) => deps.providers.ping(asString(providerId, 'Provider id', 256), Boolean(force)))
 
   return () => {
     for (const channel of channels) ipcMain.removeHandler(channel)

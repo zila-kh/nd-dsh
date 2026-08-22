@@ -1,15 +1,24 @@
 import { dialog } from 'electron'
 import { promises as fs } from 'node:fs'
 import { basename, join, relative, resolve } from 'node:path'
-import type { WorkspaceEntry, WorkspaceFile, WorkspaceState } from '../../shared/contracts.js'
+import type { WorkspaceEntry, WorkspaceFile, WorkspaceState, WorkspaceSuggestion } from '../../shared/contracts.js'
 import { resolveInside } from './path-utils.js'
+import { collectSuggestionIndex, rankFileSuggestions } from './suggest.js'
 
 const MAX_FILE_BYTES = 1024 * 1024
 const MAX_DIRECTORY_ENTRIES = 500
 const SKIPPED_NAMES = new Set(['.git', 'node_modules', 'out', 'dist', '.dsh', '.sessions'])
+const SUGGEST_INDEX_TTL_MS = 30_000
+
+interface SuggestIndexCache {
+  root: string
+  at: number
+  entries: WorkspaceSuggestion[]
+}
 
 export class WorkspaceService {
   private root: string
+  private suggestIndex: SuggestIndexCache | null = null
 
   constructor(initialRoot: string) {
     this.root = resolve(initialRoot)
@@ -79,6 +88,37 @@ export class WorkspaceService {
     } finally {
       await handle.close()
     }
+  }
+
+  /**
+   * @-mention lookup over a bounded workspace index. The index is rebuilt at
+   * most every SUGGEST_INDEX_TTL_MS and whenever the root changes, so typing
+   * stays cheap on large trees.
+   */
+  async suggest(query: string): Promise<WorkspaceSuggestion[]> {
+    const trimmed = query.trim().slice(0, 256)
+    const entries = await this.suggestEntries()
+    return rankFileSuggestions(entries, trimmed)
+  }
+
+  private async suggestEntries(): Promise<WorkspaceSuggestion[]> {
+    const now = Date.now()
+    if (this.suggestIndex && this.suggestIndex.root === this.root && now - this.suggestIndex.at < SUGGEST_INDEX_TTL_MS) {
+      return this.suggestIndex.entries
+    }
+    const root = this.root
+    const entries = await collectSuggestionIndex(async (relativeDirectory) => {
+      const absolute = relativeDirectory ? join(root, relativeDirectory) : root
+      const items = await fs.readdir(absolute, { withFileTypes: true })
+      return items.map((item) => ({
+        name: item.name,
+        isDirectory: () => item.isDirectory(),
+        isFile: () => item.isFile(),
+        isSymbolicLink: () => item.isSymbolicLink(),
+      }))
+    })
+    this.suggestIndex = { root, at: now, entries }
+    return entries
   }
 
   private async resolveExisting(relativePath: string): Promise<string> {

@@ -1,12 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type KeyboardEvent } from 'react'
 import type {
   DshEventFrame,
   HarnessStatus,
   ModelProviderGroup,
+  ProviderPingResult,
   SessionModels,
   SessionSummary,
+  WorkspaceSuggestion,
 } from '../../../shared/contracts'
 import type { AskQuestion, ThreadEntry, TodoItem } from '../lib/types'
+import { FOLDER_ACCENT, SKILL_ACCENT, fileExtensionOf, fileAccent } from '../lib/file-accents'
+import { applyMention, detectMentionTrigger } from '../../../shared/mentions'
 import {
   ArrowUpIcon,
   BrainIcon,
@@ -47,12 +51,38 @@ const RESULT_MAX_CHARS = 2_000
 
 const FS_WRITE_TOOL_NAMES = new Set(['fs_edit', 'fs_write', 'fs_write_text', 'fs_create', 'fs_apply_patch', 'fs_str_replace', 'apply_patch'])
 
+interface SkillSuggestion {
+  name: string
+  description: string
+  whenToUse?: string
+}
+
+interface MentionItem {
+  kind: 'skill' | 'file'
+  insert: string
+  label: string
+  tag: string
+  hover: string
+  accent: string
+  directory: boolean
+}
+
+const MENTION_MENU_LIMIT = 12
+
+type PingEntry = { testing: true } | ProviderPingResult
+
+function fileMentionTag(relativePath: string): string {
+  const extension = fileExtensionOf(relativePath)
+  return extension ? extension.toUpperCase().slice(0, 5) : 'FILE'
+}
+
 export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, onOpenSettings, onOpenFile, externalPrompt, onExternalPromptConsumed }: ChatPanelProps) {
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [threads, setThreads] = useState<Record<string, ThreadEntry[]>>({})
   const [busySessions, setBusySessions] = useState<Set<string>>(new Set())
   const [models, setModels] = useState<SessionModels | null>(null)
+  const [providerPings, setProviderPings] = useState<Record<string, PingEntry>>({})
   const [permissionMode, setPermissionMode] = useState('workspace-write')
   const [prompt, setPrompt] = useState('')
   const [sessionsLoaded, setSessionsLoaded] = useState(false)
@@ -61,6 +91,12 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
   const [modelMenuOpen, setModelMenuOpen] = useState(false)
   const [contextMenuOpen, setContextMenuOpen] = useState(false)
   const [changedFiles, setChangedFiles] = useState<string[]>([])
+  const [mentionCaret, setMentionCaret] = useState(0)
+  const [mentionDismissed, setMentionDismissed] = useState<string | null>(null)
+  const [mentionIndex, setMentionIndex] = useState(0)
+  const [skillItems, setSkillItems] = useState<SkillSuggestion[]>([])
+  const [skillsState, setSkillsState] = useState<'idle' | 'loading' | 'ready' | 'unavailable'>('idle')
+  const [fileItems, setFileItems] = useState<WorkspaceSuggestion[]>([])
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -140,11 +176,134 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
       .catch(() => setModels(null))
   }, [activeSessionId])
 
+  // Opening the model picker probes every provider route for real: the main
+  // process sends an authenticated request to each provider server and the
+  // result (state + latency) renders as the row's status icon.
+  const pingProviders = useCallback(async (ids: string[]): Promise<void> => {
+    if (ids.length === 0) return
+    setProviderPings((current) => {
+      const next = { ...current }
+      for (const id of ids) next[id] = { testing: true }
+      return next
+    })
+    await Promise.all(ids.map(async (id) => {
+      try {
+        const result = await window.ndDsh.providers.ping(id)
+        setProviderPings((current) => ({ ...current, [id]: result }))
+      } catch {
+        setProviderPings((current) => ({
+          ...current,
+          [id]: { providerId: id, state: 'unreachable', hasApiKey: false, at: Date.now() },
+        }))
+      }
+    }))
+  }, [])
+
+  useEffect(() => {
+    if (!modelMenuOpen) return
+    const ids = [...new Set((models?.groups ?? []).map((group) => group.id))]
+    if (ids.length > 0) void pingProviders(ids)
+  }, [modelMenuOpen, models, pingProviders])
+
   useEffect(() => {
     if (!externalPrompt) return
     setPrompt(externalPrompt.text)
     onExternalPromptConsumed?.()
   }, [externalPrompt, onExternalPromptConsumed])
+
+  // Mention triggers: '/' lists skills from the runtime's session catalog,
+  // '@' lists workspace files. Escape dismisses the current token until it
+  // changes, so the menu does not fight the typist.
+  const mentionTrigger = useMemo(() => {
+    const trigger = detectMentionTrigger(prompt, mentionCaret)
+    if (!trigger) return null
+    return prompt.slice(trigger.start, trigger.end) === mentionDismissed ? null : trigger
+  }, [prompt, mentionCaret, mentionDismissed])
+
+  const skillsLoadedFor = useRef<string | null>(null)
+  useEffect(() => {
+    if (mentionTrigger?.kind !== 'skill' || !activeSessionId) return
+    if (skillsLoadedFor.current === activeSessionId) return
+    skillsLoadedFor.current = activeSessionId
+    setSkillsState('loading')
+    void window.ndDsh.dsh.rpc('skill.list', { sessionId: activeSessionId })
+      .then((result) => {
+        const skills = result.ok ? ((result.value ?? {}) as { skills?: SkillSuggestion[] }).skills : undefined
+        if (!Array.isArray(skills)) throw new Error('skill.list returned no catalog')
+        setSkillItems(skills.map((skill) => ({
+          name: skill.name,
+          description: skill.description,
+          ...(typeof skill.whenToUse === 'string' && skill.whenToUse ? { whenToUse: skill.whenToUse } : {}),
+        })))
+        setSkillsState('ready')
+      })
+      .catch(() => {
+        setSkillItems([])
+        setSkillsState('unavailable')
+      })
+  }, [mentionTrigger?.kind, activeSessionId])
+
+  useEffect(() => {
+    if (mentionTrigger?.kind !== 'file') return
+    const query = mentionTrigger.query
+    let cancelled = false
+    const timer = setTimeout(() => {
+      void window.ndDsh.workspace.suggest(query)
+        .then((items) => { if (!cancelled) setFileItems(items) })
+        .catch(() => { if (!cancelled) setFileItems([]) })
+    }, 120)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [mentionTrigger?.kind, mentionTrigger?.query])
+
+  const mentionItems = useMemo<MentionItem[]>(() => {
+    if (!mentionTrigger) return []
+    if (mentionTrigger.kind === 'skill') {
+      const needle = mentionTrigger.query.toLowerCase()
+      return skillItems
+        .filter((skill) => skill.name.toLowerCase().includes(needle))
+        .slice(0, MENTION_MENU_LIMIT)
+        .map((skill) => ({
+          kind: 'skill' as const,
+          insert: `/${skill.name}`,
+          label: skill.name,
+          tag: 'SKILL',
+          hover: [skill.description, skill.whenToUse].filter(Boolean).join(' — '),
+          accent: SKILL_ACCENT,
+          directory: false,
+        }))
+    }
+    return fileItems
+      .slice(0, MENTION_MENU_LIMIT)
+      .map((file) => ({
+        kind: 'file' as const,
+        insert: `@${file.relativePath}`,
+        label: file.relativePath,
+        tag: file.kind === 'directory' ? 'FOLDER' : fileMentionTag(file.relativePath),
+        hover: `@${file.relativePath} · ${file.kind === 'directory' ? 'directory mention' : 'file mention'}`,
+        accent: file.kind === 'directory' ? FOLDER_ACCENT : fileAccent(file.relativePath),
+        directory: file.kind === 'directory',
+      }))
+  }, [mentionTrigger, skillItems, fileItems])
+
+  useEffect(() => {
+    setMentionIndex(0)
+  }, [mentionTrigger?.kind, mentionTrigger?.query, mentionItems.length])
+
+  const acceptMention = useCallback((item: MentionItem): void => {
+    const trigger = detectMentionTrigger(prompt, mentionCaret)
+    if (!trigger) return
+    const next = applyMention(prompt, trigger, item.insert)
+    setPrompt(next.value)
+    setMentionCaret(next.caret)
+    setMentionDismissed(null)
+    requestAnimationFrame(() => textareaRef.current?.setSelectionRange(next.caret, next.caret))
+  }, [prompt, mentionCaret])
+
+  // Opening a badge flyout must retire the mention popup: two popups over the
+  // composer overlap and hide each other.
+  const closeMention = useCallback((): void => {
+    setMentionCaret(0)
+  }, [])
 
   // The live gateway stream: fold session events into the active thread, show
   // approvals/questions as cards, and track per-session busy state.
@@ -219,6 +378,8 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
     const input = prompt.trim()
     if (!input || busy) return
     setPrompt('')
+    setMentionCaret(0)
+    setMentionDismissed(null)
     try {
       const result = await window.ndDsh.harness.run(input, activeSessionId ? { sessionId: activeSessionId } : undefined)
       setActiveSessionId(result.sessionId)
@@ -456,26 +617,101 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
         </div>
 
         <div className="composer-container" ref={menuRef}>
-          <textarea
-            ref={textareaRef}
-            value={prompt}
-            onChange={(event: ChangeEvent<HTMLTextAreaElement>) => setPrompt(event.target.value)}
-            onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
-              if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault()
-                void run()
-              }
-            }}
-            placeholder="Ask the agent to work in this workspace"
-            rows={3}
-          />
+          <div className="mention-anchor">
+            {mentionTrigger ? (
+              <div className="mention-menu shadow-flyout">
+                {mentionItems.length === 0 ? (
+                  <div className="mention-hint">
+                    {mentionTrigger.kind === 'skill'
+                      ? (activeSessionId
+                        ? (skillsState === 'loading' ? 'Loading skills…' : skillsState === 'unavailable' ? 'Skills unavailable' : 'No matching skills')
+                        : 'Send a message first to load skills')
+                      : 'No matching files'}
+                  </div>
+                ) : (
+                  <>
+                    {mentionItems.map((item, index) => (
+                      <button
+                        key={item.kind + item.insert}
+                        className={`mention-item ${index === mentionIndex ? 'active' : ''}`}
+                        style={{ '--mention-accent': item.accent } as CSSProperties}
+                        onMouseEnter={() => setMentionIndex(index)}
+                        onMouseDown={(event) => {
+                          event.preventDefault()
+                          acceptMention(item)
+                        }}
+                      >
+                        <span className="mention-chip">
+                          {item.kind === 'skill' ? <SparkIcon /> : item.directory ? <FolderIcon /> : <FileIcon />}
+                        </span>
+                        <span className="mention-body">
+                          <span className="mention-line">
+                            <span className="mention-label"><span className="mention-marker">{item.kind === 'skill' ? '/' : '@'}</span>{item.label}</span>
+                            <span className="mention-tag">{item.tag}</span>
+                          </span>
+                          {item.hover ? <span className="mention-more">{item.hover}</span> : null}
+                        </span>
+                      </button>
+                    ))}
+                    <div className="mention-footer">
+                      <span>↑↓ navigate</span>
+                      <span>↵ insert</span>
+                      <span>esc dismiss</span>
+                    </div>
+                  </>
+                )}
+              </div>
+            ) : null}
+            <textarea
+              ref={textareaRef}
+              value={prompt}
+              onChange={(event: ChangeEvent<HTMLTextAreaElement>) => {
+                setPrompt(event.target.value)
+                setMentionCaret(event.target.selectionStart ?? event.target.value.length)
+              }}
+              onSelect={(event: ChangeEvent<HTMLTextAreaElement>) => {
+                setMentionCaret(event.target.selectionStart ?? 0)
+              }}
+              onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
+                if (mentionTrigger) {
+                  if (mentionItems.length > 0 && event.key === 'ArrowDown') {
+                    event.preventDefault()
+                    setMentionIndex((index) => (index + 1) % mentionItems.length)
+                    return
+                  }
+                  if (mentionItems.length > 0 && event.key === 'ArrowUp') {
+                    event.preventDefault()
+                    setMentionIndex((index) => (index - 1 + mentionItems.length) % mentionItems.length)
+                    return
+                  }
+                  if (mentionItems.length > 0 && (event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey) {
+                    event.preventDefault()
+                    const item = mentionItems[mentionIndex] ?? mentionItems[0]
+                    if (item) acceptMention(item)
+                    return
+                  }
+                  if (event.key === 'Escape') {
+                    event.preventDefault()
+                    setMentionDismissed(prompt.slice(mentionTrigger.start, mentionTrigger.end))
+                    return
+                  }
+                }
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault()
+                  void run()
+                }
+              }}
+              placeholder="Ask the agent to work in this workspace — use @ for files and / for skills"
+              rows={3}
+            />
+          </div>
 
           <div className="composer-actions-bar">
             <div className="action-group-left">
               <div className="menu-anchor">
                 <button
                   className="permission-badge"
-                  onClick={() => { setPermissionMenuOpen(!permissionMenuOpen); setModelMenuOpen(false); setThoughtMenuOpen(false) }}
+                  onClick={() => { setPermissionMenuOpen(!permissionMenuOpen); setModelMenuOpen(false); setThoughtMenuOpen(false); closeMention() }}
                 >
                   <ShieldIcon />
                   <span>{PERMISSION_MODES.find((mode) => mode.id === permissionMode)?.label ?? permissionMode}</span>
@@ -504,7 +740,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
                 <button
                   className="context-badge"
                   title="Context used in this thread (hover to inspect)"
-                  onClick={() => setContextMenuOpen((open) => !open)}
+                  onClick={() => { setContextMenuOpen((open) => !open); closeMention() }}
                 >
                   <ContextIcon />
                   <span>{threadContext.readFiles.length + threadContext.editedFiles.length}</span>
@@ -571,7 +807,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
                 <button
                   className="model-picker-button"
                   title={`${currentGroup?.name ?? currentModel?.provider ?? 'model'}/${currentModel?.model ?? ''}`}
-                  onClick={() => { setModelMenuOpen(!modelMenuOpen); setPermissionMenuOpen(false); setThoughtMenuOpen(false) }}
+                  onClick={() => { setModelMenuOpen(!modelMenuOpen); setPermissionMenuOpen(false); setThoughtMenuOpen(false); closeMention() }}
                 >
                   <span className="model-name-text">{`${currentGroup?.name ?? currentModel?.provider ?? 'deepseek'}/${currentModel?.model ?? 'deepseek-v4-flash'}`}</span>
                   <ChevronDownIcon />
@@ -587,6 +823,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
                       >
                         <span>{group.name}</span>
                         <div className="row-end">
+                          <ProviderPingIndicator ping={providerPings[group.id]} />
                           {currentModel?.provider === group.id ? <CheckIcon className="check-icon" /> : null}
                           <ChevronRightIcon />
                         </div>
@@ -599,6 +836,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
                         className={`menu-item model-item ${currentModel?.model === model.id ? 'active' : ''}`}
                         onClick={() => { void selectModel(currentGroup.id, model.id); setModelMenuOpen(false) }}
                       >
+                        <ProviderPingDot ping={providerPings[currentGroup.id]} />
                         {model.name ?? model.id}
                         {currentModel?.model === model.id ? <CheckIcon className="check-icon" /> : null}
                       </button>
@@ -615,7 +853,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
                 <div className="menu-anchor">
                   <button
                     className="thought-picker-button"
-                    onClick={() => { setThoughtMenuOpen(!thoughtMenuOpen); setModelMenuOpen(false); setPermissionMenuOpen(false) }}
+                    onClick={() => { setThoughtMenuOpen(!thoughtMenuOpen); setModelMenuOpen(false); setPermissionMenuOpen(false); closeMention() }}
                   >
                     <BrainIcon />
                     <span>{reasoningEfforts.find((effort) => effort.id === activeEffort)?.name ?? 'Auto'}</span>
@@ -966,4 +1204,39 @@ function toolPath(args: unknown): string | undefined {
     }
   }
   return undefined
+}
+
+function pingTitle(ping: ProviderPingResult): string {
+  if (ping.state === 'ok') {
+    return `Server reachable — ${ping.latencyMs ?? '?'}ms round trip${ping.status !== undefined ? ` (HTTP ${ping.status})` : ''}`
+  }
+  if (ping.state === 'auth') {
+    return `Server reachable but the stored credential was rejected${ping.status !== undefined ? ` (HTTP ${ping.status})` : ''}`
+  }
+  return 'No answer from the server (timeout or network error)'
+}
+
+/** Status dot + live latency for a provider row in the model flyout. */
+function ProviderPingIndicator({ ping }: { ping: PingEntry | undefined }) {
+  if (!ping) return null
+  if ('testing' in ping) {
+    return (
+      <span className="ping-indicator" title="Probing the provider server…">
+        <span className="ping-dot testing" />
+      </span>
+    )
+  }
+  return (
+    <span className="ping-indicator" title={pingTitle(ping)}>
+      <span className={`ping-dot ${ping.state}`} />
+      {ping.state === 'ok' && ping.latencyMs !== undefined ? <span className="ping-ms">{ping.latencyMs}ms</span> : null}
+    </span>
+  )
+}
+
+/** Compact status dot for a single model row, colored by its provider's probe. */
+function ProviderPingDot({ ping }: { ping: PingEntry | undefined }) {
+  if (!ping) return null
+  if ('testing' in ping) return <span className="ping-dot testing" title="Probing the provider server…" />
+  return <span className={`ping-dot ${ping.state}`} title={pingTitle(ping)} />
 }

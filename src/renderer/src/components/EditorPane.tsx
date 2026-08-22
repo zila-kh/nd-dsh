@@ -1,6 +1,7 @@
 import { useMemo, useRef } from 'react'
 import hljs from 'highlight.js/lib/common'
 import type { WorkspaceFile } from '../../../shared/contracts'
+import { fileAccent } from '../lib/file-accents'
 import { FileIcon, SparkIcon } from './Icons'
 import { SelectionPromptMenu, type SelectionAction } from './SelectionPromptMenu'
 
@@ -73,7 +74,7 @@ export function EditorPane({ file, onAgentPrompt, onError }: EditorPaneProps) {
   return (
     <section className="editor-pane" aria-label={`Editor ${file.relativePath}`}>
       <div className="editor-tab-row">
-        <div className="editor-tab active"><FileIcon /><span>{file.relativePath.split(/[\\/]/).at(-1)}</span></div>
+        <div className="editor-tab active"><FileIcon style={{ color: fileAccent(file.relativePath) }} /><span>{file.relativePath.split(/[\\/]/).at(-1)}</span></div>
       </div>
       {file.truncated ? <div className="truncated-banner">Preview truncated at 1 MiB.</div> : null}
       <div className="code-scroll" ref={scrollRef}>

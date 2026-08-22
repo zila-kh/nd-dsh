@@ -37,6 +37,11 @@ export interface WorkspaceFile {
   truncated: boolean
 }
 
+export interface WorkspaceSuggestion {
+  relativePath: string
+  kind: 'file' | 'directory'
+}
+
 export type HarnessState = 'stopped' | 'starting' | 'ready' | 'running' | 'error'
 
 export interface HarnessStatus {
@@ -221,6 +226,17 @@ export interface ModelProvider {
   models: ProviderModel[]
 }
 
+/** Result of a real HTTP probe against a provider's server. */
+export interface ProviderPingResult {
+  providerId: string
+  /** ok = server answered; auth = answered but rejected the credential; unreachable = no answer. */
+  state: 'ok' | 'auth' | 'unreachable'
+  latencyMs?: number
+  status?: number
+  hasApiKey: boolean
+  at: number
+}
+
 export interface DesktopApi {
   app: {
     info(): Promise<AppInfo>
@@ -230,6 +246,7 @@ export interface DesktopApi {
     save(providers: ModelProvider[]): Promise<ModelProvider[]>
     setApiKey(providerId: string, apiKey: string): Promise<ModelProvider[]>
     clearApiKey(providerId: string): Promise<ModelProvider[]>
+    ping(providerId: string, force?: boolean): Promise<ProviderPingResult>
   }
   engines: {
     list(): Promise<CodingEngineDescriptor[]>
@@ -254,6 +271,7 @@ export interface DesktopApi {
     setRoot(path: string): Promise<WorkspaceState>
     list(relativePath?: string): Promise<WorkspaceEntry[]>
     read(relativePath: string): Promise<WorkspaceFile>
+    suggest(query: string): Promise<WorkspaceSuggestion[]>
   }
   harness: {
     status(): Promise<HarnessStatus>
@@ -303,6 +321,7 @@ export const IPC = {
   workspaceSetRoot: 'workspace:set-root',
   workspaceList: 'workspace:list',
   workspaceRead: 'workspace:read',
+  workspaceSuggest: 'workspace:suggest',
   harnessStatus: 'harness:status',
   harnessRun: 'harness:run',
   harnessStop: 'harness:stop',
@@ -326,6 +345,7 @@ export const IPC = {
   providersSave: 'providers:save',
   providersSetApiKey: 'providers:set-api-key',
   providersClearApiKey: 'providers:clear-api-key',
+  providersPing: 'providers:ping',
   enginesList: 'engines:list',
   enginesAssignments: 'engines:assignments',
   enginesAssign: 'engines:assign',

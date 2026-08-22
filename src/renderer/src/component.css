@@ -650,6 +650,176 @@
   color: var(--faint);
 }
 
+/* Mention (@ files, / skills) popup anchored above the composer textarea.
+   Each row carries a --mention-accent color (skill violet, per-extension file
+   colors, amber folders) that tints its chip, marker, tag, and hover state. */
+.mention-anchor {
+  position: relative;
+}
+.mention-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  margin-bottom: 6px;
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface-1);
+  z-index: 110;
+}
+.mention-item {
+  display: flex;
+  width: 100%;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 7px 8px;
+  border: none;
+  border-left: 2px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.mention-item.active,
+.mention-item:hover {
+  background: color-mix(in srgb, var(--mention-accent, #94a3b8) 12%, transparent);
+  border-left-color: var(--mention-accent, #94a3b8);
+}
+.mention-chip {
+  flex: none;
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--mention-accent, #94a3b8) 18%, transparent);
+  color: var(--mention-accent, #94a3b8);
+}
+.mention-chip svg {
+  width: 12px;
+  height: 12px;
+}
+.mention-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mention-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.mention-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 560;
+}
+.mention-marker {
+  margin-right: 1px;
+  color: var(--mention-accent, #94a3b8);
+  font-weight: 640;
+}
+.mention-tag {
+  flex: none;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 620;
+  letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--mention-accent, #94a3b8) 72%, var(--text));
+  background: color-mix(in srgb, var(--mention-accent, #94a3b8) 14%, transparent);
+}
+/* Hover/keyboard-active rows reveal the full description or the exact token */
+.mention-more {
+  display: block;
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.45;
+  transition: max-height 0.16s ease, opacity 0.16s ease;
+}
+.mention-item.active .mention-more,
+.mention-item:hover .mention-more {
+  max-height: 48px;
+  opacity: 1;
+}
+.mention-footer {
+  display: flex;
+  gap: 12px;
+  padding: 6px 8px 3px;
+  margin-top: 3px;
+  border-top: 1px solid var(--border);
+  color: var(--fainter);
+  font-size: 10px;
+}
+.mention-hint {
+  padding: 8px 10px;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+/* Provider reachability indicator: reflects a real authenticated ping */
+.ping-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.ping-dot {
+  display: inline-block;
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--fainter);
+}
+.ping-dot.ok {
+  background: #4ade80;
+  box-shadow: 0 0 6px rgba(74, 222, 128, 0.55);
+}
+.ping-dot.auth {
+  background: #f59e0b;
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.55);
+}
+.ping-dot.unreachable {
+  background: #f87171;
+  box-shadow: 0 0 6px rgba(248, 113, 113, 0.55);
+}
+.ping-dot.testing {
+  background: var(--faint);
+  animation: ping-pulse 1s ease-in-out infinite;
+}
+@keyframes ping-pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+.ping-ms {
+  color: var(--faint);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 9px;
+}
+.ping-result {
+  font-size: 9px;
+}
+.ping-result.ok { color: #4ade80; }
+.ping-result.auth { color: #f59e0b; }
+.ping-result.unreachable { color: #f87171; }
+
 /* Bottom Action Controls Bar */
 .composer-actions-bar {
   display: flex;
@@ -796,7 +966,8 @@
   border-radius: 10px;
   background: var(--surface-1);
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
-  z-index: 100;
+  /* Above the mention menu (z-index 110) so badge flyouts never hide under it */
+  z-index: 130;
 }
 .popover-menu.model-flyout {
   min-width: 210px;
