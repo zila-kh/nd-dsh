@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import type { BrowserState } from '../../../shared/contracts'
-import { ArrowLeftIcon, ArrowRightIcon, CameraIcon, ExternalIcon, ReloadIcon } from './Icons'
+import { ArrowLeftIcon, ArrowRightIcon, CameraIcon, ContextIcon, ExternalIcon, PencilIcon, ReloadIcon } from './Icons'
 
 interface BrowserPaneProps {
   active: boolean
@@ -78,32 +78,107 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
     }
   }
 
+  const toggleInspectMode = async (): Promise<void> => {
+    const setInspectMode = window.ndDsh.browser.setInspectMode
+    if (!setInspectMode) {
+      onError('UI inspect mode is available in the ND-DSH desktop app.')
+      return
+    }
+    await runBrowserAction(() => setInspectMode(!state?.inspectMode))
+  }
+
+  const clearSelection = async (): Promise<void> => {
+    const clear = window.ndDsh.browser.clearSelection
+    if (!clear) return
+    await runBrowserAction(() => clear())
+  }
+
+  const toggleAnnotationMode = async (): Promise<void> => {
+    const setAnnotationMode = window.ndDsh.browser.setAnnotationMode
+    if (!setAnnotationMode) {
+      onError('UI annotation mode is available in the ND-DSH desktop app.')
+      return
+    }
+    await runBrowserAction(() => setAnnotationMode(!state?.annotationMode))
+  }
+
+  const clearAnnotation = async (): Promise<void> => {
+    const clear = window.ndDsh.browser.clearAnnotation
+    if (!clear) return
+    await runBrowserAction(() => clear())
+  }
+
+  const selected = state?.selectedTarget
+  const selectedSource = selected?.source ?? selected?.react?.source
+  const selectedName = selected?.react?.component ?? selected?.tagName
+  const selectedTitle = selected
+    ? `${selectedName ?? 'element'} · ${selectedSource ? `${selectedSource.file}:${selectedSource.line}` : selected.selector}`
+    : undefined
+  const annotation = state?.annotation
+  const annotationTitle = annotation
+    ? `${annotation.marks.length} mark${annotation.marks.length === 1 ? '' : 's'} · ${annotation.elements.length} referenced element${annotation.elements.length === 1 ? '' : 's'} · click to clear`
+    : undefined
+
   return (
     <section className={`browser-pane ${active ? 'is-active' : ''}`} aria-label="Built-in browser">
       <div className="browser-toolbar">
-        <button className="icon-button" disabled={!state?.canGoBack} onClick={() => void runBrowserAction(() => window.ndDsh.browser.back())} title="Back"><ArrowLeftIcon /></button>
-        <button className="icon-button" disabled={!state?.canGoForward} onClick={() => void runBrowserAction(() => window.ndDsh.browser.forward())} title="Forward"><ArrowRightIcon /></button>
-        <button className="icon-button" onClick={() => void runBrowserAction(() => window.ndDsh.browser.reload())} title="Reload"><ReloadIcon className={state?.loading ? 'spin' : ''} /></button>
-        <form className="address-form" onSubmit={(event: FormEvent<HTMLFormElement>) => { event.preventDefault(); void navigate() }}>
+        <button className="icon-button" disabled={!state?.canGoBack || state?.annotationMode} onClick={() => void runBrowserAction(() => window.ndDsh.browser.back())} title="Back"><ArrowLeftIcon /></button>
+        <button className="icon-button" disabled={!state?.canGoForward || state?.annotationMode} onClick={() => void runBrowserAction(() => window.ndDsh.browser.forward())} title="Forward"><ArrowRightIcon /></button>
+        <button className="icon-button" disabled={Boolean(state?.annotationMode)} onClick={() => void runBrowserAction(() => window.ndDsh.browser.reload())} title="Reload"><ReloadIcon className={state?.loading ? 'spin' : ''} /></button>
+        <form className="address-form" onSubmit={(event: FormEvent<HTMLFormElement>) => { event.preventDefault(); if (!state?.annotationMode) void navigate() }}>
           <span className={`connection-dot ${state?.url.startsWith('https:') ? 'secure' : ''}`} />
           <input
             aria-label="Address"
             value={address}
+            disabled={Boolean(state?.annotationMode)}
             onChange={(event: ChangeEvent<HTMLInputElement>) => setAddress(event.target.value)}
             onFocus={() => { addressFocused.current = true }}
             onBlur={() => { addressFocused.current = false }}
             spellCheck={false}
           />
         </form>
-        <button className="icon-button snapshot-button" onClick={() => void snapshot()} title="Interactive snapshot"><CameraIcon /></button>
+        <button className="icon-button snapshot-button" disabled={Boolean(state?.annotationMode)} onClick={() => void snapshot()} title="Interactive snapshot"><CameraIcon /></button>
+        <button
+          className={`icon-button ${state?.inspectMode ? 'snapshot-button' : ''}`}
+          aria-pressed={Boolean(state?.inspectMode)}
+          disabled={Boolean(state?.annotationMode)}
+          onClick={() => void toggleInspectMode()}
+          title={state?.inspectMode ? 'Cancel UI inspect mode (Esc)' : 'Inspect UI element and attach runtime context to the agent'}
+        >
+          <ContextIcon />
+        </button>
+        <button
+          className={`icon-button ${state?.annotationMode ? 'snapshot-button' : ''}`}
+          aria-pressed={Boolean(state?.annotationMode)}
+          onClick={() => void toggleAnnotationMode()}
+          title={state?.annotationMode
+            ? 'Finish annotation and attach it to the next agent prompt'
+            : 'Freeze the viewport and draw visual instructions for the agent'}
+        >
+          <PencilIcon />
+        </button>
         <button
           className="icon-button"
-          disabled={!state?.url || state.url === 'about:blank'}
+          disabled={!state?.url || state.url === 'about:blank' || Boolean(state?.annotationMode)}
           onClick={() => void runBrowserAction(() => window.ndDsh.browser.openExternal(state?.url ?? address))}
           title="Open in system browser"
         >
           <ExternalIcon />
         </button>
+        {state?.annotationMode ? (
+          <button className="bridge-pill ready" onClick={() => void toggleAnnotationMode()} title="Finish drawing and attach this annotated frame">
+            <span />Annotating
+          </button>
+        ) : annotation ? (
+          <button className="bridge-pill ready" onClick={() => void clearAnnotation()} title={annotationTitle}>
+            <span />Annotation: {annotation.marks.length}
+          </button>
+        ) : null}
+        {selected ? (
+          <button className="bridge-pill ready" onClick={() => void clearSelection()} title={`${selectedTitle ?? 'Selected UI'} · click to clear`}>
+            <span />UI: {selectedName ?? 'element'}
+          </button>
+        ) : null}
         <span className={`bridge-pill ${state?.agentBrowser ?? 'binding'}`} title={state?.agentBrowserError}>
           <span />{state?.agentBrowser === 'ready' ? 'Agent linked' : state?.agentBrowser === 'unavailable' ? 'Agent offline' : 'Linking'}
         </span>

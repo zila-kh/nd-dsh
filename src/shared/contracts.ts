@@ -5,6 +5,86 @@ export interface BrowserBounds {
   height: number
 }
 
+export type UiSourceConfidence = 'exact' | 'mapped' | 'framework' | 'inferred'
+
+export interface UiSourceLocation {
+  file: string
+  line: number
+  column?: number
+  confidence: UiSourceConfidence
+}
+
+export interface UiReactInfo {
+  component?: string
+  hierarchy: string[]
+  source?: UiSourceLocation
+}
+
+export interface UiCssDeclaration {
+  name: string
+  value: string
+  important?: boolean
+  source?: UiSourceLocation
+}
+
+export interface UiCssRule {
+  selector: string
+  origin: string
+  declarations: UiCssDeclaration[]
+  source?: UiSourceLocation
+  sourceUrl?: string
+  sourceMapUrl?: string
+}
+
+export interface UiTarget {
+  id: string
+  runtime: 'web'
+  capturedAt: number
+  url: string
+  tagName: string
+  text: string
+  selector: string
+  outerHtml: string
+  attributes: Record<string, string>
+  bounds: BrowserBounds
+  computedStyle: Record<string, string>
+  matchedCssRules: UiCssRule[]
+  source?: UiSourceLocation
+  react?: UiReactInfo
+}
+
+export interface UiAnnotationPoint {
+  x: number
+  y: number
+}
+
+export type UiAnnotationMarkKind = 'freehand' | 'rectangle' | 'point'
+
+export interface UiAnnotationMark {
+  kind: UiAnnotationMarkKind
+  points: UiAnnotationPoint[]
+  bounds: BrowserBounds
+}
+
+export interface UiAnnotationElementReference {
+  selector: string
+  tagName: string
+  text: string
+  bounds: BrowserBounds
+  source?: UiSourceLocation
+  react?: UiReactInfo
+}
+
+export interface UiAnnotation {
+  id: string
+  runtime: 'web'
+  capturedAt: number
+  url: string
+  viewport: { width: number; height: number }
+  marks: UiAnnotationMark[]
+  elements: UiAnnotationElementReference[]
+}
+
 export type AgentBrowserState = 'binding' | 'ready' | 'unavailable'
 
 export interface BrowserState {
@@ -18,6 +98,10 @@ export interface BrowserState {
   targetId?: string
   agentBrowser: AgentBrowserState
   agentBrowserError?: string
+  inspectMode?: boolean
+  selectedTarget?: UiTarget
+  annotationMode?: boolean
+  annotation?: UiAnnotation
 }
 
 export interface WorkspaceEntry {
@@ -262,6 +346,10 @@ export interface DesktopApi {
     forward(): Promise<BrowserState>
     reload(): Promise<BrowserState>
     snapshot(): Promise<unknown>
+    setInspectMode?(enabled: boolean): Promise<BrowserState>
+    clearSelection?(): Promise<BrowserState>
+    setAnnotationMode?(enabled: boolean): Promise<BrowserState>
+    clearAnnotation?(): Promise<BrowserState>
     openExternal(url: string): Promise<void>
     onState(listener: (state: BrowserState) => void): () => void
   }
@@ -314,6 +402,10 @@ export const IPC = {
   browserForward: 'browser:forward',
   browserReload: 'browser:reload',
   browserSnapshot: 'browser:snapshot',
+  browserSetInspectMode: 'browser:set-inspect-mode',
+  browserClearSelection: 'browser:clear-selection',
+  browserSetAnnotationMode: 'browser:set-annotation-mode',
+  browserClearAnnotation: 'browser:clear-annotation',
   browserOpenExternal: 'browser:open-external',
   browserStateEvent: 'browser:state-event',
   workspaceState: 'workspace:state',
