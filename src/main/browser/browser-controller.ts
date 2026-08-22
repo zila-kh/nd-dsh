@@ -302,6 +302,11 @@ export class BrowserController {
       this.emitState()
     })
     contents.on('did-navigate-in-page', (_event, url) => {
+      if (this.stateValue.annotationMode) void this.annotator.cancel()
+      this.stateValue.annotationMode = false
+      this.annotationImage = undefined
+      delete this.stateValue.selectedTarget
+      delete this.stateValue.annotation
       this.stateValue.url = url
       this.refreshNavigationState()
       this.emitState()
