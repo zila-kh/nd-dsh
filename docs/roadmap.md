@@ -10,6 +10,7 @@ The `ai-company-workflow` branch already contains the product vertical slice:
 - Pinned Harness runtime behind an ND adapter and loopback gateway.
 - Provider-neutral model routing with DeepSeek as a compatibility default rather than product architecture.
 - OS-backed encrypted provider credentials when a secure key store exists.
+- Existing provider credentials are write-only from React: Settings sees `has credential`, can replace/clear, and never receives the stored decrypted key.
 - Multi-company and multi-project durable organization state.
 - Teams, roles, AI employees, scoped skills, workflows, goals, milestones, tasks, memory, policies, activities, and run receipts.
 - AI PM → assigned worker → independent reviewer workflow.
@@ -58,7 +59,7 @@ install -> launch -> preload bridge -> open workspace -> browser target bound
 -> close -> reopen -> organization + engine assignment + sessions survive
 ```
 
-Add negative coverage for cancellation, crash/restart recovery, missing engine, corrupted primary organization state, and rejected policy approval.
+Add negative coverage for cancellation, crash/restart recovery, missing engine, corrupted primary organization state, rejected policy approval, and missing credentials.
 
 Success criterion: source build success is no longer the only proof that a release artifact works.
 
@@ -74,13 +75,13 @@ The current main-process gate is a real hard boundary for Harness approval frame
 
 Success criterion: sensitive actions are governed consistently across Harness, Codex, browser/MCP, and future engines rather than inferred from prompt text.
 
-### 5. Credential minimization and engine onboarding
+### 5. Engine onboarding and health
 
-- Stop returning existing decrypted API keys to React; expose `hasCredential`, replace, and clear operations.
 - Add Codex installed/authenticated/project-trust health checks without copying native Codex credentials into ND provider storage.
 - Distinguish engine availability, authentication, degraded health, and rate limiting in Settings.
+- Surface actionable remediation before a user assigns an unavailable/unhealthy engine to an AI employee.
 
-Success criterion: the renderer never needs an existing secret value and users can tell why an engine is not ready before starting work.
+Success criterion: users can tell why an engine is not ready before starting work and ND never fabricates readiness.
 
 ## Public Beta P1 — best-in-class AI development environment
 
@@ -128,6 +129,7 @@ Success criterion: changing coding engine does not require rebuilding the compan
 - Capability metadata: context, reasoning, vision, computer use, tool calling.
 - Cost/token/latency metadata and budgets.
 - Provider health, rate-limit circuit breakers, fallback routes, and explicit audit of every routing decision.
+- Credential-source metadata (`secure-store`, `environment`, `ambient`) so Settings can explain what can and cannot be cleared locally without exposing a secret value.
 
 Success criterion: ND can choose a model based on job requirements, budget, latency, and health without changing the employee/workflow identity.
 

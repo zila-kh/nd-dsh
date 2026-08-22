@@ -44,6 +44,8 @@ The pinned Harness contains `@deepseek-ai/dsh-subagent-codex`, which depends on 
 
 The current Codex integration is deliberately one-shot and delegated. Native Codex authentication, `HOME` / `CODEX_HOME`, model selection, project trust, and account settings remain authoritative. ND does not copy model-provider API keys into Codex credentials.
 
+AI employees can be assigned an available coding engine from Workforce. The assignment is durable ND state. Codex-routed worker tasks delegate implementation to the Codex engine, then the ND parent validates the actual workspace before the normal independent review step.
+
 ## AI company workflow
 
 A normal autonomous delivery cycle is:
@@ -58,12 +60,12 @@ AI PM plan
 Goal -> milestones -> dependency-aware tasks
       |
       v
-Assigned worker
+Assigned worker + coding-engine route
       |
       +--> workspace files
       +--> shell / tests
-      +--> visible browser
-      +--> skills / MCP
+      +--> visible browser when supported
+      +--> skills / MCP when supported
       +--> optional Codex delegation
       |
       v
@@ -74,7 +76,7 @@ Independent reviewer
       +--> fail -> blocked or bounded automatic rework
 ```
 
-Company autonomy levels control how much of that workflow may continue without another explicit human start. Sensitive product actions still need policy enforcement and approval work before ND should be considered an enterprise GA release.
+Company autonomy levels control how much of that workflow may continue without another explicit human start. Approval-bearing organization runs pass through the ND main-process policy gate before a human approval card can be shown or resolved.
 
 ## Development setup
 
@@ -96,6 +98,8 @@ corepack pnpm dev
 ```
 
 Configure model providers from **Settings -> Models**. `DEEPSEEK_API_KEY` remains an optional compatibility environment variable for the seeded DeepSeek route. Desktop API keys entered through Settings are stored with Electron OS-backed secure storage when a secure backend is available.
+
+Existing stored API keys are not returned to the renderer. Settings receives only whether a credential exists and uses dedicated replace/clear operations. If a secure operating-system store is unavailable, a newly entered key remains memory-only rather than being persisted insecurely.
 
 Codex authentication is native to Codex. The ND adapter does not create or migrate a Codex account.
 
@@ -124,9 +128,9 @@ The pin metadata in `vendor/deepseek-harness.json`, the submodule gitlink, this 
 
 ## Public beta status
 
-The repository is being hardened for a desktop public beta. The runtime path is real; the product renderer must not fall back to mock companies, mock sessions, fake workspaces, or demo provider state when its trusted preload is unavailable.
+The source/private coding beta now runs on real desktop/runtime state: there is no production fallback to mock companies, fake sessions, fake workspaces, or a localhost demo page. The renderer fails closed if its trusted desktop bridges are missing.
 
-Remaining release work is tracked separately and includes packaged runtime distribution, installer/signing/notarization, installed-app E2E coverage, normalized policy enforcement at the action/tool boundary across engines, Codex onboarding/auth status, and release/update infrastructure.
+A downloadable **Public Beta** still requires packaged runtime distribution, signed/notarized installers, installed-app E2E on supported platforms, Codex authentication/health onboarding, and broader normalized action metadata for policy enforcement beyond Harness approval frames. See `docs/roadmap.md`.
 
 ## Security boundaries
 
@@ -135,16 +139,17 @@ Remaining release work is tracked separately and includes packaged runtime distr
 - Browser automation: attaches to the exact visible pane through loopback CDP; no hidden second browser.
 - IPC: main-frame sender validation and narrow contracts.
 - Workspace: path containment and symlink protections.
-- Provider credentials: separated from provider metadata and encrypted at rest when OS secure storage is available.
+- Provider credentials: separated from provider metadata, encrypted at rest when OS secure storage is available, and never returned to React after storage.
 - Codex delegated mode: fail-closed `never` approval policy by default; dangerous bypass is not selected by ND.
 - Organization state: atomic writes, last-known-good backup, validation, and interrupted-run reconciliation.
+- Organization approvals: explicit company DENY/ALLOW/ASK decisions are enforced in the main process for approval-bearing Harness runs; uncertain classifications fail back to human ASK.
 
 ## Repository layout
 
 ```text
 src/main/                 Electron main process and ND services
-src/main/organization/    AI company durable state and orchestration
-src/main/engines/         coding-engine capability registry
+src/main/organization/    AI company durable state, orchestration, policy gate
+src/main/engines/         coding-engine catalog and employee assignments
 src/main/harness/         primary Harness adapter
 src/main/browser/         visible browser + agent-browser integration
 src/preload/              trusted renderer bridge

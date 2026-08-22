@@ -64,6 +64,8 @@ ND keeps durable product state outside runtime-vendor configuration:
 
 Organization state uses validated snapshots, serialized/atomic writes, backup recovery, and startup reconciliation for interrupted runs. Engine assignments use atomic writes and fail back to the primary ND Harness route if the assignment file is unreadable.
 
+Provider credentials are write-only from the renderer's point of view. `ProviderStore.list()` returns `apiKey: ''` plus a `hasApiKey` flag; replacement and clearing use dedicated validated IPC calls. The decrypted value stays in the trusted main process and only enters the ephemeral environment inherited by the model-runtime child.
+
 ## Model providers are not coding engines
 
 A **provider** supplies a model endpoint. A **coding engine** supplies an agent/execution environment.
@@ -127,6 +129,7 @@ The product browser starts at `about:blank`; localhost development pages are ope
 - Browser permissions: denied by default.
 - External URLs: HTTP/HTTPS only.
 - Workspace reads: root-contained with realpath/symlink protections.
+- Existing provider credentials: never returned to React; only existence/replacement/clear operations are exposed.
 
 If the trusted preload or organization bridge is unavailable, the renderer fails closed with a runtime-unavailable screen. It does not create demo companies, fake sessions, mock workspaces, or localStorage product state.
 
@@ -157,6 +160,7 @@ ND does not yet advertise the delegated Codex route as having ND browser, ND MCP
 - Missing/unbuilt Codex adapter: employees cannot be newly assigned to Codex and existing Codex-routed work is rejected before starting.
 - Codex auth/trust failure: task remains a visible failure/blocker; ND does not invent completion.
 - Missing provider credential: the active route reports its real model error; provider metadata never substitutes a fake result.
+- Secure credential store unavailable: key remains memory-only instead of being persisted insecurely.
 - Browser bridge unavailable: visible browser remains manual; agent browser capability reports unavailable.
 - Approval policy gate failure: request falls back to human `ASK`, never implicit allow.
 - App restart mid-run: stale organization run is reconciled as interrupted/failed.
@@ -171,6 +175,5 @@ Passing source CI is necessary but not sufficient for a public desktop release. 
 - Codex authentication/health onboarding UX
 - normalized action metadata for policy enforcement beyond Harness approval frames
 - update/release provenance, SBOM/notices, and crash provenance policy
-- stronger secret UI semantics (`hasCredential` / replace / clear rather than returning an existing decrypted key)
 
 These are release engineering and policy-completeness gates, not mock functionality; the product runtime used by the desktop is real.
