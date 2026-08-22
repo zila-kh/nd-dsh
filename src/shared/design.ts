@@ -35,7 +35,7 @@ export interface DesignFreeformDocumentEntry {
 export type DesignFreeformStatus = 'unavailable' | 'idle' | 'starting' | 'ready' | 'error'
 
 export interface DesignFreeformState {
-  engine: 'openpencil'
+  engine: 'nd-pencil'
   status: DesignFreeformStatus
   available: boolean
   visible: boolean
@@ -107,7 +107,7 @@ export const DESIGN_IPC = {
   freeformChanged: 'design:freeform-changed',
 } as const
 
-export const OPENPENCIL_HOST_IPC = {
-  pageMessage: 'design:openpencil-host-page-message',
-  hostMessage: 'design:openpencil-host-message',
+export const ND_PENCIL_HOST_IPC = {
+  pageMessage: 'design:nd-pencil-host-page-message',
+  hostMessage: 'design:nd-pencil-host-message',
 } as const
