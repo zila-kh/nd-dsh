@@ -13,10 +13,11 @@ afterEach(async () => {
 })
 
 describe('DesignService', () => {
-  it('indexes HTML templates and installed shadcn components from the active workspace', async () => {
+  it('indexes HTML templates, shadcn components, and Freeform documents from the active workspace', async () => {
     const root = await makeWorkspace()
     await fs.mkdir(join(root, 'src/components/ui'), { recursive: true })
     await fs.mkdir(join(root, 'templates'), { recursive: true })
+    await fs.mkdir(join(root, '.nd/design'), { recursive: true })
     await fs.writeFile(join(root, 'package.json'), JSON.stringify({
       scripts: { dev: 'vite' },
       dependencies: { react: '^19.0.0' },
@@ -30,6 +31,7 @@ describe('DesignService', () => {
     await fs.writeFile(join(root, 'src/components/ui/button.tsx'), 'export const Button = () => null\n')
     await fs.writeFile(join(root, 'templates/index.html'), '<!doctype html><title>Template</title>')
     await fs.writeFile(join(root, 'templates/page.hbs'), '<main>{{title}}</main>')
+    await fs.writeFile(join(root, '.nd/design/home.op'), '{}')
 
     const design = new DesignService(workspaceStub(root), browserStub().api)
     const state = await design.refresh()
@@ -44,7 +46,8 @@ describe('DesignService', () => {
       ['templates/index.html', true],
       ['templates/page.hbs', false],
     ])
-    expect(state.capabilities).toEqual({ liveApp: true, htmlTemplates: true, shadcn: true, canvas: true })
+    expect(state.freeform.documents).toEqual([{ name: 'home.op', path: '.nd/design/home.op' }])
+    expect(state.capabilities).toEqual({ liveApp: true, htmlTemplates: true, shadcn: true, canvas: true, freeform: true })
   })
 
   it('serves static HTML on loopback while blocking workspace secrets', async () => {
@@ -70,14 +73,16 @@ describe('DesignService', () => {
     expect(browser.currentUrl()).toBe('about:blank')
   })
 
-  it('keeps the code canvas available for an empty workspace', async () => {
+  it('keeps code and Freeform canvases available for an empty workspace', async () => {
     const root = await makeWorkspace()
     const design = new DesignService(workspaceStub(root), browserStub().api)
     const state = await design.refresh()
     expect(state.kind).toBe('canvas')
     expect(state.capabilities.canvas).toBe(true)
+    expect(state.capabilities.freeform).toBe(true)
     expect(state.templates).toEqual([])
     expect(state.shadcn.detected).toBe(false)
+    expect(state.freeform.documents).toEqual([])
   })
 })
 

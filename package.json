@@ -18,9 +18,10 @@
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
-    "verify": "node scripts/verify.mjs",
+    "verify": "node scripts/verify.mjs && node scripts/verify-openpencil.mjs",
     "dsh:build": "pnpm --dir vendor/deepseek-harness run build",
-    "dsh:update": "node scripts/update-harness.mjs"
+    "dsh:update": "node scripts/update-harness.mjs",
+    "openpencil:build": "node scripts/build-openpencil.mjs"
   },
   "dependencies": {
     "dotenv": "17.2.3",

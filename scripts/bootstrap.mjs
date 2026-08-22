@@ -7,16 +7,21 @@ import { fileURLToPath } from 'node:url'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const harnessRoot = join(root, 'vendor', 'deepseek-harness')
-const pin = JSON.parse(await fs.readFile(join(root, 'vendor', 'deepseek-harness.json'), 'utf8'))
-const harnessRepository = requireString(pin.repository, 'repository')
-const harnessCommit = requireCommit(pin.commit)
+const openPencilRoot = join(root, 'vendor', 'openpencil')
+const harnessPin = JSON.parse(await fs.readFile(join(root, 'vendor', 'deepseek-harness.json'), 'utf8'))
+const openPencilPin = JSON.parse(await fs.readFile(join(root, 'vendor', 'openpencil.json'), 'utf8'))
+const harnessRepository = requireString(harnessPin.repository, 'vendor/deepseek-harness.json repository')
+const harnessCommit = requireCommit(harnessPin.commit, 'Harness commit')
+const openPencilRepository = requireString(openPencilPin.repository, 'vendor/openpencil.json repository')
+const openPencilCommit = requireCommit(openPencilPin.commit, 'OpenPencil commit')
 const flags = new Set(process.argv.slice(2))
 
 if (flags.has('--help')) {
   console.log(`Usage: node scripts/bootstrap.mjs [options]\n\n` +
-    `  --check             Verify prerequisites and the pinned submodule only\n` +
-    `  --skip-root-install Skip the ND-DSH pnpm install\n` +
-    `  --skip-dsh-build    Skip install/build inside DeepSeek Harness\n`)
+    `  --check                Verify prerequisites and both pinned submodules only\n` +
+    `  --skip-root-install    Skip the ND-DSH pnpm install\n` +
+    `  --skip-dsh-build       Skip install/build inside DeepSeek Harness\n` +
+    `  --build-openpencil     Compile and stage the bundled ND Freeform runtime\n`)
   process.exit(0)
 }
 
@@ -25,11 +30,27 @@ if (nodeMajor < 24) {
   throw new Error(`Node.js 24 or newer is required by agent-browser. Current: ${process.version}`)
 }
 
-await ensureHarnessSource()
-await verifyHarnessPin()
+await ensurePinnedSource({
+  name: 'Harness',
+  root: harnessRoot,
+  marker: 'package.json',
+  submodulePath: 'vendor/deepseek-harness',
+  repository: harnessRepository,
+  commit: harnessCommit,
+})
+await ensurePinnedSource({
+  name: 'OpenPencil',
+  root: openPencilRoot,
+  marker: 'Cargo.toml',
+  submodulePath: 'vendor/openpencil',
+  repository: openPencilRepository,
+  commit: openPencilCommit,
+})
+await verifyPinnedSource('Harness', harnessRoot, harnessCommit)
+await verifyPinnedSource('OpenPencil', openPencilRoot, openPencilCommit)
 
 if (flags.has('--check')) {
-  console.log('Bootstrap check passed.')
+  console.log('Bootstrap check passed for DeepSeek Harness and OpenPencil.')
   process.exit(0)
 }
 
@@ -42,53 +63,60 @@ if (!flags.has('--skip-dsh-build')) {
   await run('corepack', ['pnpm', 'run', 'build'], harnessRoot)
 }
 
+if (flags.has('--build-openpencil')) {
+  await run(process.execPath, ['scripts/build-openpencil.mjs'], root)
+} else {
+  console.log('\nOpenPencil source is pinned and ready. Run `pnpm openpencil:build` when developing the embedded Freeform canvas.')
+}
+
 await run(process.execPath, ['scripts/verify.mjs'], root)
 console.log('\nND-DSH bootstrap complete. Configure a model provider in Settings (or use DEEPSEEK_API_KEY for the compatibility route), then run:')
 console.log('  corepack pnpm dev')
 console.log('Codex CLI is available as an optional coding engine when native Codex authentication is configured.')
 
-async function ensureHarnessSource() {
-  const packagePath = join(harnessRoot, 'package.json')
-  if (existsSync(packagePath)) return
+async function ensurePinnedSource({ name, root: sourceRoot, marker, submodulePath, repository, commit }) {
+  if (existsSync(join(sourceRoot, marker))) return
 
-  await fs.mkdir(dirname(harnessRoot), { recursive: true })
+  await fs.mkdir(dirname(sourceRoot), { recursive: true })
   if (existsSync(join(root, '.git'))) {
-    console.log('Initializing pinned Harness submodule...')
-    await run('git', ['submodule', 'sync', '--', 'vendor/deepseek-harness'], root)
-    await run('git', ['submodule', 'update', '--init', '--recursive', '--', 'vendor/deepseek-harness'], root)
+    console.log(`Initializing pinned ${name} submodule...`)
+    await run('git', ['submodule', 'sync', '--', submodulePath], root)
+    await run('git', ['submodule', 'update', '--init', '--recursive', '--', submodulePath], root)
   } else {
-    console.log('Source archive detected; cloning the pinned Harness checkout...')
-    await run('git', ['clone', '--filter=blob:none', '--no-checkout', harnessRepository, harnessRoot], root)
-    await run('git', ['fetch', '--depth=1', 'origin', harnessCommit], harnessRoot)
-    await run('git', ['checkout', '--detach', harnessCommit], harnessRoot)
+    console.log(`Source archive detected; cloning the pinned ${name} checkout...`)
+    await run('git', ['clone', '--filter=blob:none', '--no-checkout', repository, sourceRoot], root)
+    await run('git', ['fetch', '--depth=1', 'origin', commit], sourceRoot)
+    await run('git', ['checkout', '--detach', commit], sourceRoot)
+    await run('git', ['submodule', 'update', '--init', '--recursive'], sourceRoot)
   }
 
-  if (!existsSync(packagePath)) throw new Error('Pinned Harness source was not initialized correctly.')
+  if (!existsSync(join(sourceRoot, marker))) throw new Error(`Pinned ${name} source was not initialized correctly.`)
 }
 
-async function verifyHarnessPin() {
-  const status = await capture('git', ['status', '--porcelain'], harnessRoot)
-  if (status.trim()) throw new Error('Harness submodule has local changes. Clean it before bootstrapping.')
+async function verifyPinnedSource(name, sourceRoot, expectedCommit) {
+  const status = await capture('git', ['status', '--porcelain'], sourceRoot)
+  if (status.trim()) throw new Error(`${name} submodule has local changes. Clean it before bootstrapping.`)
 
-  let current = (await capture('git', ['rev-parse', 'HEAD'], harnessRoot)).trim()
-  if (current !== harnessCommit) {
-    console.log(`Checking out pinned Harness commit ${harnessCommit}...`)
-    await run('git', ['fetch', 'origin', harnessCommit, '--depth=1'], harnessRoot)
-    await run('git', ['checkout', '--detach', harnessCommit], harnessRoot)
-    current = (await capture('git', ['rev-parse', 'HEAD'], harnessRoot)).trim()
+  let current = (await capture('git', ['rev-parse', 'HEAD'], sourceRoot)).trim().toLowerCase()
+  if (current !== expectedCommit) {
+    console.log(`Checking out pinned ${name} commit ${expectedCommit}...`)
+    await run('git', ['fetch', 'origin', expectedCommit, '--depth=1'], sourceRoot)
+    await run('git', ['checkout', '--detach', expectedCommit], sourceRoot)
+    await run('git', ['submodule', 'update', '--init', '--recursive'], sourceRoot)
+    current = (await capture('git', ['rev-parse', 'HEAD'], sourceRoot)).trim().toLowerCase()
   }
-  if (current !== harnessCommit) throw new Error(`Harness pin mismatch: expected ${harnessCommit}, found ${current}`)
-  console.log(`Harness pinned at ${current.slice(0, 12)}.`)
+  if (current !== expectedCommit) throw new Error(`${name} pin mismatch: expected ${expectedCommit}, found ${current}`)
+  console.log(`${name} pinned at ${current.slice(0, 12)}.`)
 }
 
 function requireString(value, field) {
-  if (typeof value !== 'string' || !value.trim()) throw new Error(`vendor/deepseek-harness.json has an invalid ${field}`)
+  if (typeof value !== 'string' || !value.trim()) throw new Error(`${field} is invalid`)
   return value.trim()
 }
 
-function requireCommit(value) {
-  const commit = requireString(value, 'commit')
-  if (!/^[0-9a-f]{40}$/i.test(commit)) throw new Error('Harness commit must be a full 40-character SHA')
+function requireCommit(value, field) {
+  const commit = requireString(value, field)
+  if (!/^[0-9a-f]{40}$/i.test(commit)) throw new Error(`${field} must be a full 40-character SHA`)
   return commit.toLowerCase()
 }
 

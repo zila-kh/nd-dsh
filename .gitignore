@@ -14,9 +14,16 @@ artifacts/
 !.dsh/skills/
 !.dsh/skills/**
 
-# Populated by git submodule or scripts/bootstrap.mjs.
+# Populated by pinned git submodules or scripts/bootstrap.mjs.
 /vendor/deepseek-harness/
+/vendor/openpencil/
 !/vendor/README.md
+!/vendor/deepseek-harness.json
+!/vendor/openpencil.json
+!/vendor/openpencil.LICENSE
+
+# Built OpenPencil runtime staged for packaging; never commit platform binaries.
+/resources/openpencil/bin/
 
 *.tsbuildinfo
 

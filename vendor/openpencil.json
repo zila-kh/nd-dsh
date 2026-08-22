@@ -1,0 +1,7 @@
+{
+  "repository": "https://github.com/ZSeven-W/openpencil.git",
+  "commit": "9c810776dab546076a5d9db791a49d9e8048dbd7",
+  "release": "0.8.4",
+  "license": "MIT",
+  "purpose": "ND Design Freeform engine"
+}

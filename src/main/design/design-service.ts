@@ -6,6 +6,7 @@ import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import type { WorkspaceState } from '../../shared/contracts.js'
 import type {
   DesignComponentEntry,
+  DesignFreeformDocumentEntry,
   DesignPreviewState,
   DesignProjectKind,
   DesignProjectState,
@@ -17,7 +18,7 @@ import type { BrowserController } from '../browser/browser-controller.js'
 import type { WorkspaceService } from '../workspace/workspace-service.js'
 
 const MAX_SCAN_DEPTH = 6
-const MAX_SCAN_ENTRIES = 2_000
+const MAX_SCAN_ENTRIES = 2_500
 const DEV_START_TIMEOUT_MS = 45_000
 const SKIPPED = new Set([
   '.git', '.dsh', '.sessions', '.next', '.turbo', '.cache',
@@ -80,7 +81,6 @@ export class DesignService {
   private serverRoot: string | undefined
   private serverPort: number | undefined
   private devChild: ChildProcess | undefined
-  private devRoot: string | undefined
 
   constructor(
     private readonly workspace: WorkspaceService,
@@ -141,7 +141,6 @@ export class DesignService {
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     this.devChild = child
-    this.devRoot = project.root
 
     try {
       const url = await waitForDevUrl(child, project.devCommand)
@@ -155,14 +154,12 @@ export class DesignService {
       child.once('exit', () => {
         if (this.devChild !== child) return
         this.devChild = undefined
-        this.devRoot = undefined
         if (this.preview?.kind === 'dev-server' && this.preview.root === project.root) this.preview = undefined
       })
       await this.browser.navigate(url)
       return preview
     } catch (cause) {
       if (this.devChild === child) this.devChild = undefined
-      if (this.devRoot === project.root) this.devRoot = undefined
       if (child.exitCode === null && child.signalCode === null) child.kill()
       throw cause
     }
@@ -180,10 +177,9 @@ export class DesignService {
   async handleWorkspaceChanged(state: WorkspaceState): Promise<void> {
     this.cache = undefined
     const blocked = state.binding === 'unlinked' || state.binding === 'missing'
-    const managedRootChanged = (this.preview && this.preview.root !== state.root)
-      || (this.serverRoot && this.serverRoot !== state.root)
-      || (this.devRoot && this.devRoot !== state.root)
-    if (blocked || managedRootChanged) await this.stopPreview()
+    if (blocked || (this.preview && this.preview.root !== state.root) || (this.serverRoot && this.serverRoot !== state.root)) {
+      await this.stopPreview()
+    }
   }
 
   destroy(): void {
@@ -194,7 +190,6 @@ export class DesignService {
     this.server = undefined
     if (this.devChild?.exitCode === null && this.devChild.signalCode === null) this.devChild.kill()
     this.devChild = undefined
-    this.devRoot = undefined
   }
 
   private withPreview(project: Omit<DesignProjectState, 'preview'>): DesignProjectState {
@@ -224,6 +219,7 @@ export class DesignService {
     const devCommand = detectDevCommand(packageJson, packageManager)
     const templates = detectTemplates(files)
     const shadcn = detectShadcn(files, componentsConfigPath, componentsJson)
+    const freeform = { documents: detectFreeformDocuments(files) }
     const kind = detectKind(shadcn, frameworks, templates)
     const project: Omit<DesignProjectState, 'preview'> = {
       root,
@@ -233,11 +229,13 @@ export class DesignService {
       ...(devCommand ? { devCommand } : {}),
       templates,
       shadcn,
+      freeform,
       capabilities: {
         liveApp: Boolean(devCommand) || frameworks.length > 0,
         htmlTemplates: templates.length > 0,
         shadcn: shadcn.detected,
         canvas: true,
+        freeform: true,
       },
     }
     this.cache = { root, project }
@@ -283,11 +281,10 @@ export class DesignService {
   private async stopDevChild(): Promise<void> {
     const child = this.devChild
     this.devChild = undefined
-    this.devRoot = undefined
     if (!child || child.exitCode !== null || child.signalCode !== null) return
     await new Promise<void>((resolvePromise) => {
       const timer = setTimeout(() => {
-        try { child.kill(process.platform === 'win32' ? undefined : 'SIGKILL') } catch { /* already stopped */ }
+        try { child.kill() } catch { /* already stopped */ }
         resolvePromise()
       }, 3_000)
       child.once('exit', () => {
@@ -309,7 +306,8 @@ function emptyProject(root: string): Omit<DesignProjectState, 'preview'> {
     frameworks: [],
     templates: [],
     shadcn: { detected: false, components: [] },
-    capabilities: { liveApp: false, htmlTemplates: false, shadcn: false, canvas: true },
+    freeform: { documents: [] },
+    capabilities: { liveApp: false, htmlTemplates: false, shadcn: false, canvas: true, freeform: true },
   }
 }
 
@@ -355,6 +353,19 @@ function detectTemplates(files: string[]): DesignTemplateEntry[] {
       entry: kind === 'html' && /^index\.html?$/i.test(name),
     } satisfies DesignTemplateEntry]
   }).sort((left, right) => Number(right.entry) - Number(left.entry) || pathDepth(left.path) - pathDepth(right.path) || left.path.localeCompare(right.path))
+}
+
+function detectFreeformDocuments(files: string[]): DesignFreeformDocumentEntry[] {
+  return files
+    .filter((path) => extname(path).toLowerCase() === '.op')
+    .map((path) => ({ path, name: path.split('/').at(-1) ?? path }))
+    .sort((left, right) => freeformRank(left.path) - freeformRank(right.path) || pathDepth(left.path) - pathDepth(right.path) || left.path.localeCompare(right.path))
+}
+
+function freeformRank(path: string): number {
+  if (path.startsWith('.nd/design/')) return 0
+  if (path.startsWith('design/')) return 1
+  return 2
 }
 
 function detectShadcn(files: string[], configPath: string | undefined, config: Record<string, unknown> | undefined): DesignShadcnState {

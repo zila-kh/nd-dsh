@@ -4,12 +4,14 @@ import { dirname, join } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { IPC } from '../shared/contracts.js'
+import { DESIGN_IPC } from '../shared/design.js'
 import { ORGANIZATION_IPC } from '../shared/organization.js'
 import { projectRoot } from './app-paths.js'
 import { BrowserController } from './browser/browser-controller.js'
 import { DEFAULT_BROWSER_URL } from './browser/browser-url.js'
 import { DesignService } from './design/design-service.js'
 import { registerDesignIpc } from './design/ipc.js'
+import { OpenPencilController } from './design/openpencil-controller.js'
 import { DshSurfaceController } from './dsh/dsh-surface.js'
 import { pickFreePort } from './dsh/gateway-client.js'
 import { EngineAssignmentStore } from './engines/engine-assignment-store.js'
@@ -34,8 +36,9 @@ app.enableSandbox()
 
 let mainWindow: BrowserWindow | undefined
 let activeHarness: HarnessService | undefined
+let activeOpenPencil: OpenPencilController | undefined
 let shutdownStarted = false
-const closingHarnesses = new Set<Promise<void>>()
+const closingServices = new Set<Promise<void>>()
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) app.quit()
@@ -51,6 +54,7 @@ app.on('second-instance', () => {
 
 async function createWindow(cdpPort: number): Promise<void> {
   const preload = join(currentDirectory, '../preload/index.cjs')
+  const openPencilPreload = join(currentDirectory, '../preload/openpencil.cjs')
   const workspace = new WorkspaceService(process.env.ND_DSH_WORKSPACE?.trim() || process.cwd())
   const providers = new ProviderStore()
   const userData = app.getPath('userData')
@@ -87,26 +91,37 @@ async function createWindow(cdpPort: number): Promise<void> {
   const projectWorkspace = new ProjectWorkspaceCoordinator(organizationStore, workspace, harness)
   await projectWorkspace.initialize()
   const design = new DesignService(workspace, browser)
+  const openPencil = new OpenPencilController(window, workspace, projectRoot(), openPencilPreload)
+  await openPencil.initialize()
   const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines)
   const approvalGate = new OrganizationApprovalGate(organizationStore, harness)
   const disposeIpc = registerIpc({ window, browser, dshSurface, engines, harness, projectWorkspace, theme, providers })
-  const disposeDesignIpc = registerDesignIpc(window, design)
+  const disposeDesignIpc = registerDesignIpc(window, design, openPencil)
   const disposeOrganizationIpc = registerOrganizationIpc(window, organizationStore, organization, projectWorkspace)
   mainWindow = window
   activeHarness = harness
+  activeOpenPencil = openPencil
 
   organizationStore.setOnChanged((state) => {
     if (!window.isDestroyed()) window.webContents.send(ORGANIZATION_IPC.changed, state)
   })
+  let lastWorkspaceRoot = workspace.state().root
   workspace.setStateListener((state) => {
+    const rootChanged = lastWorkspaceRoot !== state.root
+    lastWorkspaceRoot = state.root
+    if (rootChanged) void openPencil.setVisible(false)
     if (!window.isDestroyed()) window.webContents.send(IPC.workspaceStateEvent, state)
     void design.handleWorkspaceChanged(state).catch((error) => {
       console.warn('Design workspace synchronization failed:', error instanceof Error ? error.message : String(error))
+    })
+    void openPencil.handleWorkspaceChanged(state.root).catch((error) => {
+      console.warn('Freeform workspace synchronization failed:', error instanceof Error ? error.message : String(error))
     })
   })
   theme.attach(window, (color) => {
     browser.setBackgroundColor(color)
     dshSurface.setBackgroundColor(color)
+    openPencil.setBackgroundColor(color)
   })
   theme.setOnChanged((state) => {
     if (!window.isDestroyed()) window.webContents.send(IPC.themeChangedEvent, state)
@@ -117,6 +132,9 @@ async function createWindow(cdpPort: number): Promise<void> {
 
   browser.setStateListener((state) => {
     if (!window.isDestroyed()) window.webContents.send(IPC.browserStateEvent, state)
+  })
+  openPencil.setStateListener((state) => {
+    if (!window.isDestroyed()) window.webContents.send(DESIGN_IPC.freeformChanged, state)
   })
   dshSurface.setStateListener((state) => {
     if (!window.isDestroyed()) window.webContents.send(IPC.dshViewStateEvent, state)
@@ -171,13 +189,34 @@ async function createWindow(cdpPort: number): Promise<void> {
   if (theme.surface() === 'dsh') harness.warmup()
   if (!window.isVisible()) window.show()
 
+  let closeAfterFreeformSave = false
+  let savingFreeformForClose = false
+  window.on('close', (event) => {
+    if (shutdownStarted || closeAfterFreeformSave || !openPencil.state().dirty) return
+    event.preventDefault()
+    if (savingFreeformForClose) return
+    savingFreeformForClose = true
+    void openPencil.close()
+      .then(() => {
+        closeAfterFreeformSave = true
+        if (!window.isDestroyed()) window.close()
+      })
+      .catch((error) => {
+        savingFreeformForClose = false
+        console.error('Refusing to close ND with an unsaved Freeform document:', error)
+      })
+  })
+
   window.on('closed', () => {
     organizationStore.setOnChanged(undefined)
     workspace.setStateListener(undefined)
+    openPencil.setStateListener(undefined)
     disposeOrganizationIpc()
     disposeDesignIpc()
     disposeIpc()
     design.destroy()
+    if (activeOpenPencil === openPencil) activeOpenPencil = undefined
+    void openPencil.destroy()
     browser.destroy()
     dshSurface.destroy()
     if (mainWindow === window) mainWindow = undefined
@@ -202,15 +241,30 @@ if (hasSingleInstanceLock) {
 
 app.on('before-quit', (event) => {
   if (shutdownStarted) return
+  const openPencilForRetry = activeOpenPencil
   if (activeHarness) {
     const harness = activeHarness
     activeHarness = undefined
     beginHarnessClose(harness)
   }
-  if (closingHarnesses.size === 0) return
+  if (activeOpenPencil) {
+    const openPencil = activeOpenPencil
+    activeOpenPencil = undefined
+    beginOpenPencilClose(openPencil)
+  }
+  if (closingServices.size === 0) return
   event.preventDefault()
   shutdownStarted = true
-  void Promise.allSettled([...closingHarnesses]).finally(() => app.exit(0))
+  const pending = [...closingServices]
+  void Promise.allSettled(pending).then((results) => {
+    if (results.some((result) => result.status === 'rejected')) {
+      shutdownStarted = false
+      if (openPencilForRetry) activeOpenPencil = openPencilForRetry
+      console.error('ND quit was canceled because the Freeform document could not be saved safely.')
+      return
+    }
+    app.exit(0)
+  })
 })
 
 app.on('window-all-closed', () => {
@@ -218,11 +272,22 @@ app.on('window-all-closed', () => {
 })
 
 function beginHarnessClose(harness: HarnessService): void {
+  trackClose(harness.close().catch((error) => console.error('Failed to close ND runtime cleanly:', error)))
+}
+
+function beginOpenPencilClose(openPencil: OpenPencilController): void {
+  trackClose(openPencil.close()
+    .catch((error) => {
+      console.error('Failed to save/close ND Freeform cleanly:', error)
+      throw error
+    })
+    .then(() => openPencil.destroy()))
+}
+
+function trackClose(promise: Promise<void>): void {
   let task: Promise<void>
-  task = harness.close()
-    .catch((error) => console.error('Failed to close ND runtime cleanly:', error))
-    .finally(() => closingHarnesses.delete(task))
-  closingHarnesses.add(task)
+  task = promise.finally(() => closingServices.delete(task))
+  closingServices.add(task)
 }
 
 function reportFatalStartupError(error: unknown): void {

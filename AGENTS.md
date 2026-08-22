@@ -9,4 +9,8 @@
 - Preserve context isolation, renderer sandboxing, loopback-only CDP, and workspace-scoped runtime policies.
 - Never substitute mock companies, fake sessions, or demo workspaces in the production renderer when the trusted preload is unavailable; fail closed instead.
 - Add desktop capabilities through narrow IPC contracts or engine adapters; do not expose Node directly to React.
+- OpenPencil is a pinned MIT-licensed design-engine submodule under `vendor/openpencil`. Keep the upstream license notice in `vendor/openpencil.LICENSE` and the tested pin in `vendor/openpencil.json`.
+- ND owns the Freeform UX, active-project/workspace binding, save/conflict lifecycle, IPC surface, and distribution. Normal ND users must not be required to install OpenPencil separately or configure PATH; production discovery is ND-bundled runtime only, with `ND_OPENPENCIL_BINARY` reserved as a developer override.
+- Treat `.op` files as Freeform design artifacts, not production application source. Building a Freeform concept must target the active project's real HTML/React/shadcn/native source and remain visible as a normal Git diff.
+- Keep the embedded OpenPencil child view sandboxed and context-isolated. Its managed daemon must bind to loopback only, use the per-instance token/allowed-origin contract, and never receive arbitrary privileged renderer IPC.
 - Run `pnpm verify`, `pnpm typecheck`, `pnpm test`, and `pnpm build` before publishing changes.
