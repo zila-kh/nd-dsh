@@ -7,16 +7,18 @@ import type { AddressInfo } from 'node:net'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import process from 'node:process'
 import type { BrowserBounds } from '../../shared/contracts.js'
-import { OPENPENCIL_HOST_IPC, type DesignFreeformState } from '../../shared/design.js'
+import { ND_PENCIL_HOST_IPC, type DesignFreeformState } from '../../shared/design.js'
 import type { WorkspaceService } from '../workspace/workspace-service.js'
 
-const OPENPENCIL_PARTITION = 'nd-dsh-openpencil'
+const ND_PENCIL_PARTITION = 'nd-dsh-nd-pencil'
 const MAX_BRIDGE_MESSAGE_BYTES = 16 * 1024 * 1024
 const INIT_RETRY_MS = 500
 const INIT_MAX_TRIES = 20
 const SNAPSHOT_TIMEOUT_MS = 12_000
 const DAEMON_HANDSHAKE_TIMEOUT_MS = 10_000
 const DAEMON_EXIT_TIMEOUT_MS = 3_000
+const UPSTREAM_TOP_BAR_HEIGHT = 40
+const BLOCKED_ND_PENCIL_PATH_PREFIXES = ['/api/auth/', '/api/collab/', '/api/ai/', '/auth/']
 
 interface DaemonHandshake {
   port: number
@@ -58,14 +60,14 @@ type BridgeOutbound =
   | { type: 'op-bridge/save-committed'; generation: number; revision: number }
 
 /**
- * ND-native OpenPencil host.
+ * ND Pencil host.
  *
- * OpenPencil stays an internal design engine: ND owns the Electron surface,
- * active workspace, save lifecycle, and IPC. The vendored MIT runtime owns the
- * vector editor itself. The bridge contract mirrors OpenPencil's
- * packages/op-vscode integration and is intentionally narrow.
+ * ND owns the product surface, active project/workspace, save lifecycle,
+ * security policy and IPC. The pinned MIT OpenPencil checkout is implementation
+ * provenance only: its account, collaboration and built-in AI product routes
+ * are intentionally unavailable inside ND Pencil.
  */
-export class OpenPencilController {
+export class NdPencilController {
   private readonly view: WebContentsView
   private binaryPath: string | undefined
   private available = false
@@ -94,16 +96,20 @@ export class OpenPencilController {
     private readonly window: BrowserWindow,
     private readonly workspace: WorkspaceService,
     private readonly projectRoot: string,
-    openPencilPreload: string,
+    ndPencilPreload: string,
   ) {
-    const openPencilSession = session.fromPartition(OPENPENCIL_PARTITION)
-    openPencilSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
-    openPencilSession.setPermissionCheckHandler(() => false)
+    const ndPencilSession = session.fromPartition(ND_PENCIL_PARTITION)
+    ndPencilSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
+    ndPencilSession.setPermissionCheckHandler(() => false)
+    ndPencilSession.webRequest.onBeforeRequest(
+      { urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] },
+      (details, callback) => callback({ cancel: !isAllowedNdPencilNetworkUrl(details.url) }),
+    )
 
     this.view = new WebContentsView({
       webPreferences: {
-        preload: openPencilPreload,
-        partition: OPENPENCIL_PARTITION,
+        preload: ndPencilPreload,
+        partition: ND_PENCIL_PARTITION,
         nodeIntegration: false,
         contextIsolation: true,
         sandbox: true,
@@ -120,7 +126,7 @@ export class OpenPencilController {
       if (event.sender !== this.view.webContents || typeof payload !== 'string' || payload.length > MAX_BRIDGE_MESSAGE_BYTES) return
       this.handlePageMessage(payload)
     }
-    ipcMain.on(OPENPENCIL_HOST_IPC.pageMessage, this.pageMessageHandler)
+    ipcMain.on(ND_PENCIL_HOST_IPC.pageMessage, this.pageMessageHandler)
   }
 
   async initialize(): Promise<void> {
@@ -129,7 +135,7 @@ export class OpenPencilController {
     this.status = this.available ? 'idle' : 'unavailable'
     this.error = this.available
       ? undefined
-      : 'Bundled OpenPencil runtime is not built. Run `pnpm openpencil:build` in a source checkout.'
+      : 'Bundled ND Pencil runtime is not built. Run `pnpm nd-pencil:build` in a source checkout.'
     this.emitState()
   }
 
@@ -140,7 +146,7 @@ export class OpenPencilController {
 
   state(): DesignFreeformState {
     return {
-      engine: 'openpencil',
+      engine: 'nd-pencil',
       status: this.status,
       available: this.available,
       visible: this.visible,
@@ -179,7 +185,7 @@ export class OpenPencilController {
     try {
       JSON.parse(json)
     } catch {
-      throw new Error(`${document.relative} is not a valid OpenPencil .op JSON document`)
+      throw new Error(`${document.relative} is not a valid ND Pencil .op document`)
     }
     await this.startDocument(document.relative, document.absolute, json, false)
     return this.state()
@@ -210,7 +216,7 @@ export class OpenPencilController {
   async close(): Promise<DesignFreeformState> {
     if (this.dirty) {
       if (this.status !== 'ready') {
-        throw new Error('Freeform has unsaved changes but the OpenPencil editor is not ready to snapshot them. Keep ND open and recover the canvas before closing.')
+        throw new Error('Freeform has unsaved changes but the ND Pencil editor is not ready to snapshot them. Keep ND open and recover the canvas before closing.')
       }
       await this.save()
     }
@@ -226,15 +232,15 @@ export class OpenPencilController {
       await this.close()
     } catch (cause) {
       this.status = 'error'
-      this.error = `OpenPencil could not close the previous project safely: ${errorMessage(cause)}`
+      this.error = `ND Pencil could not close the previous project safely: ${errorMessage(cause)}`
       this.emitState()
     }
   }
 
   async destroy(): Promise<void> {
-    ipcMain.removeListener(OPENPENCIL_HOST_IPC.pageMessage, this.pageMessageHandler)
+    ipcMain.removeListener(ND_PENCIL_HOST_IPC.pageMessage, this.pageMessageHandler)
     this.stopInitLoop()
-    this.rejectSnapshots(new Error('OpenPencil host was closed'))
+    this.rejectSnapshots(new Error('ND Pencil host was closed'))
     await this.closeRuntime(true).catch(() => undefined)
     await this.closeShellServer().catch(() => undefined)
     if (!this.window.isDestroyed()) {
@@ -247,7 +253,7 @@ export class OpenPencilController {
     if (this.documentAbsolutePath) await this.close()
     this.assertAvailable()
     const binary = this.binaryPath
-    if (!binary) throw new Error('Bundled OpenPencil runtime is unavailable')
+    if (!binary) throw new Error('Bundled ND Pencil runtime is unavailable')
 
     const shellOrigin = await this.ensureShellServer()
     this.documentPath = relativePath
@@ -265,7 +271,7 @@ export class OpenPencilController {
       this.daemon = daemon
       this.version = daemon.version
       this.wireDaemonExit(daemon)
-      const frameUrl = `${daemon.baseUrl}/?embed=vscode`
+      const frameUrl = `${daemon.baseUrl}/?embed=vscode&nd=1`
       const shellUrl = `${shellOrigin}/?frame=${encodeURIComponent(frameUrl)}`
       await this.view.webContents.loadURL(shellUrl)
       this.startInitLoop()
@@ -278,14 +284,14 @@ export class OpenPencilController {
       this.dirty = false
       this.version = undefined
       this.status = 'error'
-      this.error = `OpenPencil failed to start: ${errorMessage(cause)}`
+      this.error = `ND Pencil failed to start: ${errorMessage(cause)}`
       this.emitState()
       throw cause
     }
   }
 
   private async performSave(): Promise<DesignFreeformState> {
-    if (this.status !== 'ready' || !this.documentAbsolutePath) throw new Error('OpenPencil document is not ready to save')
+    if (this.status !== 'ready' || !this.documentAbsolutePath) throw new Error('ND Pencil document is not ready to save')
     await this.assertSourceUnchanged()
     const snapshot = await this.requestSnapshot('save')
     await atomicWrite(this.documentAbsolutePath, snapshot.docJson)
@@ -307,10 +313,10 @@ export class OpenPencilController {
     try {
       const current = await fs.readFile(path, 'utf8')
       if (this.sourceHash === undefined) {
-        throw new Error(`OpenPencil save conflict: ${this.documentPath ?? path} was created outside ND while this canvas was open`)
+        throw new Error(`ND Pencil save conflict: ${this.documentPath ?? path} was created outside ND while this canvas was open`)
       }
       if (hashText(current) !== this.sourceHash) {
-        throw new Error(`OpenPencil save conflict: ${this.documentPath ?? path} changed on disk. Reopen it before saving.`)
+        throw new Error(`ND Pencil save conflict: ${this.documentPath ?? path} changed on disk. Reopen it before saving.`)
       }
     } catch (cause) {
       if (isMissingFileError(cause) && this.sourceHash === undefined) return
@@ -323,7 +329,7 @@ export class OpenPencilController {
     return new Promise<SnapshotResult>((resolvePromise, reject) => {
       const timer = setTimeout(() => {
         this.snapshotWaiters.delete(requestId)
-        reject(new Error('OpenPencil snapshot timed out'))
+        reject(new Error('ND Pencil snapshot timed out'))
       }, SNAPSHOT_TIMEOUT_MS)
       this.snapshotWaiters.set(requestId, { resolve: resolvePromise, reject, timer })
       this.postToPage({ type: 'op-bridge/snapshot', purpose, requestId })
@@ -381,12 +387,12 @@ export class OpenPencilController {
         if (!waiter) return
         this.snapshotWaiters.delete(message.requestId)
         clearTimeout(waiter.timer)
-        waiter.reject(new Error(`OpenPencil snapshot conflict at server version ${message.serverVersion}`))
+        waiter.reject(new Error(`ND Pencil snapshot conflict at server version ${message.serverVersion}`))
         return
       }
       case 'op-bridge/sync-conflict':
         this.status = 'error'
-        this.error = `OpenPencil sync conflict at server version ${message.serverVersion}. Reopen the design before saving.`
+        this.error = `ND Pencil sync conflict at server version ${message.serverVersion}. Reopen the design before saving.`
         this.emitState()
         return
       case 'op-bridge/conflict-resolved':
@@ -404,9 +410,9 @@ export class OpenPencilController {
     this.status = 'ready'
     this.error = undefined
     this.emitState()
-    // A new document starts from OpenPencil's canonical starter state. Snapshot
-    // it so the workspace receives a real .op file rather than an ND-made
-    // approximation of OpenPencil's schema.
+    // A new design starts from the upstream engine's canonical starter state.
+    // Snapshot it so the workspace receives a real .op document rather than an
+    // ND-made approximation of the schema.
     void this.save().catch((cause) => {
       this.status = 'error'
       this.error = `Could not create Freeform document: ${errorMessage(cause)}`
@@ -424,7 +430,7 @@ export class OpenPencilController {
       this.initTries += 1
       if (this.initTries >= INIT_MAX_TRIES) {
         this.status = 'error'
-        this.error = 'OpenPencil editor did not become ready'
+        this.error = 'ND Pencil editor did not become ready'
         this.emitState()
         return
       }
@@ -440,7 +446,7 @@ export class OpenPencilController {
 
   private postToPage(message: BridgeOutbound): void {
     if (this.view.webContents.isDestroyed()) return
-    this.view.webContents.send(OPENPENCIL_HOST_IPC.hostMessage, JSON.stringify(message))
+    this.view.webContents.send(ND_PENCIL_HOST_IPC.hostMessage, JSON.stringify(message))
   }
 
   private async closeRuntime(force = false): Promise<void> {
@@ -449,7 +455,7 @@ export class OpenPencilController {
       await this.save()
     }
     this.stopInitLoop()
-    this.rejectSnapshots(new Error('OpenPencil document was closed'))
+    this.rejectSnapshots(new Error('ND Pencil document was closed'))
     await this.disposeDaemon()
     this.documentPath = undefined
     this.documentAbsolutePath = undefined
@@ -483,7 +489,7 @@ export class OpenPencilController {
       this.daemon = undefined
       if (this.closingDaemon) return
       this.status = 'error'
-      this.error = `OpenPencil runtime exited unexpectedly (${signal ?? String(code ?? 'unknown')})`
+      this.error = `ND Pencil runtime exited unexpectedly (${signal ?? String(code ?? 'unknown')})`
       this.emitState()
     })
   }
@@ -510,7 +516,7 @@ export class OpenPencilController {
     const address = server.address() as AddressInfo | null
     if (!address?.port) {
       server.close()
-      throw new Error('ND OpenPencil shell could not bind to loopback')
+      throw new Error('ND Pencil shell could not bind to loopback')
     }
     this.shellServer = server
     this.shellOrigin = `http://127.0.0.1:${address.port}`
@@ -526,7 +532,7 @@ export class OpenPencilController {
       return
     }
     if (!frame || !isLoopbackHttpUrl(frame)) {
-      sendShellError(response, 400, 'Invalid OpenPencil frame target')
+      sendShellError(response, 400, 'Invalid ND Pencil frame target')
       return
     }
     const frameOrigin = new URL(frame).origin
@@ -550,10 +556,10 @@ export class OpenPencilController {
   private async findBundledBinary(): Promise<string | undefined> {
     const binary = process.platform === 'win32' ? 'op-host-web-server.exe' : 'op-host-web-server'
     const candidates = [
-      process.env.ND_OPENPENCIL_BINARY?.trim(),
-      join(process.resourcesPath, 'openpencil', 'bin', binary),
-      join(process.resourcesPath, 'openpencil', binary),
-      join(this.projectRoot, 'resources', 'openpencil', 'bin', binary),
+      process.env.ND_PENCIL_BINARY?.trim(),
+      join(process.resourcesPath, 'nd-pencil', 'bin', binary),
+      join(process.resourcesPath, 'nd-pencil', binary),
+      join(this.projectRoot, 'resources', 'nd-pencil', 'bin', binary),
       join(this.projectRoot, 'vendor', 'openpencil', 'target', 'release', binary),
       join(this.projectRoot, 'vendor', 'openpencil', 'target', 'debug', binary),
     ].filter((value): value is string => Boolean(value))
@@ -563,8 +569,8 @@ export class OpenPencilController {
         await fs.access(candidate, process.platform === 'win32' ? fsConstants.F_OK : fsConstants.X_OK)
         return candidate
       } catch {
-        // Keep searching only ND-bundled/dev-override locations. We purposely do
-        // not probe PATH or a separately installed OpenPencil application.
+        // Search only ND-bundled locations and the explicit developer override.
+        // ND Pencil never probes PATH or a separately installed OpenPencil app.
       }
     }
     return undefined
@@ -590,7 +596,7 @@ export class OpenPencilController {
   }
 
   private assertAvailable(): void {
-    if (!this.available || !this.binaryPath) throw new Error(this.error ?? 'Bundled OpenPencil runtime is unavailable')
+    if (!this.available || !this.binaryPath) throw new Error(this.error ?? 'Bundled ND Pencil runtime is unavailable')
   }
 
   private installViewGuards(): void {
@@ -605,7 +611,7 @@ export class OpenPencilController {
     })
     contents.on('render-process-gone', (_event, details) => {
       this.status = 'error'
-      this.error = `OpenPencil renderer exited: ${details.reason}`
+      this.error = `ND Pencil renderer exited: ${details.reason}`
       this.emitState()
     })
   }
@@ -626,8 +632,8 @@ async function spawnManagedDaemon(binary: string, allowOrigin: string, filePath?
   try {
     const line = await readFirstLine(child, DAEMON_HANDSHAKE_TIMEOUT_MS)
     const handshake = parseHandshake(line)
-    forwardRedactedLines(child.stdout, handshake.token, (message) => console.log(`[OpenPencil] ${message}`))
-    forwardRedactedLines(child.stderr, handshake.token, (message) => console.warn(`[OpenPencil] ${message}`))
+    forwardRedactedLines(child.stdout, handshake.token, (message) => console.log(`[ND Pencil] ${message}`))
+    forwardRedactedLines(child.stderr, handshake.token, (message) => console.warn(`[ND Pencil] ${message}`))
     return { ...handshake, child, baseUrl: `http://127.0.0.1:${handshake.port}` }
   } catch (cause) {
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
@@ -652,17 +658,17 @@ function readFirstLine(child: ChildProcessWithoutNullStreams, timeoutMs: number)
       cleanup()
       if (error) reject(error)
       else if (line !== undefined) resolvePromise(line)
-      else reject(new Error('OpenPencil handshake failed'))
+      else reject(new Error('ND Pencil handshake failed'))
     }
     const onData = (chunk: string): void => {
       buffer += chunk
       const newline = buffer.indexOf('\n')
       if (newline >= 0) finish(undefined, buffer.slice(0, newline))
     }
-    const onEnd = (): void => finish(new Error('OpenPencil closed stdout before handshake'))
+    const onEnd = (): void => finish(new Error('ND Pencil closed stdout before handshake'))
     const onError = (error: Error): void => finish(error)
-    const onExit = (): void => finish(new Error('OpenPencil exited before handshake'))
-    const timer = setTimeout(() => finish(new Error('OpenPencil handshake timed out')), timeoutMs)
+    const onExit = (): void => finish(new Error('ND Pencil exited before handshake'))
+    const timer = setTimeout(() => finish(new Error('ND Pencil handshake timed out')), timeoutMs)
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', onData)
     child.stdout.once('end', onEnd)
@@ -673,16 +679,16 @@ function readFirstLine(child: ChildProcessWithoutNullStreams, timeoutMs: number)
 
 function parseHandshake(line: string): DaemonHandshake {
   let value: unknown
-  try { value = JSON.parse(line) } catch { throw new Error('OpenPencil handshake is not JSON') }
-  if (!value || typeof value !== 'object') throw new Error('OpenPencil handshake is invalid')
+  try { value = JSON.parse(line) } catch { throw new Error('ND Pencil handshake is not JSON') }
+  if (!value || typeof value !== 'object') throw new Error('ND Pencil handshake is invalid')
   const record = value as Record<string, unknown>
-  if (record.ok !== true) throw new Error('OpenPencil handshake did not report ready')
+  if (record.ok !== true) throw new Error('ND Pencil handshake did not report ready')
   const port = record.port
   const token = record.token
   const version = record.version
-  if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65_535) throw new Error('OpenPencil handshake port is invalid')
-  if (typeof token !== 'string' || !token) throw new Error('OpenPencil handshake token is invalid')
-  if (typeof version !== 'string' || !version) throw new Error('OpenPencil handshake version is invalid')
+  if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65_535) throw new Error('ND Pencil handshake port is invalid')
+  if (typeof token !== 'string' || !token) throw new Error('ND Pencil handshake token is invalid')
+  if (typeof version !== 'string' || !version) throw new Error('ND Pencil handshake version is invalid')
   return { port, token, version }
 }
 
@@ -756,13 +762,13 @@ function buildShellHtml(frameUrl: string, frameOrigin: string): string {
 <head>
 <meta charset="utf-8">
 <meta name="color-scheme" content="dark light">
-<style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#111}iframe{display:block;width:100%;height:100%;border:0;background:#111}</style>
+<style>html,body{position:relative;margin:0;width:100%;height:100%;overflow:hidden;background:#111}iframe{position:absolute;left:0;top:-${UPSTREAM_TOP_BAR_HEIGHT}px;display:block;width:100%;height:calc(100% + ${UPSTREAM_TOP_BAR_HEIGHT}px);border:0;background:#111}</style>
 </head>
 <body>
 <iframe id="op-frame" src="${escapeAttribute(frameUrl)}" allow="clipboard-read; clipboard-write"></iframe>
 <script>
 (function(){
-  var host=window.ndOpenPencilHost;
+  var host=window.ndPencilHost;
   var frame=document.getElementById('op-frame');
   var origin=${JSON.stringify(frameOrigin)};
   if(!host||!frame)return;
@@ -787,13 +793,31 @@ function sendShellError(response: ServerResponse, status: number, message: strin
   response.end(message)
 }
 
-function isLoopbackHttpUrl(value: string): boolean {
+function isAllowedNdPencilNetworkUrl(value: string): boolean {
   try {
     const url = new URL(value)
-    return url.protocol === 'http:' && (url.hostname === '127.0.0.1' || url.hostname === 'localhost' || url.hostname === '[::1]')
+    if (url.protocol === 'ws:' || url.protocol === 'wss:') return false
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
+    if (!isLoopbackHost(url.hostname)) return false
+    if (url.pathname === '/mcp-tokens') return false
+    if (BLOCKED_ND_PENCIL_PATH_PREFIXES.some((prefix) => url.pathname.startsWith(prefix))) return false
+    return true
   } catch {
     return false
   }
+}
+
+function isLoopbackHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value)
+    return url.protocol === 'http:' && isLoopbackHost(url.hostname)
+  } catch {
+    return false
+  }
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '[::1]' || hostname === '::1'
 }
 
 async function assertNoSymlinkParents(root: string, directory: string): Promise<void> {
