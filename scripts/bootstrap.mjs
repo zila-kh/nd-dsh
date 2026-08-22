@@ -69,7 +69,7 @@ if (flags.has('--build-nd-pencil')) {
   console.log('\nND Pencil upstream source is pinned and ready. Run `pnpm nd-pencil:build` when developing the embedded Freeform canvas.')
 }
 
-await run(process.execPath, ['scripts/verify.mjs'], root)
+await run('corepack', ['pnpm', 'verify'], root)
 console.log('\nND-DSH bootstrap complete. Configure a model provider in Settings (or use DEEPSEEK_API_KEY for the compatibility route), then run:')
 console.log('  corepack pnpm dev')
 console.log('Codex CLI is available as an optional coding engine when native Codex authentication is configured.')
