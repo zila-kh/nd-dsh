@@ -7,6 +7,7 @@ import type { WorkspaceService } from './workspace-service.js'
 import type { OrganizationStore } from '../organization/store.js'
 
 const ACTIVE_CONTEXT_MUTATIONS = new Set<OrganizationMutation['type']>([
+  'company.create',
   'company.activate',
   'project.create',
   'project.activate',
@@ -28,9 +29,14 @@ export class ProjectWorkspaceCoordinator {
   }
 
   async assertCanMutate(mutation: OrganizationMutation): Promise<void> {
-    if (!ACTIVE_CONTEXT_MUTATIONS.has(mutation.type)) return
-    const active = (await this.store.state()).runs.find((run) => run.status === 'running')
-    if (active) throw new Error(`Cannot switch projects while ${active.kind} is running. Cancel the active run first.`)
+    const state = await this.store.state()
+    const changesActiveWorkspace = ACTIVE_CONTEXT_MUTATIONS.has(mutation.type)
+      || (mutation.type === 'project.update'
+        && mutation.patch.workspacePath !== undefined
+        && state.activeProjectId === mutation.id)
+    if (!changesActiveWorkspace) return
+    const active = state.runs.find((run) => run.status === 'running')
+    if (active) throw new Error(`Cannot switch projects or workspaces while ${active.kind} is running. Cancel the active run first.`)
   }
 
   async afterOrganizationMutation(mutation: OrganizationMutation, state: OrganizationSnapshot): Promise<WorkspaceState> {
