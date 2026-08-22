@@ -426,6 +426,7 @@ function isUnsupportedImageResult(result: GatewayRpcResult): boolean {
     || message.includes('unsupported content')
     || (message.includes('image') && (
       message.includes('unsupported')
+      || message.includes('does not support')
       || message.includes('modality')
       || message.includes('vision')
     ))
