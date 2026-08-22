@@ -10,7 +10,7 @@ import type {
   UiAnnotation,
   UiTarget,
 } from '../../shared/contracts.js'
-import { dshPatchPath, harnessCliBinPath, harnessRoot, presetSourceDir } from '../app-paths.js'
+import { dshPatchPath, harnessCliBinPath, harnessRoot, presetSourceDir, projectRoot } from '../app-paths.js'
 import type { BrowserController } from '../browser/browser-controller.js'
 import { formatExternalElementContext, type ExternalElementStage } from '../capture/external-inspect.js'
 import { GatewayClient, pickFreePort } from '../dsh/gateway-client.js'
@@ -287,6 +287,7 @@ export class HarnessService {
       ...(providerRuntime.defaultProvider ? { ND_DSH_DEFAULT_PROVIDER: providerRuntime.defaultProvider } : {}),
       ...(providerRuntime.defaultModel ? { ND_DSH_DEFAULT_MODEL: providerRuntime.defaultModel } : {}),
       ...this.browser.agentBrowserEnvironment(),
+      ND_DSH_EXTERNAL_INSPECT_ENTRY: join(projectRoot(), 'scripts', 'external-inspect-mcp.mjs'),
       DSH_HOME: dshHome,
       DSH_CWD: workspaceRoot,
       DSH_PERMISSION_MODE: process.env.ND_DSH_PERMISSION_MODE ?? 'workspace-write',
