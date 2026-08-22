@@ -1,3 +1,4 @@
+import './design.js'
 import './organization.js'
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC, type DesktopApi } from '../shared/contracts.js'
