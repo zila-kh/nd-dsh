@@ -76,6 +76,23 @@ export default function App() {
     if (appInspectTimer.current !== undefined) clearInterval(appInspectTimer.current)
   }, [])
 
+  // Keyboard accelerators for the two inspect entry points.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (!event.altKey || !event.ctrlKey) return
+      const key = event.key.toLowerCase()
+      if (key === 'e') {
+        event.preventDefault()
+        startElementInspect()
+      } else if (key === 'c') {
+        event.preventDefault()
+        startAppInspect()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  })
+
   // Element-level inspect for an external Electron app: ND injects a picker
   // through the target's loopback debug port; the picked element is offered
   // as an Add-to-chat chip (multiple chips can queue before one prompt).
@@ -259,7 +276,7 @@ export default function App() {
         <div className="product-runtime">
           <button
             className="titlebar-sidebar-toggle"
-            title="Inspect any app — captures the screen in 3s, sends it to the ND chat agent, and copies it to the clipboard"
+            title="Inspect any app (Ctrl+Alt+C) — captures the screen in 3s, sends it to the ND chat agent, and copies it to the clipboard"
             disabled={appInspectCountdown !== null}
             onClick={startAppInspect}
           >
@@ -267,7 +284,7 @@ export default function App() {
           </button>
           <button
             className="titlebar-sidebar-toggle"
-            title="Inspect an element in an external Electron app (launch it with --remote-debugging-port=9333) — pick the element there, then it goes to the ND chat agent"
+            title="Inspect an element in an external Electron app (Ctrl+Alt+E) — launch it with --remote-debugging-port=9333, pick the element there, then Add to chat"
             disabled={elementInspectActive}
             onClick={startElementInspect}
           >
