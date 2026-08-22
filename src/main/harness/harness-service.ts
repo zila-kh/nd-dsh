@@ -14,8 +14,8 @@ import { GatewayClient, pickFreePort } from '../dsh/gateway-client.js'
 import type { ProviderStore } from '../providers.js'
 import type { WorkspaceService } from '../workspace/workspace-service.js'
 
-const DEFAULT_PROVIDER = 'deepseek-official'
-const DEFAULT_MODEL = 'deepseek-v4-flash'
+const COMPAT_DEFAULT_PROVIDER = 'deepseek-official'
+const COMPAT_DEFAULT_MODEL = 'deepseek-v4-flash'
 const READY_TIMEOUT_MS = 120_000
 const READY_POLL_MS = 300
 const READY_URL_PATTERN = /dsh web:\s+(https?:\/\/\S+)/
@@ -29,6 +29,7 @@ export class HarnessService {
   private startPromise: Promise<GatewayClient> | undefined
   private stopping = false
   private canceledSessions = new Set<string>()
+  private providerRevisionAtStart = -1
   private onStatusChanged?: (status: HarnessStatus) => void
   private onEvent?: (frame: DshEventFrame) => void
   private onGatewayReady?: (url: string) => void
@@ -71,7 +72,9 @@ export class HarnessService {
     if (!cleaned) throw new Error('Prompt cannot be empty')
     if (cleaned.length > 100_000) throw new Error('Prompt exceeds the 100,000 character limit')
 
-    const gateway = await this.ensureStarted()
+    // Provider edits are staged in ND settings and take effect on the next
+    // prompt/session. Durable Harness sessions survive this runtime restart.
+    const gateway = await this.ensureStarted(true)
     const sessionId = options?.sessionId?.trim() || this.activeSessionId || await this.createSession()
     this.activeSessionId = sessionId
     this.canceledSessions.delete(sessionId)
@@ -88,7 +91,7 @@ export class HarnessService {
 
   /** Create a session on the workspace root (the deployment default preset applies). */
   async createSession(): Promise<string> {
-    const gateway = await this.ensureStarted()
+    const gateway = await this.ensureStarted(true)
     const result = await gateway.rpc('session.create', { cwd: this.workspace.state().root })
     if (!result.ok) throw new Error(rpcFailureMessage('session.create', result))
     const sessionId = (result.value as { sessionId?: unknown } | undefined)?.sessionId
@@ -104,10 +107,10 @@ export class HarnessService {
     return gateway.rpc(method, payload)
   }
 
-  /** Boot the runtime eagerly (the DSH surface needs the UI as soon as it is active). */
+  /** Boot the runtime eagerly. */
   warmup(): void {
     void this.ensureStarted().catch((error) => {
-      console.warn('ND-DSH harness warmup failed:', error instanceof Error ? error.message : String(error))
+      console.warn('ND-DSH runtime warmup failed:', error instanceof Error ? error.message : String(error))
     })
   }
 
@@ -147,7 +150,7 @@ export class HarnessService {
     return mode
   }
 
-  /** Tear down the runtime subprocess (app shutdown / workspace change). */
+  /** Tear down the runtime subprocess (app shutdown / workspace change / provider refresh). */
   async close(): Promise<void> {
     this.stopping = true
     const child = this.child
@@ -184,7 +187,10 @@ export class HarnessService {
     this.updateStatus('stopped')
   }
 
-  private async ensureStarted(): Promise<GatewayClient> {
+  private async ensureStarted(refreshProviders = false): Promise<GatewayClient> {
+    if (refreshProviders && this.gateway && this.providerRevisionAtStart !== this.providers.revision()) {
+      await this.close()
+    }
     if (this.gateway) return this.gateway
     if (this.startPromise) return this.startPromise
     this.startPromise = this.start().finally(() => {
@@ -204,7 +210,7 @@ export class HarnessService {
     const presetsDir = presetSourceDir()
     const missing = [cliBin, patchPath, presetsDir].filter((value) => !existsSync(value))
     if (missing.length > 0) {
-      throw new Error(`DeepSeek Harness is not bootstrapped. Missing: ${missing.join(', ')}. Run pnpm bootstrap.`)
+      throw new Error(`ND runtime is not bootstrapped. Missing: ${missing.join(', ')}. Run pnpm bootstrap.`)
     }
 
     const workspaceRoot = this.workspace.state().root
@@ -213,11 +219,15 @@ export class HarnessService {
     // The nd-dsh preset ships with the desktop; a fresh copy keeps it current.
     await fs.cp(presetsDir, join(dshHome, '.agent-presets'), { recursive: true, force: true })
 
-    const configured = this.providers.enabled()
+    const providerRevision = this.providers.revision()
+    const providerRuntime = this.providers.runtimeConfig()
     const port = await pickFreePort()
     const environment: NodeJS.ProcessEnv = {
       ...process.env,
-      ...(configured?.apiKey ? { DEEPSEEK_API_KEY: configured.apiKey } : {}),
+      ...providerRuntime.environment,
+      ND_DSH_LLM_PROVIDERS_JSON: JSON.stringify(providerRuntime.profiles),
+      ...(providerRuntime.defaultProvider ? { ND_DSH_DEFAULT_PROVIDER: providerRuntime.defaultProvider } : {}),
+      ...(providerRuntime.defaultModel ? { ND_DSH_DEFAULT_MODEL: providerRuntime.defaultModel } : {}),
       ...this.browser.agentBrowserEnvironment(),
       DSH_HOME: dshHome,
       DSH_CWD: workspaceRoot,
@@ -252,7 +262,7 @@ export class HarnessService {
       this.gateway = undefined
       this.baseUrl = undefined
       gateway?.close()
-      const reason = wasExpected ? undefined : `Harness exited (${signal ?? String(code ?? 'unknown')}): ${childError.split(/\r?\n/).at(-1) ?? ''}`.trim()
+      const reason = wasExpected ? undefined : `Runtime exited (${signal ?? String(code ?? 'unknown')}): ${childError.split(/\r?\n/).at(-1) ?? ''}`.trim()
       this.updateStatus(wasExpected ? 'stopped' : 'error', wasExpected ? undefined : reason)
     })
 
@@ -262,6 +272,7 @@ export class HarnessService {
     gateway.openEvents((frame) => this.handleEvent(frame))
     this.gateway = gateway
     this.baseUrl = baseUrl
+    this.providerRevisionAtStart = providerRevision
     this.updateStatus('ready')
     this.onGatewayReady?.(baseUrl)
     return gateway
@@ -293,7 +304,7 @@ export class HarnessService {
         }
         await new Promise((resolve) => setTimeout(resolve, READY_POLL_MS))
       }
-      throw new Error('Harness did not become ready within the timeout')
+      throw new Error('Runtime did not become ready within the timeout')
     })()
     await Promise.race([printedUrl, polled])
   }
@@ -308,13 +319,14 @@ export class HarnessService {
   private computeStatus(state: HarnessStatus['state'], error?: string): HarnessStatus {
     const sourceReady = existsSync(harnessCliBinPath()) && existsSync(dshPatchPath()) && existsSync(presetSourceDir())
     const configured = this.providers.enabled()
-    const apiKeyPresent = Boolean((configured?.apiKey ?? process.env.DEEPSEEK_API_KEY)?.trim())
+    const runtime = this.providers.runtimeConfig()
+    const apiKeyPresent = Boolean(configured?.apiKey.trim())
     return {
       state,
       sourceReady,
       apiKeyPresent,
-      provider: process.env.ND_DSH_PROVIDER?.trim() || DEFAULT_PROVIDER,
-      model: configured?.models[0]?.id?.trim() || process.env.ND_DSH_MODEL?.trim() || DEFAULT_MODEL,
+      provider: nonEmpty(runtime.defaultProvider, process.env.ND_DSH_PROVIDER, COMPAT_DEFAULT_PROVIDER),
+      model: nonEmpty(runtime.defaultModel, process.env.ND_DSH_MODEL, COMPAT_DEFAULT_MODEL),
       ...(this.activeSessionId ? { sessionId: this.activeSessionId } : {}),
       ...(this.baseUrl ? { url: this.baseUrl, port: Number(new URL(this.baseUrl).port) } : {}),
       ...(error ? { error } : {}),
@@ -329,4 +341,12 @@ export class HarnessService {
 
 function rpcFailureMessage(method: string, result: GatewayRpcResult): string {
   return `${method} failed: ${result.error?.message ?? result.error?.code ?? 'unknown error'}`
+}
+
+function nonEmpty(...values: Array<string | undefined>): string {
+  for (const value of values) {
+    const cleaned = value?.trim()
+    if (cleaned) return cleaned
+  }
+  return ''
 }

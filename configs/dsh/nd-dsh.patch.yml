@@ -1,7 +1,7 @@
 # ND-DSH overlay for the DeepSeek Harness `web` profile.
 #
-# The desktop launches the official web surface as:
-#   node <harness>/apps/cli/lib/bin.js --profile web --patch <this file> --no-open --port <port>
+# The runtime implementation is vendored infrastructure; ND owns the product,
+# provider configuration, workspace, permissions, browser, and agent presets.
 #
 # Patch layers, in application order (last write per row wins):
 #   dsh-base bundle -> dsh-web-app bundle -> $DSH_HOME/profiles/web/cordis.patch.yml
@@ -19,6 +19,23 @@
   config:
     mode: !!js process.env.DSH_PERMISSION_MODE ?? 'workspace-write'
     workspaceRoot: !!js process.env.DSH_CWD ?? process.cwd()
+
+# ── provider-neutral LLM routing ──────────────────────────────────────────────
+
+# Harness already owns a provider-neutral LlmRuntime. Its pi-ai adapter is
+# mounted dormant by the base bundle; ND activates routes here from the
+# ProviderStore-compiled JSON. Secrets are references to ephemeral environment
+# variables and are never present in this JSON/config tree.
+- id: llm-pi-ai
+  config:
+    providers: !!js JSON.parse(process.env.ND_DSH_LLM_PROVIDERS_JSON ?? '{}')
+
+# New sessions use ND's selected default route/model. DeepSeek's native adapter
+# remains the compatibility fallback when no ND provider selection is available.
+- id: agent-default-model
+  config:
+    provider: !!js process.env.ND_DSH_DEFAULT_PROVIDER ?? process.env.ND_DSH_PROVIDER ?? 'deepseek-official'
+    model: !!js process.env.ND_DSH_DEFAULT_MODEL ?? process.env.ND_DSH_MODEL ?? 'deepseek-v4-flash'
 
 # ── session search: durable full-text index inside the harness home ───────────
 

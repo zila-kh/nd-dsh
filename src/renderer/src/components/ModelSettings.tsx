@@ -7,8 +7,10 @@ interface ModelSettingsProps {
 }
 
 const API_FORMATS = [
+  'Provider native / catalog default',
   'Chat completions (/chat/completions)',
   'Responses (/responses)',
+  'Anthropic Messages (/v1/messages)',
   'OpenAI compatible (/v1/chat/completions)',
 ]
 
@@ -69,7 +71,7 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
       name: `Custom provider ${index}`,
       enabled: false,
       baseUrl: '',
-      apiFormat: API_FORMATS[0] ?? '',
+      apiFormat: 'OpenAI compatible (/v1/chat/completions)',
       apiKey: '',
       models: [],
     }
@@ -100,7 +102,7 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
       <header className="models-header">
         <div>
           <h2>Model settings</h2>
-          <p>Manage custom model providers. Once configured, they can be selected during chat.</p>
+          <p>Configure provider routes independently from ND-DSH. Enabled routes become available to Harness sessions on the next prompt.</p>
         </div>
         <button
           className="models-refresh"
@@ -118,7 +120,7 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
 
       <div className="models-body">
         <aside className="providers-list" aria-label="Providers">
-          <div className="provider-group-label">Providers</div>
+          <div className="provider-group-label">Compatibility provider</div>
           {builtins.map((provider) => (
             <ProviderItem
               key={provider.id}
@@ -127,7 +129,7 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
               onSelect={() => setSelectedId(provider.id)}
             />
           ))}
-          <div className="provider-group-label">Custom providers</div>
+          <div className="provider-group-label">Additional providers</div>
           {customs.map((provider) => (
             <ProviderItem
               key={provider.id}
@@ -196,7 +198,7 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
                 <input
                   id="provider-base-url"
                   value={selected.baseUrl}
-                  placeholder="https://api.example.com"
+                  placeholder="Leave blank for a provider-native catalog endpoint"
                   spellCheck={false}
                   onChange={(event) => updateSelected({ baseUrl: event.target.value })}
                 />
@@ -208,8 +210,10 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
                   value={selected.apiFormat}
                   onChange={(event) => updateSelected({ apiFormat: event.target.value })}
                 >
+                  {API_FORMATS.includes(selected.apiFormat) ? null : <option value={selected.apiFormat}>{selected.apiFormat}</option>}
                   {API_FORMATS.map((format) => <option key={format} value={format}>{format}</option>)}
                 </select>
+                <span className="settings-path">Native/catalog mode lets the runtime use a known provider's own protocol and ambient authentication. Custom gateways can use OpenAI Completions, OpenAI Responses, or Anthropic Messages.</span>
               </div>
               <div className="provider-field">
                 <label htmlFor="provider-api-key">API key</label>
@@ -218,7 +222,7 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
                     id="provider-api-key"
                     type={showApiKey ? 'text' : 'password'}
                     value={selected.apiKey}
-                    placeholder="••••••••••••••••••••"
+                    placeholder="Optional when provider-native authentication is available"
                     spellCheck={false}
                     autoComplete="off"
                     onChange={(event) => updateSelected({ apiKey: event.target.value })}
@@ -232,7 +236,7 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
                     {showApiKey ? <EyeOffIcon /> : <EyeIcon />}
                   </button>
                 </div>
-                <span className="settings-path">Desktop API keys are stored with OS-backed encryption. If a secure key store is unavailable, the key stays memory-only and must be entered again after restart.</span>
+                <span className="settings-path">Desktop API keys are stored with OS-backed encryption. Runtime profiles contain only a temporary credential reference, never the key itself.</span>
               </div>
             </form>
 

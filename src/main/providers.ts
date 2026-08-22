@@ -3,6 +3,7 @@ import { app, safeStorage } from 'electron'
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { ModelProvider, ProviderModel } from '../shared/contracts.js'
+import { buildProviderRuntime, type ProviderRuntimeConfig } from './provider-runtime.js'
 
 const PROVIDERS_FILE = 'providers.json'
 const PROVIDER_SECRETS_FILE = 'provider-secrets.json'
@@ -25,7 +26,7 @@ function defaultProvider(): ModelProvider {
   const model = process.env.ND_DSH_MODEL?.trim() || DEFAULT_MODEL
   return {
     id: 'deepseek',
-    name: 'deepseek',
+    name: 'DeepSeek',
     enabled: true,
     baseUrl: process.env.ND_DSH_BASE_URL?.trim() || DEFAULT_BASE_URL,
     apiFormat: DEFAULT_API_FORMAT,
@@ -73,6 +74,10 @@ function cloneProviders(providers: ModelProvider[]): ModelProvider[] {
  * no real desktop keyring is available the key stays memory-only rather than
  * being written with a known plaintext encryption password.
  *
+ * ProviderStore is the ND control plane. It does not expose vendor-specific
+ * runtime configuration to the renderer; `runtimeConfig()` compiles the stored
+ * providers into the Harness adapter routes used for the next runtime launch.
+ *
  * This store must be constructed after `app.whenReady()` so safeStorage can
  * correctly report its operating-system encryption backend.
  */
@@ -80,6 +85,7 @@ export class ProviderStore {
   private readonly filePath: string
   private readonly secretsPath: string
   private providers: ModelProvider[]
+  private revisionValue = 0
 
   constructor() {
     if (!app.isReady()) throw new Error('ProviderStore must be created after the Electron app is ready')
@@ -101,11 +107,22 @@ export class ProviderStore {
   save(value: unknown): ModelProvider[] {
     const sanitized = Array.isArray(value) ? value.map(sanitizeProvider).filter((p): p is ModelProvider => p !== undefined) : []
     this.providers = sanitized.length > 0 ? sanitized : [defaultProvider()]
+    this.revisionValue += 1
     this.persist()
     return this.list()
   }
 
-  /** The first enabled provider, used to drive the Harness runtime. */
+  /** Incremented whenever the ND provider configuration changes in this process. */
+  revision(): number {
+    return this.revisionValue
+  }
+
+  /** Compile all enabled providers into provider-neutral Harness runtime routes. */
+  runtimeConfig(): ProviderRuntimeConfig {
+    return buildProviderRuntime(this.providers)
+  }
+
+  /** The first enabled provider, used for status/UI summaries. */
   enabled(): ModelProvider | undefined {
     return cloneProviders(this.providers).find((provider) => provider.enabled)
   }
