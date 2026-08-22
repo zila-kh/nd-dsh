@@ -56,6 +56,10 @@ const api: DesktopApi = {
       ipcRenderer.on(IPC.workspaceStateEvent, handler)
       return () => ipcRenderer.removeListener(IPC.workspaceStateEvent, handler)
     },
+    registry: () => ipcRenderer.invoke(IPC.workspaceRegistry),
+    addSaved: () => ipcRenderer.invoke(IPC.workspaceAddSaved),
+    removeSaved: (id) => ipcRenderer.invoke(IPC.workspaceRemoveSaved, id),
+    openSaved: (id) => ipcRenderer.invoke(IPC.workspaceOpenSaved, id),
   },
   harness: {
     status: () => ipcRenderer.invoke(IPC.harnessStatus),

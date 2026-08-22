@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import { ND_PENCIL_HOST_IPC } from '../shared/design.js'
+import { ND_PENCIL_HOST_IPC } from '../shared/nd-pencil-host.js'
 
 interface NdPencilHostApi {
   postMessage(payload: string): void

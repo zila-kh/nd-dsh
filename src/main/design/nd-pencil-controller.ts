@@ -7,7 +7,8 @@ import type { AddressInfo } from 'node:net'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import process from 'node:process'
 import type { BrowserBounds } from '../../shared/contracts.js'
-import { ND_PENCIL_HOST_IPC, type DesignFreeformState } from '../../shared/design.js'
+import { type DesignFreeformState } from '../../shared/design.js'
+import { ND_PENCIL_HOST_IPC } from '../../shared/nd-pencil-host.js'
 import type { WorkspaceService } from '../workspace/workspace-service.js'
 
 const ND_PENCIL_PARTITION = 'nd-dsh-nd-pencil'
@@ -83,7 +84,7 @@ export class NdPencilController {
   private daemon: DaemonRuntime | undefined
   private shellServer: Server | undefined
   private shellOrigin: string | undefined
-  private onStateChanged?: (state: DesignFreeformState) => void
+  private onStateChanged?: ((state: DesignFreeformState) => void) | undefined
   private initTimer: NodeJS.Timeout | undefined
   private initTries = 0
   private requestCounter = 0

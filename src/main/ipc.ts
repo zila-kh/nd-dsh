@@ -1,4 +1,4 @@
-import { app, clipboard, ipcMain, nativeImage, shell, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
+import { app, clipboard, dialog, ipcMain, nativeImage, shell, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
 import type { BrowserBounds, DshSurface, ThemeMode } from '../shared/contracts.js'
 import { IPC } from '../shared/contracts.js'
 import { projectRoot } from './app-paths.js'
@@ -11,6 +11,7 @@ import type { HarnessService } from './harness/harness-service.js'
 import type { ProviderStore } from './providers.js'
 import type { ThemeService } from './theme.js'
 import type { ProjectWorkspaceCoordinator } from './workspace/project-workspace-coordinator.js'
+import type { WorkspaceRegistry } from './workspace/workspace-registry.js'
 
 interface IpcDependencies {
   window: BrowserWindow
@@ -19,6 +20,7 @@ interface IpcDependencies {
   engines: CodingEngineRegistry
   harness: HarnessService
   projectWorkspace: ProjectWorkspaceCoordinator
+  workspaces: WorkspaceRegistry
   theme: ThemeService
   providers: ProviderStore
   externalElements: ExternalElementStage
@@ -122,11 +124,48 @@ export function registerIpc(deps: IpcDependencies): () => void {
   handle(IPC.browserClearAnnotation, () => deps.browser.clearAnnotation())
   handle(IPC.browserOpenExternal, (_event, value) => openExternal(asString(value, 'URL', 8_192)))
 
+  // Every successful open (pick, path, or saved entry) is registered in the
+  // durable workspace list, so the sidebar always reflects reality.
   handle(IPC.workspaceState, () => deps.projectWorkspace.state())
-  handle(IPC.workspacePick, () => deps.projectWorkspace.pick())
-  handle(IPC.workspaceSetRoot, (_event, value) => deps.projectWorkspace.setRoot(asString(value, 'Workspace path', 4_096)))
+  handle(IPC.workspacePick, async () => {
+    const state = await deps.projectWorkspace.pick()
+    await deps.workspaces.openRoot(state.root)
+    return state
+  })
+  handle(IPC.workspaceSetRoot, async (_event, value) => {
+    const state = await deps.projectWorkspace.setRoot(asString(value, 'Workspace path', 4_096))
+    await deps.workspaces.openRoot(state.root)
+    return state
+  })
+  handle(IPC.workspaceRegistry, () => deps.workspaces.list())
+  handle(IPC.workspaceAddSaved, async () => {
+    // Pin a folder without switching to it; switching happens via openSaved.
+    const result = await dialog.showOpenDialog({
+      title: 'Add workspace',
+      defaultPath: deps.projectWorkspace.state().root,
+      properties: ['openDirectory', 'createDirectory'],
+    })
+    const selected = result.filePaths[0]
+    if (!result.canceled && selected) await deps.workspaces.add(selected)
+    return deps.workspaces.list()
+  })
+  handle(IPC.workspaceRemoveSaved, (_event, value) => deps.workspaces.remove(asString(value, 'Workspace id', 128)))
+  handle(IPC.workspaceOpenSaved, async (_event, value) => {
+    const entry = deps.workspaces.get(asString(value, 'Workspace id', 128))
+    if (!entry) throw new Error('Unknown saved workspace')
+    let state
+    try {
+      state = await deps.projectWorkspace.setRoot(entry.root)
+    } catch {
+      throw new Error(`"${entry.name}" is no longer accessible on disk`)
+    }
+    const registry = await deps.workspaces.markOpened(entry.id)
+    return { state, registry }
+  })
   handle(IPC.workspaceList, (_event, value) => deps.projectWorkspace.list(value === undefined ? '.' : asString(value, 'Workspace path', 4_096)))
   handle(IPC.workspaceRead, (_event, value) => deps.projectWorkspace.read(asString(value, 'Workspace file path', 4_096)))
+  // An empty query is valid here: it surfaces the workspace's top entries.
+  handle(IPC.workspaceSuggest, (_event, value) => deps.projectWorkspace.suggest(typeof value === 'string' ? value.slice(0, 256) : ''))
   // An empty query is valid here: it surfaces the workspace's top entries.
   handle(IPC.workspaceSuggest, (_event, value) => deps.projectWorkspace.suggest(typeof value === 'string' ? value.slice(0, 256) : ''))
 

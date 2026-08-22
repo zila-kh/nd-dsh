@@ -106,8 +106,3 @@ export const DESIGN_IPC = {
   freeformClose: 'design:freeform-close',
   freeformChanged: 'design:freeform-changed',
 } as const
-
-export const ND_PENCIL_HOST_IPC = {
-  pageMessage: 'design:nd-pencil-host-page-message',
-  hostMessage: 'design:nd-pencil-host-message',
-} as const

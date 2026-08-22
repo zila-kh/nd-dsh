@@ -8,7 +8,6 @@ import { Explorer } from './components/Explorer'
 import { BrowserIcon, CameraIcon, CloseIcon, CrosshairIcon, FileIcon, SidebarToggleIcon, SparkIcon } from './components/Icons'
 import { OrganizationDashboard } from './components/OrganizationDashboard'
 import { RuntimePrompts } from './components/RuntimePrompts'
-import { StatusBar } from './components/StatusBar'
 import { ThemeToggle } from './components/ThemeToggle'
 import './styles/design.css'
 import './styles/organization.css'
@@ -405,7 +404,6 @@ export default function App() {
         </main>
       </div>
 
-      <StatusBar browser={browserState} harness={harnessStatus} workspace={workspace} />
       <RuntimePrompts onError={setToast} />
       {pendingPick ? (
         <div className="element-pick-popover" role="dialog" aria-label="Picked element">

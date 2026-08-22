@@ -27,6 +27,7 @@ import { OrganizationStore } from './organization/store.js'
 import { ProviderStore } from './providers.js'
 import { ThemeService } from './theme.js'
 import { ProjectWorkspaceCoordinator } from './workspace/project-workspace-coordinator.js'
+import { WorkspaceRegistry } from './workspace/workspace-registry.js'
 import { WorkspaceService } from './workspace/workspace-service.js'
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url))
@@ -84,6 +85,9 @@ async function createWindow(cdpPort: number): Promise<void> {
     },
   })
 
+  const workspaces = new WorkspaceRegistry(join(userData, 'workspaces.json'))
+  await workspaces.ensureActive(workspace.state().root)
+
   const browser = new BrowserController(window, cdpPort, projectRoot())
   const dshSurface = new DshSurfaceController(window)
   const externalElements = new ExternalElementStage()
@@ -98,7 +102,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   await ndPencil.initialize()
   const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines)
   const approvalGate = new OrganizationApprovalGate(organizationStore, harness)
-  const disposeIpc = registerIpc({ window, browser, dshSurface, engines, harness, projectWorkspace, theme, providers, externalElements })
+  const disposeIpc = registerIpc({ window, browser, dshSurface, engines, harness, projectWorkspace, workspaces, theme, providers, externalElements })
   const disposeDesignIpc = registerDesignIpc(window, design, ndPencil)
   const disposeOrganizationIpc = registerOrganizationIpc(window, organizationStore, organization, projectWorkspace)
   mainWindow = window

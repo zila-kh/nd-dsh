@@ -22,7 +22,7 @@ export class WorkspaceService {
   private root: string
   private suggestIndex: SuggestIndexCache | null = null
   private context: WorkspaceContext = { binding: 'standalone' }
-  private onStateChanged?: (state: WorkspaceState) => void
+  private onStateChanged?: ((state: WorkspaceState) => void) | undefined
 
   constructor(initialRoot: string) {
     this.root = resolve(initialRoot)

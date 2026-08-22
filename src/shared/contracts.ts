@@ -124,6 +124,27 @@ export interface WorkspaceState {
   warning?: string
 }
 
+/** One pinned workspace in the persisted sidebar registry. */
+export interface SavedWorkspace {
+  id: string
+  root: string
+  name: string
+  addedAt: number
+  lastOpenedAt?: number
+}
+
+export interface WorkspaceRegistryView {
+  version: 1
+  activeId?: string
+  items: SavedWorkspace[]
+}
+
+/** Result of opening a saved workspace: the new root state plus the refreshed registry. */
+export interface WorkspaceOpenResult {
+  state: WorkspaceState
+  registry: WorkspaceRegistryView
+}
+
 export interface WorkspaceFile {
   relativePath: string
   content: string
@@ -154,6 +175,29 @@ export interface HarnessRunResult {
   messageId?: string
 }
 
+export interface HarnessRunOptions {
+  sessionId?: string
+  engineId?: string
+}
+
+/** ND-managed non-harness chat session surfaced alongside gateway sessions. */
+export interface EngineSessionSummary {
+  sessionId: string
+  engineId: string
+  title: string
+  cwd?: string
+  createdAt: number
+  updatedAt: number
+  running: boolean
+}
+
+/** Replayed session events for a non-harness chat session. */
+export interface EngineSessionTranscript {
+  sessionId: string
+  engineId: string
+  events: SessionEventEnvelope[]
+}
+
 export type CodingEngineIntegration = 'primary' | 'delegated'
 
 export interface CodingEngineCapabilities {
@@ -177,6 +221,8 @@ export interface CodingEngineDescriptor {
   description: string
   unavailableReason?: string
   capabilities: CodingEngineCapabilities
+  /** Engine-owned execution guidance injected into organization worker prompts. */
+  workerInstructions?: string
 }
 
 export type DshSurface = 'dsh' | 'workbench'
@@ -387,6 +433,8 @@ export interface DesktopApi {
     list(): Promise<CodingEngineDescriptor[]>
     assignments(): Promise<Record<string, string>>
     assign(agentId: string, engineId: string): Promise<Record<string, string>>
+    sessions(): Promise<EngineSessionSummary[]>
+    transcript(sessionId: string): Promise<EngineSessionTranscript>
   }
   capture: {
     inspectApp(copyToClipboard: boolean): Promise<AppInspectResult>
@@ -419,10 +467,14 @@ export interface DesktopApi {
     read(relativePath: string): Promise<WorkspaceFile>
     suggest(query: string): Promise<WorkspaceSuggestion[]>
     onState(listener: (state: WorkspaceState) => void): () => void
+    registry(): Promise<WorkspaceRegistryView>
+    addSaved(): Promise<WorkspaceRegistryView>
+    removeSaved(id: string): Promise<WorkspaceRegistryView>
+    openSaved(id: string): Promise<WorkspaceOpenResult>
   }
   harness: {
     status(): Promise<HarnessStatus>
-    run(prompt: string, options?: { sessionId?: string }): Promise<HarnessRunResult>
+    run(prompt: string, options?: HarnessRunOptions): Promise<HarnessRunResult>
     stop(): Promise<HarnessStatus>
     getPermissionMode(): Promise<string>
     setPermissionMode(mode: string): Promise<string>
@@ -474,6 +526,10 @@ export const IPC = {
   workspaceRead: 'workspace:read',
   workspaceSuggest: 'workspace:suggest',
   workspaceStateEvent: 'workspace:state-event',
+  workspaceRegistry: 'workspace:registry',
+  workspaceAddSaved: 'workspace:add-saved',
+  workspaceRemoveSaved: 'workspace:remove-saved',
+  workspaceOpenSaved: 'workspace:open-saved',
   harnessStatus: 'harness:status',
   harnessRun: 'harness:run',
   harnessStop: 'harness:stop',
@@ -501,6 +557,8 @@ export const IPC = {
   enginesList: 'engines:list',
   enginesAssignments: 'engines:assignments',
   enginesAssign: 'engines:assign',
+  enginesSessions: 'engines:sessions',
+  enginesTranscript: 'engines:transcript',
   captureInspectApp: 'capture:inspect-app',
   captureInspectElement: 'capture:inspect-element',
   captureStageElement: 'capture:stage-element',
