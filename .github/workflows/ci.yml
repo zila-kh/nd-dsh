@@ -1,0 +1,33 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Enable Corepack
+        run: corepack enable
+      - name: Install desktop dependencies
+        run: corepack pnpm install --frozen-lockfile
+      - name: Verify repository invariants
+        run: corepack pnpm verify
+      - name: Typecheck
+        run: corepack pnpm typecheck
+      - name: Unit tests
+        run: corepack pnpm test
+      - name: Build desktop
+        run: corepack pnpm build

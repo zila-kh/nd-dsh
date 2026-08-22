@@ -47,7 +47,7 @@ export function EditorPane({ file, onAgentPrompt, onError }: EditorPaneProps) {
     return (
       <section className="editor-empty">
         <div className="brand-mark">ND</div>
-        <h2>DeepSeek Harness Desktop</h2>
+        <h2>ND-DSH Coding Workspace</h2>
         <p>Open a file, switch to Browser, or ask the agent to start building.</p>
         <div className="shortcut-grid">
           <span>Open a project</span><kbd>Explorer</kbd>

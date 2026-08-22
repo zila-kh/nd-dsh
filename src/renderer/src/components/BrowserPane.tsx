@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import type { BrowserState } from '../../../shared/contracts'
 import { ArrowLeftIcon, ArrowRightIcon, CameraIcon, ExternalIcon, ReloadIcon } from './Icons'
-import { MockWebPage } from './MockWebPage'
 
 interface BrowserPaneProps {
   active: boolean
@@ -13,8 +12,7 @@ interface BrowserPaneProps {
 export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneProps) {
   const surfaceRef = useRef<HTMLDivElement>(null)
   const addressFocused = useRef(false)
-  const [address, setAddress] = useState(state?.url ?? 'http://localhost:5173')
-  const webMode = document.documentElement.dataset.webMode === 'true'
+  const [address, setAddress] = useState(state?.url ?? 'about:blank')
 
   useEffect(() => {
     if (!addressFocused.current && state?.url) setAddress(state.url)
@@ -100,7 +98,7 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
         <button className="icon-button snapshot-button" onClick={() => void snapshot()} title="Interactive snapshot"><CameraIcon /></button>
         <button
           className="icon-button"
-          disabled={!state?.url}
+          disabled={!state?.url || state.url === 'about:blank'}
           onClick={() => void runBrowserAction(() => window.ndDsh.browser.openExternal(state?.url ?? address))}
           title="Open in system browser"
         >
@@ -111,14 +109,10 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
         </span>
       </div>
       <div className="browser-native-surface" ref={surfaceRef}>
-        {webMode ? (
-          <MockWebPage title={state?.title} />
-        ) : (
-          <div className="browser-placeholder">
-            <div className="placeholder-ring" />
-            <span>{state?.loading ? `Loading ${state.url}` : 'Electron WebContentsView'}</span>
-          </div>
-        )}
+        <div className="browser-placeholder">
+          {state?.loading ? <div className="placeholder-ring" /> : null}
+          <span>{state?.loading ? `Loading ${state.url}` : state?.url === 'about:blank' ? 'Enter a URL to open the shared agent browser.' : 'Shared Electron browser surface'}</span>
+        </div>
       </div>
     </section>
   )

@@ -1,6 +1,6 @@
 import type { SessionSummary } from '../../../shared/contracts'
 
-export type CenterView = 'dsh' | 'browser' | 'editor' | 'settings'
+export type CenterView = 'company' | 'dsh' | 'browser' | 'editor' | 'settings'
 
 export interface TodoItem {
   content: string

@@ -7,8 +7,10 @@ interface ModelSettingsProps {
 }
 
 const API_FORMATS = [
+  'Provider native / catalog default',
   'Chat completions (/chat/completions)',
   'Responses (/responses)',
+  'Anthropic Messages (/v1/messages)',
   'OpenAI compatible (/v1/chat/completions)',
 ]
 
@@ -16,10 +18,14 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
   const [providers, setProviders] = useState<ModelProvider[]>([])
   const [selectedId, setSelectedId] = useState('')
   const [showApiKey, setShowApiKey] = useState(false)
+  const [apiKeyDraft, setApiKeyDraft] = useState('')
+  const [savingCredential, setSavingCredential] = useState(false)
   const [renamingProvider, setRenamingProvider] = useState(false)
   const [nameDraft, setNameDraft] = useState('')
   const [editingModelId, setEditingModelId] = useState<string | null>(null)
   const [modelDraft, setModelDraft] = useState('')
+  const [editingContextModelId, setEditingContextModelId] = useState<string | null>(null)
+  const [contextDraft, setContextDraft] = useState('')
 
   useEffect(() => {
     let mounted = true
@@ -30,24 +36,25 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
         setProviders(loaded)
         setSelectedId((current) => (loaded.some((provider) => provider.id === current) ? current : (loaded[0]?.id ?? '')))
       })
-      .catch((cause) => onError(cause instanceof Error ? cause.message : String(cause)))
+      .catch((cause) => onError(errorMessage(cause)))
     return () => { mounted = false }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [onError])
+
+  useEffect(() => {
+    setApiKeyDraft('')
+    setShowApiKey(false)
+  }, [selectedId])
 
   const selected = providers.find((provider) => provider.id === selectedId) ?? providers[0] ?? null
-  const builtins = providers.filter((provider) => provider.id === 'deepseek')
-  const customs = providers.filter((provider) => provider.id !== 'deepseek')
 
   const commit = (next: ModelProvider[]): void => {
-    setProviders(next)
-    void window.ndDsh.providers.save(next).then(setProviders).catch((cause) => {
-      onError(cause instanceof Error ? cause.message : String(cause))
-    })
+    const safe = next.map((provider) => ({ ...provider, apiKey: '' }))
+    setProviders(safe)
+    void window.ndDsh.providers.save(safe).then(setProviders).catch((cause) => onError(errorMessage(cause)))
   }
 
   const updateSelected = (patch: Partial<ModelProvider>): void => {
-    commit(providers.map((provider) => (provider.id === selectedId ? { ...provider, ...patch } : provider)))
+    commit(providers.map((provider) => (provider.id === selectedId ? { ...provider, ...patch, apiKey: '' } : provider)))
   }
 
   const renameProvider = (): void => {
@@ -63,18 +70,46 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
   }
 
   const addProvider = (): void => {
-    const index = providers.length + 1
     const provider: ModelProvider = {
-      id: `custom-${index}`,
-      name: `Custom provider ${index}`,
+      id: `custom-${crypto.randomUUID().slice(0, 8)}`,
+      name: 'Custom provider',
       enabled: false,
       baseUrl: '',
-      apiFormat: API_FORMATS[0] ?? '',
+      apiFormat: 'OpenAI compatible (/v1/chat/completions)',
       apiKey: '',
+      hasApiKey: false,
       models: [],
     }
     setSelectedId(provider.id)
     commit([...providers, provider])
+  }
+
+  const saveCredential = async (): Promise<void> => {
+    if (!selected || !apiKeyDraft.trim() || savingCredential) return
+    setSavingCredential(true)
+    try {
+      setProviders(await window.ndDsh.providers.setApiKey(selected.id, apiKeyDraft))
+      setApiKeyDraft('')
+      setShowApiKey(false)
+    } catch (cause) {
+      onError(errorMessage(cause))
+    } finally {
+      setSavingCredential(false)
+    }
+  }
+
+  const clearCredential = async (): Promise<void> => {
+    if (!selected || !selected.hasApiKey || savingCredential) return
+    setSavingCredential(true)
+    try {
+      setProviders(await window.ndDsh.providers.clearApiKey(selected.id))
+      setApiKeyDraft('')
+      setShowApiKey(false)
+    } catch (cause) {
+      onError(errorMessage(cause))
+    } finally {
+      setSavingCredential(false)
+    }
   }
 
   const addModel = (): void => {
@@ -95,23 +130,33 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
     setEditingModelId(null)
   }
 
+  const commitContextEdit = (): void => {
+    if (editingContextModelId && contextDraft.trim()) {
+      updateSelected({
+        models: (selected?.models ?? []).map((model) => (model.id === editingContextModelId ? { ...model, context: contextDraft.trim() } : model)),
+      })
+    }
+    setEditingContextModelId(null)
+  }
+
+  const refresh = async (): Promise<void> => {
+    try {
+      const loaded = await window.ndDsh.providers.list()
+      setProviders(loaded)
+      setSelectedId((current) => loaded.some((provider) => provider.id === current) ? current : (loaded[0]?.id ?? ''))
+    } catch (cause) {
+      onError(errorMessage(cause))
+    }
+  }
+
   return (
     <section className="models-settings" aria-label="Model settings">
       <header className="models-header">
         <div>
           <h2>Model settings</h2>
-          <p>Manage custom model providers. Once configured, they can be selected during chat.</p>
+          <p>Configure model-provider routes independently from coding engines. Enabled routes become available to ND Harness sessions on the next prompt.</p>
         </div>
-        <button
-          className="models-refresh"
-          title="Reload providers from storage"
-          aria-label="Refresh model settings"
-          onClick={() => {
-            void window.ndDsh.providers.list().then(setProviders).catch((cause) => {
-              onError(cause instanceof Error ? cause.message : String(cause))
-            })
-          }}
-        >
+        <button className="models-refresh" title="Reload providers from storage" aria-label="Refresh model settings" onClick={() => void refresh()}>
           <RotateIcon />
         </button>
       </header>
@@ -119,22 +164,8 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
       <div className="models-body">
         <aside className="providers-list" aria-label="Providers">
           <div className="provider-group-label">Providers</div>
-          {builtins.map((provider) => (
-            <ProviderItem
-              key={provider.id}
-              provider={provider}
-              selected={provider.id === selectedId}
-              onSelect={() => setSelectedId(provider.id)}
-            />
-          ))}
-          <div className="provider-group-label">Custom providers</div>
-          {customs.map((provider) => (
-            <ProviderItem
-              key={provider.id}
-              provider={provider}
-              selected={provider.id === selectedId}
-              onSelect={() => setSelectedId(provider.id)}
-            />
+          {providers.map((provider) => (
+            <ProviderItem key={provider.id} provider={provider} selected={provider.id === selectedId} onSelect={() => setSelectedId(provider.id)} />
           ))}
           <button className="add-provider" onClick={addProvider}><PlusIcon />Add provider</button>
         </aside>
@@ -158,35 +189,16 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
                 ) : (
                   <>
                     <h3>{selected.name}</h3>
-                    <button
-                      className="icon-button-mini"
-                      title="Rename provider"
-                      aria-label="Rename provider"
-                      onClick={() => {
-                        setNameDraft(selected.name)
-                        setRenamingProvider(true)
-                      }}
-                    >
+                    <button className="icon-button-mini" title="Rename provider" aria-label="Rename provider" onClick={() => { setNameDraft(selected.name); setRenamingProvider(true) }}>
                       <PencilIcon />
                     </button>
                   </>
                 )}
               </div>
               <div className="provider-status-actions">
-                <span className={selected.enabled ? 'badge-enabled' : 'badge-disabled'}>
-                  {selected.enabled ? 'Enabled' : 'Disabled'}
-                </span>
-                <button className="toggle-button" onClick={() => updateSelected({ enabled: !selected.enabled })}>
-                  {selected.enabled ? 'Disable' : 'Enable'}
-                </button>
-                <button
-                  className="icon-button-mini danger"
-                  title="Delete provider"
-                  aria-label="Delete provider"
-                  onClick={() => removeProvider(selected.id)}
-                >
-                  <TrashIcon />
-                </button>
+                <span className={selected.enabled ? 'badge-enabled' : 'badge-disabled'}>{selected.enabled ? 'Enabled' : 'Disabled'}</span>
+                <button className="toggle-button" onClick={() => updateSelected({ enabled: !selected.enabled })}>{selected.enabled ? 'Disable' : 'Enable'}</button>
+                <button className="icon-button-mini danger" title="Delete provider" aria-label="Delete provider" onClick={() => removeProvider(selected.id)}><TrashIcon /></button>
               </div>
             </header>
 
@@ -196,41 +208,41 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
                 <input
                   id="provider-base-url"
                   value={selected.baseUrl}
-                  placeholder="https://api.example.com"
+                  placeholder="Leave blank for a provider-native catalog endpoint"
                   spellCheck={false}
                   onChange={(event) => updateSelected({ baseUrl: event.target.value })}
                 />
               </div>
               <div className="provider-field">
                 <label htmlFor="provider-api-format">API format</label>
-                <select
-                  id="provider-api-format"
-                  value={selected.apiFormat}
-                  onChange={(event) => updateSelected({ apiFormat: event.target.value })}
-                >
+                <select id="provider-api-format" value={selected.apiFormat} onChange={(event) => updateSelected({ apiFormat: event.target.value })}>
+                  {API_FORMATS.includes(selected.apiFormat) ? null : <option value={selected.apiFormat}>{selected.apiFormat}</option>}
                   {API_FORMATS.map((format) => <option key={format} value={format}>{format}</option>)}
                 </select>
+                <span className="settings-path">Native/catalog mode lets the runtime use a known provider's own protocol and ambient authentication. Custom gateways can use OpenAI Completions, OpenAI Responses, or Anthropic Messages.</span>
               </div>
               <div className="provider-field">
-                <label htmlFor="provider-api-key">API key</label>
+                <label htmlFor="provider-api-key">Credential</label>
                 <div className="key-field">
                   <input
                     id="provider-api-key"
                     type={showApiKey ? 'text' : 'password'}
-                    value={selected.apiKey}
-                    placeholder="••••••••••••••••••••"
+                    value={apiKeyDraft}
+                    placeholder={selected.hasApiKey ? 'Credential stored — enter a new key to replace it' : 'Enter API key'}
                     spellCheck={false}
-                    onChange={(event) => updateSelected({ apiKey: event.target.value })}
+                    autoComplete="new-password"
+                    onChange={(event) => setApiKeyDraft(event.target.value)}
                   />
-                  <button
-                    type="button"
-                    title={showApiKey ? 'Hide API key' : 'Show API key'}
-                    aria-label={showApiKey ? 'Hide API key' : 'Show API key'}
-                    onClick={() => setShowApiKey((current) => !current)}
-                  >
+                  <button type="button" title={showApiKey ? 'Hide new credential' : 'Show new credential'} aria-label={showApiKey ? 'Hide new credential' : 'Show new credential'} onClick={() => setShowApiKey((current) => !current)}>
                     {showApiKey ? <EyeOffIcon /> : <EyeIcon />}
                   </button>
                 </div>
+                <div className="provider-status-actions">
+                  <span className={selected.hasApiKey ? 'badge-enabled' : 'badge-disabled'}>{selected.hasApiKey ? 'Credential stored' : 'No stored credential'}</span>
+                  <button type="button" className="toggle-button" disabled={!apiKeyDraft.trim() || savingCredential} onClick={() => void saveCredential()}>{selected.hasApiKey ? 'Replace key' : 'Save key'}</button>
+                  {selected.hasApiKey ? <button type="button" className="toggle-button" disabled={savingCredential} onClick={() => void clearCredential()}>Clear key</button> : null}
+                </div>
+                <span className="settings-path">Stored credentials are write-only from this screen. React receives only whether a credential exists; the key value remains in the trusted main process and OS-backed secure storage.</span>
               </div>
             </form>
 
@@ -250,38 +262,25 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
                         if (event.key === 'Escape') setEditingModelId(null)
                       }}
                     />
-                  ) : (
-                    <span className="model-name">{model.id}</span>
-                  )}
+                  ) : <span className="model-name">{model.id}</span>}
                   <div className="model-item-actions">
-                    <span className="model-context">{model.context}</span>
-                    <button
-                      className="icon-button-mini"
-                      title="Edit model context"
-                      aria-label={`Edit context of ${model.id}`}
-                      onClick={() => onError('Model context editing is not wired yet.')}
-                    >
-                      <PlugIcon />
-                    </button>
-                    <button
-                      className="icon-button-mini"
-                      title="Edit model id"
-                      aria-label={`Edit model ${model.id}`}
-                      onClick={() => {
-                        setModelDraft(model.id)
-                        setEditingModelId(model.id)
-                      }}
-                    >
-                      <PencilIcon />
-                    </button>
-                    <button
-                      className="icon-button-mini danger"
-                      title="Delete model"
-                      aria-label={`Delete model ${model.id}`}
-                      onClick={() => removeModel(model.id)}
-                    >
-                      <TrashIcon />
-                    </button>
+                    {editingContextModelId === model.id ? (
+                      <input
+                        className="model-name-input"
+                        aria-label={`Context window for ${model.id}`}
+                        value={contextDraft}
+                        autoFocus
+                        onChange={(event) => setContextDraft(event.target.value)}
+                        onBlur={commitContextEdit}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') commitContextEdit()
+                          if (event.key === 'Escape') setEditingContextModelId(null)
+                        }}
+                      />
+                    ) : <span className="model-context">{model.context}</span>}
+                    <button className="icon-button-mini" title="Edit model context" aria-label={`Edit context of ${model.id}`} onClick={() => { setContextDraft(model.context); setEditingContextModelId(model.id) }}><PlugIcon /></button>
+                    <button className="icon-button-mini" title="Edit model id" aria-label={`Edit model ${model.id}`} onClick={() => { setModelDraft(model.id); setEditingModelId(model.id) }}><PencilIcon /></button>
+                    <button className="icon-button-mini danger" title="Delete model" aria-label={`Delete model ${model.id}`} onClick={() => removeModel(model.id)}><TrashIcon /></button>
                   </div>
                 </div>
               ))}
@@ -289,29 +288,23 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
             </div>
           </div>
         ) : (
-          <div className="provider-card provider-card-empty">
-            <p>No providers yet. Use “Add provider” to create one.</p>
-          </div>
+          <div className="provider-card provider-card-empty"><p>No providers yet. Use “Add provider” to create one.</p></div>
         )}
       </div>
     </section>
   )
 }
 
-function ProviderItem({ provider, selected, onSelect }: {
-  provider: ModelProvider
-  selected: boolean
-  onSelect(): void
-}) {
+function ProviderItem({ provider, selected, onSelect }: { provider: ModelProvider; selected: boolean; onSelect(): void }) {
   return (
-    <button
-      className={`provider-item ${selected ? 'selected' : ''}`}
-      aria-pressed={selected}
-      onClick={onSelect}
-    >
+    <button className={`provider-item ${selected ? 'selected' : ''}`} aria-pressed={selected} onClick={onSelect}>
       <BoxIcon />
       <span className="provider-name">{provider.name}</span>
       <span className={`provider-dot ${provider.enabled ? 'on' : ''}`} title={provider.enabled ? 'Active' : 'Disabled'} />
     </button>
   )
+}
+
+function errorMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause)
 }

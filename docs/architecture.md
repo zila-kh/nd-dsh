@@ -1,132 +1,179 @@
 # ND-DSH architecture
 
+ND-DSH is the product and control plane. Model vendors and coding runtimes are replaceable execution dependencies.
+
 ## Ownership
 
-| Subsystem | Owner | Notes |
+| Subsystem | Product owner | Runtime implementation |
 | --- | --- | --- |
-| desktop lifecycle | ND-DSH / Electron | windows, IPC, native-view geometry, process shutdown |
-| workbench | ND-DSH / React | sessions, chat, explorer, source preview, activity, status |
-| DeepSeek UI surface | ND-DSH / WebContentsView | official harness UI on the loopback gateway origin |
-| visible web runtime | Electron `WebContentsView` | one persistent partition and canonical target |
-| browser automation | `agent-browser` | CDP, ARIA snapshots, actions, diagnostics, MCP |
-| agent runtime | pinned DeepSeek Harness submodule | `web` profile + ND-DSH patch overlay; loop, tools, sessions, presets |
-| gateway transport | ND-DSH / main process | HTTP RPC + WebSocket events to the runtime's `/api` |
-| browser tool bridge | DSH MCP client | maps MCP schemas/results into native Harness tools |
-| workspace policy | DSH sandbox providers | filesystem and shell capability boundary |
+| companies, projects, goals, tasks | ND-DSH | `OrganizationStore` + orchestrator |
+| teams, roles, AI employees | ND-DSH | organization domain |
+| skills and memory | ND-DSH | compiled into runtime context/tools |
+| company policy | ND-DSH | orchestrator + main-process approval gate |
+| model-provider routes | ND-DSH | provider compiler → Harness LLM adapters |
+| coding-engine routes | ND-DSH | engine registry + per-employee assignments |
+| primary coding runtime | ND-DSH adapter | pinned DeepSeek Harness |
+| delegated Codex execution | ND-DSH adapter | pinned Harness Codex provider → official Codex app-server |
+| visible browser | ND-DSH / Electron | one `WebContentsView` + exact CDP target |
+| browser automation | ND-DSH integration | agent-browser + Harness MCP client |
+| desktop lifecycle / IPC | ND-DSH | Electron main + context-isolated preload |
+| product UI | ND-DSH | React renderer |
+
+The source may contain upstream package names where they are technically required, but product-domain state and user-facing identity must not depend on one model vendor or coding engine.
 
 ## Process graph
 
 ```text
+ND-DSH React product UI
+        |
+        v
+context-isolated preload / narrow IPC
+        |
+        v
 Electron main process
-  ├─ renderer process (React workbench, context-isolated preload)
-  ├─ WebContentsView renderer (the inspected application — canonical browser)
-  ├─ WebContentsView renderer (official DeepSeek UI surface, loopback origin)
-  ├─ agent-browser session (attached over loopback CDP)
-  └─ DeepSeek Harness child: dsh --profile web --patch configs/dsh/nd-dsh.patch.yml
-       ├─ web server + /api gateway + official UI dist (127.0.0.1:<port>)
-       ├─ gateway client in the main process (HTTP RPC + WebSocket events)
-       └─ agent-browser MCP child
-            └─ same agent-browser session and exact CDP target
+  |-- organization state + PM/worker/reviewer orchestrator
+  |-- provider control plane + encrypted credentials
+  |-- coding-engine registry + employee assignments
+  |-- company approval policy gate
+  |-- workspace service
+  |-- visible browser controller
+  |
+  `-- ND Harness adapter
+        |
+        `-- pinned Harness child: dsh --profile web --patch ...
+              |-- provider-neutral LLM runtime
+              |-- workspace filesystem / shell / jobs
+              |-- ND skills / workflow tools
+              |-- browser MCP -> exact visible Electron target
+              `-- optional Codex provider
+                    `-- package-local official codex app-server --stdio
 ```
 
-The direct Electron-to-agent-browser path exists only to bind the visible
-target and provide manual snapshots in the UI. Model tool calls travel through
-Harness MCP. Both routes use the same generated config and session name.
+The hidden Harness web surface remains compatibility/debug infrastructure. ND-DSH forces the normal product surface to the ND workbench and does not present the upstream UI as product identity.
+
+## Control-plane state
+
+ND keeps durable product state outside runtime-vendor configuration:
+
+- `organization.json` — companies, projects, workforce, workflows, tasks, policies, memory, activity, run receipts.
+- `organization.json.bak` — last-known-good organization recovery copy.
+- `providers.json` — provider metadata only; no API keys.
+- `provider-secrets.json` — OS-backed encrypted provider credentials where secure storage is available.
+- `engine-assignments.json` — per-AI-employee coding-engine routes; absence means `nd-harness`.
+- Harness session storage — durable execution transcripts owned by the runtime adapter.
+
+Organization state uses validated snapshots, serialized/atomic writes, backup recovery, and startup reconciliation for interrupted runs. Engine assignments use atomic writes and fail back to the primary ND Harness route if the assignment file is unreadable.
+
+Provider credentials are write-only from the renderer's point of view. `ProviderStore.list()` returns `apiKey: ''` plus a `hasApiKey` flag; replacement and clearing use dedicated validated IPC calls. The decrypted value stays in the trusted main process and only enters the ephemeral environment inherited by the model-runtime child.
+
+## Model providers are not coding engines
+
+A **provider** supplies a model endpoint. A **coding engine** supplies an agent/execution environment.
+
+```text
+AI employee
+   |
+   +-- model route --------> DeepSeek / OpenAI-style / Anthropic-style / catalog / gateway
+   |
+   `-- coding engine ------> ND Harness / Codex CLI / future engine
+```
+
+`src/main/provider-runtime.ts` compiles enabled ND provider settings into provider+model routes. DeepSeek remains a seeded compatibility route; the company/task domain does not depend on it.
+
+`src/main/engines/` owns the coding-engine registry and employee assignments. The current Codex route is deliberately marked **delegated** because an ND Harness parent session invokes the pinned one-shot Codex provider and then validates the resulting workspace. A future direct persistent Codex adapter can implement the same ND engine contract without changing organization semantics.
+
+## AI company execution
+
+```text
+objective
+  -> AI PM plan
+  -> goal / milestones / dependency-aware tasks
+  -> assigned employee
+  -> resolve employee coding engine
+  -> real workspace execution
+  -> independent reviewer
+  -> pass: memory + unlock dependency
+     fail: block or bounded autonomy-4 rework
+  -> next ready task
+```
+
+One organization run owns the shared runtime/workspace at a time. Cancellation never counts as completion. A desktop restart converts stale running receipts to explicit interrupted failures so projects cannot remain permanently locked.
+
+## Approval and policy boundary
+
+Organization-level plan/execute/review policy is checked before a run starts. Runtime permission escalations are also intercepted in the main process before they reach React.
+
+For an approval-bearing organization run:
+
+1. ND associates the session with its organization run.
+2. A conservative classifier maps high-confidence requests to existing company actions such as `external.publish`, `production.deploy`, `money.spend`, or `data.destructive`.
+3. `DENY` is rejected in the main process.
+4. `ALLOW` is resolved as allow-once.
+5. `ASK`, unknown requests, classification uncertainty, or gate errors remain human-visible.
+
+The pinned Harness approval wire exposes tool name and reason, not arbitrary tool arguments. ND therefore does **not** claim perfect semantic enforcement for every possible command. Non-approval-bearing browser/MCP/external actions still need normalized action metadata before enterprise GA.
 
 ## Same-browser invariant
 
-A CDP port identifies Electron's browser process, not one tab. ND-DSH therefore
-asks the embedded view's `webContents.debugger` for `Target.getTargetInfo`, then
-selects that exact `targetId` in `agent-browser`.
+The browser visible to the user is the browser controlled by the agent. ND asks the embedded view's debugger for its exact CDP `targetId`, then binds agent-browser to that target. The CLI and MCP integration share the same generated agent-browser config/session so an agent cannot silently create a second hidden browser.
 
-A new strict pinned session can create a fresh target before it has a binding.
-ND-DSH avoids that by selecting the view once with `--no-pin-tab`, then issuing
-a command with `--pin-tab`. The resulting session persists the exact target;
-later CLI and MCP commands cannot silently adopt another renderer.
+The product browser starts at `about:blank`; localhost development pages are opened only when explicitly requested.
 
-## Harness boundary
+## Renderer trust boundary
 
-ND-DSH never imports harness code at build time and never patches the pinned
-submodule. It launches the upstream `web` profile through the harness's own
-CLI launcher and applies two ND-DSH-owned artifacts:
+- Node integration: off.
+- Context isolation: on.
+- Renderer sandbox: on.
+- Web security: on.
+- Main-process IPC: trusted main frame only with bounded inputs.
+- Browser permissions: denied by default.
+- External URLs: HTTP/HTTPS only.
+- Workspace reads: root-contained with realpath/symlink protections.
+- Existing provider credentials: never returned to React; only existence/replacement/clear operations are exposed.
 
-- `configs/dsh/nd-dsh.patch.yml` — a `--patch` overlay pinning the sandbox to
-  the selected workspace, enabling durable full-text session search, making
-  `nd-dsh` the default preset, and mounting the `browser-mcp` row
-  (`@deepseek-ai/dsh-mcp-client` → `agent-browser mcp`).
-- `configs/dsh/agent-presets/nd-dsh/` — the ND-DSH agent preset (standard
-  toolset, ND-DSH persona, bundled `live-browser` skill), installed into the
-  harness-home user preset root at launch. The shipped `standard`, `code`
-  (PTC/code mode), and `cordis` (creator mode) presets remain available.
+If the trusted preload or organization bridge is unavailable, the renderer fails closed with a runtime-unavailable screen. It does not create demo companies, fake sessions, mock workspaces, or localStorage product state.
 
-The desktop then drives the runtime over the loopback gateway
-(`src/main/dsh/gateway-client.ts`): unary RPCs on `POST /api/<method>`,
-answerable frames (approvals, questions) on `POST /api/respond`, and live
-events over the `/api/events.mux` and `/api/events.host` WebSocket downlinks.
-This keeps upstream updates reviewable as one explicit submodule/pin change.
+## Coding-engine capability posture
 
-## Surfaces
+ND advertises only capabilities it actually wires.
 
-The default surface is the official DeepSeek UI: the harness serves it at the
-gateway origin, and `src/main/dsh/dsh-surface.ts` hosts it in a sandboxed,
-preload-free `WebContentsView` whose navigation is pinned to that origin. The
-ND-DSH workbench surface shares the same runtime and session store: sessions
-created in either surface appear in both, and the Explorer rail plus the
-Browser tab stay available in both. The choice persists in `settings.json`
-(`surface: dsh | workbench`).
+### ND Harness
 
-## Trust boundaries
+- durable sessions and streaming
+- filesystem and shell
+- visible browser
+- ND skills and MCP
+- provider-neutral model routing
+- human approvals/questions
 
-### Renderer
+### Codex CLI (current delegated adapter)
 
-The React process has no Node integration. The preload exposes only typed,
-capability-specific methods. Main-process IPC rejects calls from any sender
-other than the workbench's main frame and validates strings, paths, and native
-view bounds.
+- same workspace
+- filesystem and shell through Codex
+- one-shot final result
 
-### Workspace
-
-The Explorer is read-only in the MVP. Paths are resolved beneath the selected
-root, then checked again after `realpath`; symbolic links are not exposed.
-Model-facing write/edit and shell capabilities come from Harness sandbox
-providers, not renderer IPC.
-
-### Browser
-
-The embedded page has its own persistent partition, no Node integration, and no
-permission grants. CDP is bound to loopback (auto-picked unless pinned). The
-official DeepSeek UI view gets the same hardening plus an origin-locked
-navigation guard; it is a product surface, never the agent browser. Browser
-MCP remains privileged because page storage, cookies, console output,
-screenshots, and network payloads may contain secrets.
-
-### Approvals
-
-The engine approval policy is the default `ask`. Approval frames stream over
-the gateway event downlink; the official DeepSeek UI answers them directly,
-and the ND-DSH workbench renders allow-once/reject cards answered through
-`POST /api/respond`. Escalation requests never hang: with no answerer the
-engine fails closed.
+ND does not yet advertise the delegated Codex route as having ND browser, ND MCP/skill compilation, human approval streaming, or persistent Codex threads. Native Codex account/auth/model/project configuration remains authoritative.
 
 ## Failure behavior
 
-- Missing `agent-browser`: the native browser still loads and navigates; manual
-  automation status becomes `unavailable`, and agent turns fail before launch.
-- Missing or unbuilt Harness submodule: the workbench reports the exact missing
-  CLI/runtime path; the browser remains usable.
-- Missing API key: the workbench shows a setup warning; the upstream adapter
-  reports the model error on use.
-- Browser MCP startup failure: Harness startup fails loudly because the browser
-  is a required capability; the visible browser remains manually usable.
-- Initial localhost page unavailable: the pane records the load failure and the
-  user can navigate later.
-- App quit or window close: the harness child is terminated (graceful on
-  POSIX, direct kill on Windows); durable sessions survive either way.
+- Missing/unbuilt Harness: engine is unavailable and a run is rejected before a false run receipt is created.
+- Missing/unbuilt Codex adapter: employees cannot be newly assigned to Codex and existing Codex-routed work is rejected before starting.
+- Codex auth/trust failure: task remains a visible failure/blocker; ND does not invent completion.
+- Missing provider credential: the active route reports its real model error; provider metadata never substitutes a fake result.
+- Secure credential store unavailable: key remains memory-only instead of being persisted insecurely.
+- Browser bridge unavailable: visible browser remains manual; agent browser capability reports unavailable.
+- Approval policy gate failure: request falls back to human `ASK`, never implicit allow.
+- App restart mid-run: stale organization run is reconciled as interrupted/failed.
 
-## Extension path
+## Public-beta release gates
 
-Monaco/LSP, a writable editor, terminal, Git, a trajectory event-ledger tab,
-and packaging should be added as UI projections over Harness services or
-narrow Electron IPC adapters. Engine-facing features belong in ND-DSH-owned
-Harness plugins or patch-overlay rows. They must not introduce a second
-browser, bypass workspace policy, or patch the Harness agent loop.
+Passing source CI is necessary but not sufficient for a public desktop release. Before publishing installers, ND still needs:
+
+- packaged/bundled Node-compatible Harness and agent-browser runtime assets
+- macOS signing/notarization and Windows signing
+- installed-app E2E on supported platforms
+- Codex authentication/health onboarding UX
+- normalized action metadata for policy enforcement beyond Harness approval frames
+- update/release provenance, SBOM/notices, and crash provenance policy
+
+These are release engineering and policy-completeness gates, not mock functionality; the product runtime used by the desktop is real.

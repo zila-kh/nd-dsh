@@ -56,7 +56,30 @@ export interface HarnessRunResult {
   messageId?: string
 }
 
-// ── DSH gateway surface ──────────────────────────────────────────────────────
+export type CodingEngineIntegration = 'primary' | 'delegated'
+
+export interface CodingEngineCapabilities {
+  workspace: boolean
+  filesystem: boolean
+  shell: boolean
+  browser: boolean
+  skills: boolean
+  mcp: boolean
+  modelProviderRouting: boolean
+  humanApprovals: boolean
+  streaming: boolean
+  persistentSessions: boolean
+}
+
+export interface CodingEngineDescriptor {
+  id: string
+  name: string
+  integration: CodingEngineIntegration
+  available: boolean
+  description: string
+  unavailableReason?: string
+  capabilities: CodingEngineCapabilities
+}
 
 export type DshSurface = 'dsh' | 'workbench'
 
@@ -181,6 +204,12 @@ export interface ProviderModel {
   context: string
 }
 
+/**
+ * Renderer-safe provider metadata. ProviderStore.list() always returns
+ * `apiKey: ''`; `hasApiKey` is the only signal that an existing credential is
+ * present. The non-empty key is held only by the trusted main process and the
+ * temporary child-process environment used for model execution.
+ */
 export interface ModelProvider {
   id: string
   name: string
@@ -188,6 +217,7 @@ export interface ModelProvider {
   baseUrl: string
   apiFormat: string
   apiKey: string
+  hasApiKey?: boolean
   models: ProviderModel[]
 }
 
@@ -198,6 +228,13 @@ export interface DesktopApi {
   providers: {
     list(): Promise<ModelProvider[]>
     save(providers: ModelProvider[]): Promise<ModelProvider[]>
+    setApiKey(providerId: string, apiKey: string): Promise<ModelProvider[]>
+    clearApiKey(providerId: string): Promise<ModelProvider[]>
+  }
+  engines: {
+    list(): Promise<CodingEngineDescriptor[]>
+    assignments(): Promise<Record<string, string>>
+    assign(agentId: string, engineId: string): Promise<Record<string, string>>
   }
   browser: {
     state(): Promise<BrowserState>
@@ -287,4 +324,9 @@ export const IPC = {
   themeChangedEvent: 'theme:changed',
   providersList: 'providers:list',
   providersSave: 'providers:save',
+  providersSetApiKey: 'providers:set-api-key',
+  providersClearApiKey: 'providers:clear-api-key',
+  enginesList: 'engines:list',
+  enginesAssignments: 'engines:assignments',
+  enginesAssign: 'engines:assign',
 } as const

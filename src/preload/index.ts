@@ -1,9 +1,19 @@
+import './organization.js'
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC, type DesktopApi } from '../shared/contracts.js'
 
 const api: DesktopApi = {
-  app: {
-    info: () => ipcRenderer.invoke(IPC.appInfo),
+  app: { info: () => ipcRenderer.invoke(IPC.appInfo) },
+  providers: {
+    list: () => ipcRenderer.invoke(IPC.providersList),
+    save: (providers) => ipcRenderer.invoke(IPC.providersSave, providers),
+    setApiKey: (providerId, apiKey) => ipcRenderer.invoke(IPC.providersSetApiKey, providerId, apiKey),
+    clearApiKey: (providerId) => ipcRenderer.invoke(IPC.providersClearApiKey, providerId),
+  },
+  engines: {
+    list: () => ipcRenderer.invoke(IPC.enginesList),
+    assignments: () => ipcRenderer.invoke(IPC.enginesAssignments),
+    assign: (agentId, engineId) => ipcRenderer.invoke(IPC.enginesAssign, agentId, engineId),
   },
   browser: {
     state: () => ipcRenderer.invoke(IPC.browserState),
@@ -76,10 +86,6 @@ const api: DesktopApi = {
       ipcRenderer.on(IPC.themeChangedEvent, handler)
       return () => ipcRenderer.removeListener(IPC.themeChangedEvent, handler)
     },
-  },
-  providers: {
-    list: () => ipcRenderer.invoke(IPC.providersList),
-    save: (providers) => ipcRenderer.invoke(IPC.providersSave, providers),
   },
 }
 
