@@ -1,5 +1,6 @@
 import 'dotenv/config'
 import { app, BrowserWindow } from 'electron'
+import { createServer } from 'node:net'
 import { dirname, join } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -174,7 +175,7 @@ async function createWindow(cdpPort: number): Promise<void> {
 
 if (hasSingleInstanceLock) {
   void (async () => {
-    const cdpPort = requestedCdpPort || await pickFreePort()
+    const cdpPort = await resolveCdpPort(requestedCdpPort)
     console.log(`ND-DSH CDP port: ${cdpPort}`)
     app.commandLine.appendSwitch('remote-debugging-port', String(cdpPort))
     app.commandLine.appendSwitch('remote-debugging-address', '127.0.0.1')
@@ -219,6 +220,29 @@ function reportFatalStartupError(error: unknown): void {
 function parsePort(value: string | undefined, fallback: number): number {
   const parsed = Number(value)
   return Number.isInteger(parsed) && parsed >= 1_024 && parsed < 65_536 ? parsed : fallback
+}
+
+/**
+ * Honor ND_DSH_CDP_PORT only when it is actually bindable. A stale ND-DSH
+ * process (or a dev instance) holding the pinned port previously killed
+ * Chromium's devtools server, which made the agent-browser binding time out
+ * and blocked runtime startup entirely. Fall back to a free port instead.
+ */
+async function resolveCdpPort(requested: number): Promise<number> {
+  if (requested <= 0) return pickFreePort()
+  if (await canBindLoopback(requested)) return requested
+  console.warn(`ND_DSH_CDP_PORT=${requested} is already in use (another ND-DSH process?); using a free port instead.`)
+  return pickFreePort()
+}
+
+function canBindLoopback(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = createServer()
+    server.once('error', () => resolve(false))
+    server.listen(port, '127.0.0.1', () => {
+      server.close(() => resolve(true))
+    })
+  })
 }
 
 function createRendererUrlGuard(devUrl: string | undefined, rendererFile: string): (url: string) => boolean {
