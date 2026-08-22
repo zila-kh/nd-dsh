@@ -70,12 +70,8 @@ export function registerIpc(deps: IpcDependencies): () => void {
     await deps.harness.stop()
     return deps.workspace.setRoot(asString(value, 'Workspace path', 4_096))
   })
-  handle(IPC.workspaceList, (_event, value) =>
-    deps.workspace.list(value === undefined ? '.' : asString(value, 'Workspace path', 4_096)),
-  )
-  handle(IPC.workspaceRead, (_event, value) =>
-    deps.workspace.read(asString(value, 'Workspace file path', 4_096)),
-  )
+  handle(IPC.workspaceList, (_event, value) => deps.workspace.list(value === undefined ? '.' : asString(value, 'Workspace path', 4_096)))
+  handle(IPC.workspaceRead, (_event, value) => deps.workspace.read(asString(value, 'Workspace file path', 4_096)))
 
   handle(IPC.harnessStatus, () => deps.harness.status())
   handle(IPC.harnessRun, (_event, value, options) => deps.harness.run(asString(value, 'Prompt', 100_000), asSessionOptions(options)))
@@ -105,6 +101,11 @@ export function registerIpc(deps: IpcDependencies): () => void {
 
   handle(IPC.providersList, () => deps.providers.list())
   handle(IPC.providersSave, (_event, value) => deps.providers.save(value))
+  handle(IPC.providersSetApiKey, (_event, providerId, apiKey) => deps.providers.setApiKey(
+    asString(providerId, 'Provider id', 256),
+    asString(apiKey, 'API key', 32_768),
+  ))
+  handle(IPC.providersClearApiKey, (_event, providerId) => deps.providers.clearApiKey(asString(providerId, 'Provider id', 256)))
 
   return () => {
     for (const channel of channels) ipcMain.removeHandler(channel)
@@ -122,9 +123,7 @@ function asBounds(value: unknown): BrowserBounds {
   const record = value as Record<string, unknown>
   const read = (key: keyof BrowserBounds): number => {
     const number = Number(record[key])
-    if (!Number.isFinite(number) || number < 0 || number > 100_000) {
-      throw new Error(`${key} must be a finite non-negative number`)
-    }
+    if (!Number.isFinite(number) || number < 0 || number > 100_000) throw new Error(`${key} must be a finite non-negative number`)
     return number
   }
   return { x: read('x'), y: read('y'), width: read('width'), height: read('height') }
@@ -138,30 +137,22 @@ function asString(value: unknown, label: string, maxLength: number): string {
 }
 
 function asThemeMode(value: unknown): ThemeMode {
-  if (value !== 'system' && value !== 'light' && value !== 'dark') {
-    throw new Error('Theme mode must be one of: system, light, dark')
-  }
+  if (value !== 'system' && value !== 'light' && value !== 'dark') throw new Error('Theme mode must be one of: system, light, dark')
   return value
 }
 
 function asSurface(value: unknown): DshSurface {
-  if (value !== 'dsh' && value !== 'workbench') {
-    throw new Error('Surface must be one of: dsh, workbench')
-  }
+  if (value !== 'dsh' && value !== 'workbench') throw new Error('Surface must be one of: dsh, workbench')
   return value
 }
 
 function asPermissionMode(value: unknown): string {
-  if (value !== 'read-only' && value !== 'workspace-write' && value !== 'danger-full-access') {
-    throw new Error('Permission mode must be one of: read-only, workspace-write, danger-full-access')
-  }
+  if (value !== 'read-only' && value !== 'workspace-write' && value !== 'danger-full-access') throw new Error('Permission mode must be one of: read-only, workspace-write, danger-full-access')
   return value
 }
 
 function asGatewayMethod(value: unknown): string {
-  if (typeof value !== 'string' || value.length > GATEWAY_METHOD_MAX_LENGTH || !GATEWAY_METHOD_PATTERN.test(value)) {
-    throw new Error('Gateway method must be a dotted name like "session.list"')
-  }
+  if (typeof value !== 'string' || value.length > GATEWAY_METHOD_MAX_LENGTH || !GATEWAY_METHOD_PATTERN.test(value)) throw new Error('Gateway method must be a dotted name like "session.list"')
   return value
 }
 
@@ -170,21 +161,13 @@ function asSessionOptions(value: unknown): { sessionId?: string } {
   if (typeof value !== 'object') throw new Error('Harness run options must be an object')
   const record = value as Record<string, unknown>
   const sessionId = record.sessionId
-  if (sessionId !== undefined && (typeof sessionId !== 'string' || !sessionId.trim() || sessionId.length > 128)) {
-    throw new Error('sessionId must be a short non-empty string')
-  }
+  if (sessionId !== undefined && (typeof sessionId !== 'string' || !sessionId.trim() || sessionId.length > 128)) throw new Error('sessionId must be a short non-empty string')
   return { ...(typeof sessionId === 'string' ? { sessionId: sessionId.trim() } : {}) }
 }
 
 async function openExternal(value: string): Promise<void> {
   let parsed: URL
-  try {
-    parsed = new URL(value)
-  } catch {
-    throw new Error('URL must be a valid absolute web address')
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error('Only http and https URLs can be opened in a system browser')
-  }
+  try { parsed = new URL(value) } catch { throw new Error('URL must be a valid absolute web address') }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('Only http and https URLs can be opened in a system browser')
   await shell.openExternal(parsed.toString())
 }

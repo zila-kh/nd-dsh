@@ -3,12 +3,12 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { IPC, type DesktopApi } from '../shared/contracts.js'
 
 const api: DesktopApi = {
-  app: {
-    info: () => ipcRenderer.invoke(IPC.appInfo),
-  },
+  app: { info: () => ipcRenderer.invoke(IPC.appInfo) },
   providers: {
     list: () => ipcRenderer.invoke(IPC.providersList),
     save: (providers) => ipcRenderer.invoke(IPC.providersSave, providers),
+    setApiKey: (providerId, apiKey) => ipcRenderer.invoke(IPC.providersSetApiKey, providerId, apiKey),
+    clearApiKey: (providerId) => ipcRenderer.invoke(IPC.providersClearApiKey, providerId),
   },
   engines: {
     list: () => ipcRenderer.invoke(IPC.enginesList),

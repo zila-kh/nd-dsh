@@ -35,7 +35,7 @@ function defaultProvider(): ModelProvider {
   }
 }
 
-function sanitizeProvider(value: unknown): ModelProvider | undefined {
+function sanitizeProvider(value: unknown, includeLegacySecret = false): ModelProvider | undefined {
   if (!value || typeof value !== 'object') return undefined
   const record = value as Record<string, unknown>
   const id = typeof record.id === 'string' ? record.id.trim() : ''
@@ -58,7 +58,7 @@ function sanitizeProvider(value: unknown): ModelProvider | undefined {
     enabled: record.enabled !== false,
     baseUrl: typeof record.baseUrl === 'string' ? record.baseUrl : '',
     apiFormat: typeof record.apiFormat === 'string' ? record.apiFormat : DEFAULT_API_FORMAT,
-    apiKey: typeof record.apiKey === 'string' ? record.apiKey : '',
+    apiKey: includeLegacySecret && typeof record.apiKey === 'string' ? record.apiKey : '',
     models,
   }
 }
@@ -74,12 +74,10 @@ function cloneProviders(providers: ModelProvider[]): ModelProvider[] {
  * no real desktop keyring is available the key stays memory-only rather than
  * being written with a known plaintext encryption password.
  *
- * ProviderStore is the ND control plane. It does not expose vendor-specific
- * runtime configuration to the renderer; `runtimeConfig()` compiles the stored
- * providers into the Harness adapter routes used for the next runtime launch.
- *
- * This store must be constructed after `app.whenReady()` so safeStorage can
- * correctly report its operating-system encryption backend.
+ * Existing credentials are write-only from the renderer's perspective:
+ * `list()` always returns `apiKey: ''` plus `hasApiKey`; replacement and clear
+ * use dedicated IPC methods. Full secret values remain in this trusted main
+ * process and in the ephemeral child-process environment used by the runtime.
  */
 export class ProviderStore {
   private readonly filePath: string
@@ -94,35 +92,68 @@ export class ProviderStore {
     const loaded = this.readProviders()
     this.providers = this.hydrateSecrets(loaded.providers)
 
-    // Migrate older ND-DSH builds that persisted apiKey directly inside
-    // providers.json. The current process keeps the value in memory, then the
-    // rewrite removes plaintext from metadata and encrypts it when possible.
     if (loaded.hadPlaintextSecrets) this.persist()
   }
 
+  /** Renderer-safe metadata: never returns an existing credential value. */
   list(): ModelProvider[] {
-    return cloneProviders(this.providers)
+    return this.providers.map(({ apiKey, hasApiKey: _ignored, ...provider }) => ({
+      ...structuredClone(provider),
+      apiKey: '',
+      hasApiKey: Boolean(apiKey.trim()),
+    }))
   }
 
+  /** Save metadata/model routes while preserving credentials by provider id. */
   save(value: unknown): ModelProvider[] {
-    const sanitized = Array.isArray(value) ? value.map(sanitizeProvider).filter((p): p is ModelProvider => p !== undefined) : []
-    this.providers = sanitized.length > 0 ? sanitized : [defaultProvider()]
+    const sanitized = Array.isArray(value)
+      ? value.map((item) => sanitizeProvider(item)).filter((provider): provider is ModelProvider => provider !== undefined)
+      : []
+    const previousKeys = new Map(this.providers.map((provider) => [provider.id, provider.apiKey]))
+    const next = sanitized.length > 0 ? sanitized : [defaultProvider()]
+    this.providers = next.map((provider) => ({
+      ...provider,
+      apiKey: previousKeys.get(provider.id) ?? provider.apiKey,
+    }))
     this.revisionValue += 1
     this.persist()
     return this.list()
   }
 
-  /** Incremented whenever the ND provider configuration changes in this process. */
+  setApiKey(providerId: string, value: string): ModelProvider[] {
+    const id = providerId.trim()
+    const apiKey = value.trim()
+    if (!id) throw new Error('Provider id is required')
+    if (!apiKey) throw new Error('API key cannot be empty; use clear credential instead')
+    if (apiKey.length > 32_768) throw new Error('API key exceeds the supported length')
+    const provider = this.providers.find((item) => item.id === id)
+    if (!provider) throw new Error('Provider not found')
+    provider.apiKey = apiKey
+    this.revisionValue += 1
+    this.persist()
+    return this.list()
+  }
+
+  clearApiKey(providerId: string): ModelProvider[] {
+    const id = providerId.trim()
+    if (!id) throw new Error('Provider id is required')
+    const provider = this.providers.find((item) => item.id === id)
+    if (!provider) throw new Error('Provider not found')
+    provider.apiKey = ''
+    this.revisionValue += 1
+    this.persist()
+    return this.list()
+  }
+
   revision(): number {
     return this.revisionValue
   }
 
-  /** Compile all enabled providers into provider-neutral Harness runtime routes. */
   runtimeConfig(): ProviderRuntimeConfig {
     return buildProviderRuntime(this.providers)
   }
 
-  /** The first enabled provider, used for status/UI summaries. */
+  /** Trusted main-process summary used by runtime status computation. */
   enabled(): ModelProvider | undefined {
     return cloneProviders(this.providers).find((provider) => provider.enabled)
   }
@@ -135,10 +166,12 @@ export class ProviderStore {
         const apiKey = (value as Record<string, unknown>).apiKey
         return typeof apiKey === 'string' && apiKey.trim().length > 0
       })
-      const sanitized = Array.isArray(parsed) ? parsed.map(sanitizeProvider).filter((p): p is ModelProvider => p !== undefined) : []
+      const sanitized = Array.isArray(parsed)
+        ? parsed.map((item) => sanitizeProvider(item, true)).filter((provider): provider is ModelProvider => provider !== undefined)
+        : []
       if (sanitized.length > 0) return { providers: sanitized, hadPlaintextSecrets }
     } catch {
-      // Missing or unreadable metadata falls back to the default provider.
+      // Missing or unreadable metadata falls back to the compatibility route.
     }
     return { providers: [defaultProvider()], hadPlaintextSecrets: false }
   }
@@ -148,7 +181,9 @@ export class ProviderStore {
     const environmentKey = process.env.DEEPSEEK_API_KEY?.trim() ?? ''
     return providers.map((provider) => ({
       ...provider,
-      apiKey: secrets[provider.id] ?? provider.apiKey ?? (provider.id === 'deepseek' ? environmentKey : ''),
+      apiKey: secrets[provider.id]
+        ?? provider.apiKey
+        ?? (provider.id === 'deepseek' ? environmentKey : ''),
     })).map((provider) => ({
       ...provider,
       apiKey: provider.apiKey || (provider.id === 'deepseek' ? environmentKey : ''),
@@ -180,7 +215,7 @@ export class ProviderStore {
 
   private persist(): void {
     try {
-      const metadata = this.providers.map(({ apiKey: _apiKey, ...provider }) => provider)
+      const metadata = this.providers.map(({ apiKey: _apiKey, hasApiKey: _hasApiKey, ...provider }) => provider)
       writeJsonAtomic(this.filePath, metadata)
     } catch (error) {
       console.warn('Failed to persist model providers:', error)

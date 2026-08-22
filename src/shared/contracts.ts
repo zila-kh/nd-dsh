@@ -81,8 +81,6 @@ export interface CodingEngineDescriptor {
   capabilities: CodingEngineCapabilities
 }
 
-// ── DSH gateway surface ──────────────────────────────────────────────────────
-
 export type DshSurface = 'dsh' | 'workbench'
 
 export interface DshViewState {
@@ -206,6 +204,12 @@ export interface ProviderModel {
   context: string
 }
 
+/**
+ * Renderer-safe provider metadata. ProviderStore.list() always returns
+ * `apiKey: ''`; `hasApiKey` is the only signal that an existing credential is
+ * present. The non-empty key is held only by the trusted main process and the
+ * temporary child-process environment used for model execution.
+ */
 export interface ModelProvider {
   id: string
   name: string
@@ -213,6 +217,7 @@ export interface ModelProvider {
   baseUrl: string
   apiFormat: string
   apiKey: string
+  hasApiKey?: boolean
   models: ProviderModel[]
 }
 
@@ -223,6 +228,8 @@ export interface DesktopApi {
   providers: {
     list(): Promise<ModelProvider[]>
     save(providers: ModelProvider[]): Promise<ModelProvider[]>
+    setApiKey(providerId: string, apiKey: string): Promise<ModelProvider[]>
+    clearApiKey(providerId: string): Promise<ModelProvider[]>
   }
   engines: {
     list(): Promise<CodingEngineDescriptor[]>
@@ -317,6 +324,8 @@ export const IPC = {
   themeChangedEvent: 'theme:changed',
   providersList: 'providers:list',
   providersSave: 'providers:save',
+  providersSetApiKey: 'providers:set-api-key',
+  providersClearApiKey: 'providers:clear-api-key',
   enginesList: 'engines:list',
   enginesAssignments: 'engines:assignments',
   enginesAssign: 'engines:assign',
