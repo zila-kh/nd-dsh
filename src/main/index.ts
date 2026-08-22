@@ -8,6 +8,8 @@ import { ORGANIZATION_IPC } from '../shared/organization.js'
 import { projectRoot } from './app-paths.js'
 import { BrowserController } from './browser/browser-controller.js'
 import { DEFAULT_BROWSER_URL } from './browser/browser-url.js'
+import { DesignService } from './design/design-service.js'
+import { registerDesignIpc } from './design/ipc.js'
 import { DshSurfaceController } from './dsh/dsh-surface.js'
 import { pickFreePort } from './dsh/gateway-client.js'
 import { EngineAssignmentStore } from './engines/engine-assignment-store.js'
@@ -84,9 +86,11 @@ async function createWindow(cdpPort: number): Promise<void> {
   if (interruptedRuns > 0) console.warn(`Recovered ${interruptedRuns} interrupted organization run(s) from the previous app session.`)
   const projectWorkspace = new ProjectWorkspaceCoordinator(organizationStore, workspace, harness)
   await projectWorkspace.initialize()
+  const design = new DesignService(workspace, browser)
   const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines)
   const approvalGate = new OrganizationApprovalGate(organizationStore, harness)
   const disposeIpc = registerIpc({ window, browser, dshSurface, engines, harness, projectWorkspace, theme, providers })
+  const disposeDesignIpc = registerDesignIpc(window, design)
   const disposeOrganizationIpc = registerOrganizationIpc(window, organizationStore, organization, projectWorkspace)
   mainWindow = window
   activeHarness = harness
@@ -96,6 +100,9 @@ async function createWindow(cdpPort: number): Promise<void> {
   })
   workspace.setStateListener((state) => {
     if (!window.isDestroyed()) window.webContents.send(IPC.workspaceStateEvent, state)
+    void design.handleWorkspaceChanged(state).catch((error) => {
+      console.warn('Design workspace synchronization failed:', error instanceof Error ? error.message : String(error))
+    })
   })
   theme.attach(window, (color) => {
     browser.setBackgroundColor(color)
@@ -168,7 +175,9 @@ async function createWindow(cdpPort: number): Promise<void> {
     organizationStore.setOnChanged(undefined)
     workspace.setStateListener(undefined)
     disposeOrganizationIpc()
+    disposeDesignIpc()
     disposeIpc()
+    design.destroy()
     browser.destroy()
     dshSurface.destroy()
     if (mainWindow === window) mainWindow = undefined
