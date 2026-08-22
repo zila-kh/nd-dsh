@@ -16,6 +16,7 @@ export function registerDesignIpc(window: BrowserWindow, design: DesignService):
   handle(DESIGN_IPC.state, () => design.state())
   handle(DESIGN_IPC.refresh, () => design.refresh())
   handle(DESIGN_IPC.previewHtml, (_event, value) => design.previewHtml(asPath(value)))
+  handle(DESIGN_IPC.startDevPreview, () => design.startDevPreview())
   handle(DESIGN_IPC.stopPreview, () => design.stopPreview())
 
   return () => {
