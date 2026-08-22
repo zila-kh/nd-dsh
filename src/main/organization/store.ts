@@ -29,8 +29,15 @@ const EMPTY: OrganizationSnapshot = {
   workflows: [], goals: [], milestones: [], tasks: [], memory: [], policies: [], activity: [], runs: [],
 }
 
+const SNAPSHOT_ARRAY_KEYS = [
+  'companies', 'projects', 'roles', 'teams', 'agents', 'skills', 'workflows',
+  'goals', 'milestones', 'tasks', 'memory', 'policies', 'activity', 'runs',
+] as const
+
 export class OrganizationStore {
   private loaded = false
+  private loadPromise: Promise<void> | undefined
+  private saveChain: Promise<void> = Promise.resolve()
   private value: OrganizationSnapshot = clone(EMPTY)
   private onChanged: ((state: OrganizationSnapshot) => void) | undefined
 
@@ -166,6 +173,8 @@ export class OrganizationStore {
   async beginRun(kind: OrganizationRunKind, companyId: string, projectId: string, sessionId: string, taskId?: string, goalId?: string): Promise<OrganizationRun> {
     await this.load()
     this.company(companyId); this.project(projectId)
+    const active = this.value.runs.find((item) => item.status === 'running')
+    if (active) throw new Error(`Another organization run is already active in session ${active.sessionId}`)
     const run: OrganizationRun = { id: randomUUID(), companyId, projectId, kind, status: 'running', sessionId, ...(taskId ? { taskId } : {}), ...(goalId ? { goalId } : {}), startedAt: Date.now() }
     this.value.runs.unshift(run)
     this.activity(companyId, projectId, `run.${kind}`, `${kind} started in session ${short(sessionId)}.`)
@@ -181,6 +190,52 @@ export class OrganizationStore {
     if (error) run.error = error.slice(0, 8_000)
     run.completedAt = Date.now()
     await this.save()
+  }
+
+  /**
+   * A desktop restart means no in-memory Harness turn can still be running.
+   * Convert persisted running receipts into explicit failed/interrupted work so
+   * they cannot permanently lock the company. Tasks remain retryable but never
+   * auto-resume partially applied workspace changes without the user seeing it.
+   */
+  async reconcileInterruptedRuns(reason = 'ND-DSH restarted before the run finished.'): Promise<number> {
+    await this.load()
+    const running = this.value.runs.filter((item) => item.status === 'running')
+    if (running.length === 0) return 0
+
+    const now = Date.now()
+    const message = reason.trim() || 'ND-DSH restarted before the run finished.'
+    const projects = new Set<string>()
+    for (const run of running) {
+      run.status = 'failed'
+      run.error = `Interrupted: ${message}`.slice(0, 8_000)
+      run.completedAt = now
+      projects.add(run.projectId)
+
+      if (run.taskId) {
+        const task = this.value.tasks.find((item) => item.id === run.taskId)
+        if (task) {
+          if (run.kind === 'task-review') {
+            task.status = 'review'
+            delete task.reviewSessionId
+          } else {
+            task.status = 'blocked'
+            const interruption = `Execution interrupted: ${message}`
+            task.reviewSummary = [task.reviewSummary, interruption].filter(Boolean).join('\n\n').slice(0, 20_000)
+          }
+          task.updatedAt = now
+          for (const agent of this.value.agents.filter((item) => item.currentTaskId === task.id && (item.status === 'working' || item.status === 'reviewing'))) {
+            this.setAgent(agent.id, 'idle')
+          }
+        }
+      }
+
+      this.activity(run.companyId, run.projectId, 'run.interrupted', `${run.kind} in session ${short(run.sessionId)} was interrupted by an app restart.`)
+    }
+
+    for (const projectId of projects) this.refreshProject(projectId)
+    await this.save()
+    return running.length
   }
 
   async markExecution(taskId: string, sessionId: string): Promise<void> {
@@ -271,21 +326,66 @@ export class OrganizationStore {
 
   private async load(): Promise<void> {
     if (this.loaded) return
-    this.loaded = true
+    if (this.loadPromise) return this.loadPromise
+    const pending = this.loadFromDisk()
+    this.loadPromise = pending
     try {
-      const parsed = JSON.parse(await fs.readFile(this.filePath, 'utf8')) as OrganizationSnapshot
-      if (parsed?.version === 1) this.value = { ...clone(EMPTY), ...parsed, skills: mergeBuiltins(parsed.skills ?? []) }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      await pending
+    } finally {
+      this.loadPromise = undefined
     }
   }
 
+  private async loadFromDisk(): Promise<void> {
+    let primaryError: unknown
+    try {
+      this.value = await this.readSnapshot(this.filePath)
+      this.loaded = true
+      return
+    } catch (error) {
+      primaryError = error
+    }
+
+    const backupPath = this.backupPath()
+    try {
+      this.value = await this.readSnapshot(backupPath)
+      this.loaded = true
+      console.warn(`Recovered organization state from backup after primary load failed: ${errorMessage(primaryError)}`)
+      await this.save()
+      return
+    } catch (backupError) {
+      if (isMissing(primaryError) && isMissing(backupError)) {
+        this.loaded = true
+        return
+      }
+      throw new Error(`Organization state could not be loaded. Primary: ${errorMessage(primaryError)}. Backup: ${errorMessage(backupError)}.`)
+    }
+  }
+
+  private async readSnapshot(path: string): Promise<OrganizationSnapshot> {
+    const parsed = JSON.parse(await fs.readFile(path, 'utf8')) as unknown
+    return normalizeSnapshot(parsed)
+  }
+
   private async save(): Promise<void> {
-    await fs.mkdir(dirname(this.filePath), { recursive: true })
-    const temp = `${this.filePath}.${process.pid}.tmp`
-    await fs.writeFile(temp, `${JSON.stringify(this.value, null, 2)}\n`, 'utf8')
-    await fs.rename(temp, this.filePath)
-    this.onChanged?.(clone(this.value))
+    const snapshot = clone(this.value)
+    const serialized = `${JSON.stringify(snapshot, null, 2)}\n`
+    const write = this.saveChain.catch(() => undefined).then(async () => {
+      await fs.mkdir(dirname(this.filePath), { recursive: true })
+      await writeAtomic(this.filePath, serialized)
+      try {
+        await writeAtomic(this.backupPath(), serialized)
+      } catch (error) {
+        console.warn('Failed to persist organization backup:', error)
+      }
+      this.onChanged?.(clone(snapshot))
+    })
+    this.saveChain = write
+    return write
+  }
+
+  private backupPath(): string {
+    return `${this.filePath}.bak`
   }
 
   private createCompany(name: string, mission: string): void {
@@ -394,6 +494,30 @@ export class OrganizationStore {
   private activity(companyId: string, projectId: string | undefined, type: string, message: string): void { const row: OrganizationActivity = { id: randomUUID(), companyId, type, message, createdAt: Date.now(), ...(projectId ? { projectId } : {}) }; this.value.activity.unshift(row); this.value.activity = this.value.activity.slice(0, 500) }
 }
 
+function normalizeSnapshot(value: unknown): OrganizationSnapshot {
+  if (!value || typeof value !== 'object') throw new Error('Organization snapshot must be a JSON object')
+  const record = value as Record<string, unknown>
+  if (record.version !== 1) throw new Error(`Unsupported organization snapshot version: ${String(record.version)}`)
+  for (const key of SNAPSHOT_ARRAY_KEYS) {
+    if (!Array.isArray(record[key])) throw new Error(`Organization snapshot field ${key} must be an array`)
+  }
+  const parsed = record as unknown as OrganizationSnapshot
+  return { ...clone(EMPTY), ...parsed, skills: mergeBuiltins(parsed.skills) }
+}
+
+async function writeAtomic(path: string, content: string): Promise<void> {
+  const temp = `${path}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    await fs.writeFile(temp, content, 'utf8')
+    await fs.rename(temp, path)
+  } catch (error) {
+    await fs.rm(temp, { force: true }).catch(() => undefined)
+    throw error
+  }
+}
+
+function isMissing(error: unknown): boolean { return (error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT' }
+function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error) }
 function clean(value: string): string { const text = value.trim(); if (!text) throw new Error('Organization text fields cannot be empty'); return text }
 function must<T>(value: T | undefined, label: string): T { if (!value) throw new Error(`${label} not found`); return value }
 function clone<T>(value: T): T { return structuredClone(value) }

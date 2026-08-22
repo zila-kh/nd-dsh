@@ -76,6 +76,8 @@ async function createWindow(cdpPort: number): Promise<void> {
   const dshSurface = new DshSurfaceController(window)
   const harness = new HarnessService(workspace, browser, providers)
   const organizationStore = new OrganizationStore(join(app.getPath('userData'), 'organization.json'))
+  const interruptedRuns = await organizationStore.reconcileInterruptedRuns()
+  if (interruptedRuns > 0) console.warn(`Recovered ${interruptedRuns} interrupted organization run(s) from the previous app session.`)
   const organization = new OrganizationOrchestrator(organizationStore, harness, workspace)
   const disposeIpc = registerIpc({ window, browser, dshSurface, harness, workspace, theme, providers })
   const disposeOrganizationIpc = registerOrganizationIpc(window, organizationStore, organization)
