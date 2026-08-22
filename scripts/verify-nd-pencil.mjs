@@ -20,6 +20,7 @@ for (const path of [
   'src/shared/design.ts',
   'src/main/design/nd-pencil-controller.ts',
   'src/preload/nd-pencil.ts',
+  'scripts/bootstrap.mjs',
   'scripts/build-nd-pencil.mjs',
 ]) {
   if (!existsSync(join(root, path))) errors.push(`missing ND Pencil integration file: ${path}`)
@@ -114,6 +115,14 @@ if (existsSync(buildScriptPath)) {
     "'LICENSE.openpencil'",
   ]) {
     if (!buildScript.includes(needle)) errors.push(`ND Pencil build staging is incomplete; missing ${needle}`)
+  }
+}
+
+const bootstrapPath = join(root, 'scripts', 'bootstrap.mjs')
+if (existsSync(bootstrapPath)) {
+  const bootstrap = await fs.readFile(bootstrapPath, 'utf8')
+  if (!bootstrap.includes("await run('corepack', ['pnpm', 'verify'], root)")) {
+    errors.push('Bootstrap must run the full pnpm verify command so ND Pencil invariants are checked before startup')
   }
 }
 
