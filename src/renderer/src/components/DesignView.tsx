@@ -50,8 +50,7 @@ export function DesignView({ active, workspace, browser, harness, onWorkspaceCha
   const refreshProject = async (): Promise<void> => {
     setBusy('scan')
     try {
-      const state = await window.ndDshDesign.refresh()
-      setProject(state)
+      setProject(await window.ndDshDesign.refresh())
     } catch (cause) {
       onError(errorMessage(cause))
     } finally {
@@ -65,6 +64,31 @@ export function DesignView({ active, workspace, browser, harness, onWorkspaceCha
       await window.ndDshDesign.previewHtml(template.path)
       setProject(await window.ndDshDesign.state())
       setSurface('live')
+    } catch (cause) {
+      onError(errorMessage(cause))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const startDevPreview = async (): Promise<void> => {
+    setBusy('dev')
+    try {
+      await window.ndDshDesign.startDevPreview()
+      setProject(await window.ndDshDesign.state())
+      setSurface('live')
+    } catch (cause) {
+      onError(errorMessage(cause))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const stopManagedPreview = async (): Promise<void> => {
+    setBusy('stop')
+    try {
+      await window.ndDshDesign.stopPreview()
+      setProject(await window.ndDshDesign.refresh())
     } catch (cause) {
       onError(errorMessage(cause))
     } finally {
@@ -128,7 +152,14 @@ export function DesignView({ active, workspace, browser, harness, onWorkspaceCha
             <strong>{workspace?.binding === 'project' ? 'Project workspace linked' : workspace?.binding === 'missing' ? 'Workspace missing' : workspace?.binding === 'unlinked' ? 'Workspace not linked' : 'Standalone workspace'}</strong>
             <span>{workspace?.projectWorkspacePath ?? workspace?.root ?? 'Select a workspace'}</span>
           </div>
-          {project?.devCommand ? <div className="design-runtime-hint"><span>Dev runtime</span><code>{project.devCommand}</code></div> : null}
+          {project?.devCommand ? <>
+            <div className="design-runtime-hint"><span>Dev runtime</span><code>{project.devCommand}</code></div>
+            <button className="design-primary" disabled={busy !== null} onClick={() => void startDevPreview()}>{busy === 'dev' ? 'Starting runtime…' : project.preview?.kind === 'dev-server' ? 'Restart dev preview' : 'Start dev preview'}</button>
+          </> : null}
+          {project?.preview ? <>
+            <div className="design-runtime-hint"><span>Managed preview</span><code>{project.preview.kind === 'static-html' ? project.preview.templatePath ?? 'HTML' : project.preview.url}</code></div>
+            <button disabled={busy !== null} onClick={() => void stopManagedPreview()}>{busy === 'stop' ? 'Stopping…' : 'Stop managed preview'}</button>
+          </> : null}
           {bindingBlocked ? <button className="design-primary" onClick={() => void chooseWorkspace()}>Select workspace</button> : null}
         </section>
 
@@ -262,10 +293,10 @@ function CodeCanvas({ project, onAgent }: { project: DesignProjectState | null; 
       <p>The canvas is a starting surface, not a second document format. Pick a base and the agent creates the implementation directly in this workspace; the result then becomes the live canvas.</p>
     </div>
     <div className="design-starter-grid">
-      <button onClick={() => onAgent('Create a polished static HTML page in the active workspace using semantic index.html plus local CSS and JavaScript as needed. Treat the files as production source, make the layout responsive and accessible, and leave index.html ready for ND Design Mode static preview.')}> <b>HTML</b><strong>Static HTML canvas</strong><span>No build step · instant preview</span></button>
-      <button onClick={() => onAgent('Create or extend a React + Vite UI in the active workspace. Reuse the existing package setup if present, keep components maintainable, make the page responsive and accessible, and ensure the project can be opened in ND Design Mode through its live dev runtime.')}> <b>RE</b><strong>React canvas</strong><span>Components + live runtime</span></button>
-      <button onClick={() => onAgent('Create or extend the current UI using shadcn/ui as the component system. If shadcn is already configured, reuse it. If not, initialize it only when compatible with the existing project. Use real project components and tokens, not a parallel mockup, and verify the result in Design Mode.')}> <b>UI</b><strong>shadcn canvas</strong><span>Real components + tokens</span></button>
-      <button onClick={() => onAgent('Inspect the active workspace and choose the most appropriate existing web stack. Build the requested interface directly in that stack without replacing established architecture. Treat the running app as the design canvas and verify the final UI visually.')}> <b>↗</b><strong>Use existing stack</strong><span>{project?.frameworks.join(' + ') || 'Auto-detect project'}</span></button>
+      <button onClick={() => onAgent('Create a polished static HTML page in the active workspace using semantic index.html plus local CSS and JavaScript as needed. Treat the files as production source, make the layout responsive and accessible, and leave index.html ready for ND Design Mode static preview.')}><b>HTML</b><strong>Static HTML canvas</strong><span>No build step · instant preview</span></button>
+      <button onClick={() => onAgent('Create or extend a React + Vite UI in the active workspace. Reuse the existing package setup if present, keep components maintainable, make the page responsive and accessible, and ensure the project can be opened in ND Design Mode through its live dev runtime.')}><b>RE</b><strong>React canvas</strong><span>Components + live runtime</span></button>
+      <button onClick={() => onAgent('Create or extend the current UI using shadcn/ui as the component system. If shadcn is already configured, reuse it. If not, initialize it only when compatible with the existing project. Use real project components and tokens, not a parallel mockup, and verify the result in Design Mode.')}><b>UI</b><strong>shadcn canvas</strong><span>Real components + tokens</span></button>
+      <button onClick={() => onAgent('Inspect the active workspace and choose the most appropriate existing web stack. Build the requested interface directly in that stack without replacing established architecture. Treat the running app as the design canvas and verify the final UI visually.')}><b>↗</b><strong>Use existing stack</strong><span>{project?.frameworks.join(' + ') || 'Auto-detect project'}</span></button>
     </div>
   </div>
 }
@@ -281,6 +312,7 @@ function ProjectInspector({ project, surface }: { project: DesignProjectState | 
       <Property label="Templates" value={String(project.templates.length)} />
       <Property label="shadcn" value={project.shadcn.detected ? `${project.shadcn.components.length} components` : 'not detected'} />
       <Property label="Canvas" value="available" />
+      {project.preview ? <Property label="Preview" value={project.preview.kind} /> : null}
     </section>
     <div className="design-inspector-empty">Use Live app to inspect runtime elements. HTML templates, shadcn components, and the code canvas all resolve back to this same workspace.</div>
   </>
@@ -295,7 +327,7 @@ function Property({ label, value }: { label: string; value: string }) {
 }
 
 function initialSurface(project: DesignProjectState, browser: BrowserState | null): DesignSurface {
-  if (browser?.url && browser.url !== 'about:blank') return 'live'
+  if (project.preview || (browser?.url && browser.url !== 'about:blank')) return 'live'
   if (project.templates.some((entry) => entry.previewable)) return 'templates'
   if (project.shadcn.detected) return 'library'
   return 'canvas'
