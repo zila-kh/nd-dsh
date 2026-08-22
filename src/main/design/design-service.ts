@@ -1,7 +1,8 @@
+import { promises as fs, type Dirent } from 'node:fs'
 import { createServer, type Server, type ServerResponse } from 'node:http'
-import { promises as fs } from 'node:fs'
-import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import type { AddressInfo } from 'node:net'
+import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
+import type { WorkspaceState } from '../../shared/contracts.js'
 import type {
   DesignComponentEntry,
   DesignPreviewState,
@@ -11,7 +12,6 @@ import type {
   DesignTemplateEntry,
   DesignTemplateKind,
 } from '../../shared/design.js'
-import type { WorkspaceState } from '../../shared/contracts.js'
 import type { BrowserController } from '../browser/browser-controller.js'
 import type { WorkspaceService } from '../workspace/workspace-service.js'
 
@@ -47,14 +47,24 @@ const MIME_TYPES: Record<string, string> = {
   '.jpeg': 'image/jpeg',
   '.gif': 'image/gif',
   '.webp': 'image/webp',
+  '.avif': 'image/avif',
   '.ico': 'image/x-icon',
   '.woff': 'font/woff',
   '.woff2': 'font/woff2',
   '.ttf': 'font/ttf',
   '.otf': 'font/otf',
+  '.wasm': 'application/wasm',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mp3': 'audio/mpeg',
   '.map': 'application/json; charset=utf-8',
   '.txt': 'text/plain; charset=utf-8',
 }
+
+const BLOCKED_STATIC_NAMES = new Set([
+  'package.json', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock', 'bun.lockb',
+  'components.json', 'tsconfig.json', 'jsconfig.json',
+])
 
 interface ScanCache {
   root: string
@@ -236,7 +246,7 @@ async function walkWorkspace(root: string): Promise<string[]> {
   async function visit(relativeDirectory: string, depth: number): Promise<void> {
     if (depth > MAX_SCAN_DEPTH || visited >= MAX_SCAN_ENTRIES) return
     const absoluteDirectory = resolve(root, relativeDirectory || '.')
-    let entries: Awaited<ReturnType<typeof fs.readdir>>
+    let entries: Dirent[]
     try {
       entries = await fs.readdir(absoluteDirectory, { withFileTypes: true })
     } catch {
@@ -375,6 +385,10 @@ async function serveWorkspaceFile(root: string, requestUrl: string, method: stri
     send(response, 404, 'text/plain; charset=utf-8', 'Preview file not found')
     return
   }
+  if (!isSafeStaticPath(relativePath)) {
+    send(response, 403, 'text/plain; charset=utf-8', 'Preview path is not a public web asset')
+    return
+  }
 
   let candidate = resolve(root, relativePath)
   if (!isInside(root, candidate)) {
@@ -402,6 +416,14 @@ async function serveWorkspaceFile(root: string, requestUrl: string, method: stri
   } catch {
     send(response, 404, 'text/plain; charset=utf-8', 'Preview file not found')
   }
+}
+
+function isSafeStaticPath(path: string): boolean {
+  const segments = normalizeRelativePath(path).split('/')
+  if (segments.some((segment) => !segment || segment.startsWith('.'))) return false
+  const name = segments.at(-1)?.toLowerCase() ?? ''
+  if (BLOCKED_STATIC_NAMES.has(name) || name.startsWith('tsconfig.') || name.startsWith('vite.config.') || name.startsWith('next.config.')) return false
+  return Object.hasOwn(MIME_TYPES, extname(name).toLowerCase())
 }
 
 function send(response: ServerResponse, status: number, contentType: string, body: string): void {
