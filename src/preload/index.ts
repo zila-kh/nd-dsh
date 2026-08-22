@@ -16,6 +16,9 @@ const api: DesktopApi = {
     assignments: () => ipcRenderer.invoke(IPC.enginesAssignments),
     assign: (agentId, engineId) => ipcRenderer.invoke(IPC.enginesAssign, agentId, engineId),
   },
+  capture: {
+    inspectApp: (copyToClipboard) => ipcRenderer.invoke(IPC.captureInspectApp, copyToClipboard),
+  },
   browser: {
     state: () => ipcRenderer.invoke(IPC.browserState),
     setBounds: (bounds) => ipcRenderer.invoke(IPC.browserSetBounds, bounds),

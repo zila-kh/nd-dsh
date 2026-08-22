@@ -1292,3 +1292,13 @@
 .settings-row-actions{display:flex;flex:0 0 auto;gap:6px}
 .settings-row .settings-status{margin-left:8px;padding:2px 6px;border:1px solid var(--border-soft);border-radius:4px;color:var(--faint);font-size:8px;text-transform:uppercase;letter-spacing:.06em}
 .settings-row .settings-status.good{border-color:var(--accent-border);color:var(--accent)}
+
+/* Cross-app inspect camera button (titlebar, right side) */
+.titlebar-sidebar-toggle:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.titlebar-sidebar-toggle:disabled:hover {
+  background: transparent;
+  color: var(--faint);
+}

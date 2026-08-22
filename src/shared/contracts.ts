@@ -321,6 +321,16 @@ export interface ProviderPingResult {
   at: number
 }
 
+/** Cross-app inspect: a screen capture bridged into the ND chat session. */
+export interface AppInspectResult {
+  sessionId: string
+  messageId?: string
+  copiedToClipboard: boolean
+  width: number
+  height: number
+  displayLabel: string
+}
+
 export interface DesktopApi {
   app: {
     info(): Promise<AppInfo>
@@ -336,6 +346,9 @@ export interface DesktopApi {
     list(): Promise<CodingEngineDescriptor[]>
     assignments(): Promise<Record<string, string>>
     assign(agentId: string, engineId: string): Promise<Record<string, string>>
+  }
+  capture: {
+    inspectApp(copyToClipboard: boolean): Promise<AppInspectResult>
   }
   browser: {
     state(): Promise<BrowserState>
@@ -441,4 +454,5 @@ export const IPC = {
   enginesList: 'engines:list',
   enginesAssignments: 'engines:assignments',
   enginesAssign: 'engines:assign',
+  captureInspectApp: 'capture:inspect-app',
 } as const

@@ -23,6 +23,16 @@ const READY_POLL_MS = 300
 const READY_URL_PATTERN = /dsh web:\s+(https?:\/\/\S+)/
 const UI_CONTEXT_MARKER = '\n\n[ND-DSH LIVE UI CONTEXT]'
 
+/**
+ * Main-process image attachment for prompts (cross-app screen capture).
+ * Bytes stay in the trusted main process; the renderer only triggers it.
+ */
+export interface HarnessRunImage {
+  data: string
+  mediaType: string
+  name: string
+}
+
 export class HarnessService {
   private child: ChildProcess | undefined
   private gateway: GatewayClient | undefined
@@ -68,9 +78,10 @@ export class HarnessService {
   /**
    * Send one prompt to the active session (created lazily on first use).
    * The turn's progress arrives over the gateway event stream; the result
-   * carries the durable message receipt.
+   * carries the durable message receipt. A main-process image (cross-app
+   * screen capture) rides along as its own context surface.
    */
-  async run(prompt: string, options?: { sessionId?: string }): Promise<HarnessRunResult> {
+  async run(prompt: string, options?: { sessionId?: string; image?: HarnessRunImage }): Promise<HarnessRunResult> {
     const cleaned = prompt.trim()
     if (!cleaned) throw new Error('Prompt cannot be empty')
     if (cleaned.length > 100_000) throw new Error('Prompt exceeds the 100,000 character limit')
@@ -82,23 +93,25 @@ export class HarnessService {
     this.activeSessionId = sessionId
     this.canceledSessions.delete(sessionId)
 
-    const selectedUiTarget = this.browser.selectedUiTarget()
-    const selectedAnnotation = this.browser.selectedUiAnnotation()
-    const annotationImage = selectedAnnotation
-      ? this.browser.selectedUiAnnotationImage(selectedAnnotation.id)
-      : undefined
+    // A capture image replaces the browser UI context: it is a different
+    // inspection surface (external apps), never both at once.
+    const captureImage = options?.image
+    const selectedUiTarget = captureImage ? undefined : this.browser.selectedUiTarget()
+    const selectedAnnotation = captureImage ? undefined : this.browser.selectedUiAnnotation()
+    const promptImage = captureImage
+      ?? (selectedAnnotation ? this.browser.selectedUiAnnotationImage(selectedAnnotation.id) : undefined)
     const runtimePrompt = selectedUiTarget || selectedAnnotation
       ? attachUiContext(cleaned, selectedUiTarget, selectedAnnotation)
       : cleaned
     const textContent = [{ type: 'text', text: runtimePrompt }]
-    const content = annotationImage
+    const content = promptImage
       ? [
           ...textContent,
           {
             type: 'image',
-            mediaType: annotationImage.mediaType,
-            data: annotationImage.data,
-            name: annotationImage.name,
+            mediaType: promptImage.mediaType,
+            data: promptImage.data,
+            name: promptImage.name,
           },
         ]
       : textContent
@@ -107,7 +120,7 @@ export class HarnessService {
     // The pinned Harness rejects unsupported image modalities before publishing
     // the user event. Retrying text-only preserves the annotation geometry and
     // source references for text-only routes without duplicating a turn.
-    if (!result.ok && annotationImage && isUnsupportedImageResult(result)) {
+    if (!result.ok && promptImage && isUnsupportedImageResult(result)) {
       result = await gateway.rpc('session.prompt', { sessionId, mode: 'queue', content: textContent })
     }
     if (!result.ok) throw new Error(rpcFailureMessage('session.prompt', result))

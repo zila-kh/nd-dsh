@@ -1,6 +1,11 @@
 # ND-DSH
 
+> **Company team first. Built for devs, by real devs. Works with any CLI engine — Codex, DeepSeek Harness, and many more.**
+
 ND-DSH is a desktop **AI Company Operating System for software delivery**. Instead of treating an AI model as a single chat box, ND owns companies, projects, roles, teams, agents, tasks, workflows, skills, memory, policies, model-provider routes, and coding-engine capabilities.
+
+> **⚠️ Status: not beta yet — this project just started.**
+> The core loop runs on real desktop/runtime state, but there is no downloadable beta, no signed installers, and no stability promise yet. Expect breaking changes at any time. See [What we ship and what's planned](#what-we-ship-and-whats-planned) and the [Roadmap](#roadmap).
 
 The current product is coding-first: an AI PM plans work, assigned workers operate the real workspace and browser, an independent reviewer verifies the result, failed reviews can return to rework, durable memory is recorded, dependencies unlock, and the next task can continue automatically according to company autonomy and policy.
 
@@ -126,11 +131,37 @@ corepack pnpm dsh:update -- <tag-or-commit>
 
 The pin metadata in `vendor/deepseek-harness.json`, the submodule gitlink, this README, and `vendor/README.md` must remain aligned. The current required pin is release **0.1.0-rc.8** at **141eb6fef83422698aef7a981029e843e8161534**.
 
-## Public beta status
+## Project status
 
-The source/private coding beta now runs on real desktop/runtime state: there is no production fallback to mock companies, fake sessions, fake workspaces, or a localhost demo page. The renderer fails closed if its trusted desktop bridges are missing.
+**ND-DSH is not beta yet — it just started.** There is no downloadable public build and no compatibility guarantee yet; expect breaking changes at any time.
 
-A downloadable **Public Beta** still requires packaged runtime distribution, signed/notarized installers, installed-app E2E on supported platforms, Codex authentication/health onboarding, and broader normalized action metadata for policy enforcement beyond Harness approval frames. See `docs/roadmap.md`.
+What exists today is the source tree and a real running slice: the app runs on actual desktop/runtime state with no production fallback to mock companies, fake sessions, fake workspaces, or a localhost demo page, and the renderer fails closed if its trusted desktop bridges are missing.
+
+A **Public Beta** still requires packaged runtime distribution, signed/notarized installers, installed-app E2E on supported platforms, Codex authentication/health onboarding, and broader normalized action metadata for policy enforcement beyond Harness approval frames.
+
+## What we ship and what's planned
+
+| Area | Status | Detail |
+| --- | --- | --- |
+| Desktop shell | 🚢 Shipped | Secure Electron/React app with one canonical visible browser pane; renderer fails closed without trusted bridges |
+| Model routing | 🚢 Shipped | Provider-neutral routes: DeepSeek, OpenAI-compatible, Responses-compatible, Anthropic-compatible |
+| Provider credentials | 🚢 Shipped | OS-backed encrypted storage when available; write-only from the UI (replace/clear, never read back) |
+| Organization state | 🚢 Shipped | Companies, projects, teams, roles, AI employees, goals, milestones, tasks, memory, policies, run receipts |
+| Delivery loop | 🚢 Shipped | AI PM → assigned worker → independent reviewer; dependency-aware progression and bounded rework |
+| Coding engines | 🚢 Shipped | ND Harness (primary) + Codex CLI as a delegated one-shot engine, assigned per employee |
+| Policy gate | 🚢 Shipped | Main-process DENY/ALLOW/ASK enforcement for approval-bearing organization runs |
+| Packaging & installers | 🛠 Planned | Bundled runtime, signed/notarized installers, offline install without dev tooling |
+| Codex onboarding | 🛠 Planned | Native authentication and health checks in first-run onboarding |
+| More CLI engines | 🛠 Planned | Additional adapters beyond Harness and Codex — any CLI engine can plug in |
+| Broader company templates | 🛠 Planned | Non-coding business roles once the software-company loop is reliable |
+
+## Roadmap
+
+The full, ordered roadmap lives in [`docs/roadmap.md`](docs/roadmap.md). Summary:
+
+1. **Shipped foundation** — the coding-first vertical slice above, on real state.
+2. **Public Beta P0** — runtime distribution, installers, installed-app E2E, onboarding.
+3. **After the beta** — more engine adapters, broader action metadata for policy, business-company templates.
 
 ## Security boundaries
 
@@ -163,4 +194,8 @@ vendor/deepseek-harness/  pinned runtime submodule
 
 ## License
 
-See `LICENSE` and upstream dependency licenses. DeepSeek Harness and Codex remain third-party runtime dependencies governed by their respective licenses and distribution terms.
+Released under the **MIT License** — see [`LICENSE`](LICENSE). DeepSeek Harness and Codex remain third-party runtime dependencies governed by their respective licenses and distribution terms.
+
+---
+
+> **ND-DSH** — Company team first. Built for devs, by real devs. Any CLI engine: Codex, DeepSeek Harness, and many more. · *Not beta yet — just started.* · [Roadmap](docs/roadmap.md) · MIT License

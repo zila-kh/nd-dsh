@@ -1,10 +1,10 @@
-import { lazy, Suspense, useEffect, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import type { BrowserState, HarnessStatus, ThemeMode, ThemeState, WorkspaceFile, WorkspaceState } from '../../shared/contracts'
 import { BrowserPane } from './components/BrowserPane'
 import { ChatPanel } from './components/ChatPanel'
 import { EditorPane } from './components/EditorPane'
 import { Explorer } from './components/Explorer'
-import { BrowserIcon, CloseIcon, FileIcon, SidebarToggleIcon, SparkIcon } from './components/Icons'
+import { BrowserIcon, CameraIcon, CloseIcon, FileIcon, SidebarToggleIcon, SparkIcon } from './components/Icons'
 import { OrganizationDashboard } from './components/OrganizationDashboard'
 import { RuntimePrompts } from './components/RuntimePrompts'
 import { StatusBar } from './components/StatusBar'
@@ -42,6 +42,36 @@ export default function App() {
   const [externalPrompt, setExternalPrompt] = useState<{ id: string; text: string } | null>(null)
   const [toast, setToast] = useState<string>()
   const [theme, setTheme] = useState<ThemeState | null>(null)
+  const [appInspectCountdown, setAppInspectCountdown] = useState<number | null>(null)
+  const appInspectTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
+
+  // Cross-app inspect: after a short countdown (so the user can focus the
+  // target app), the trusted main process captures the screen, bridges the
+  // screenshot into the ND chat session, and copies it to the clipboard.
+  const startAppInspect = (): void => {
+    if (appInspectCountdown !== null) return
+    let remaining = 3
+    setAppInspectCountdown(remaining)
+    appInspectTimer.current = setInterval(() => {
+      remaining -= 1
+      if (remaining > 0) {
+        setAppInspectCountdown(remaining)
+        return
+      }
+      clearInterval(appInspectTimer.current)
+      appInspectTimer.current = undefined
+      setAppInspectCountdown(null)
+      void window.ndDsh.capture.inspectApp(true)
+        .then((result) => setToast(result.copiedToClipboard
+          ? 'Screenshot sent to the agent and copied to the clipboard.'
+          : 'Screenshot sent to the agent.'))
+        .catch((cause) => setToast(errorMessage(cause)))
+    }, 1_000)
+  }
+
+  useEffect(() => () => {
+    if (appInspectTimer.current !== undefined) clearInterval(appInspectTimer.current)
+  }, [])
 
   useEffect(() => {
     void Promise.all([
@@ -187,6 +217,14 @@ export default function App() {
           </div>
         </nav>
         <div className="product-runtime">
+          <button
+            className="titlebar-sidebar-toggle"
+            title="Inspect any app — captures the screen in 3s, sends it to the ND chat agent, and copies it to the clipboard"
+            disabled={appInspectCountdown !== null}
+            onClick={startAppInspect}
+          >
+            <CameraIcon />
+          </button>
           <ThemeToggle theme={theme} onSelect={selectTheme} />
           <span className={`tiny-dot ${harnessStatus?.state ?? 'stopped'}`} />
           <span>{harnessStatus?.model ?? 'Runtime offline'}</span>
@@ -286,7 +324,11 @@ export default function App() {
 
       <StatusBar browser={browserState} harness={harnessStatus} workspace={workspace} />
       <RuntimePrompts onError={setToast} />
-      {toast ? <div className="toast" role="alert"><span>{toast}</span><button onClick={() => setToast(undefined)}><CloseIcon /></button></div> : null}
+      {appInspectCountdown !== null ? (
+        <div className="toast" role="status">
+          <span>{`Screen capture in ${appInspectCountdown}s — switch to the app you want to inspect`}</span>
+        </div>
+      ) : toast ? <div className="toast" role="alert"><span>{toast}</span><button onClick={() => setToast(undefined)}><CloseIcon /></button></div> : null}
     </div>
   )
 }
