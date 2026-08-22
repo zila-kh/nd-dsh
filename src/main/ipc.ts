@@ -59,6 +59,8 @@ export function registerIpc(deps: IpcDependencies): () => void {
   handle(IPC.browserForward, () => deps.browser.forward())
   handle(IPC.browserReload, () => deps.browser.reload())
   handle(IPC.browserSnapshot, () => deps.browser.snapshot())
+  handle(IPC.browserSetInspectMode, (_event, enabled) => deps.browser.setInspectMode(Boolean(enabled)))
+  handle(IPC.browserClearSelection, () => deps.browser.clearSelection())
   handle(IPC.browserOpenExternal, (_event, value) => openExternal(asString(value, 'URL', 8_192)))
 
   handle(IPC.workspaceState, () => deps.workspace.state())
