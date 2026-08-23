@@ -1,5 +1,6 @@
 import { resolve } from 'node:path'
 import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 import type { Plugin } from 'vite'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 
@@ -48,18 +49,19 @@ export default defineConfig({
     build: {
       sourcemap: true,
       rollupOptions: {
-        input: resolve('src/preload/index.ts'),
-        // The window uses `sandbox: true`, and sandboxed preload scripts must
-        // be CommonJS. Without this, electron-vite emits an ES-module preload
-        // (because package.json has "type": "module") and Electron fails to
-        // load it, leaving `window.ndDsh` undefined.
+        input: {
+          index: resolve('src/preload/index.ts'),
+          'nd-pencil': resolve('src/preload/nd-pencil.ts'),
+        },
+        // Both the product renderer and the isolated ND Pencil host run with
+        // `sandbox: true`, so their preload scripts must remain CommonJS.
         output: { format: 'cjs' },
       },
     },
   },
   renderer: {
     root: resolve('src/renderer'),
-    plugins: [react()],
+    plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
         '@renderer': resolve('src/renderer/src'),

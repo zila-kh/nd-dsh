@@ -50,6 +50,33 @@
         providerName: codex
         permissionMode: !!js process.env.ND_DSH_CODEX_PERMISSION_MODE ?? 'never'
 
+# ── external app inspection (agent-side) ─────────────────────────────────────
+
+# ND ships a loopback-only MCP server that lets the agent attach to an
+# Electron app launched with --remote-debugging-port and inspect it (targets,
+# DOM snapshots, page evaluation). Optional capability: a missing entry or a
+# down port must never break sessions, so startup failures are tolerated.
+- insert:
+    - id: external-inspect-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: external-app
+        transport: stdio
+        command: !!js process.execPath
+        args:
+          - !!js process.env.ND_DSH_EXTERNAL_INSPECT_ENTRY ?? ''
+          - mcp
+        env:
+          PATH: !!js process.env.PATH ?? ''
+          ND_DSH_EXTERNAL_CDP_PORT: !!js process.env.ND_DSH_EXTERNAL_CDP_PORT ?? '9333'
+        toolCallTimeoutMs: 120000
+        failOnStartupError: false
+        reconnect:
+          enabled: true
+          initialDelayMs: 500
+          maxDelayMs: 30000
+          maxAttempts: 10
+
 # ── session search: durable full-text index inside the harness home ───────────
 
 - id: session-query-sqlite
@@ -80,14 +107,14 @@
         transport: stdio
         command: !!js process.execPath
         args:
-          - !!js process.env.ND_DSH_AGENT_BROWSER_ENTRY
+          - !!js process.env.ND_DSH_AGENT_BROWSER_ENTRY ?? ''
           - mcp
           - --tools
           - core,network,state,debug,tabs,react
         env:
-          PATH: !!js process.env.PATH
-          AGENT_BROWSER_CONFIG: !!js process.env.ND_DSH_AGENT_BROWSER_CONFIG
-          AGENT_BROWSER_SESSION: !!js process.env.ND_DSH_AGENT_BROWSER_SESSION
+          PATH: !!js process.env.PATH ?? ''
+          AGENT_BROWSER_CONFIG: !!js process.env.ND_DSH_AGENT_BROWSER_CONFIG ?? ''
+          AGENT_BROWSER_SESSION: !!js process.env.ND_DSH_AGENT_BROWSER_SESSION ?? ''
         toolCallTimeoutMs: 120000
         failOnStartupError: true
         reconnect:

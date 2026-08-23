@@ -26,7 +26,8 @@ export interface ProviderRuntimeConfig {
   defaultModel?: string
 }
 
-const DIRECT_DEEPSEEK_ROUTE = 'deepseek-official'
+/** The Harness native DeepSeek route key; ND's `deepseek` provider compiles to it. */
+export const DIRECT_DEEPSEEK_ROUTE = 'deepseek-official'
 
 /**
  * Compile ND provider settings into the runtime-neutral facts Harness needs.

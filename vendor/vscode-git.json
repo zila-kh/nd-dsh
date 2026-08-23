@@ -1,0 +1,9 @@
+{
+  "repository": "https://github.com/microsoft/vscode.git",
+  "commit": "f3fa55c39d3df2923b46a3d76cf6baf0afa1db33",
+  "path": "extensions/git",
+  "license": "MIT",
+  "productName": "ND Source Control",
+  "purpose": "Pinned upstream implementation source adapted for ND's built-in Git source control",
+  "upstreamNotice": "Derived from microsoft/vscode extensions/git. MIT License. Copyright (c) 2015 - present Microsoft Corporation."
+}

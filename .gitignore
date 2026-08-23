@@ -2,6 +2,7 @@ node_modules/
 out/
 dist/
 coverage/
+test-results/
 .DS_Store
 .env
 *.log
@@ -14,9 +15,16 @@ artifacts/
 !.dsh/skills/
 !.dsh/skills/**
 
-# Populated by git submodule or scripts/bootstrap.mjs.
+# Pinned upstream infrastructure populated by git submodule/bootstrap.
 /vendor/deepseek-harness/
+/vendor/openpencil/
 !/vendor/README.md
+!/vendor/deepseek-harness.json
+!/vendor/openpencil.json
+!/vendor/openpencil.LICENSE
+
+# Built ND Pencil runtime staged for packaging; never commit platform binaries.
+/resources/nd-pencil/bin/
 
 *.tsbuildinfo
 

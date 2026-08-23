@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import type { BrowserState } from '../../../shared/contracts'
 import { ArrowLeftIcon, ArrowRightIcon, CameraIcon, ContextIcon, ExternalIcon, PencilIcon, ReloadIcon } from './Icons'
+import { BridgePill } from './bridge-pill'
+import { cn } from '../lib/utils'
 
 interface BrowserPaneProps {
   active: boolean
@@ -9,7 +11,22 @@ interface BrowserPaneProps {
   onError(message: string): void
 }
 
+const iconButtonClasses = cn(
+  'grid size-[27px] shrink-0 place-items-center rounded-[5px] text-muted-foreground transition-colors',
+  'hover:bg-accent hover:text-foreground',
+  'disabled:pointer-events-none disabled:text-fainter [&_svg]:size-[15px]',
+)
+
+// Bordered/filled variant used by the snapshot camera and as the active
+// marker for the inspect/annotation toggles.
+const activeIconButtonClasses = cn(
+  'inline-flex h-[27px] w-auto items-center gap-[5px] rounded-[5px] border border-border bg-secondary px-[7px]',
+  'text-muted-foreground transition-colors hover:border-(--border-focus) hover:text-foreground',
+  'disabled:pointer-events-none disabled:opacity-45 [&_svg]:size-[15px]',
+)
+
 export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneProps) {
+  const uiPreview = window.ndDshRuntimeMode === 'ui-preview'
   const surfaceRef = useRef<HTMLDivElement>(null)
   const addressFocused = useRef(false)
   const [address, setAddress] = useState(state?.url ?? 'about:blank')
@@ -27,6 +44,7 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
       animationFrame = requestAnimationFrame(() => {
         const rect = surface.getBoundingClientRect()
         void window.ndDsh.browser.setBounds({ x: rect.x, y: rect.y, width: rect.width, height: rect.height })
+          .catch((cause) => onError(cause instanceof Error ? cause.message : String(cause)))
       })
     }
     const observer = new ResizeObserver(syncBounds)
@@ -42,16 +60,18 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
 
   useEffect(() => {
     void window.ndDsh.browser.setVisible(active)
+      .catch((cause) => onError(cause instanceof Error ? cause.message : String(cause)))
     if (active) {
       requestAnimationFrame(() => {
         const rect = surfaceRef.current?.getBoundingClientRect()
         if (rect) void window.ndDsh.browser.setBounds({ x: rect.x, y: rect.y, width: rect.width, height: rect.height })
+          .catch((cause) => onError(cause instanceof Error ? cause.message : String(cause)))
       })
     }
     return () => {
-      void window.ndDsh.browser.setVisible(false)
+      void window.ndDsh.browser.setVisible(false).catch(() => undefined)
     }
-  }, [active])
+  }, [active, onError])
 
   const navigate = async (): Promise<void> => {
     try {
@@ -120,13 +140,16 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
     : undefined
 
   return (
-    <section className={`browser-pane ${active ? 'is-active' : ''}`} aria-label="Built-in browser">
-      <div className="browser-toolbar">
-        <button className="icon-button" disabled={!state?.canGoBack || state?.annotationMode} onClick={() => void runBrowserAction(() => window.ndDsh.browser.back())} title="Back"><ArrowLeftIcon /></button>
-        <button className="icon-button" disabled={!state?.canGoForward || state?.annotationMode} onClick={() => void runBrowserAction(() => window.ndDsh.browser.forward())} title="Forward"><ArrowRightIcon /></button>
-        <button className="icon-button" disabled={Boolean(state?.annotationMode)} onClick={() => void runBrowserAction(() => window.ndDsh.browser.reload())} title="Reload"><ReloadIcon className={state?.loading ? 'spin' : ''} /></button>
-        <form className="address-form" onSubmit={(event: FormEvent<HTMLFormElement>) => { event.preventDefault(); if (!state?.annotationMode) void navigate() }}>
-          <span className={`connection-dot ${state?.url.startsWith('https:') ? 'secure' : ''}`} />
+    <section className="grid h-full w-full grid-cols-[100%] grid-rows-[39px_minmax(0,1fr)] min-h-0 min-w-0 bg-background" aria-label="Built-in browser">
+      <div className="flex min-w-0 items-center gap-[3px] border-b border-border-soft bg-secondary px-[7px] py-[5px]">
+        <button className={iconButtonClasses} disabled={!state?.canGoBack || state?.annotationMode} onClick={() => void runBrowserAction(() => window.ndDsh.browser.back())} title="Back"><ArrowLeftIcon /></button>
+        <button className={iconButtonClasses} disabled={!state?.canGoForward || state?.annotationMode} onClick={() => void runBrowserAction(() => window.ndDsh.browser.forward())} title="Forward"><ArrowRightIcon /></button>
+        <button className={iconButtonClasses} disabled={Boolean(state?.annotationMode)} onClick={() => void runBrowserAction(() => window.ndDsh.browser.reload())} title="Reload"><ReloadIcon className={state?.loading ? 'animate-spin' : ''} /></button>
+        <form
+          className="mx-1 flex h-7 min-w-0 flex-1 items-center gap-[7px] rounded-[7px] border border-border-strong bg-background px-[9px] transition-colors focus-within:border-(--border-focus)"
+          onSubmit={(event: FormEvent<HTMLFormElement>) => { event.preventDefault(); if (!state?.annotationMode) void navigate() }}
+        >
+          <span className={cn('size-1.5 shrink-0 rounded-full', state?.url.startsWith('https:') ? 'bg-primary' : 'bg-warning')} />
           <input
             aria-label="Address"
             value={address}
@@ -135,11 +158,12 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
             onFocus={() => { addressFocused.current = true }}
             onBlur={() => { addressFocused.current = false }}
             spellCheck={false}
+            className="min-w-0 flex-1 border-0 bg-transparent font-mono text-[9px] text-soft outline-none"
           />
         </form>
-        <button className="icon-button snapshot-button" disabled={Boolean(state?.annotationMode)} onClick={() => void snapshot()} title="Interactive snapshot"><CameraIcon /></button>
+        <button className={activeIconButtonClasses} disabled={Boolean(state?.annotationMode)} onClick={() => void snapshot()} title="Interactive snapshot"><CameraIcon /></button>
         <button
-          className={`icon-button ${state?.inspectMode ? 'snapshot-button' : ''}`}
+          className={state?.inspectMode ? activeIconButtonClasses : iconButtonClasses}
           aria-pressed={Boolean(state?.inspectMode)}
           disabled={Boolean(state?.annotationMode)}
           onClick={() => void toggleInspectMode()}
@@ -148,7 +172,7 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
           <ContextIcon />
         </button>
         <button
-          className={`icon-button ${state?.annotationMode ? 'snapshot-button' : ''}`}
+          className={state?.annotationMode ? activeIconButtonClasses : iconButtonClasses}
           aria-pressed={Boolean(state?.annotationMode)}
           onClick={() => void toggleAnnotationMode()}
           title={state?.annotationMode
@@ -158,7 +182,7 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
           <PencilIcon />
         </button>
         <button
-          className="icon-button"
+          className={iconButtonClasses}
           disabled={!state?.url || state.url === 'about:blank' || Boolean(state?.annotationMode)}
           onClick={() => void runBrowserAction(() => window.ndDsh.browser.openExternal(state?.url ?? address))}
           title="Open in system browser"
@@ -166,27 +190,28 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
           <ExternalIcon />
         </button>
         {state?.annotationMode ? (
-          <button className="bridge-pill ready" onClick={() => void toggleAnnotationMode()} title="Finish drawing and attach this annotated frame">
-            <span />Annotating
-          </button>
+          <BridgePill state="ready" onClick={() => void toggleAnnotationMode()} title="Finish drawing and attach this annotated frame">
+            Annotating
+          </BridgePill>
         ) : annotation ? (
-          <button className="bridge-pill ready" onClick={() => void clearAnnotation()} title={annotationTitle}>
-            <span />Annotation: {annotation.marks.length}
-          </button>
+          <BridgePill state="ready" onClick={() => void clearAnnotation()} title={annotationTitle}>
+            Annotation: {annotation.marks.length}
+          </BridgePill>
         ) : null}
         {selected ? (
-          <button className="bridge-pill ready" onClick={() => void clearSelection()} title={`${selectedTitle ?? 'Selected UI'} · click to clear`}>
-            <span />UI: {selectedName ?? 'element'}
-          </button>
+          <BridgePill state="ready" onClick={() => void clearSelection()} title={`${selectedTitle ?? 'Selected UI'} · click to clear`}>
+            UI: {selectedName ?? 'element'}
+          </BridgePill>
         ) : null}
-        <span className={`bridge-pill ${state?.agentBrowser ?? 'binding'}`} title={state?.agentBrowserError}>
-          <span />{state?.agentBrowser === 'ready' ? 'Agent linked' : state?.agentBrowser === 'unavailable' ? 'Agent offline' : 'Linking'}
-        </span>
+        <BridgePill state={state?.agentBrowser ?? 'binding'} title={state?.agentBrowserError}>
+          {state?.agentBrowser === 'ready' ? 'Agent linked' : state?.agentBrowser === 'unavailable' ? 'Agent offline' : 'Linking'}
+        </BridgePill>
       </div>
-      <div className="browser-native-surface" ref={surfaceRef}>
-        <div className="browser-placeholder">
-          {state?.loading ? <div className="placeholder-ring" /> : null}
-          <span>{state?.loading ? `Loading ${state.url}` : state?.url === 'about:blank' ? 'Enter a URL to open the shared agent browser.' : 'Shared Electron browser surface'}</span>
+      {/* Native WebContentsView host — bounds-synced over CDP; keep this DOM stable. */}
+      <div className="relative min-h-0 min-w-0 overflow-hidden bg-browser" ref={surfaceRef}>
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-[10px] text-fainter">
+          {state?.loading ? <div className="size-[34px] animate-spin rounded-full border border-border-strong border-t-primary" /> : null}
+          <span>{state?.loading ? `Loading ${state.url}` : uiPreview ? 'Browser canvas is desktop-only; controls are simulated in UI preview.' : state?.url === 'about:blank' ? 'Enter a URL to open the shared agent browser.' : 'Shared Electron browser surface'}</span>
         </div>
       </div>
     </section>

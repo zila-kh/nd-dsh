@@ -1,0 +1,426 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+/*
+ * ND-DSH renderer design tokens.
+ *
+ * Dark values live on :root (the product default); light overrides sit under
+ * :root[data-theme='light'] exactly like the legacy stylesheet did, so the
+ * preload-backed theme service keeps working unchanged.
+ *
+ * Semantic tokens follow shadcn conventions (--background, --primary, ...).
+ * Green stays the brand color via --primary; blue/warning map to --info and
+ * --warning extras. Legacy surface names survive as surface-0..3 so panels
+ * keep their distinct elevations.
+ */
+:root {
+  --background: #090b0e;
+  --foreground: #e9edf3;
+  --bg-glow: rgb(77 115 85 / 13%);
+
+  --card: #13181e;
+  --card-foreground: #e9edf3;
+  --popover: #181e26;
+  --popover-foreground: #e9edf3;
+
+  --primary: #a6f06d;
+  --primary-foreground: #17200f;
+
+  --secondary: #151a21;
+  --secondary-foreground: #eef1f5;
+
+  --muted: rgb(255 255 255 / 5%);
+  --muted-foreground: #929ca9;
+
+  --accent: rgb(255 255 255 / 5%);
+  --accent-foreground: #e9edf3;
+
+  --destructive: #ff7b86;
+  --destructive-foreground: #2a0d10;
+
+  --border: #242b35;
+  --border-soft: #1b2129;
+  --border-strong: #272f39;
+  --input: #242b35;
+  --ring: #a6f06d;
+
+  /* Product extras */
+  --info: #76a9ff;
+  --warning: #f1bd67;
+  --strong: #eef1f5;
+  --soft: #c8d0da;
+  --faint: #626d7b;
+  --fainter: #3f4955;
+  --code-dim: #46515e;
+  --surface-0: #0b0e12;
+  --surface-1: #0f1318;
+  --surface-2: #13181e;
+  --surface-3: #181e26;
+  --titlebar: #0c0f13;
+  --sidebar: #0e1116;
+  --composer: #11161c;
+  --meta: #0c1014;
+  --browser: #080a0d;
+  --inset: rgb(5 8 11 / 30%);
+  --selected: rgb(118 169 255 / 12%);
+  --folder: #d1aa63;
+  --file: #8492a2;
+  --toast-bg: #191217;
+  --toast-border: #4a3137;
+  --toast-text: #ae8d92;
+
+  --radius: 0.5rem;
+
+  /* Plain vars consumed by the irreducible CSS blocks below */
+  --scrollbar: #2c343e;
+  --scrollbar-hover: #3a4551;
+  --editor-selection: #264f78;
+  --border-focus: #3b4856;
+  --prompt-menu-bg: #252526;
+  --prompt-menu-border: #3c3c3c;
+  --prompt-menu-text: #cccccc;
+  --prompt-menu-hover: #37373d;
+
+  color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+  --background: #f4f5f7;
+  --foreground: #1b2128;
+  --bg-glow: rgb(76 138 16 / 8%);
+
+  --card: #ffffff;
+  --card-foreground: #1b2128;
+  --popover: #ffffff;
+  --popover-foreground: #1b2128;
+
+  --primary: #4c8a10;
+  --primary-foreground: #ffffff;
+
+  --secondary: #ffffff;
+  --secondary-foreground: #10151b;
+
+  --muted: rgb(15 25 40 / 5%);
+  --muted-foreground: #5b6570;
+
+  --accent: rgb(15 25 40 / 5%);
+  --accent-foreground: #1b2128;
+
+  --destructive: #c92e3d;
+  --destructive-foreground: #ffffff;
+
+  --border: #d2d7de;
+  --border-soft: #e3e6ea;
+  --border-strong: #c4cad2;
+  --input: #d2d7de;
+  --ring: #4c8a10;
+
+  --info: #2f6fe0;
+  --warning: #a16207;
+  --strong: #10151b;
+  --soft: #2e3740;
+  --faint: #8b94a0;
+  --fainter: #b3bbc4;
+  --code-dim: #9aa3ae;
+  --surface-0: #ffffff;
+  --surface-1: #fafbfc;
+  --surface-2: #f0f2f5;
+  --surface-3: #e8ebef;
+  --titlebar: #eef0f3;
+  --sidebar: #f2f3f6;
+  --composer: #ffffff;
+  --meta: #f1f3f5;
+  --browser: #e9ebee;
+  --inset: rgb(20 30 45 / 3%);
+  --selected: rgb(47 111 224 / 10%);
+  --folder: #b07f2e;
+  --file: #7c8894;
+  --toast-bg: #fdf2f3;
+  --toast-border: #e6c4c9;
+  --toast-text: #8a3d47;
+
+  --scrollbar: #c6ccd3;
+  --scrollbar-hover: #a9b1bb;
+  --editor-selection: #add6ff;
+  --border-focus: #a9bcd8;
+  --prompt-menu-bg: #ffffff;
+  --prompt-menu-border: #d2d7de;
+  --prompt-menu-text: #1b2128;
+  --prompt-menu-hover: #f0f2f5;
+
+  color-scheme: light;
+}
+
+@theme inline {
+  --font-sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'SFMono-Regular', Consolas, monospace;
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-border-soft: var(--border-soft);
+  --color-border-strong: var(--border-strong);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-info: var(--info);
+  --color-warning: var(--warning);
+  --color-strong: var(--strong);
+  --color-soft: var(--soft);
+  --color-faint: var(--faint);
+  --color-fainter: var(--fainter);
+  --color-code-dim: var(--code-dim);
+  --color-surface-0: var(--surface-0);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-titlebar: var(--titlebar);
+  --color-sidebar: var(--sidebar);
+  --color-composer: var(--composer);
+  --color-meta: var(--meta);
+  --color-browser: var(--browser);
+  --color-inset: var(--inset);
+  --color-selected: var(--selected);
+  --color-folder: var(--folder);
+  --color-file: var(--file);
+  --color-toast: var(--toast-bg);
+  --color-toast-border: var(--toast-border);
+  --color-toast-text: var(--toast-text);
+
+  --animate-pulse-dot: pulse-dot 1.4s ease-in-out infinite;
+  --animate-thinking: thinking 1.2s ease-in-out infinite;
+  --animate-caret-blink: caret-blink 1s step-end infinite;
+  --animate-ping-pulse: ping-pulse 1s ease-in-out infinite;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    text-rendering: optimizeLegibility;
+  }
+}
+
+/* Electron window drag regions for the custom titlebars. */
+@utility app-drag {
+  -webkit-app-region: drag;
+}
+
+@utility app-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+html.float-mode,
+body.float-mode,
+#root.float-mode,
+.float-mode {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 6px currentColor;
+  }
+}
+
+@keyframes thinking {
+  0%,
+  60%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+@keyframes caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@keyframes ping-pulse {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+/* Model settings — dark IDE surface scope (independent of the product palette). */
+.models-scope {
+  --models-bg: #1a1a1a;
+  --models-surface: #222222;
+  --models-surface-3: #2d2d2d;
+  --models-field: #2a2a2a;
+  --models-border: #333333;
+  --models-border-2: #3a3a3a;
+  --models-text: #d4d4d4;
+  --models-muted: #9ca3af;
+  --models-faint: #6b7280;
+  --models-green: #22c55e;
+  --models-green-soft: rgb(34 197 94 / 15%);
+}
+
+:root[data-theme='light'] .models-scope {
+  --models-bg: #f4f5f7;
+  --models-surface: #ffffff;
+  --models-surface-3: #eceef1;
+  --models-field: #f0f2f5;
+  --models-border: #d2d7de;
+  --models-border-2: #c4cad2;
+  --models-text: #1b2128;
+  --models-muted: #5b6570;
+  --models-faint: #8b94a0;
+  --models-green: #16a34a;
+  --models-green-soft: rgb(22 163 74 / 12%);
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background: var(--scrollbar);
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-hover);
+  background-clip: padding-box;
+}
+
+/* VS Code-style selection inside code surfaces. */
+.code-editor ::selection {
+  background: var(--editor-selection);
+}
+
+/* Syntax highlighting — One Dark Pro (dark) / One Light (light). */
+:root {
+  --syntax-comment: #5c6370;
+  --syntax-keyword: #c678dd;
+  --syntax-tag: #e06c75;
+  --syntax-literal: #56b6c2;
+  --syntax-string: #98c379;
+  --syntax-number: #d19a66;
+  --syntax-symbol: #61afef;
+  --syntax-builtin: #e5c07b;
+}
+
+:root[data-theme='light'] {
+  --syntax-comment: #a0a1a7;
+  --syntax-keyword: #a626a4;
+  --syntax-tag: #e45649;
+  --syntax-literal: #0184bc;
+  --syntax-string: #50a14f;
+  --syntax-number: #986801;
+  --syntax-symbol: #4078f2;
+  --syntax-builtin: #c18401;
+}
+
+.hljs-comment,
+.hljs-quote {
+  color: var(--syntax-comment);
+  font-style: italic;
+}
+.hljs-doctag,
+.hljs-keyword,
+.hljs-formula {
+  color: var(--syntax-keyword);
+}
+.hljs-section,
+.hljs-name,
+.hljs-selector-tag,
+.hljs-deletion,
+.hljs-subst {
+  color: var(--syntax-tag);
+}
+.hljs-literal {
+  color: var(--syntax-literal);
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-attribute,
+.hljs-meta .hljs-string {
+  color: var(--syntax-string);
+}
+.hljs-attr,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-type,
+.hljs-selector-class,
+.hljs-selector-attr,
+.hljs-selector-pseudo,
+.hljs-number {
+  color: var(--syntax-number);
+}
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link,
+.hljs-meta,
+.hljs-selector-id,
+.hljs-title {
+  color: var(--syntax-symbol);
+}
+.hljs-built_in,
+.hljs-title.class_,
+.hljs-class .hljs-title {
+  color: var(--syntax-builtin);
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: bold;
+}
+.hljs-link {
+  text-decoration: underline;
+}

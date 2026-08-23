@@ -1,5 +1,6 @@
 import { ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
 import { ORGANIZATION_IPC, type OrganizationMutation, type OrganizationSnapshot } from '../../shared/organization.js'
+import type { ProjectWorkspaceCoordinator } from '../workspace/project-workspace-coordinator.js'
 import type { OrganizationOrchestrator } from './orchestrator.js'
 import type { OrganizationStore } from './store.js'
 
@@ -9,7 +10,12 @@ const MUTATIONS = new Set([
   'task.update', 'memory.add', 'policy.set',
 ])
 
-export function registerOrganizationIpc(window: BrowserWindow, store: OrganizationStore, orchestrator: OrganizationOrchestrator): () => void {
+export function registerOrganizationIpc(
+  window: BrowserWindow,
+  store: OrganizationStore,
+  orchestrator: OrganizationOrchestrator,
+  projectWorkspace: ProjectWorkspaceCoordinator,
+): () => void {
   const channels: string[] = []
   const handle = (channel: string, listener: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown | Promise<unknown>): void => {
     ipcMain.removeHandler(channel)
@@ -23,7 +29,9 @@ export function registerOrganizationIpc(window: BrowserWindow, store: Organizati
   handle(ORGANIZATION_IPC.state, () => store.state())
   handle(ORGANIZATION_IPC.mutate, async (_event, value) => {
     const mutation = asMutation(value)
+    await projectWorkspace.assertCanMutate(mutation)
     const state = await store.mutate(mutation)
+    await projectWorkspace.afterOrganizationMutation(mutation, state)
     const projectId = autopilotProjectId(mutation, state)
     if (projectId) {
       try {

@@ -190,4 +190,16 @@ describe('OrganizationOrchestrator', () => {
     const task = (await store.state()).tasks[0]!
     await expect(orchestrator.runTask(task.id)).rejects.toThrow(/denied by company policy/i)
   })
+
+  it('pauses autopilot and does not loop infinitely when pm-plan fails', async () => {
+    const { store, project, orchestrator } = await fixture(4)
+    const run = await orchestrator.planProject(project.id, true)
+
+    await orchestrator.handleHarnessEvent({ kind: 'agent-error', sessionId: run.sessionId, message: 'LLM API key missing' })
+
+    const state = await store.state()
+    expect(state.runs.filter((item) => item.kind === 'pm-plan').length).toBe(1)
+    expect(state.runs[0]?.status).toBe('failed')
+    expect(await orchestrator.runNext(project.id, false)).toBeNull()
+  })
 })

@@ -1,19 +1,50 @@
+import './design.js'
 import './organization.js'
 import { contextBridge, ipcRenderer } from 'electron'
-import { IPC, type DesktopApi } from '../shared/contracts.js'
+import { IPC, type DesktopApi, type ModelProvider } from '../shared/contracts.js'
 
 const api: DesktopApi = {
   app: { info: () => ipcRenderer.invoke(IPC.appInfo) },
+  window: {
+    setFloatMode: (enabled) => ipcRenderer.invoke(IPC.windowSetFloatMode, enabled),
+    resizeFloatWindow: (width, height) => ipcRenderer.invoke(IPC.windowResizeFloatWindow, width, height),
+    moveFloatWindow: (deltaX, deltaY) => ipcRenderer.invoke(IPC.windowMoveFloatWindow, deltaX, deltaY),
+    onFloatMode: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, enabled: boolean) => listener(enabled)
+      ipcRenderer.on(IPC.windowFloatModeEvent, handler)
+      return () => ipcRenderer.removeListener(IPC.windowFloatModeEvent, handler)
+    },
+  },
   providers: {
     list: () => ipcRenderer.invoke(IPC.providersList),
     save: (providers) => ipcRenderer.invoke(IPC.providersSave, providers),
     setApiKey: (providerId, apiKey) => ipcRenderer.invoke(IPC.providersSetApiKey, providerId, apiKey),
     clearApiKey: (providerId) => ipcRenderer.invoke(IPC.providersClearApiKey, providerId),
+    ping: (providerId, force) => ipcRenderer.invoke(IPC.providersPing, providerId, force),
+    onChanged: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, providers: ModelProvider[]) => listener(providers)
+      ipcRenderer.on(IPC.providersChangedEvent, handler)
+      return () => ipcRenderer.removeListener(IPC.providersChangedEvent, handler)
+    },
   },
   engines: {
     list: () => ipcRenderer.invoke(IPC.enginesList),
     assignments: () => ipcRenderer.invoke(IPC.enginesAssignments),
     assign: (agentId, engineId) => ipcRenderer.invoke(IPC.enginesAssign, agentId, engineId),
+    sessions: () => ipcRenderer.invoke(IPC.enginesSessions),
+    transcript: (sessionId) => ipcRenderer.invoke(IPC.enginesTranscript, sessionId),
+  },
+  sessions: {
+    setArchived: (sessionId, archived) => ipcRenderer.invoke(IPC.sessionsSetArchived, sessionId, archived),
+  },
+  capture: {
+    inspectApp: (copyToClipboard, scope) => ipcRenderer.invoke(IPC.captureInspectApp, copyToClipboard, scope),
+    inspectElement: (scope) => ipcRenderer.invoke(IPC.captureInspectElement, scope),
+    stageElement: (element, targetTitle, pickId) => ipcRenderer.invoke(IPC.captureStageElement, element, targetTitle, pickId),
+    elementAttachments: () => ipcRenderer.invoke(IPC.captureElementAttachments),
+    removeElement: (id) => ipcRenderer.invoke(IPC.captureRemoveElement, id),
+    copyElementContext: (pickId) => ipcRenderer.invoke(IPC.captureCopyElementContext, pickId),
+    copyElementShot: (pickId) => ipcRenderer.invoke(IPC.captureCopyElementShot, pickId),
   },
   browser: {
     state: () => ipcRenderer.invoke(IPC.browserState),
@@ -41,6 +72,16 @@ const api: DesktopApi = {
     setRoot: (path) => ipcRenderer.invoke(IPC.workspaceSetRoot, path),
     list: (relativePath) => ipcRenderer.invoke(IPC.workspaceList, relativePath),
     read: (relativePath) => ipcRenderer.invoke(IPC.workspaceRead, relativePath),
+    suggest: (query) => ipcRenderer.invoke(IPC.workspaceSuggest, query),
+    onState: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: Parameters<typeof listener>[0]) => listener(state)
+      ipcRenderer.on(IPC.workspaceStateEvent, handler)
+      return () => ipcRenderer.removeListener(IPC.workspaceStateEvent, handler)
+    },
+    registry: () => ipcRenderer.invoke(IPC.workspaceRegistry),
+    addSaved: () => ipcRenderer.invoke(IPC.workspaceAddSaved),
+    removeSaved: (id) => ipcRenderer.invoke(IPC.workspaceRemoveSaved, id),
+    openSaved: (id) => ipcRenderer.invoke(IPC.workspaceOpenSaved, id),
   },
   harness: {
     status: () => ipcRenderer.invoke(IPC.harnessStatus),
@@ -89,6 +130,40 @@ const api: DesktopApi = {
       const handler = (_event: Electron.IpcRendererEvent, state: Parameters<typeof listener>[0]) => listener(state)
       ipcRenderer.on(IPC.themeChangedEvent, handler)
       return () => ipcRenderer.removeListener(IPC.themeChangedEvent, handler)
+    },
+  },
+  git: {
+    state: () => ipcRenderer.invoke(IPC.gitState),
+    refresh: () => ipcRenderer.invoke(IPC.gitRefresh),
+    stage: (relativePaths) => ipcRenderer.invoke(IPC.gitStage, relativePaths),
+    unstage: (relativePaths) => ipcRenderer.invoke(IPC.gitUnstage, relativePaths),
+    discard: (relativePaths) => ipcRenderer.invoke(IPC.gitDiscard, relativePaths),
+    commit: (message) => ipcRenderer.invoke(IPC.gitCommit, message),
+    diff: (relativePath, staged) => ipcRenderer.invoke(IPC.gitDiff, relativePath, staged),
+    checkout: (branch) => ipcRenderer.invoke(IPC.gitCheckout, branch),
+    createBranch: (name) => ipcRenderer.invoke(IPC.gitCreateBranch, name),
+    push: () => ipcRenderer.invoke(IPC.gitPush),
+    pull: () => ipcRenderer.invoke(IPC.gitPull),
+    fetch: () => ipcRenderer.invoke(IPC.gitFetch),
+    onState: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: Parameters<typeof listener>[0]) => listener(state)
+      ipcRenderer.on(IPC.gitStateEvent, handler)
+      return () => ipcRenderer.removeListener(IPC.gitStateEvent, handler)
+    },
+  },
+  qa: {
+    state: () => ipcRenderer.invoke(IPC.qaState),
+    run: (suite) => ipcRenderer.invoke(IPC.qaRun, suite),
+    stop: () => ipcRenderer.invoke(IPC.qaStop),
+    onState: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: Parameters<typeof listener>[0]) => listener(state)
+      ipcRenderer.on(IPC.qaStateEvent, handler)
+      return () => ipcRenderer.removeListener(IPC.qaStateEvent, handler)
+    },
+    onOutput: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, chunk: Parameters<typeof listener>[0]) => listener(chunk)
+      ipcRenderer.on(IPC.qaOutputEvent, handler)
+      return () => ipcRenderer.removeListener(IPC.qaOutputEvent, handler)
     },
   },
 }

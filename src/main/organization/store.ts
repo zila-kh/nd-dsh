@@ -63,7 +63,9 @@ export class OrganizationStore {
       case 'project.activate': this.activateProject(mutation.id); break
       case 'team.create': this.createTeam(mutation); break
       case 'role.create': this.createRole(mutation); break
+      case 'role.update': this.updateRole(mutation.id, mutation.patch); break
       case 'agent.create': this.createAgent(mutation); break
+      case 'agent.update': this.updateAgent(mutation.id, mutation.patch); break
       case 'skill.create': this.createSkill(mutation); break
       case 'workflow.create': this.createWorkflow(mutation); break
       case 'goal.create': this.createGoal(mutation); break
@@ -125,12 +127,13 @@ export class OrganizationStore {
     return { task: clone(task), project: clone(project), company: clone(company), ...(agent ? { agent: clone(agent) } : {}), ...(role ? { role: clone(role) } : {}), skills: clone(skills), memory: clone(memory), policies: clone(policies) }
   }
 
-  async projectContext(projectId: string): Promise<{ project: Project; company: Company; roles: OrganizationRole[]; teams: Team[]; memory: MemoryEntry[]; policies: OrganizationPolicy[] }> {
+  async projectContext(projectId: string): Promise<{ project: Project; company: Company; agents: OrganizationAgent[]; roles: OrganizationRole[]; teams: Team[]; memory: MemoryEntry[]; policies: OrganizationPolicy[] }> {
     await this.load()
     const project = this.project(projectId)
     const company = this.company(project.companyId)
     return {
       project: clone(project), company: clone(company),
+      agents: clone(this.value.agents.filter((item) => item.companyId === company.id)),
       roles: clone(this.value.roles.filter((item) => item.companyId === company.id)),
       teams: clone(this.value.teams.filter((item) => item.companyId === company.id)),
       memory: clone(this.value.memory.filter((entry) => entry.companyId === company.id && (!entry.projectId || entry.projectId === project.id)).slice(-30)),
@@ -418,8 +421,10 @@ export class OrganizationStore {
   private updateProject(id: string, patch: Extract<OrganizationMutation, { type: 'project.update' }>['patch']): void { const project = this.project(id); Object.assign(project, patch); project.name = clean(project.name); project.objective = clean(project.objective); project.updatedAt = Date.now() }
   private activateProject(id: string): void { const project = this.project(id); this.value.activeProjectId = id; this.value.activeCompanyId = project.companyId }
   private createTeam(input: Extract<OrganizationMutation, { type: 'team.create' }>): void { this.company(input.companyId); for (const roleId of input.roleIds ?? []) this.assertRoleCompany(roleId, input.companyId); this.value.teams.push({ id: randomUUID(), companyId: input.companyId, name: clean(input.name), purpose: clean(input.purpose), roleIds: input.roleIds ?? [], skillIds: input.skillIds ?? [] }) }
-  private createRole(input: Extract<OrganizationMutation, { type: 'role.create' }>): void { this.company(input.companyId); this.value.roles.push({ id: randomUUID(), companyId: input.companyId, name: clean(input.name), responsibility: clean(input.responsibility), systemPrompt: clean(input.systemPrompt), skillIds: input.skillIds ?? [] }) }
-  private createAgent(input: Extract<OrganizationMutation, { type: 'agent.create' }>): void { this.company(input.companyId); this.assertRoleCompany(input.roleId, input.companyId); if (input.teamId) this.assertTeamCompany(input.teamId, input.companyId); this.value.agents.push({ id: randomUUID(), companyId: input.companyId, name: clean(input.name), roleId: input.roleId, status: 'idle', skillIds: input.skillIds ?? [], ...(input.teamId ? { teamId: input.teamId } : {}) }) }
+  private createRole(input: Extract<OrganizationMutation, { type: 'role.create' }>): void { this.company(input.companyId); this.value.roles.push({ id: randomUUID(), companyId: input.companyId, name: clean(input.name), responsibility: clean(input.responsibility), systemPrompt: clean(input.systemPrompt), skillIds: input.skillIds ?? [], ...(input.providerId ? { providerId: input.providerId } : {}), ...(input.modelId ? { modelId: input.modelId } : {}) }) }
+  private updateRole(id: string, patch: Extract<OrganizationMutation, { type: 'role.update' }>['patch']): void { const role = must(this.value.roles.find((item) => item.id === id), 'Role'); Object.assign(role, patch) }
+  private createAgent(input: Extract<OrganizationMutation, { type: 'agent.create' }>): void { this.company(input.companyId); this.assertRoleCompany(input.roleId, input.companyId); if (input.teamId) this.assertTeamCompany(input.teamId, input.companyId); this.value.agents.push({ id: randomUUID(), companyId: input.companyId, name: clean(input.name), roleId: input.roleId, status: 'idle', skillIds: input.skillIds ?? [], ...(input.teamId ? { teamId: input.teamId } : {}), ...(input.providerId ? { providerId: input.providerId } : {}), ...(input.modelId ? { modelId: input.modelId } : {}) }) }
+  private updateAgent(id: string, patch: Extract<OrganizationMutation, { type: 'agent.update' }>['patch']): void { const agent = must(this.value.agents.find((item) => item.id === id), 'Agent'); Object.assign(agent, patch) }
   private createSkill(input: Extract<OrganizationMutation, { type: 'skill.create' }>): void { const companyId = input.companyId; if (!companyId) throw new Error('Scoped skills require companyId'); this.company(companyId); if (input.projectId && this.project(input.projectId).companyId !== companyId) throw new Error('Project skill crosses company boundary'); if (input.teamId) this.assertTeamCompany(input.teamId, companyId); if (input.roleId) this.assertRoleCompany(input.roleId, companyId); if (input.agentId && !this.value.agents.some((item) => item.id === input.agentId && item.companyId === companyId)) throw new Error('Agent skill crosses company boundary'); this.value.skills.push({ id: randomUUID(), scope: input.scope, name: clean(input.name), description: clean(input.description), instructions: clean(input.instructions), companyId, ...(input.projectId ? { projectId: input.projectId } : {}), ...(input.teamId ? { teamId: input.teamId } : {}), ...(input.roleId ? { roleId: input.roleId } : {}), ...(input.agentId ? { agentId: input.agentId } : {}) }) }
   private createWorkflow(input: Extract<OrganizationMutation, { type: 'workflow.create' }>): void { this.company(input.companyId); if (input.projectId && this.project(input.projectId).companyId !== input.companyId) throw new Error('Workflow crosses company boundary'); if (!input.steps.length) throw new Error('Workflow must contain at least one step'); this.value.workflows.push({ id: randomUUID(), companyId: input.companyId, name: clean(input.name), scope: input.projectId ? 'project' : 'company', ...(input.projectId ? { projectId: input.projectId } : {}), steps: input.steps }) }
   private createGoal(input: Extract<OrganizationMutation, { type: 'goal.create' }>): void { if (this.project(input.projectId).companyId !== input.companyId) throw new Error('Goal crosses company boundary'); this.value.goals.push({ id: randomUUID(), companyId: input.companyId, projectId: input.projectId, title: clean(input.title), description: clean(input.description), status: 'active', progress: 0, createdAt: Date.now() }); this.refreshProject(input.projectId) }

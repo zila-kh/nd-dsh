@@ -40,6 +40,8 @@ export interface OrganizationRole {
   responsibility: string
   systemPrompt: string
   skillIds: string[]
+  providerId?: string
+  modelId?: string
 }
 
 export interface Team {
@@ -61,6 +63,8 @@ export interface OrganizationAgent {
   skillIds: string[]
   currentTaskId?: string
   lastSessionId?: string
+  providerId?: string
+  modelId?: string
 }
 
 export interface OrganizationSkill {
@@ -224,8 +228,10 @@ export type OrganizationMutation =
   | { type: 'project.update'; id: string; patch: Partial<Pick<Project, 'name' | 'objective' | 'status' | 'workspacePath' | 'repoUrls' | 'teamIds'>> }
   | { type: 'project.activate'; id: string }
   | { type: 'team.create'; companyId: string; name: string; purpose: string; roleIds?: string[]; skillIds?: string[] }
-  | { type: 'role.create'; companyId: string; name: string; responsibility: string; systemPrompt: string; skillIds?: string[] }
-  | { type: 'agent.create'; companyId: string; name: string; roleId: string; teamId?: string; skillIds?: string[] }
+  | { type: 'role.create'; companyId: string; name: string; responsibility: string; systemPrompt: string; skillIds?: string[]; providerId?: string; modelId?: string }
+  | { type: 'role.update'; id: string; patch: Partial<Pick<OrganizationRole, 'name' | 'responsibility' | 'systemPrompt' | 'skillIds' | 'providerId' | 'modelId'>> }
+  | { type: 'agent.create'; companyId: string; name: string; roleId: string; teamId?: string; skillIds?: string[]; providerId?: string; modelId?: string }
+  | { type: 'agent.update'; id: string; patch: Partial<Pick<OrganizationAgent, 'name' | 'roleId' | 'teamId' | 'status' | 'skillIds' | 'providerId' | 'modelId'>> }
   | { type: 'skill.create'; scope: Exclude<OrganizationScope, 'builtin'>; name: string; description: string; instructions: string; companyId?: string; projectId?: string; teamId?: string; roleId?: string; agentId?: string }
   | { type: 'workflow.create'; companyId: string; projectId?: string; name: string; steps: WorkflowStep[] }
   | { type: 'goal.create'; companyId: string; projectId: string; title: string; description: string }

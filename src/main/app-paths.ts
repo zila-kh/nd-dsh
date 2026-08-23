@@ -1,5 +1,6 @@
 import { app } from 'electron'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -40,4 +41,35 @@ export function dshPatchPath(): string {
 /** Shipped ND-DSH agent presets (installed into the harness home at launch). */
 export function presetSourceDir(): string {
   return resolve(process.env.ND_DSH_PRESET_DIR ?? join(projectRoot(), 'configs/dsh/agent-presets'))
+}
+
+interface CodexPackageManifest {
+  bin?: { codex?: string }
+}
+
+/**
+ * The pinned official Codex CLI wrapper shipped inside the vendored runtime.
+ * Resolution mirrors the delegated adapter's package-local lookup so the
+ * direct engine never depends on the host `PATH`. `ND_DSH_CODEX_BINARY`
+ * remains a developer-only override.
+ */
+export function codexBinPath(): string | undefined {
+  const override = process.env.ND_DSH_CODEX_BINARY
+  if (override) {
+    const resolved = resolve(override)
+    return existsSync(resolved) ? resolved : undefined
+  }
+  const subagentEntry = join(harnessRoot(), 'packages/subagent/subagent-codex/lib/index.js')
+  if (!existsSync(subagentEntry)) return undefined
+  try {
+    const requireFromSubagent = createRequire(subagentEntry)
+    const manifestPath = requireFromSubagent.resolve('@openai/codex/package.json')
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as CodexPackageManifest
+    const bin = manifest.bin?.codex
+    if (!bin) return undefined
+    const wrapper = resolve(dirname(manifestPath), bin)
+    return existsSync(wrapper) ? wrapper : undefined
+  } catch {
+    return undefined
+  }
 }

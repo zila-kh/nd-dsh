@@ -1,6 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
 import type { ThemeMode, ThemeState } from '../../../shared/contracts'
 import { MonitorIcon, MoonIcon, SunIcon } from './Icons'
+import { TitlebarIconButton } from './titlebar-icon-button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from './ui/dropdown-menu'
 
 interface ThemeToggleProps {
   theme: ThemeState | null
@@ -14,59 +21,28 @@ const OPTIONS: { mode: ThemeMode; label: string; Icon: typeof SunIcon }[] = [
 ]
 
 export function ThemeToggle({ theme, onSelect }: ThemeToggleProps) {
-  const [open, setOpen] = useState(false)
-  const rootRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!open) return
-    const close = (event: MouseEvent): void => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
-    }
-    const closeOnEscape = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') setOpen(false)
-    }
-    window.addEventListener('mousedown', close)
-    window.addEventListener('keydown', closeOnEscape)
-    return () => {
-      window.removeEventListener('mousedown', close)
-      window.removeEventListener('keydown', closeOnEscape)
-    }
-  }, [open])
-
-  const activeIcon = OPTIONS.find((option) => option.mode === theme?.mode) ?? OPTIONS[0]
-  const ActiveIcon = activeIcon?.Icon ?? MonitorIcon
+  const ActiveIcon = OPTIONS.find((option) => option.mode === theme?.mode)?.Icon ?? MonitorIcon
 
   return (
-    <div className="theme-toggle" ref={rootRef}>
-      <button
-        className="theme-toggle-button"
-        title={`Theme: ${theme?.mode ?? 'system'}`}
-        aria-label="Theme"
-        aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
-      >
-        <ActiveIcon />
-      </button>
-      {open ? (
-        <div className="theme-menu" role="menu" aria-label="Theme settings">
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <TitlebarIconButton title={`Theme: ${theme?.mode ?? 'system'}`} aria-label="Theme">
+          <ActiveIcon />
+        </TitlebarIconButton>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuRadioGroup
+          value={theme?.mode ?? 'system'}
+          onValueChange={(value) => onSelect(value as ThemeMode)}
+        >
           {OPTIONS.map(({ mode, label, Icon }) => (
-            <button
-              key={mode}
-              role="menuitemradio"
-              aria-checked={theme?.mode === mode}
-              className={theme?.mode === mode ? 'active' : ''}
-              onClick={() => {
-                onSelect(mode)
-                setOpen(false)
-              }}
-            >
-              <Icon />
-              <span>{label}</span>
-              {theme?.mode === mode ? <span className="theme-check">✓</span> : null}
-            </button>
+            <DropdownMenuRadioItem key={mode} value={mode}>
+              <Icon className="size-3.5" />
+              {label}
+            </DropdownMenuRadioItem>
           ))}
-        </div>
-      ) : null}
-    </div>
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }

@@ -2,8 +2,9 @@ import { randomUUID } from 'node:crypto'
 import { app, safeStorage } from 'electron'
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import type { ModelProvider, ProviderModel } from '../shared/contracts.js'
-import { buildProviderRuntime, type ProviderRuntimeConfig } from './provider-runtime.js'
+import type { ModelProvider, ProviderModel, ProviderPingResult } from '../shared/contracts.js'
+import { buildProviderRuntime, DIRECT_DEEPSEEK_ROUTE, type ProviderRuntimeConfig } from './provider-runtime.js'
+import { pingProvider } from './provider-ping.js'
 
 const PROVIDERS_FILE = 'providers.json'
 const PROVIDER_SECRETS_FILE = 'provider-secrets.json'
@@ -11,6 +12,7 @@ const DEFAULT_BASE_URL = 'https://api.deepseek.com'
 const DEFAULT_API_FORMAT = 'Chat completions (/chat/completions)'
 const DEFAULT_MODEL = 'deepseek-v4-flash'
 const DEFAULT_CONTEXT = '1M'
+const PING_CACHE_TTL_MS = 30_000
 
 interface ProviderSecretsFile {
   version: 1
@@ -84,6 +86,7 @@ export class ProviderStore {
   private readonly secretsPath: string
   private providers: ModelProvider[]
   private revisionValue = 0
+  private readonly pingCache = new Map<string, { at: number; result: ProviderPingResult }>()
 
   constructor() {
     if (!app.isReady()) throw new Error('ProviderStore must be created after the Electron app is ready')
@@ -147,6 +150,33 @@ export class ProviderStore {
 
   revision(): number {
     return this.revisionValue
+  }
+
+  /**
+   * Real reachability probe with the provider's stored credential. Accepts
+   * either the ND provider id or the runtime route id it compiles to (the
+   * `deepseek` provider routes as `deepseek-official` in sessions). Results
+   * are cached briefly so opening the model picker does not spam provider
+   * servers; `force` re-probes immediately (settings "Test connection").
+   */
+  async ping(providerId: string, force = false): Promise<ProviderPingResult> {
+    const requested = providerId.trim()
+    const id = requested === DIRECT_DEEPSEEK_ROUTE ? 'deepseek' : requested
+    const provider = this.providers.find((item) => item.id === id)
+    if (!provider) throw new Error('Provider not found')
+    const cached = this.pingCache.get(id)
+    if (!force && cached && Date.now() - cached.at < PING_CACHE_TTL_MS) return cached.result
+    const outcome = await pingProvider({ baseUrl: provider.baseUrl, apiKey: provider.apiKey })
+    const result: ProviderPingResult = {
+      providerId: id,
+      state: outcome.state,
+      ...(outcome.latencyMs !== undefined ? { latencyMs: outcome.latencyMs } : {}),
+      ...(outcome.status !== undefined ? { status: outcome.status } : {}),
+      hasApiKey: Boolean(provider.apiKey.trim()),
+      at: Date.now(),
+    }
+    this.pingCache.set(id, { at: result.at, result })
+    return result
   }
 
   runtimeConfig(): ProviderRuntimeConfig {

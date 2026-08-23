@@ -32,17 +32,35 @@ export class GatewayClient {
 
   async rpc(method: string, payload: unknown = {}): Promise<GatewayRpcResult> {
     const rpcId = randomUUID()
-    const response = await fetch(`${this.baseUrl}/api/${method}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ type: 'client-request', rpcId, method, payload }),
-    })
-    if (!response.ok) {
-      throw new Error(`gateway ${method}: HTTP ${response.status}`)
+    let response: Response
+    try {
+      response = await fetch(`${this.baseUrl}/api/${method}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ type: 'client-request', rpcId, method, payload }),
+      })
+    } catch (error) {
+      // The runtime child exited or is restarting between calls. Transport
+      // failures are structured results, never raw TypeErrors through IPC.
+      return {
+        ok: false,
+        error: {
+          code: 'gateway-unreachable',
+          message: `gateway ${method}: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      }
     }
-    const frame = (await response.json()) as ServerResponseFrame
+    if (!response.ok) {
+      return { ok: false, error: { code: 'gateway-http', message: `gateway ${method}: HTTP ${response.status}` } }
+    }
+    let frame: ServerResponseFrame
+    try {
+      frame = (await response.json()) as ServerResponseFrame
+    } catch {
+      return { ok: false, error: { code: 'gateway-protocol', message: `gateway ${method}: unreadable response body` } }
+    }
     if (!frame || frame.type !== 'server-response') {
-      throw new Error(`gateway ${method}: unexpected response shape`)
+      return { ok: false, error: { code: 'gateway-protocol', message: `gateway ${method}: unexpected response shape` } }
     }
     if (frame.result.ok) {
       return { ok: true, value: frame.result.value }
@@ -51,11 +69,16 @@ export class GatewayClient {
   }
 
   async respond(rpcId: string, value: unknown): Promise<void> {
-    const response = await fetch(`${this.baseUrl}/api/respond`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ type: 'client-response', rpcId, result: { ok: true, value } }),
-    })
+    let response: Response
+    try {
+      response = await fetch(`${this.baseUrl}/api/respond`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ type: 'client-response', rpcId, result: { ok: true, value } }),
+      })
+    } catch (error) {
+      throw new Error(`gateway respond: ${error instanceof Error ? error.message : String(error)}`)
+    }
     if (!response.ok) throw new Error(`gateway respond: HTTP ${response.status}`)
     const receipt = (await response.json()) as { accepted?: boolean; reason?: string }
     if (receipt?.accepted !== true) {

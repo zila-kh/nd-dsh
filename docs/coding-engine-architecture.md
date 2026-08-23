@@ -62,6 +62,21 @@ ND does **not** currently advertise the delegated Codex route as having ND brows
 
 The default ND Codex provider configuration uses the pinned adapter's fail-closed `never` permission mode. ND never selects the dangerous sandbox bypass implicitly.
 
+### `codex-cli`
+
+Direct coding engine: ND's own main process spawns and manages the official Codex app-server (`@openai/codex`, resolved from the same pinned vendored payload the delegated adapter uses; `ND_DSH_CODEX_BINARY` is a developer-only override). One app-server child hosts one native thread per ND session; wire activity is translated into ND's shared event vocabulary so organization runs and the workbench chat consume it exactly like primary-runtime events.
+
+Capabilities ND advertises:
+
+- workspace execution (thread cwd is fixed at creation)
+- filesystem and shell
+- streamed progress in the workbench chat panel
+- human approvals: interactive threads request escalation approval through ND's approval cards; unattended organization runs use the fail-closed `never` policy and never ask
+
+ND does not yet advertise persistent sessions across restarts (threads live in memory per app run), browser integration, skill/MCP compilation, or ND model-provider routing for this engine; those descriptors stay honestly false. Native Codex authentication and model configuration remain authoritative, and ND strips its own runtime environment variables before spawning the child.
+
+Engine-specific execution guidance for organization workers lives on each descriptor (`workerInstructions`) rather than in workflow code: plan/review still run on the primary ND Harness path, while assigned task execution creates its session directly on the assigned engine through the session router.
+
 ## Capability registry
 
 The renderer never decides engine availability. `CodingEngineRegistry` probes the installed/built runtime and returns `CodingEngineDescriptor` values through narrow IPC.
@@ -78,19 +93,7 @@ Today the registry implements installation/build availability and durable employ
 
 ## Target direct-adapter contract
 
-The current Codex path reuses the pinned Harness provider because that is the shortest safe integration and avoids duplicating the official app-server protocol. If one-shot delegation becomes limiting, a direct adapter should implement an ND contract rather than leaking Codex protocol types into the organization domain:
-
-```ts
-interface CodingEngine {
-  descriptor(): CodingEngineDescriptor
-  health(): Promise<EngineHealth>
-  createSession(input: EngineSessionInput): Promise<EngineSession>
-  run(input: EngineRunInput): Promise<EngineRunReceipt>
-  cancel(runId: string): Promise<void>
-}
-```
-
-That can later support persistent Codex threads, richer child progress, direct cancellation, or a completely different local/remote coding engine without changing Company, Project, Role, Task, Skill, or Workflow data.
+The delegated Codex path reuses the pinned Harness provider, while `codex-cli` already implements the direct shape: ND owns the child process lifecycle and translates its protocol into ND-owned events. Both engines sit behind the same seams — the catalog (descriptors + capability honesty), the registry (availability probes + durable routing), and the session router (which engine owns which session) — so Company, Project, Role, Task, Skill, or Workflow data never changes shape when another local/remote coding engine is added.
 
 ## Skills and MCP
 
@@ -117,13 +120,13 @@ Organization plan/execute/review policies are checked before workflow stages sta
 
 The pinned Harness approval wire currently exposes tool name/reason but not arbitrary tool arguments. The classifier is therefore deliberately conservative. Full enterprise policy consistency requires ND action envelopes from browser/MCP/engine adapters for operations that may not emit a Harness approval frame.
 
-Codex's current one-shot path does not expose an ND human-approval stream; its default permission mode is therefore fail-closed rather than silently auto-escalating.
+The delegated Codex one-shot path does not expose an ND human-approval stream; its default permission mode is therefore fail-closed rather than silently auto-escalating. The direct `codex-cli` engine does surface approval requests for interactive threads through the same gate and cards; its unattended organization runs keep the fail-closed `never` policy.
 
 ## Public-beta safety
 
 - Production renderer fails closed when trusted desktop bridges are missing; no mock runtime is installed.
 - Engine capability claims are conservative.
 - Employee engine assignments are durable and validated before organization runs start.
-- Codex remains one-shot and fail-closed by default.
+- Codex stays fail-closed by default: delegated runs never ask, direct unattended runs use the `never` policy, and only interactive `codex-cli` threads can request a human approval.
 - Main-process organization approvals respect company policy before reaching the renderer.
 - Runtime packaging, signing, installed-app E2E, Codex auth/health onboarding, and normalized cross-engine action metadata remain release gates.
