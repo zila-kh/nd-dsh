@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import type {
   DshEventFrame,
   GatewayRpcResult,
+  HarnessRunOptions,
   HarnessRunResult,
   HarnessStatus,
   UiAnnotation,
@@ -15,6 +16,8 @@ import type { BrowserController } from '../browser/browser-controller.js'
 import { formatExternalElementContext, type ExternalElementStage } from '../capture/external-inspect.js'
 import { GatewayClient, pickFreePort } from '../dsh/gateway-client.js'
 import type { ProviderStore } from '../providers.js'
+import type { SessionArchiveStore } from '../sessions/session-archive-store.js'
+import { ensureProfilePluginLinks } from './profile-plugin-links.js'
 import type { WorkspaceService } from '../workspace/workspace-service.js'
 
 const COMPAT_DEFAULT_PROVIDER = 'deepseek-official'
@@ -52,6 +55,7 @@ export class HarnessService {
     private readonly browser: BrowserController,
     private readonly providers: ProviderStore,
     private readonly externalElements: ExternalElementStage,
+    private readonly sessionArchive: SessionArchiveStore,
   ) {
     this.statusValue = this.computeStatus('stopped')
   }
@@ -82,7 +86,7 @@ export class HarnessService {
    * carries the durable message receipt. A main-process image (cross-app
    * screen capture) rides along as its own context surface.
    */
-  async run(prompt: string, options?: { sessionId?: string; image?: HarnessRunImage }): Promise<HarnessRunResult> {
+  async run(prompt: string, options?: HarnessRunOptions): Promise<HarnessRunResult> {
     const cleaned = prompt.trim()
     if (!cleaned) throw new Error('Prompt cannot be empty')
     if (cleaned.length > 100_000) throw new Error('Prompt exceeds the 100,000 character limit')
@@ -94,6 +98,16 @@ export class HarnessService {
     this.activeSessionId = sessionId
     this.canceledSessions.delete(sessionId)
 
+    if (options?.provider && options?.model) {
+      await this.rpcWithRecovery(this.gateway ?? gateway, 'session.selectModel', {
+        sessionId,
+        provider: options.provider,
+        model: options.model,
+      }).catch((cause) => {
+        console.warn(`Failed to select model ${options.provider}/${options.model} on session ${sessionId}:`, cause)
+      })
+    }
+
     // A capture image replaces the browser UI context: it is a different
     // inspection surface (external apps), never both at once.
     const captureImage = options?.image
@@ -102,32 +116,36 @@ export class HarnessService {
     const promptImage = captureImage
       ?? (selectedAnnotation ? this.browser.selectedUiAnnotationImage(selectedAnnotation.id) : undefined)
     // Staged external-app elements ride along with this prompt, then drain.
+    // Each staged pick may carry a cropped element screenshot; both the text
+    // context block and those images join the turn's content.
     const stagedElements = this.externalElements.consumeAll()
     const browserPrompt = selectedUiTarget || selectedAnnotation
       ? attachUiContext(cleaned, selectedUiTarget, selectedAnnotation)
       : cleaned
     const runtimePrompt = stagedElements.length > 0
-      ? `${browserPrompt}\n\n${stagedElements.map((pick) => formatExternalElementContext(pick)).join('\n\n')}`
+      ? `${browserPrompt}\n\n${stagedElements.map((item) => formatExternalElementContext(item.pick, item.screenshot)).join('\n\n')}`
       : browserPrompt
     const textContent = [{ type: 'text', text: runtimePrompt }]
-    const content = promptImage
-      ? [
-          ...textContent,
-          {
-            type: 'image',
-            mediaType: promptImage.mediaType,
-            data: promptImage.data,
-            name: promptImage.name,
-          },
-        ]
-      : textContent
+    const images = [
+      ...(promptImage ? [promptImage] : []),
+      ...stagedElements.flatMap((item) => (item.screenshot ? [{ data: item.screenshot.data, mediaType: item.screenshot.mediaType, name: item.screenshot.name }] : [])),
+    ]
+    const content = [
+      ...textContent,
+      ...images.map((image) => ({
+        type: 'image' as const,
+        mediaType: image.mediaType,
+        data: image.data,
+        name: image.name,
+      })),
+    ]
 
     const promptRpc = await this.rpcWithRecovery(this.gateway ?? gateway, 'session.prompt', { sessionId, mode: 'queue', content })
     let result = promptRpc.result
     // The pinned Harness rejects unsupported image modalities before publishing
     // the user event. Retrying text-only preserves the annotation geometry and
     // source references for text-only routes without duplicating a turn.
-    if (!result.ok && promptImage && isUnsupportedImageResult(result)) {
+    if (!result.ok && images.length > 0 && isUnsupportedImageResult(result)) {
       result = (await this.rpcWithRecovery(promptRpc.gateway, 'session.prompt', { sessionId, mode: 'queue', content: textContent })).result
     }
     if (!result.ok) throw new Error(rpcFailureMessage('session.prompt', result))
@@ -155,7 +173,29 @@ export class HarnessService {
   async gatewayRpc(method: string, payload?: unknown): Promise<GatewayRpcResult> {
     const started = await this.ensureStarted()
     const { result } = await this.rpcWithRecovery(started, method, payload)
-    return method === 'session.history' ? sanitizeHistoryResult(result) : result
+    if (method === 'session.history') return sanitizeHistoryResult(result)
+    if (method === 'session.list') return this.annotateArchivedSessions(result)
+    return result
+  }
+
+  /**
+   * ND owns chat archival: the pinned runtime has no archive concept, so its
+   * session.list items are annotated with ND-side flags before reaching the
+   * renderer. The runtime payload itself is never rewritten.
+   */
+  private async annotateArchivedSessions(result: GatewayRpcResult): Promise<GatewayRpcResult> {
+    if (!result.ok) return result
+    const items = (result.value as { items?: unknown } | undefined)?.items
+    if (!Array.isArray(items)) return result
+    const archivedIds = await this.sessionArchive.archivedIds()
+    if (archivedIds.size === 0) return result
+    return {
+      ...result,
+      value: {
+        ...(typeof result.value === 'object' && result.value !== null ? result.value : {}),
+        items: items.map((item) => (isSessionLike(item) && archivedIds.has(item.sessionId) ? { ...item, archived: true } : item)),
+      },
+    }
   }
 
   /** Boot the runtime eagerly. */
@@ -272,7 +312,7 @@ export class HarnessService {
     return { gateway: replacement, result: await replacement.rpc(method, payload) }
   }
 
-  private async start(): Promise<GatewayClient> {
+  private async start(attempt = 0): Promise<GatewayClient> {
     // close() marks the current child as expected-to-stop; a fresh child must
     // return to normal unexpected-exit detection.
     this.stopping = false
@@ -289,6 +329,9 @@ export class HarnessService {
     const workspaceRoot = this.workspace.state().root
     const dshHome = join(app.getPath('userData'), 'dsh-home')
     await fs.mkdir(join(dshHome, '.agent-presets'), { recursive: true })
+    // Upstream heals the flat module fallback only for its own dependency
+    // closure; ND-inserted entries need their links staged before boot.
+    ensureProfilePluginLinks(dshHome, harnessRoot())
     // The nd-dsh preset ships with the desktop; a fresh copy keeps it current.
     await fs.cp(presetsDir, join(dshHome, '.agent-presets'), { recursive: true, force: true })
 
@@ -341,8 +384,20 @@ export class HarnessService {
     })
 
     const baseUrl = `http://127.0.0.1:${port}`
-    await this.waitUntilReady(child, baseUrl)
+    await this.waitUntilReady(child, baseUrl, () => childError)
     const gateway = new GatewayClient(baseUrl)
+    // The reservation is released before the child binds, so a foreign local
+    // service can win the port race; it would answer HTTP 404 to every RPC
+    // (observed as session.create failing right after boot). Verify the
+    // responder actually speaks the gateway protocol before adopting it.
+    const identity = await gateway.rpc('session.list')
+    if (!identity.ok && (identity.error?.code === 'gateway-http' || identity.error?.code === 'gateway-protocol')) {
+      this.stopping = true
+      gateway.close()
+      child.kill()
+      if (attempt >= 2) throw new Error(`Port ${port} keeps being taken by another local server; runtime cannot bind`)
+      return this.start(attempt + 1)
+    }
     gateway.openEvents((frame) => this.handleEvent(frame))
     this.gateway = gateway
     this.baseUrl = baseUrl
@@ -357,7 +412,7 @@ export class HarnessService {
    * before the listener binds, so stdout alone proves nothing; polling is the
    * only trustworthy signal.
    */
-  private async waitUntilReady(child: ChildProcess, baseUrl: string): Promise<void> {
+  private async waitUntilReady(child: ChildProcess, baseUrl: string, getChildError: () => string): Promise<void> {
     const deadline = Date.now() + READY_TIMEOUT_MS
     while (Date.now() < deadline) {
       if (child.exitCode !== null) break
@@ -369,7 +424,8 @@ export class HarnessService {
       }
       await new Promise((resolve) => setTimeout(resolve, READY_POLL_MS))
     }
-    throw new Error('Runtime did not become ready within the timeout')
+    const err = getChildError().trim()
+    throw new Error(`Runtime did not become ready within the timeout${err ? `: ${err}` : ''}`)
   }
 
   private handleEvent(frame: DshEventFrame): void {
@@ -518,6 +574,10 @@ function stripUiContext(value: string): string {
 
 function rpcFailureMessage(method: string, result: GatewayRpcResult): string {
   return `${method} failed: ${result.error?.message ?? result.error?.code ?? 'unknown error'}`
+}
+
+function isSessionLike(value: unknown): value is { sessionId: string } {
+  return typeof value === 'object' && value !== null && typeof (value as { sessionId?: unknown }).sessionId === 'string'
 }
 
 function nonEmpty(...values: Array<string | undefined>): string {

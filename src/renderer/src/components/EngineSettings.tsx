@@ -1,5 +1,16 @@
 import { useEffect, useState } from 'react'
 import type { CodingEngineDescriptor } from '../../../shared/contracts'
+import {
+  SettingsButton,
+  SettingsRow,
+  SettingsSection,
+  StatusChip,
+  rowDesc,
+  rowPathText,
+  rowStack,
+  rowTitle,
+  rowValueText,
+} from './settings-primitives'
 
 interface EngineSettingsProps {
   onError(message: string): void
@@ -23,45 +34,60 @@ export function EngineSettings({ onError }: EngineSettingsProps) {
   }, [onError])
 
   return (
-    <div className="settings-scroll">
-      <section className="settings-section">
-        <h2>Coding engines</h2>
-        <div className="settings-row">
-          <div>
-            <strong>ND control plane</strong>
-            <span>Companies, roles, tasks, skills, policies, memory, and provider routes stay owned by ND. Engines are replaceable execution adapters.</span>
-          </div>
-          <span className="settings-status good">Provider-neutral</span>
+    <div className="min-h-0 overflow-auto px-[26px] pb-[42px] pt-1.5">
+      <SettingsSection title="Coding engines" className="mt-3.5">
+        <div className="space-y-1.5">
+          <SettingsRow>
+            <div className={rowStack}>
+              <strong className={rowTitle}>ND control plane</strong>
+              <span className={rowDesc}>Companies, roles, tasks, skills, policies, memory, and provider routes stay owned by ND. Engines are replaceable execution adapters.</span>
+            </div>
+            <StatusChip good>Provider-neutral</StatusChip>
+          </SettingsRow>
+          {loading ? (
+            <SettingsRow>
+              <div className={rowStack}><strong className={rowTitle}>Detecting engines…</strong></div>
+            </SettingsRow>
+          ) : null}
+          {engines.map((engine) => (
+            <SettingsRow key={engine.id}>
+              <div className={rowStack}>
+                <strong className={rowTitle}>{engine.name}</strong>
+                <span className={rowDesc}>{engine.description}</span>
+                <span className={rowPathText}>{capabilitySummary(engine)}</span>
+                {!engine.available && engine.unavailableReason ? <span className={rowPathText}>{engine.unavailableReason}</span> : null}
+              </div>
+              <div className="flex shrink-0 flex-col items-end gap-[3px]">
+                <StatusChip good={engine.available} warn={!engine.available}>{engine.available ? 'Available' : 'Unavailable'}</StatusChip>
+                <span className={rowValueText}>{engine.integration === 'primary' ? 'Primary' : 'Delegated'}</span>
+              </div>
+            </SettingsRow>
+          ))}
         </div>
-        {loading ? <div className="settings-row"><div><strong>Detecting engines…</strong></div></div> : null}
-        {engines.map((engine) => (
-          <div className="settings-row" key={engine.id}>
-            <div>
-              <strong>{engine.name}</strong>
-              <span>{engine.description}</span>
-              <span className="settings-path">{capabilitySummary(engine)}</span>
-              {!engine.available && engine.unavailableReason ? <span className="settings-path">{engine.unavailableReason}</span> : null}
-            </div>
-            <div>
-              <span className={`settings-status ${engine.available ? 'good' : 'warn'}`}>{engine.available ? 'Available' : 'Unavailable'}</span>
-              <span className="settings-value">{engine.integration === 'primary' ? 'Primary' : 'Delegated'}</span>
-            </div>
-          </div>
-        ))}
-      </section>
+      </SettingsSection>
 
-      <section className="settings-section">
-        <h2>Engine boundaries</h2>
-        <div className="settings-row">
-          <div><strong>ND Harness</strong><span>Primary durable runtime for ND agents, browser, MCP, skills, approvals, and provider-routed models.</span></div>
+      <SettingsSection title="Engine boundaries">
+        <div className="space-y-1.5">
+          <SettingsRow>
+            <div className={rowStack}>
+              <strong className={rowTitle}>ND Harness</strong>
+              <span className={rowDesc}>Primary durable runtime for ND agents, browser, MCP, skills, approvals, and provider-routed models.</span>
+            </div>
+          </SettingsRow>
+          <SettingsRow>
+            <div className={rowStack}>
+              <strong className={rowTitle}>Codex CLI (direct)</strong>
+              <span className={rowDesc}>ND spawns and manages the official Codex app-server: streamed chat threads in the workbench, approval prompts, and workspace-scoped unattended runs. Codex account, model, project trust, and authentication remain native to Codex.</span>
+            </div>
+          </SettingsRow>
+          <SettingsRow>
+            <div className={rowStack}>
+              <strong className={rowTitle}>Codex (delegated)</strong>
+              <span className={rowDesc}>Fallback route where the ND runtime delegates one-shot implementation work through its pinned Codex adapter. Useful when the direct engine is unavailable.</span>
+            </div>
+          </SettingsRow>
         </div>
-        <div className="settings-row">
-          <div><strong>Codex CLI (direct)</strong><span>ND spawns and manages the official Codex app-server: streamed chat threads in the workbench, approval prompts, and workspace-scoped unattended runs. Codex account, model, project trust, and authentication remain native to Codex.</span></div>
-        </div>
-        <div className="settings-row">
-          <div><strong>Codex (delegated)</strong><span>Fallback route where the ND runtime delegates one-shot implementation work through its pinned Codex adapter. Useful when the direct engine is unavailable.</span></div>
-        </div>
-      </section>
+      </SettingsSection>
     </div>
   )
 }

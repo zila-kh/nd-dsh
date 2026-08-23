@@ -7,6 +7,7 @@ declare global {
     ndDsh: DesktopApi
     ndDshDesign: DesignDesktopApi
     ndDshOrganization: OrganizationDesktopApi
+    ndDshRuntimeMode?: 'ui-preview'
   }
 }
 

@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { CloseIcon } from './Icons'
+import { ScmStatusChip } from './scm-status-chip'
+import { cn } from '../lib/utils'
 
 interface DiffViewProps {
   relativePath: string
@@ -30,25 +32,32 @@ export function DiffView({ relativePath, staged, onClose, onError }: DiffViewPro
   }, [relativePath, staged, onError])
 
   return (
-    <div className="editor-pane diff-view">
-      <div className="editor-tab-row">
-        <div className="editor-tab">
-          <span className={`scm-status ${staged ? 'added' : 'modified'}`}>{staged ? 'S' : 'D'}</span>
+    // code-editor keeps the VS Code-style ::selection treatment.
+    <div className="code-editor relative grid h-full w-full grid-rows-[31px_auto_minmax(0,1fr)] bg-surface-0">
+      <div className="flex border-b border-border-soft bg-secondary">
+        <div className="flex items-center gap-1.5 border-r border-border-soft px-[11px] text-[10px] text-soft">
+          <ScmStatusChip kind={staged ? 'added' : 'modified'} label={staged ? 'S' : 'D'} />
           <span title={relativePath}>{`Diff · ${relativePath}${staged ? ' (staged)' : ''}`}</span>
         </div>
-        <button className="diff-close" title="Close diff" onClick={onClose}>
+        <button
+          className="ml-auto mr-1.5 my-1 grid size-[22px] shrink-0 place-items-center rounded-[5px] text-faint transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-3"
+          title="Close diff"
+          onClick={onClose}
+        >
           <CloseIcon />
         </button>
       </div>
       {patch === null ? (
-        <div className="view-loading"><div className="placeholder-ring" /></div>
+        <div className="grid min-h-0 place-items-center">
+          <div className="size-[34px] animate-spin rounded-full border border-border-strong border-t-primary" />
+        </div>
       ) : patch.trim() === '' ? (
-        <div className="empty-note">No textual changes.</div>
+        <div className="p-3 text-[10px]/[1.45] text-faint">No textual changes.</div>
       ) : (
-        <div className="code-scroll">
-          <pre className="diff-code">
+        <div className="min-h-0 overflow-auto">
+          <pre className="m-0 overflow-visible whitespace-pre bg-surface-0 px-4 pb-10 pt-3 font-mono text-[11px]/[1.62] text-soft">
             {patch.split('\n').map((line, index) => (
-              <span key={index} className={diffLineClass(line)}>{`${line}\n`}</span>
+              <span key={index} className={cn('block', diffLineClass(line))}>{`${line}\n`}</span>
             ))}
           </pre>
         </div>
@@ -57,10 +66,10 @@ export function DiffView({ relativePath, staged, onClose, onError }: DiffViewPro
   )
 }
 
-function diffLineClass(line: string): string {
-  if (line.startsWith('+++') || line.startsWith('---')) return 'diff-meta'
-  if (line.startsWith('+')) return 'diff-add'
-  if (line.startsWith('-')) return 'diff-del'
-  if (line.startsWith('@@')) return 'diff-hunk'
-  return 'diff-ctx'
+function diffLineClass(line: string): string | false {
+  if (line.startsWith('+++') || line.startsWith('---')) return 'text-fainter'
+  if (line.startsWith('+')) return 'bg-primary/10 text-foreground'
+  if (line.startsWith('-')) return 'bg-destructive/15 text-foreground'
+  if (line.startsWith('@')) return 'text-info'
+  return false
 }

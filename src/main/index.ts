@@ -10,7 +10,7 @@ import { ORGANIZATION_IPC } from '../shared/organization.js'
 import { projectRoot } from './app-paths.js'
 import { BrowserController } from './browser/browser-controller.js'
 import { DEFAULT_BROWSER_URL } from './browser/browser-url.js'
-import { ExternalElementStage } from './capture/external-inspect.js'
+import { ExternalElementStage, RecentPickStore } from './capture/external-inspect.js'
 import { DesignService } from './design/design-service.js'
 import { registerDesignIpc } from './design/ipc.js'
 import { NdPencilController } from './design/nd-pencil-controller.js'
@@ -29,6 +29,7 @@ import { OrganizationOrchestrator } from './organization/orchestrator.js'
 import { OrganizationStore } from './organization/store.js'
 import { ProviderStore } from './providers.js'
 import { QaService } from './qa/qa-service.js'
+import { SessionArchiveStore } from './sessions/session-archive-store.js'
 import { ThemeService } from './theme.js'
 import { ProjectWorkspaceCoordinator } from './workspace/project-workspace-coordinator.js'
 import { WorkspaceRegistry } from './workspace/workspace-registry.js'
@@ -67,6 +68,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   const providers = new ProviderStore()
   const userData = app.getPath('userData')
   const engines = new CodingEngineRegistry(new EngineAssignmentStore(join(userData, 'engine-assignments.json')))
+  const sessionArchive = new SessionArchiveStore(join(userData, 'session-archive.json'))
   const isMac = process.platform === 'darwin'
 
   const window = new BrowserWindow({
@@ -96,7 +98,8 @@ async function createWindow(cdpPort: number): Promise<void> {
   const browser = new BrowserController(window, cdpPort, projectRoot())
   const dshSurface = new DshSurfaceController(window)
   const externalElements = new ExternalElementStage()
-  const harness = new HarnessService(workspace, browser, providers, externalElements)
+  const recentPicks = new RecentPickStore()
+  const harness = new HarnessService(workspace, browser, providers, externalElements, sessionArchive)
   const codexEngine = new CodexCliEngine({ log: (line) => console.log(line) })
   activeCodexEngine = codexEngine
   const engineRouter = new EngineSessionRouter(harness, codexEngine, workspace)
@@ -112,7 +115,8 @@ async function createWindow(cdpPort: number): Promise<void> {
   const approvalGate = new OrganizationApprovalGate(organizationStore, harness)
   const git = new GitService(workspace)
   const qa = new QaService()
-  const disposeIpc = registerIpc({ window, browser, dshSurface, engines, engineRouter, harness, projectWorkspace, workspaces, theme, providers, externalElements, git, qa })
+  qa.setProjectRoot(workspace.state().root)
+  const disposeIpc = registerIpc({ window, preloadPath: preload, browser, dshSurface, engines, engineRouter, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, qa, sessionArchive })
   const disposeDesignIpc = registerDesignIpc(window, design, ndPencil)
   const disposeOrganizationIpc = registerOrganizationIpc(window, organizationStore, organization, projectWorkspace)
   mainWindow = window

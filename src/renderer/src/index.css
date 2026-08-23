@@ -16,6 +16,7 @@
 :root {
   --background: #090b0e;
   --foreground: #e9edf3;
+  --bg-glow: rgb(77 115 85 / 13%);
 
   --card: #13181e;
   --card-foreground: #e9edf3;
@@ -61,6 +62,7 @@
   --meta: #0c1014;
   --browser: #080a0d;
   --inset: rgb(5 8 11 / 30%);
+  --selected: rgb(118 169 255 / 12%);
   --folder: #d1aa63;
   --file: #8492a2;
   --toast-bg: #191217;
@@ -73,7 +75,11 @@
   --scrollbar: #2c343e;
   --scrollbar-hover: #3a4551;
   --editor-selection: #264f78;
+  --border-focus: #3b4856;
+  --prompt-menu-bg: #252526;
   --prompt-menu-border: #3c3c3c;
+  --prompt-menu-text: #cccccc;
+  --prompt-menu-hover: #37373d;
 
   color-scheme: dark;
 }
@@ -81,6 +87,7 @@
 :root[data-theme='light'] {
   --background: #f4f5f7;
   --foreground: #1b2128;
+  --bg-glow: rgb(76 138 16 / 8%);
 
   --card: #ffffff;
   --card-foreground: #1b2128;
@@ -125,6 +132,7 @@
   --meta: #f1f3f5;
   --browser: #e9ebee;
   --inset: rgb(20 30 45 / 3%);
+  --selected: rgb(47 111 224 / 10%);
   --folder: #b07f2e;
   --file: #7c8894;
   --toast-bg: #fdf2f3;
@@ -134,7 +142,11 @@
   --scrollbar: #c6ccd3;
   --scrollbar-hover: #a9b1bb;
   --editor-selection: #add6ff;
+  --border-focus: #a9bcd8;
+  --prompt-menu-bg: #ffffff;
   --prompt-menu-border: #d2d7de;
+  --prompt-menu-text: #1b2128;
+  --prompt-menu-hover: #f0f2f5;
 
   color-scheme: light;
 }
@@ -187,6 +199,7 @@
   --color-meta: var(--meta);
   --color-browser: var(--browser);
   --color-inset: var(--inset);
+  --color-selected: var(--selected);
   --color-folder: var(--folder);
   --color-file: var(--file);
   --color-toast: var(--toast-bg);
@@ -224,6 +237,14 @@
 
 @utility app-no-drag {
   -webkit-app-region: no-drag;
+}
+
+html.float-mode,
+body.float-mode,
+#root.float-mode,
+.float-mode {
+  background: transparent !important;
+  background-color: transparent !important;
 }
 
 @keyframes pulse-dot {
@@ -269,6 +290,35 @@
 ::-webkit-scrollbar {
   width: 9px;
   height: 9px;
+}
+
+/* Model settings — dark IDE surface scope (independent of the product palette). */
+.models-scope {
+  --models-bg: #1a1a1a;
+  --models-surface: #222222;
+  --models-surface-3: #2d2d2d;
+  --models-field: #2a2a2a;
+  --models-border: #333333;
+  --models-border-2: #3a3a3a;
+  --models-text: #d4d4d4;
+  --models-muted: #9ca3af;
+  --models-faint: #6b7280;
+  --models-green: #22c55e;
+  --models-green-soft: rgb(34 197 94 / 15%);
+}
+
+:root[data-theme='light'] .models-scope {
+  --models-bg: #f4f5f7;
+  --models-surface: #ffffff;
+  --models-surface-3: #eceef1;
+  --models-field: #f0f2f5;
+  --models-border: #d2d7de;
+  --models-border-2: #c4cad2;
+  --models-text: #1b2128;
+  --models-muted: #5b6570;
+  --models-faint: #8b94a0;
+  --models-green: #16a34a;
+  --models-green-soft: rgb(22 163 74 / 12%);
 }
 
 ::-webkit-scrollbar-track {

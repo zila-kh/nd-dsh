@@ -168,8 +168,8 @@ for (const directive of ["default-src 'self'", "script-src 'self'", "connect-src
   if (!rendererHtml.includes(directive)) errors.push(`renderer CSP is missing ${directive}`)
 }
 const rendererMain = await fs.readFile(join(root, 'src/renderer/src/main.tsx'), 'utf8')
-if (!rendererMain.includes('ND runtime unavailable') || rendererMain.includes('installWebBridge')) {
-  errors.push('renderer must fail closed without the trusted desktop runtime and must not install a mock web bridge')
+if (!rendererMain.includes('ND runtime unavailable') || rendererMain.includes('installWebBridge') || !rendererMain.includes('import.meta.env.DEV')) {
+  errors.push('renderer must fail closed in production; any UI-only browser preview must be explicitly development-gated')
 }
 const browserUrl = await fs.readFile(join(root, 'src/main/browser/browser-url.ts'), 'utf8')
 if (!browserUrl.includes("DEFAULT_BROWSER_URL = 'about:blank'")) {

@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import type { GitFileChange, GitStatusSnapshot, WorkspaceState } from '../../../shared/contracts'
 import { ArrowLeftIcon, FileIcon, PlusIcon, ReloadIcon, TrashIcon } from './Icons'
+import { ScmStatusChip, type ScmStatusKind } from './scm-status-chip'
+import { Button } from './ui/button'
+import { Input } from './ui/input'
+import { Badge } from './ui/badge'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
+import { Textarea } from './ui/textarea'
+import { cn } from '../lib/utils'
 
 interface SourceControlPanelProps {
   workspace: WorkspaceState | null
@@ -17,6 +24,13 @@ const GROUP_LABELS: Record<ChangeGroupKind, string> = {
   unstaged: 'Changes',
   untracked: 'Untracked Files',
 }
+
+const DETACHED_VALUE = '__detached__'
+
+const iconButtonClasses = cn(
+  'grid size-6 shrink-0 place-items-center rounded-[3px] border-0 bg-transparent text-muted-foreground',
+  'transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-45 [&_svg]:size-3',
+)
 
 /** ND Source Control panel — git CLI plumbing derived from microsoft/vscode extensions/git (MIT). */
 export function SourceControlPanel({ workspace, onOpenFile, onOpenDiff, onError }: SourceControlPanelProps) {
@@ -96,10 +110,10 @@ export function SourceControlPanel({ workspace, onOpenFile, onOpenDiff, onError 
 
   if (!state?.repoRoot) {
     return (
-      <div className="scm-panel">
-        <div className="sidebar-placeholder">
-          <strong>Source Control</strong>
-          <p>This folder is not inside a Git repository.</p>
+      <div className="flex h-full w-full min-h-0 flex-col overflow-hidden">
+        <div className="flex flex-1 flex-col gap-1 p-3">
+          <strong className="text-xs font-semibold text-soft">Source Control</strong>
+          <p className="text-[10px] leading-relaxed text-faint">This folder is not inside a Git repository.</p>
         </div>
         <UpstreamCredit />
       </div>
@@ -114,33 +128,41 @@ export function SourceControlPanel({ workspace, onOpenFile, onOpenDiff, onError 
   ]
 
   return (
-    <div className="scm-panel">
-      <div className="scm-toolbar">
-        <select
-          className="scm-branch-select"
-          value={state.branch ?? ''}
-          title="Switch branch"
-          onChange={(event) => void run(() => window.ndDsh.git.checkout(event.target.value))}
+    <div className="flex h-full w-full min-h-0 flex-col overflow-hidden">
+      <div className="flex items-center gap-1 border-b border-border-soft px-2 py-1.5">
+        <Select
+          value={state.branch ?? DETACHED_VALUE}
+          onValueChange={(value) => {
+            if (value !== DETACHED_VALUE) void run(() => window.ndDsh.git.checkout(value))
+          }}
         >
-          {state.branch === null ? <option value="" disabled>HEAD (detached)</option> : null}
-          {state.branches.map((branch) => (
-            <option key={branch.name} value={branch.name}>{branch.name}</option>
-          ))}
-          {state.branch !== null && !state.branches.some((branch) => branch.name === state.branch)
-            ? <option value={state.branch}>{state.branch}</option>
-            : null}
-        </select>
-        <button className="scm-icon-button" title="Create branch" onClick={() => setBranchFormOpen((open) => !open)}>
+          <SelectTrigger
+            title="Switch branch"
+            className="h-6 min-w-0 flex-1 rounded-[5px] border-border bg-secondary px-1.5 text-[11px] text-soft"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {state.branch === null ? <SelectItem value={DETACHED_VALUE} disabled>HEAD (detached)</SelectItem> : null}
+            {state.branches.map((branch) => (
+              <SelectItem key={branch.name} value={branch.name}>{branch.name}</SelectItem>
+            ))}
+            {state.branch !== null && !state.branches.some((branch) => branch.name === state.branch)
+              ? <SelectItem value={state.branch}>{state.branch}</SelectItem>
+              : null}
+          </SelectContent>
+        </Select>
+        <button className={iconButtonClasses} title="Create branch" onClick={() => setBranchFormOpen((open) => !open)}>
           <PlusIcon />
         </button>
-        <button className="scm-icon-button" title="Refresh" onClick={() => void refresh()}>
-          <ReloadIcon className={busy ? 'spin' : ''} />
+        <button className={iconButtonClasses} title="Refresh" onClick={() => void refresh()}>
+          <ReloadIcon className={busy ? 'animate-spin' : ''} />
         </button>
       </div>
 
       {branchFormOpen ? (
-        <div className="scm-branch-form">
-          <input
+        <div className="flex gap-1 border-b border-border-soft px-2 py-1.5">
+          <Input
             value={newBranch}
             placeholder="new-branch-name"
             autoFocus
@@ -149,36 +171,47 @@ export function SourceControlPanel({ workspace, onOpenFile, onOpenDiff, onError 
               if (event.key === 'Enter') void createBranch()
               if (event.key === 'Escape') setBranchFormOpen(false)
             }}
+            className="h-6 min-w-0 flex-1 rounded-[5px] border-border-strong bg-transparent px-[7px] text-[11px]"
           />
-          <button className="scm-text-button" disabled={!newBranch.trim() || busy} onClick={() => void createBranch()}>Create</button>
+          <Button variant="secondary" className="h-[22px] rounded-[5px] px-2 text-[10px]" disabled={!newBranch.trim() || busy} onClick={() => void createBranch()}>
+            Create
+          </Button>
         </div>
       ) : null}
 
-      <div className="scm-sync-row">
-        {state.ahead > 0 ? <span className="scm-badge">{`↑ ${state.ahead}`}</span> : null}
-        {state.behind > 0 ? <span className="scm-badge down">{`↓ ${state.behind}`}</span> : null}
-        <span className="scm-flex" />
-        <button className="scm-text-button" disabled={!state.remotes.length || busy} onClick={() => void run(() => window.ndDsh.git.fetch())}>Fetch</button>
-        <button className="scm-text-button" disabled={!state.remotes.length || busy} onClick={() => void run(() => window.ndDsh.git.pull())}>Pull</button>
-        <button className="scm-text-button" disabled={!state.remotes.length || busy} onClick={() => void run(() => window.ndDsh.git.push())}>Push</button>
+      <div className="flex items-center gap-[5px] border-b border-border-soft px-2 py-1.5 text-[10px] text-faint">
+        {state.ahead > 0 ? <Badge className="rounded-lg bg-primary/10 px-1.5 text-[9px] font-bold text-primary">{`↑ ${state.ahead}`}</Badge> : null}
+        {state.behind > 0 ? <Badge className="rounded-lg bg-warning/10 px-1.5 text-[9px] font-bold text-warning">{`↓ ${state.behind}`}</Badge> : null}
+        <span className="flex-1" />
+        <Button variant="secondary" className="h-[22px] rounded-[5px] px-2 text-[10px]" disabled={!state.remotes.length || busy} onClick={() => void run(() => window.ndDsh.git.fetch())}>Fetch</Button>
+        <Button variant="secondary" className="h-[22px] rounded-[5px] px-2 text-[10px]" disabled={!state.remotes.length || busy} onClick={() => void run(() => window.ndDsh.git.pull())}>Pull</Button>
+        <Button variant="secondary" className="h-[22px] rounded-[5px] px-2 text-[10px]" disabled={!state.remotes.length || busy} onClick={() => void run(() => window.ndDsh.git.push())}>Push</Button>
       </div>
 
-      <div className="scm-commit-box">
-        <textarea
+      <div className="flex flex-col gap-1.5 border-b border-border-soft p-2">
+        <Textarea
           value={message}
           placeholder="Commit message (Ctrl+Enter to commit)"
           onChange={(event) => setMessage(event.target.value)}
           onKeyDown={onComposerKeyDown}
+          className="min-h-[54px] resize-none rounded-md border-border-strong bg-composer px-2 py-[7px] text-[11px] leading-[1.45]"
         />
-        <button className="scm-commit-button" disabled={!state.staged.length || !message.trim() || busy} onClick={() => void commit()}>
+        <Button
+          variant="ghost"
+          className="h-6 rounded-md border border-primary/30 bg-primary/10 text-[10px] font-semibold text-primary hover:bg-primary/[0.16] hover:text-primary disabled:opacity-45"
+          disabled={!state.staged.length || !message.trim() || busy}
+          onClick={() => void commit()}
+        >
           {state.staged.length > 0 ? `Commit (${state.staged.length})` : 'Commit'}
-        </button>
+        </Button>
       </div>
 
-      <div className="scm-scroll">
+      <div className="min-h-0 flex-1 overflow-auto pb-2.5">
         {groups.map(({ kind, changes }) => changes.length > 0 ? (
           <section key={kind}>
-            <div className="scm-group-label">{GROUP_LABELS[kind]} <span className="count">{changes.length}</span></div>
+            <div className="flex h-6 items-center gap-[5px] px-2.5 text-[9px] font-semibold tracking-[0.08em] text-faint">
+              {GROUP_LABELS[kind]} <span className="text-muted-foreground">{changes.length}</span>
+            </div>
             {changes.map((change) => (
               <ChangeRow
                 key={`${change.path}:${change.x}${change.y}`}
@@ -195,7 +228,7 @@ export function SourceControlPanel({ workspace, onOpenFile, onOpenDiff, onError 
           </section>
         ) : null)}
         {state.staged.length + state.unstaged.length + state.untracked.length + state.conflicts.length === 0
-          ? <div className="empty-note">Working tree clean.</div>
+          ? <div className="p-3 text-[10px]/[1.45] text-faint">Working tree clean.</div>
           : null}
       </div>
 
@@ -215,29 +248,38 @@ function ChangeRow({ change, kind, armed, onOpen, onStage, onUnstage, onDiscard,
   onOpenFile(): void
 }) {
   const { name, directory } = splitPath(change.path)
+  const rowIconButtonClasses = cn(
+    'grid size-[18px] shrink-0 basis-[18px] place-items-center rounded-[5px] border-0 bg-transparent text-muted-foreground',
+    'hover:bg-accent hover:text-foreground',
+    armed && 'text-destructive',
+  )
   return (
-    <div className="scm-row" title={change.originalPath ? `${change.originalPath} → ${change.path}` : change.path} onClick={onOpen}>
-      <span className={`scm-status ${statusClass(change, kind)}`}>{statusLetter(change, kind)}</span>
-      <span className="scm-row-label">{name}</span>
-      {directory ? <span className="scm-row-dir">{directory}</span> : null}
-      <span className="scm-row-actions">
+    <div
+      className="group flex h-[23px] cursor-default items-center gap-1.5 pl-2.5 pr-2 text-xs text-soft hover:bg-accent/50 hover:text-foreground"
+      title={change.originalPath ? `${change.originalPath} → ${change.path}` : change.path}
+      onClick={onOpen}
+    >
+      <ScmStatusChip kind={statusKind(change, kind)} label={statusLetter(change, kind)} />
+      <span className="min-w-0 truncate">{name}</span>
+      {directory ? <span className="truncate text-[10px] text-fainter">{directory}</span> : null}
+      <span className="ml-auto hidden shrink-0 items-center gap-0.5 group-hover:flex">
         {kind === 'staged' ? (
-          <button className="scm-icon-button" title="Unstage" onClick={(event) => { event.stopPropagation(); onUnstage() }}>
+          <button className={rowIconButtonClasses} title="Unstage" onClick={(event) => { event.stopPropagation(); onUnstage() }}>
             <ArrowLeftIcon />
           </button>
         ) : (
-          <button className="scm-icon-button" title="Stage" onClick={(event) => { event.stopPropagation(); onStage() }}>
+          <button className={rowIconButtonClasses} title="Stage" onClick={(event) => { event.stopPropagation(); onStage() }}>
             <PlusIcon />
           </button>
         )}
         {kind === 'conflicts' ? (
-          <button className="scm-icon-button" title="Open file to resolve conflict" onClick={(event) => { event.stopPropagation(); onOpenFile() }}>
+          <button className={rowIconButtonClasses} title="Open file to resolve conflict" onClick={(event) => { event.stopPropagation(); onOpenFile() }}>
             <FileIcon />
           </button>
         ) : null}
         {kind === 'unstaged' || kind === 'untracked' ? (
           <button
-            className={`scm-icon-button ${armed ? 'armed' : ''}`}
+            className={rowIconButtonClasses}
             title={armed ? 'Click again to discard changes' : 'Discard changes'}
             onClick={(event) => { event.stopPropagation(); onDiscard() }}
           >
@@ -256,7 +298,7 @@ function statusLetter(change: GitFileChange, kind: ChangeGroupKind): string {
   return letter === ' ' ? 'M' : letter
 }
 
-function statusClass(change: GitFileChange, kind: ChangeGroupKind): string {
+function statusKind(change: GitFileChange, kind: ChangeGroupKind): ScmStatusKind {
   if (kind === 'conflicts') return 'conflict'
   if (kind === 'untracked') return 'added'
   const letter = (kind === 'staged' ? change.x : change.y).toUpperCase()
@@ -273,7 +315,7 @@ function splitPath(path: string): { name: string; directory: string } {
 }
 
 function UpstreamCredit() {
-  return <p className="scm-credit">Git integration adapted from microsoft/vscode extensions/git (MIT License).</p>
+  return <p className="m-0 border-t border-border-soft px-2.5 py-[7px] text-[9px] text-fainter">Git integration adapted from microsoft/vscode extensions/git (MIT License).</p>
 }
 
 function errorMessage(cause: unknown): string {

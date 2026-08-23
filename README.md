@@ -109,6 +109,8 @@ corepack pnpm dev
 
 Configure model providers from **Settings -> Models**. `DEEPSEEK_API_KEY` remains an optional compatibility environment variable for the seeded DeepSeek route. Desktop API keys entered through Settings are stored with Electron OS-backed secure storage when a secure backend is available.
 
+During development, opening the Vite renderer URL (normally `http://localhost:5173`) in a regular browser shows an explicitly labeled **UI Preview** populated with simulated fixtures. It exists only for reviewing navigation, layout, responsive behavior, and interaction states; agents, workspaces, Git, providers, ND Pencil, the shared browser, and organization runs function only in the Electron application. Preview fixtures are development-only and are not bundled as a production runtime fallback.
+
 Existing stored API keys are not returned to the renderer. Settings receives only whether a credential exists and uses dedicated replace/clear operations. If a secure operating-system store is unavailable, a newly entered key remains memory-only rather than being persisted insecurely.
 
 Codex authentication is native to Codex. The ND adapter does not create or migrate a Codex account.

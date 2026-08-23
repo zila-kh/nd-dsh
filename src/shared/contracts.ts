@@ -216,9 +216,18 @@ export interface HarnessRunResult {
   messageId?: string
 }
 
+export interface HarnessRunImage {
+  data: string
+  mediaType: string
+  name: string
+}
+
 export interface HarnessRunOptions {
   sessionId?: string
   engineId?: string
+  provider?: string
+  model?: string
+  image?: HarnessRunImage
 }
 
 /** ND-managed non-harness chat session surfaced alongside gateway sessions. */
@@ -230,6 +239,8 @@ export interface EngineSessionSummary {
   createdAt: number
   updatedAt: number
   running: boolean
+  /** ND-side archival flag, resolved from the desktop archive store. */
+  archived?: boolean
 }
 
 /** Replayed session events for a non-harness chat session. */
@@ -291,6 +302,8 @@ export interface SessionSummary {
   origin?: 'subagent'
   cwd?: string
   agentPreset?: string
+  /** ND-side archival flag; the pinned runtime list is annotated by the main process. */
+  archived?: boolean
   projections?: { asOfSeq: number; values: Record<string, unknown> }
 }
 
@@ -447,6 +460,12 @@ export interface ExternalElementPickView {
   box: { x: number; y: number; width: number; height: number }
   url?: string
   pageTitle?: string
+  /** CSS path from the document root to the element (id/position based). */
+  selector?: string
+  /** Key computed styles captured at pick time. */
+  styles?: Record<string, string>
+  /** Best-effort dev-build source location, e.g. "src/App.tsx:42". */
+  source?: string
 }
 
 /** One pick round from the crosshair button; the renderer offers Add-to-chat. */
@@ -457,6 +476,10 @@ export interface ExternalElementPickResult {
   targetTitle?: string
   shortName?: string
   hover?: string
+  /** Id of this pick in the main-process store; enables context/screenshot copy. */
+  pickId?: string
+  /** Whether a cropped element screenshot was captured for this pick. */
+  hasShot?: boolean
 }
 
 /** A staged element chip waiting in the composer for the next prompt. */
@@ -466,20 +489,31 @@ export interface ExternalElementAttachmentView {
   hover: string
 }
 
-/** Suites executable from the QA panel against the current project checkout. */
-export type QaSuiteId = 'unit' | 'e2e'
+/**
+ * QA targets. `script:<name>` runs a check detected in the user's project
+ * package.json; `unit`/`e2e` are ND-DSH's own developer suites (Settings).
+ */
+export type QaSuiteId = 'unit' | 'e2e' | `script:${string}`
+
+/** `project` suites belong to the user's workspace; `internal` suites test ND-DSH itself. */
+export type QaSuiteKind = 'project' | 'internal'
 
 export type QaRunStatus = 'idle' | 'running' | 'passed' | 'failed' | 'unavailable'
 
 export interface QaSuiteState {
   id: QaSuiteId
+  kind: QaSuiteKind
   label: string
+  /** Plain-language sentence describing what the check verifies. */
+  description: string
   runner: string
   command: string
   status: QaRunStatus
   lastExitCode?: number
   lastDurationMs?: number
   lastFinishedAt?: number
+  /** Shown when a check cannot run at all (e.g. Node.js missing on this computer). */
+  notice?: string
 }
 
 export interface QaState {
@@ -504,6 +538,7 @@ export interface DesktopApi {
     setApiKey(providerId: string, apiKey: string): Promise<ModelProvider[]>
     clearApiKey(providerId: string): Promise<ModelProvider[]>
     ping(providerId: string, force?: boolean): Promise<ProviderPingResult>
+    onChanged(listener: (providers: ModelProvider[]) => void): () => void
   }
   engines: {
     list(): Promise<CodingEngineDescriptor[]>
@@ -512,12 +547,20 @@ export interface DesktopApi {
     sessions(): Promise<EngineSessionSummary[]>
     transcript(sessionId: string): Promise<EngineSessionTranscript>
   }
+  sessions: {
+    /** Archive or unarchive any chat thread (harness or engine-backed); resolves with the refreshed archived id list. */
+    setArchived(sessionId: string, archived: boolean): Promise<string[]>
+  }
   capture: {
     inspectApp(copyToClipboard: boolean, scope?: InspectScope): Promise<AppInspectResult>
     inspectElement(scope?: InspectScope): Promise<ExternalElementPickResult>
-    stageElement(element: ExternalElementPickView, targetTitle: string): Promise<ExternalElementAttachmentView[]>
+    stageElement(element: ExternalElementPickView, targetTitle: string, pickId?: string): Promise<ExternalElementAttachmentView[]>
     elementAttachments(): Promise<ExternalElementAttachmentView[]>
     removeElement(id: string): Promise<ExternalElementAttachmentView[]>
+    /** Copy the full agent-ready context block for a stored pick to the clipboard. */
+    copyElementContext(pickId: string): Promise<boolean>
+    /** Copy the cropped element screenshot (if captured) to the clipboard. */
+    copyElementShot(pickId: string): Promise<boolean>
   }
   browser: {
     state(): Promise<BrowserState>
@@ -599,10 +642,20 @@ export interface DesktopApi {
     onState(listener: (state: QaState) => void): () => void
     onOutput(listener: (chunk: QaOutputChunk) => void): () => void
   }
+  window?: {
+    setFloatMode(enabled: boolean): Promise<{ float: boolean }>
+    resizeFloatWindow(width: number, height: number): Promise<void>
+    moveFloatWindow(deltaX: number, deltaY: number): Promise<void>
+    onFloatMode?(listener: (enabled: boolean) => void): () => void
+  }
 }
 
 export const IPC = {
   appInfo: 'app:info',
+  windowSetFloatMode: 'window:set-float-mode',
+  windowResizeFloatWindow: 'window:resize-float-window',
+  windowMoveFloatWindow: 'window:move-float-window',
+  windowFloatModeEvent: 'window:float-mode-event',
   browserState: 'browser:state',
   browserSetBounds: 'browser:set-bounds',
   browserSetVisible: 'browser:set-visible',
@@ -649,6 +702,7 @@ export const IPC = {
   themeChangedEvent: 'theme:changed',
   providersList: 'providers:list',
   providersSave: 'providers:save',
+  providersChangedEvent: 'providers:changed',
   providersSetApiKey: 'providers:set-api-key',
   providersClearApiKey: 'providers:clear-api-key',
   providersPing: 'providers:ping',
@@ -657,11 +711,14 @@ export const IPC = {
   enginesAssign: 'engines:assign',
   enginesSessions: 'engines:sessions',
   enginesTranscript: 'engines:transcript',
+  sessionsSetArchived: 'sessions:set-archived',
   captureInspectApp: 'capture:inspect-app',
   captureInspectElement: 'capture:inspect-element',
   captureStageElement: 'capture:stage-element',
   captureElementAttachments: 'capture:element-attachments',
   captureRemoveElement: 'capture:remove-element',
+  captureCopyElementContext: 'capture:copy-element-context',
+  captureCopyElementShot: 'capture:copy-element-shot',
   gitState: 'git:state',
   gitRefresh: 'git:refresh',
   gitStage: 'git:stage',

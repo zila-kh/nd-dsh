@@ -34,6 +34,12 @@ export const GitIcon = (props: IconProps) => (
 export const SettingsIcon = (props: IconProps) => (
   <IconBase {...props}><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .35 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.1A1.7 1.7 0 0 0 8.55 19.4a1.7 1.7 0 0 0-1.88.35l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.2 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H2.4v-4h.1A1.7 1.7 0 0 0 4.2 8.55a1.7 1.7 0 0 0-.35-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 8.55 4.2a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V2.4h4v.1A1.7 1.7 0 0 0 15 4.2a1.7 1.7 0 0 0 1.88-.35l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 8.55a1.7 1.7 0 0 0 .6 1 1.7 1.7 0 0 0 1.1.4h.1v4h-.1A1.7 1.7 0 0 0 19.4 15z" /></IconBase>
 )
+export const CompanyIcon = (props: IconProps) => (
+  <IconBase {...props}>
+    <path d="M4 21V7l8-4 8 4v14" />
+    <path d="M2.5 21h19M8 10h.01M12 10h.01M16 10h.01M8 14h.01M12 14h.01M16 14h.01M10 21v-3h4v3" />
+  </IconBase>
+)
 export const ChevronRightIcon = (props: IconProps) => <IconBase {...props}><path d="m9 18 6-6-6-6" /></IconBase>
 export const ChevronDownIcon = (props: IconProps) => <IconBase {...props}><path d="m6 9 6 6 6-6" /></IconBase>
 export const SidebarToggleIcon = ({ collapsed = false, ...props }: { collapsed?: boolean } & IconProps) => (
@@ -62,6 +68,8 @@ export const TrashIcon = (props: IconProps) => <IconBase {...props}><path d="M3 
 export const EyeIcon = (props: IconProps) => <IconBase {...props}><path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0" /><circle cx="12" cy="12" r="3" /></IconBase>
 export const EyeOffIcon = (props: IconProps) => <IconBase {...props}><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" /><path d="M6.61 6.61A13.53 13.53 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" /><path d="M2 2l20 20" /><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" /></IconBase>
 export const PlusIcon = (props: IconProps) => <IconBase {...props}><path d="M5 12h14M12 5v14" /></IconBase>
+export const ArchiveIcon = (props: IconProps) => <IconBase {...props}><rect x="2.75" y="3.25" width="18.5" height="5" rx="1" /><path d="M4.5 8.25V19a1.75 1.75 0 0 0 1.75 1.75h11.5A1.75 1.75 0 0 0 19.5 19V8.25" /><path d="M9.75 12.25h4.5" /></IconBase>
+export const MoreHorizontalIcon = (props: IconProps) => <IconBase {...props}><circle cx="5" cy="12" r="1.1" fill="currentColor" /><circle cx="12" cy="12" r="1.1" fill="currentColor" /><circle cx="19" cy="12" r="1.1" fill="currentColor" /></IconBase>
 export const BoxIcon = (props: IconProps) => <IconBase {...props}><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" /><path d="m3.3 7 8.7 5 8.7-5M12 22V12" /></IconBase>
 export const PlugIcon = (props: IconProps) => <IconBase {...props}><path d="M12 22v-5M9 8V2M15 8V2" /><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8z" /></IconBase>
 export const ShieldIcon = (props: IconProps) => <IconBase {...props}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10" /></IconBase>
@@ -69,7 +77,8 @@ export const BrainIcon = (props: IconProps) => <IconBase {...props}><path d="M12
 export const ContextIcon = (props: IconProps) => <IconBase {...props}><path d="M12 3.25 21 8l-9 4.75L3 8z" /><path d="m4.6 12.2 7.4 3.9 7.4-3.9" /><path d="m4.6 16.1 7.4 3.9 7.4-3.9" /></IconBase>
 export const ArrowUpIcon = (props: IconProps) => <IconBase {...props}><path d="m5 12 7-7 7 7M12 19V5" /></IconBase>
 export const CheckIcon = (props: IconProps) => <IconBase {...props}><path d="m20 6-11 11-5-5" /></IconBase>
-export const SpinnerIcon = (props: IconProps) => <IconBase {...props} className={`spin ${props.className || ''}`}><path d="M21 12a9 9 0 1 1-6.219-8.56" /></IconBase>
+export const QualityIcon = (props: IconProps) => <IconBase {...props}><circle cx="12" cy="12" r="9" /><path d="m8 12 2.6 2.6L16.5 9" /></IconBase>
+export const SpinnerIcon = (props: IconProps) => <IconBase {...props} className={`animate-spin ${props.className || ''}`}><path d="M21 12a9 9 0 1 1-6.219-8.56" /></IconBase>
 export const SearchIcon = (props: IconProps) => <IconBase {...props}><circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" /></IconBase>
 export const CrosshairIcon = (props: IconProps) => (
   <IconBase {...props}>

@@ -1,11 +1,22 @@
 import { useEffect, useState } from 'react'
 import type { DshEventFrame } from '../../../shared/contracts'
 import type { AskQuestion } from '../lib/types'
+import { Button } from './ui/button'
+import { Input } from './ui/input'
+import { cn } from '../lib/utils'
 
 interface Props { onError(message: string): void }
 type PendingApproval = { kind: 'approval'; id: string; sessionId: string; rpcId: string; approvalId: string; toolName: string; reason?: string }
 type PendingQuestion = { kind: 'question'; id: string; sessionId: string; rpcId: string; questions: AskQuestion[] }
 type Pending = PendingApproval | PendingQuestion
+
+const chipClasses = cn(
+  'h-[27px] rounded-md border px-2 text-xs transition-colors',
+  'border-border-strong bg-secondary text-soft hover:bg-accent hover:text-foreground',
+)
+const primaryChipClasses = cn(
+  'h-[27px] rounded-md border border-primary/30 bg-primary/10 px-2 text-xs text-primary transition-colors hover:bg-primary/15',
+)
 
 export function RuntimePrompts({ onError }: Props) {
   const [pending, setPending] = useState<Pending[]>([])
@@ -43,13 +54,21 @@ export function RuntimePrompts({ onError }: Props) {
   }
 
   if (pending.length === 0) return null
-  return <aside className="runtime-prompts" aria-label="Runtime requests">
-    <header><strong>Agent needs you</strong><span>{pending.length}</span></header>
-    <div className="runtime-prompts-scroll">
+  return <aside className="fixed top-3.5 right-3.5 z-20 flex max-h-[calc(100%-28px)] w-[min(390px,calc(100%-28px))] flex-col overflow-hidden rounded-[9px] border border-warning/25 bg-sidebar shadow-[0_12px_30px_rgba(0,0,0,0.28)]" aria-label="Runtime requests">
+    <header className="flex items-center justify-between border-b border-border-soft bg-warning/10 px-2.5 py-[9px]">
+      <strong className="text-sm">Agent needs you</strong>
+      <span className="grid size-[19px] place-items-center rounded-full bg-warning text-xs font-extrabold text-surface-0">{pending.length}</span>
+    </header>
+    <div className="max-h-[520px] overflow-auto p-2">
       {pending.map((item) => item.kind === 'approval'
-        ? <article className="runtime-prompt-card" key={item.id}>
-            <small>APPROVAL</small><strong>{item.toolName}</strong>{item.reason ? <p>{item.reason}</p> : null}
-            <footer><button onClick={() => void answerApproval(item, 'rejected')}>Reject</button><button className="primary" onClick={() => void answerApproval(item, 'allowed-once')}>Allow once</button></footer>
+        ? <article className="mb-[7px] rounded-[7px] border border-border-soft bg-surface-0 p-[9px] last:mb-0" key={item.id}>
+            <small className="mb-[5px] block text-[11px] tracking-[0.1em] text-warning">APPROVAL</small>
+            <strong className="text-sm">{item.toolName}</strong>
+            {item.reason ? <p className="my-[5px] text-xs leading-relaxed text-muted-foreground">{item.reason}</p> : null}
+            <footer className="mt-2 flex justify-end gap-1.5">
+              <Button variant="ghost" className={chipClasses} onClick={() => void answerApproval(item, 'rejected')}>Reject</Button>
+              <Button variant="ghost" className={primaryChipClasses} onClick={() => void answerApproval(item, 'allowed-once')}>Allow once</Button>
+            </footer>
           </article>
         : <QuestionPrompt key={item.id} item={item} onDone={() => setPending((current) => current.filter((entry) => entry.id !== item.id))} onError={onError} />)}
     </div>
@@ -66,14 +85,29 @@ function QuestionPrompt({ item, onDone, onError }: { item: PendingQuestion; onDo
       onDone()
     } catch (cause) { onError(errorMessage(cause)) }
   }
-  return <article className="runtime-prompt-card question">
-    <small>QUESTION</small>
-    {item.questions.length === 0 ? <p>The agent requested input. Add a response below.</p> : item.questions.map((question) => <section key={question.id}>
-      <strong>{question.question}</strong>{question.detail ? <p>{question.detail}</p> : null}
-      <div>{(question.options ?? []).map((option) => { const selected = (selections[question.id] ?? []).includes(option.label); return <button key={option.label} className={selected ? 'selected' : ''} onClick={() => setSelections((current) => { const existing = current[question.id] ?? []; const next = question.multiSelect ? selected ? existing.filter((value) => value !== option.label) : [...existing, option.label] : [option.label]; return { ...current, [question.id]: next } })}>{option.label}</button> })}</div>
-      <input value={custom[question.id] ?? ''} onChange={(event) => setCustom((current) => ({ ...current, [question.id]: event.target.value }))} placeholder="Other answer…" />
+  return <article className="mb-0 rounded-[7px] border border-border-soft bg-surface-0 p-[9px]">
+    <small className="mb-[5px] block text-[11px] tracking-[0.1em] text-warning">QUESTION</small>
+    {item.questions.length === 0 ? <p className="my-[5px] text-xs leading-relaxed text-muted-foreground">The agent requested input. Add a response below.</p> : item.questions.map((question) => <section key={question.id} className="border-b border-border-soft py-2 last:border-b-0">
+      <strong className="text-sm">{question.question}</strong>
+      {question.detail ? <p className="my-[5px] text-xs leading-relaxed text-muted-foreground">{question.detail}</p> : null}
+      <div className="my-1.5 flex flex-wrap gap-[5px]">{(question.options ?? []).map((option) => { const selected = (selections[question.id] ?? []).includes(option.label); return (
+        <Button
+          key={option.label}
+          variant="ghost"
+          className={selected ? primaryChipClasses : chipClasses}
+          onClick={() => setSelections((current) => { const existing = current[question.id] ?? []; const next = question.multiSelect ? selected ? existing.filter((value) => value !== option.label) : [...existing, option.label] : [option.label]; return { ...current, [question.id]: next } })}
+        >{option.label}</Button>
+      ) })}</div>
+      <Input
+        value={custom[question.id] ?? ''}
+        onChange={(event) => setCustom((current) => ({ ...current, [question.id]: event.target.value }))}
+        placeholder="Other answer…"
+        className="h-auto py-[7px] text-xs"
+      />
     </section>)}
-    <footer><button className="primary" onClick={() => void submit()}>Submit answer</button></footer>
+    <footer className="mt-2 flex justify-end gap-1.5">
+      <Button variant="ghost" className={primaryChipClasses} onClick={() => void submit()}>Submit answer</Button>
+    </footer>
   </article>
 }
 

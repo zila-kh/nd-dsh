@@ -123,10 +123,9 @@ function requireCommit(value, field) {
 function run(command, args, cwd) {
   console.log(`\n> ${command} ${args.join(' ')}`)
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(command, args, {
+    const child = spawn(platformExecutable(command), args, {
       cwd,
       stdio: 'inherit',
-      shell: process.platform === 'win32',
       env: process.env,
     })
     child.once('error', reject)
@@ -139,9 +138,8 @@ function run(command, args, cwd) {
 
 function capture(command, args, cwd) {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(command, args, {
+    const child = spawn(platformExecutable(command), args, {
       cwd,
-      shell: process.platform === 'win32',
       env: process.env,
       windowsHide: true,
     })
@@ -157,4 +155,8 @@ function capture(command, args, cwd) {
       else reject(new Error(stderr.trim() || `${command} exited with code ${String(code)}`))
     })
   })
+}
+
+function platformExecutable(command) {
+  return process.platform === 'win32' && command === 'corepack' ? 'corepack.cmd' : command
 }

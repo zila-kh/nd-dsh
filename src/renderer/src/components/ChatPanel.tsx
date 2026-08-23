@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
 import type {
   CodingEngineDescriptor,
   DshEventFrame,
@@ -16,6 +16,7 @@ import type { AskQuestion, ThreadEntry, TodoItem } from '../lib/types'
 import { FOLDER_ACCENT, SKILL_ACCENT, fileExtensionOf, fileAccent } from '../lib/file-accents'
 import { applyMention, detectMentionTrigger } from '../../../shared/mentions'
 import {
+  ArchiveIcon,
   ArrowUpIcon,
   BrainIcon,
   ChatIcon,
@@ -26,7 +27,9 @@ import {
   CrosshairIcon,
   FileIcon,
   FolderIcon,
+  MoreHorizontalIcon,
   PlusIcon,
+  RotateIcon,
   SearchIcon,
   SettingsIcon,
   ShieldIcon,
@@ -34,6 +37,7 @@ import {
   SpinnerIcon,
   StopIcon,
 } from './Icons'
+import { cn } from '../lib/utils'
 
 interface ChatPanelProps {
   status: HarnessStatus | null
@@ -94,7 +98,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
   const [prompt, setPrompt] = useState('')
   const [sessionsLoaded, setSessionsLoaded] = useState(false)
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false)
-  const [thoughtMenuOpen, setThoughtMenuOpen] = useState(false)
+  const [effortPickerOpen, setEffortPickerOpen] = useState(false)
   const [modelMenuOpen, setModelMenuOpen] = useState(false)
   const [contextMenuOpen, setContextMenuOpen] = useState(false)
   const [changedFiles, setChangedFiles] = useState<string[]>([])
@@ -112,6 +116,10 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
   // Engine id for a chat that is drafted but not created yet; the session is
   // created by the first send (router-side), never via gateway session.create.
   const [draftEngineId, setDraftEngineId] = useState<string | null>(null)
+  // Chat archival lives ND-side; the sidebar filters on it and each thread
+  // card gets a hover menu that toggles it (harness and engine chats alike).
+  const [showArchived, setShowArchived] = useState(false)
+  const [sessionMenuId, setSessionMenuId] = useState<string | null>(null)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -133,6 +141,16 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
   const activeEngineName = engines.find((engine) => engine.id === activeEngineId)?.name ?? 'Codex CLI'
   // Extra chat engines come straight from the catalog; unavailable ones never render.
   const chatEngines = useMemo(() => engines.filter((engine) => engine.available && engine.id !== ND_HARNESS_ENGINE_ID), [engines])
+  // Both listings arrive pre-annotated with ND archive flags; the sidebar
+  // shows one bucket at a time.
+  const visibleSessions = useMemo(
+    () => sessions.filter((session) => (showArchived ? session.archived === true : session.archived !== true)),
+    [sessions, showArchived],
+  )
+  const visibleEngineSessions = useMemo(
+    () => engineSessions.filter((session) => (showArchived ? session.archived === true : session.archived !== true)),
+    [engineSessions, showArchived],
+  )
 
   const refreshSessions = useCallback(async (): Promise<void> => {
     try {
@@ -223,6 +241,17 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
     if (!threads[summary.sessionId]) void loadEngineTranscript(summary.sessionId)
   }, [threads, loadEngineTranscript])
 
+  // Archival is a desktop-side flag; refetching both listings re-applies the
+  // annotated flags exactly like every other session mutation does.
+  const setSessionArchived = useCallback(async (sessionId: string, archived: boolean): Promise<void> => {
+    try {
+      await window.ndDsh.sessions.setArchived(sessionId, archived)
+      await Promise.all([refreshSessions(), refreshEngineSessions()])
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }, [onError, refreshEngineSessions, refreshSessions])
+
   /** Draft a chat on a non-harness engine; creation happens on first send. */
   const startEngineDraft = useCallback((engineId: string): void => {
     setDraftEngineId(engineId)
@@ -264,6 +293,19 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
     if (!threads[activeSessionId]) void loadHistory(activeSessionId)
   }, [activeSessionId, threads, loadHistory, engineSessionIds])
 
+  // Archiving (or leaving the archived view) must not strand the composer on
+  // a hidden thread: fall back to the first visible chat, else the draft state.
+  useEffect(() => {
+    if (!activeSessionId || showArchived) return
+    const activeArchived = sessions.some((session) => session.sessionId === activeSessionId && session.archived === true)
+      || engineSessions.some((session) => session.sessionId === activeSessionId && session.archived === true)
+    if (!activeArchived) return
+    const nextHarness = sessions.find((session) => session.archived !== true && !session.blank)
+    const nextEngine = engineSessions.find((session) => session.archived !== true)
+    setDraftEngineId(null)
+    setActiveSessionId(nextHarness?.sessionId ?? nextEngine?.sessionId ?? null)
+  }, [activeSessionId, showArchived, sessions, engineSessions])
+
   useEffect(() => {
     // The gateway model catalog only applies to harness sessions.
     if (!activeSessionId || engineSessionIds.has(activeSessionId)) return
@@ -272,6 +314,20 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
         if (result.ok) setModels(result.value as SessionModels)
       })
       .catch(() => setModels(null))
+  }, [activeSessionId, engineSessionIds])
+
+  // Provider routes edited in settings (model removed/renamed, provider
+  // disabled) must reach open chat threads: refetch the session's catalog so
+  // the picker and its current-selection state stay in sync.
+  useEffect(() => {
+    return window.ndDsh.providers.onChanged(() => {
+      if (!activeSessionId || engineSessionIds.has(activeSessionId)) return
+      void window.ndDsh.dsh.rpc('session.models', { sessionId: activeSessionId })
+        .then((result) => {
+          if (result.ok) setModels(result.value as SessionModels)
+        })
+        .catch(() => {})
+    })
   }, [activeSessionId, engineSessionIds])
 
   // Opening the model picker probes every provider route for real: the main
@@ -470,7 +526,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
         setModelMenuOpen(false)
         setPermissionMenuOpen(false)
-        setThoughtMenuOpen(false)
+        setEffortPickerOpen(false)
         setContextMenuOpen(false)
       }
     }
@@ -583,6 +639,9 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
   const currentModel = models?.current
   const currentGroup = modelGroups.find((group) => group.id === currentModel?.provider)
   const currentModelMeta = currentGroup?.models.find((model) => model.id === currentModel?.model)
+  // The session's stored route can reference a provider/model that was since
+  // removed or renamed in settings; flag it instead of rendering a ghost route.
+  const currentSelectionStale = Boolean(currentModel && modelGroups.length > 0 && (!currentGroup || !currentModelMeta))
   const reasoningEfforts = currentModelMeta?.reasoning?.efforts ?? []
   const activeEffort = currentModel?.reasoningEffort ?? currentModelMeta?.reasoning?.defaultEffort
 
@@ -602,105 +661,127 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
   }
 
   return (
-    <div className="chat-dual-sidebar-wrap">
-      <aside className={`chat-sessions-sidebar ${sessionsCollapsed ? 'collapsed' : ''}`}>
-        <div className="session-action-container">
-          <button className="new-session-btn" onClick={() => void handleNewSession()}>
-            <PlusIcon className="plus-icon" />
+    <div className="flex h-full w-full min-h-0 min-w-0 flex-1 flex-row overflow-hidden">
+      <aside className={cn('flex h-full min-h-0 w-[168px] shrink-0 grow-0 basis-[168px] flex-col overflow-hidden border-r border-border-soft bg-sidebar', sessionsCollapsed && 'hidden')}>
+        <div className="space-y-1 px-3 pb-1 pt-2">
+          <button
+            className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-border-soft bg-secondary px-3 py-[7px] text-xs font-medium text-soft transition-colors hover:border-border-strong hover:bg-accent hover:text-foreground [&_svg]:size-3.5"
+            onClick={() => void handleNewSession()}
+          >
+            <PlusIcon />
             <span>New Session</span>
           </button>
           {chatEngines.map((engine) => (
             <button
               key={engine.id}
-              className="new-session-btn secondary"
+              className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-border-soft bg-transparent px-3 py-[7px] text-xs font-medium text-faint transition-colors hover:border-border-strong hover:bg-accent hover:text-foreground [&_svg]:size-3.5"
               title={`${engine.description}${engine.unavailableReason ? `\n${engine.unavailableReason}` : ''}`}
               onClick={() => startEngineDraft(engine.id)}
             >
-              <PlusIcon className="plus-icon" />
+              <PlusIcon />
               <span>New {engine.name} chat</span>
             </button>
           ))}
         </div>
 
-        <div className="workspaces-section">
-          <div className="workspaces-header">
-            <span className="section-label">Workspaces</span>
-            <div className="section-actions">
-              <button className="settings-cta-btn" title="Refresh sessions" onClick={() => void refreshSessions()}>
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 py-2">
+          <div className="mb-1.5 flex items-center justify-between">
+            <span className="text-[11px] font-semibold text-faint">Workspaces</span>
+            <div className="flex items-center gap-1">
+              <button className="grid size-[22px] place-items-center rounded-[5px] text-faint transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[13px]" title="Refresh sessions" onClick={() => void refreshSessions()}>
                 <SearchIcon />
               </button>
+              <button
+                className={cn(
+                  'grid size-[22px] place-items-center rounded-[5px] transition-colors [&_svg]:size-[13px]',
+                  showArchived ? 'bg-accent text-primary' : 'text-faint hover:bg-accent hover:text-foreground',
+                )}
+                title={showArchived ? 'Showing archived chats' : 'Show archived chats'}
+                onClick={() => setShowArchived((value) => !value)}
+              >
+                <ArchiveIcon />
+              </button>
               {onOpenSettings ? (
-                <button className="settings-cta-btn" onClick={onOpenSettings} title="Settings">
+                <button className="grid size-[22px] place-items-center rounded-[5px] text-faint transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[13px]" onClick={onOpenSettings} title="Settings">
                   <SettingsIcon />
                 </button>
               ) : null}
-              <button className="settings-cta-btn" title="New session" onClick={() => void handleNewSession()}>
+              <button className="grid size-[22px] place-items-center rounded-[5px] text-faint transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[13px]" title="New session" onClick={() => void handleNewSession()}>
                 <PlusIcon />
               </button>
             </div>
           </div>
 
-          <div className="workspace-item">
-            <FolderIcon className="folder-icon" />
-            <span className="workspace-name">{workspaceName ?? 'workspace'}</span>
+          <div className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium text-foreground [&_svg]:size-3.5 [&_svg]:shrink-0 [&_svg]:text-folder">
+            <FolderIcon />
+            <span className="truncate">{workspaceName ?? 'workspace'}</span>
           </div>
 
-          <div className="sessions-list">
+          <div className="mt-1.5 flex flex-col gap-1">
             {!sessionsLoaded ? (
-              <div className="sessions-empty">Loading sessions…</div>
-            ) : sessions.length === 0 && engineSessions.length === 0 ? (
-              <div className="sessions-empty">No sessions yet</div>
+              <div className="px-0.5 py-2 text-[10px]/[1.5] text-faint">Loading sessions…</div>
+            ) : visibleSessions.length === 0 && visibleEngineSessions.length === 0 ? (
+              <div className="px-0.5 py-2 text-[10px]/[1.5] text-faint">{showArchived ? 'No archived chats' : 'No sessions yet'}</div>
             ) : (
               <>
-                {sessions.filter((session) => !session.blank || session.sessionId === activeSessionId).map((session) => (
-                  <button
+                {visibleSessions.filter((session) => !session.blank || session.sessionId === activeSessionId).map((session) => (
+                  <SessionCard
                     key={session.sessionId}
-                    className={`session-thread-card ${activeSessionId === session.sessionId ? 'active' : ''}`}
+                    active={activeSessionId === session.sessionId}
+                    busy={busySessions.has(session.sessionId)}
+                    title={sessionTitle(session)}
+                    time={sessionTime(session)}
+                    archived={session.archived === true}
+                    menuOpen={sessionMenuId === session.sessionId}
+                    onMenuOpenChange={(open) => setSessionMenuId(open ? session.sessionId : null)}
+                    onToggleArchive={() => {
+                      setSessionMenuId(null)
+                      void setSessionArchived(session.sessionId, session.archived !== true)
+                    }}
                     onClick={() => selectSession(session)}
-                  >
-                    <div className="card-left">
-                      <span className={`dot-active ${busySessions.has(session.sessionId) ? 'on' : 'off'}`} />
-                      <ChatIcon className="thread-icon" />
-                      <span className="thread-title">{sessionTitle(session)}</span>
-                    </div>
-                    <span className="thread-time">{sessionTime(session)}</span>
-                  </button>
+                  />
                 ))}
-                {engineSessions.map((session) => (
-                  <button
+                {visibleEngineSessions.map((session) => (
+                  <SessionCard
                     key={session.sessionId}
-                    className={`session-thread-card engine ${activeSessionId === session.sessionId ? 'active' : ''}`}
-                    title={`${engines.find((engine) => engine.id === session.engineId)?.name ?? session.engineId} chat`}
+                    active={activeSessionId === session.sessionId}
+                    busy={busySessions.has(session.sessionId)}
+                    title={session.title}
+                    time={sessionTime({ updatedAt: session.updatedAt } as SessionSummary)}
+                    engineChip={engines.find((engine) => engine.id === session.engineId)?.name ?? session.engineId}
+                    cardTitle={`${engines.find((engine) => engine.id === session.engineId)?.name ?? session.engineId} chat`}
+                    archived={session.archived === true}
+                    menuOpen={sessionMenuId === session.sessionId}
+                    onMenuOpenChange={(open) => setSessionMenuId(open ? session.sessionId : null)}
+                    onToggleArchive={() => {
+                      setSessionMenuId(null)
+                      void setSessionArchived(session.sessionId, session.archived !== true)
+                    }}
                     onClick={() => selectEngineSession(session)}
-                  >
-                    <div className="card-left">
-                      <span className={`dot-active ${busySessions.has(session.sessionId) ? 'on' : 'off'}`} />
-                      <ChatIcon className="thread-icon" />
-                      <span className="thread-title">{session.title}</span>
-                      <span className="thread-engine-chip">{engines.find((engine) => engine.id === session.engineId)?.name ?? session.engineId}</span>
-                    </div>
-                    <span className="thread-time">{sessionTime({ updatedAt: session.updatedAt } as SessionSummary)}</span>
-                  </button>
+                  />
                 ))}
               </>
             )}
           </div>
         </div>
 
-        <footer className="sessions-footer">
-          <button className="settings-footer-btn" onClick={onOpenSettings} title="Settings">
+        <footer className="mt-auto border-t border-border-soft px-3 py-2">
+          <button className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-xs font-medium text-soft transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[15px] [&_svg]:text-faint" onClick={onOpenSettings} title="Settings">
             <SettingsIcon />
             <span>Settings</span>
           </button>
         </footer>
       </aside>
 
-      <aside className="chat-thread-pane">
-        <header className="chat-heading">
-          <div className="active-thread-header-info">
-            <div>
-              <span className="eyebrow">{onHarnessThread ? 'ACTIVE THREAD' : 'ENGINE THREAD'}</span>
-              <strong title={activeSession ? sessionTitle(activeSession) : undefined}>
+      <aside className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface-0">
+        <header className="flex h-[38px] shrink-0 items-center justify-between border-b border-border-soft bg-sidebar px-2.5">
+          <div className="flex min-w-0 flex-1 flex-row items-center gap-2">
+            <div className="flex min-w-0 flex-1 flex-col justify-center gap-px">
+              <span className="m-0 text-[8px]/[1.2] tracking-[0.1em] text-faint">{onHarnessThread ? 'ACTIVE THREAD' : 'ENGINE THREAD'}</span>
+              <strong
+                className="truncate text-[11px]/[1.25] font-normal text-foreground"
+                title={activeSession ? sessionTitle(activeSession) : undefined}
+              >
                 {activeSession
                   ? sessionTitle(activeSession)
                   : draftEngineId !== null
@@ -709,45 +790,59 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
               </strong>
             </div>
           </div>
-          <span className={`status-orb ${status?.state ?? 'stopped'}`} title={status?.error} />
+          <span
+            className={cn(
+              'inline-block size-2 rounded-full',
+              status?.state === 'ready' && 'bg-primary',
+              (status?.state === 'running' || status?.state === 'starting') && 'animate-pulse-dot bg-info',
+              status?.state === 'error' && 'bg-destructive',
+              !status?.state || status.state === 'stopped' ? 'bg-faint' : '',
+            )}
+            title={status?.error}
+          />
         </header>
 
         {!status?.sourceReady ? (
-          <div className="setup-card">
+          <div className="mx-3 mt-2.5 flex flex-col gap-[3px] rounded-[7px] border border-info/25 bg-info/[0.07] p-2.5 text-[9px] text-info">
             <strong>Harness not built</strong>
-            <span>Run <code>pnpm bootstrap</code> once.</span>
+            <span>Run <code className="font-mono">pnpm bootstrap</code> once.</span>
           </div>
         ) : null}
         {status?.sourceReady && !status.apiKeyPresent ? (
-          <div className="setup-card warning">
+          <div className="mx-3 mt-2.5 flex flex-col gap-[3px] rounded-[7px] border border-warning/25 bg-warning/10 p-2.5 text-[9px] text-warning">
             <strong>API key missing</strong>
-            <span>Add <code>DEEPSEEK_API_KEY</code> to <code>.env</code>.</span>
+            <span>Add <code className="font-mono">DEEPSEEK_API_KEY</code> to <code className="font-mono">.env</code>.</span>
           </div>
         ) : null}
 
         {changedFiles.length > 0 ? (
-          <div className="diff-changes-banner">
-            <div className="banner-left">
-              <ChevronRightIcon className="banner-chevron" />
-              <span className="banner-title">{changedFiles.length} file{changedFiles.length === 1 ? '' : 's'} changed</span>
-              <div className="banner-files">
+          <div className="mx-3 my-1.5 flex items-center justify-between rounded-lg border border-border-soft bg-surface-1 px-2.5 py-1.5 text-[11px]">
+            <div className="flex min-w-0 items-center gap-1.5 text-soft">
+              <ChevronRightIcon className="size-3.5 shrink-0 text-faint" />
+              <span className="font-semibold text-foreground">{changedFiles.length} file{changedFiles.length === 1 ? '' : 's'} changed</span>
+              <div className="flex min-w-0 items-center gap-[5px]">
                 {changedFiles.slice(0, 4).map((file) => (
-                  <button key={file} className="banner-file" onClick={() => onOpenFile?.(file)} title={file}>
+                  <button
+                    key={file}
+                    className="max-w-[170px] cursor-pointer truncate rounded border border-border-soft bg-surface-0 px-1.5 py-0.5 font-mono text-[8px] text-primary transition-colors hover:bg-primary/10"
+                    onClick={() => onOpenFile?.(file)}
+                    title={file}
+                  >
                     {file}
                   </button>
                 ))}
-                {changedFiles.length > 4 ? <span className="banner-more">+{changedFiles.length - 4} more</span> : null}
+                {changedFiles.length > 4 ? <span className="whitespace-nowrap text-[9px] text-faint">+{changedFiles.length - 4} more</span> : null}
               </div>
             </div>
           </div>
         ) : null}
 
-        <div className="chat-scroll" ref={scrollRef}>
+        <div className="min-h-0 flex-1 overflow-auto px-3 pt-2.5 pb-4" ref={scrollRef}>
           {entries.length === 0 && !busy ? (
-            <div className="chat-empty">
-              <span className="chat-empty-mark"><SparkIcon /></span>
-              <h3>ND Agent</h3>
-              <p>Ask anything about this workspace — open files, inspect the browser, or plan company goals. Context used during the thread appears on the composer badge.</p>
+            <div className="flex h-full flex-col items-center justify-center gap-1 p-5 text-center text-faint">
+              <span className="mb-1.5 grid size-[46px] place-items-center rounded-xl border border-primary/30 bg-primary/10 text-primary [&_svg]:size-5"><SparkIcon /></span>
+              <h3 className="m-0 text-[13px] font-semibold text-soft">ND Agent</h3>
+              <p className="m-0 max-w-[300px] text-[9px]/[1.6]">Ask anything about this workspace — open files, inspect the browser, or plan company goals. Context used during the thread appears on the composer badge.</p>
             </div>
           ) : null}
           {entries.map((entry) => (
@@ -759,23 +854,29 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
             />
           ))}
           {busy ? (
-            <div className="agent-working">
-              <span /><span /><span />
-              <em>{status?.state === 'starting' && onHarnessThread ? 'Starting pinned runtime' : onHarnessThread ? 'Harness is working' : `${activeEngineName} is working`}</em>
+            <div className="flex items-center gap-1 p-[9px] text-[9px] text-faint">
+              <span className="size-1 animate-thinking rounded-full bg-primary" />
+              <span className="size-1 animate-thinking rounded-full bg-primary [animation-delay:160ms]" />
+              <span className="mr-1 size-1 animate-thinking rounded-full bg-primary [animation-delay:320ms]" />
+              <em className="font-normal not-italic">{status?.state === 'starting' && onHarnessThread ? 'Starting pinned runtime' : onHarnessThread ? 'Harness is working' : `${activeEngineName} is working`}</em>
             </div>
           ) : null}
         </div>
 
-        <div className="composer-container" ref={menuRef}>
+        <div className="mx-3 my-1.5 flex flex-col rounded-xl border border-border bg-surface-1 px-2.5 py-2 shadow-[0_4px_16px_rgba(0,0,0,0.18)]" ref={menuRef}>
           {elementChips.length > 0 ? (
-            <div className="element-chip-row" aria-label="Staged UI elements">
+            <div className="mb-[7px] flex flex-wrap gap-[5px]" aria-label="Staged UI elements">
               {elementChips.map((chip) => (
-                <span key={chip.id} className="element-chip" title={chip.hover}>
-                  <CrosshairIcon className="element-chip-icon" />
-                  <span className="element-chip-label">{chip.shortName}</span>
+                <span
+                  key={chip.id}
+                  className="inline-flex cursor-help items-center gap-[5px] rounded-full border border-[#a78bfa]/35 bg-[#a78bfa]/10 py-0.5 pl-[7px] pr-1 font-mono text-[10px] text-[#a78bfa]"
+                  title={chip.hover}
+                >
+                  <CrosshairIcon className="size-2.5" />
+                  <span className="max-w-[180px] truncate">{chip.shortName}</span>
                   <button
                     type="button"
-                    className="element-chip-remove"
+                    className="grid size-3.5 place-items-center rounded-full text-[11px] leading-none text-faint transition-colors hover:bg-[#a78bfa]/25 hover:text-foreground"
                     title="Remove this element"
                     onClick={() => void removeElementChip(chip.id)}
                   >
@@ -785,11 +886,11 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
               ))}
             </div>
           ) : null}
-          <div className="mention-anchor">
+          <div className="relative">
             {mentionTrigger ? (
-              <div className="mention-menu shadow-flyout">
+              <div className="absolute inset-x-0 bottom-full z-[110] mb-1.5 max-h-[300px] overflow-y-auto rounded-[10px] border border-border-strong bg-surface-1 p-[5px] shadow-[0_10px_30px_rgba(0,0,0,0.4)]">
                 {mentionItems.length === 0 ? (
-                  <div className="mention-hint">
+                  <div className="px-2.5 py-2 text-xs text-faint">
                     {mentionTrigger.kind === 'skill'
                       ? (activeSessionId
                         ? (skillsState === 'loading' ? 'Loading skills…' : skillsState === 'unavailable' ? 'Skills unavailable' : 'No matching skills')
@@ -801,27 +902,61 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
                     {mentionItems.map((item, index) => (
                       <button
                         key={item.kind + item.insert}
-                        className={`mention-item ${index === mentionIndex ? 'active' : ''}`}
-                        style={{ '--mention-accent': item.accent } as CSSProperties}
+                        className={cn(
+                          'flex w-full items-start gap-[9px] rounded-lg border-l-2 border-l-transparent px-2 py-[7px] text-left text-xs text-foreground transition-colors',
+                          index === mentionIndex && '[&:hover]:bg-[transparent]',
+                        )}
+                        style={{
+                          '--mention-accent': item.accent,
+                          ...(index === mentionIndex
+                            ? {
+                                backgroundColor: 'color-mix(in srgb, var(--mention-accent) 12%, transparent)',
+                                borderLeftColor: item.accent,
+                              }
+                            : {}),
+                        } as CSSProperties}
                         onMouseEnter={() => setMentionIndex(index)}
                         onMouseDown={(event) => {
                           event.preventDefault()
                           acceptMention(item)
                         }}
                       >
-                        <span className="mention-chip">
+                        <span
+                          className="inline-flex size-[22px] shrink-0 place-items-center rounded-md [&_svg]:size-3"
+                          style={{
+                            color: item.accent,
+                            backgroundColor: 'color-mix(in srgb, var(--mention-accent) 18%, transparent)',
+                          }}
+                        >
                           {item.kind === 'skill' ? <SparkIcon /> : item.directory ? <FolderIcon /> : <FileIcon />}
                         </span>
-                        <span className="mention-body">
-                          <span className="mention-line">
-                            <span className="mention-label"><span className="mention-marker">{item.kind === 'skill' ? '/' : '@'}</span>{item.label}</span>
-                            <span className="mention-tag">{item.tag}</span>
+                        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                          <span className="flex items-center justify-between gap-2">
+                            <span className="min-w-0 truncate font-medium"><span className="mr-px font-bold" style={{ color: item.accent }}>{item.kind === 'skill' ? '/' : '@'}</span>{item.label}</span>
+                            <span
+                              className="shrink-0 rounded px-[5px] py-px text-[9px] font-semibold tracking-[0.04em]"
+                              style={{
+                                color: `color-mix(in srgb, ${item.accent} 72%, var(--color-foreground))`,
+                                backgroundColor: `color-mix(in srgb, ${item.accent} 14%, transparent)`,
+                              }}
+                            >
+                              {item.tag}
+                            </span>
                           </span>
-                          {item.hover ? <span className="mention-more">{item.hover}</span> : null}
+                          {item.hover ? (
+                            <span
+                              className={cn(
+                                'block max-h-0 overflow-hidden text-[11px]/[1.45] text-faint opacity-0 transition-all duration-150',
+                                index === mentionIndex && 'max-h-12 opacity-100',
+                              )}
+                            >
+                              {item.hover}
+                            </span>
+                          ) : null}
                         </span>
                       </button>
                     ))}
-                    <div className="mention-footer">
+                    <div className="mt-[3px] flex gap-3 border-t border-border px-2 pb-[3px] pt-1.5 text-[10px] text-fainter">
                       <span>↑↓ navigate</span>
                       <span>↵ insert</span>
                       <span>esc dismiss</span>
@@ -871,32 +1006,29 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
               }}
               placeholder="Ask the agent to work in this workspace — use @ for files and / for skills"
               rows={3}
+              className="w-full resize-none bg-transparent text-xs/[1.5] text-foreground outline-none placeholder:text-faint"
             />
           </div>
 
-          <div className="composer-actions-bar">
-            <div className="action-group-left">
+          <div className="mt-[5px] flex flex-nowrap items-center justify-between gap-1 border-t border-border pt-[5px]">
+            <div className="flex min-w-0 items-center gap-1">
               {onHarnessThread ? (
-                <div className="menu-anchor">
+                <div className="relative">
                   <button
-                    className="permission-badge"
-                    onClick={() => { setPermissionMenuOpen(!permissionMenuOpen); setModelMenuOpen(false); setThoughtMenuOpen(false); closeMention() }}
+                    className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-[#f59e0b]/30 bg-[#f59e0b]/10 px-1.5 py-[3px] text-[10px] font-medium text-[#f59e0b] transition-colors hover:bg-[#f59e0b]/20 [&_svg]:size-3"
+                    onClick={() => { setPermissionMenuOpen(!permissionMenuOpen); setModelMenuOpen(false); setEffortPickerOpen(false); closeMention() }}
                   >
                     <ShieldIcon />
                     <span>{PERMISSION_MODES.find((mode) => mode.id === permissionMode)?.label ?? permissionMode}</span>
                     <ChevronDownIcon />
                   </button>
                   {permissionMenuOpen ? (
-                    <div className="popover-menu shadow-flyout">
+                    <div className="absolute bottom-full right-0 z-[130] mb-1.5 min-w-40 rounded-[10px] border border-border-strong bg-surface-1 p-1 shadow-[0_10px_30px_rgba(0,0,0,0.4)]">
                       {PERMISSION_MODES.map((mode) => (
-                        <button
-                          key={mode.id}
-                          className={`menu-item ${permissionMode === mode.id ? 'active' : ''}`}
-                          onClick={() => void setSessionPermission(mode.id)}
-                        >
+                        <MenuItem key={mode.id} active={permissionMode === mode.id} onClick={() => void setSessionPermission(mode.id)}>
                           {mode.label}
-                          {permissionMode === mode.id ? <CheckIcon className="check-icon" /> : null}
-                        </button>
+                          {permissionMode === mode.id ? <CheckIcon className="text-primary" /> : null}
+                        </MenuItem>
                       ))}
                     </div>
                   ) : null}
@@ -904,18 +1036,21 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
               ) : (
                 // Engine threads manage their own permission policy (Codex runs
                 // fail-closed unless an approval card is answered).
-                <span className="permission-badge static" title={`${activeEngineName} manages its own sandbox and approval policy`}>
+                <span
+                  className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-[#f59e0b]/30 bg-[#f59e0b]/10 px-1.5 py-[3px] text-[10px] font-medium text-[#f59e0b] opacity-85 [&_svg]:size-3"
+                  title={`${activeEngineName} manages its own sandbox and approval policy`}
+                >
                   <ShieldIcon />
                   <span>{activeEngineName}</span>
                 </span>
               )}
               <div
-                className="menu-anchor context-anchor"
+                className="relative"
                 onMouseEnter={() => setContextMenuOpen(true)}
                 onMouseLeave={() => setContextMenuOpen(false)}
               >
                 <button
-                  className="context-badge"
+                  className="flex h-6 items-center gap-[5px] rounded-full border border-border-strong px-2 font-mono text-[8px] text-faint transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-3"
                   title="Context used in this thread (hover to inspect)"
                   onClick={() => { setContextMenuOpen((open) => !open); closeMention() }}
                 >
@@ -923,53 +1058,60 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
                   <span>{threadContext.readFiles.length + threadContext.editedFiles.length}</span>
                 </button>
                 {contextMenuOpen ? (
-                  <div className="popover-menu context-popover">
-                    <div className="context-popover-title">THREAD CONTEXT</div>
+                  <div className="absolute bottom-full left-0 right-auto z-[130] mb-1.5 max-h-[300px] w-[250px] overflow-auto rounded-[10px] border border-border-strong bg-surface-1 p-1 shadow-[0_10px_30px_rgba(0,0,0,0.4)]">
+                    <div className="px-2.5 pb-1 pt-1.5 text-[8px] font-bold tracking-[0.12em] text-faint">THREAD CONTEXT</div>
                     {threadContext.readFiles.length === 0
                       && threadContext.editedFiles.length === 0
                       && threadContext.tools.length === 0 ? (
                       <>
-                        <div className="context-tool"><span>Files</span><span>0</span></div>
-                        <div className="context-tool"><span>Tools</span><span>0</span></div>
+                        <ContextRow label="Files" value="0" />
+                        <ContextRow label="Tools" value="0" />
                       </>
                     ) : (
                       <>
                         {threadContext.editedFiles.length > 0 ? (
-                          <div className="context-section">
-                            <small>EDITED</small>
+                          <div>
+                            <small className="block px-2.5 pb-[3px] pt-1.5 text-[7px] font-bold tracking-[0.1em] text-primary">EDITED</small>
                             {threadContext.editedFiles.map((file) => (
-                              <button key={file} className="context-file" onClick={() => onOpenFile?.(file)} title={file}>
+                              <button
+                                key={file}
+                                className="flex w-full items-center gap-[7px] rounded-[5px] px-2.5 py-1 text-left font-mono text-[9px] text-soft transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[11px] [&_svg]:shrink-0 [&_svg]:text-faint"
+                                onClick={() => onOpenFile?.(file)}
+                                title={file}
+                              >
                                 <FileIcon />
-                                <span>{file}</span>
+                                <span className="truncate">{file}</span>
                               </button>
                             ))}
                           </div>
                         ) : null}
                         {threadContext.readFiles.length > 0 ? (
-                          <div className="context-section">
-                            <small>READ</small>
+                          <div>
+                            <small className="block px-2.5 pb-[3px] pt-1.5 text-[7px] font-bold tracking-[0.1em] text-primary">READ</small>
                             {threadContext.readFiles.map((file) => (
-                              <button key={file} className="context-file" onClick={() => onOpenFile?.(file)} title={file}>
+                              <button
+                                key={file}
+                                className="flex w-full items-center gap-[7px] rounded-[5px] px-2.5 py-1 text-left font-mono text-[9px] text-soft transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[11px] [&_svg]:shrink-0 [&_svg]:text-faint"
+                                onClick={() => onOpenFile?.(file)}
+                                title={file}
+                              >
                                 <FileIcon />
-                                <span>{file}</span>
+                                <span className="truncate">{file}</span>
                               </button>
                             ))}
                           </div>
                         ) : null}
                         {threadContext.tools.length > 0 ? (
-                          <div className="context-section">
-                            <small>TOOLS</small>
+                          <div>
+                            <small className="block px-2.5 pb-[3px] pt-1.5 text-[7px] font-bold tracking-[0.1em] text-primary">TOOLS</small>
                             {threadContext.tools.map((tool) => (
-                              <div key={tool.name} className="context-tool">
-                                <span>{tool.name}</span>
-                                <span>×{tool.count}</span>
-                              </div>
+                              <ContextRow key={tool.name} label={tool.name} value={`×${tool.count}`} />
                             ))}
                           </div>
                         ) : null}
                       </>
                     )}
-                    <div className="context-meta">
+                    <div className="mt-1 border-t border-border-soft px-2.5 py-1.5 font-mono text-[8px] text-faint">
                       {threadContext.userMessages} prompt{threadContext.userMessages === 1 ? '' : 's'} · {threadContext.assistantMessages} repl{threadContext.assistantMessages === 1 ? 'y' : 'ies'}
                     </div>
                   </div>
@@ -977,92 +1119,98 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
               </div>
             </div>
 
-            <div className="action-group-right">
-              {busy ? <SpinnerIcon className="busy-spinner" /> : null}
+            <div className="flex min-w-0 items-center gap-1">
+              {busy ? <SpinnerIcon className="size-[15px] animate-spin text-primary" /> : null}
 
               {/* Model/reasoning routing is an ND Harness capability; engine
                   chats keep their native model configuration. */}
               {onHarnessThread ? (<>
-              <div className="menu-anchor">
+              <div className="relative">
                 <button
-                  className="model-picker-button"
-                  title={`${currentGroup?.name ?? currentModel?.provider ?? 'model'}/${currentModel?.model ?? ''}`}
-                  onClick={() => { setModelMenuOpen(!modelMenuOpen); setPermissionMenuOpen(false); setThoughtMenuOpen(false); closeMention() }}
+                  className={cn('flex min-w-0 max-w-[135px] shrink items-center gap-1 rounded-md border border-border-soft bg-secondary px-1.5 py-[3px] text-[10px] text-soft transition-colors hover:border-border-strong hover:bg-accent hover:text-foreground [&_svg]:size-3 [&_svg]:shrink-0', currentSelectionStale && 'text-warning')}
+                  title={currentSelectionStale ? `Removed from model catalog — pick another · ${currentModel?.provider ?? ''}/${currentModel?.model ?? ''}` : `${currentGroup?.name ?? currentModel?.provider ?? 'model'}/${currentModel?.model ?? ''}`}
+                  onClick={() => { setModelMenuOpen(!modelMenuOpen); setPermissionMenuOpen(false); setEffortPickerOpen(false); closeMention() }}
                 >
-                  <span className="model-name-text">{`${currentGroup?.name ?? currentModel?.provider ?? 'deepseek'}/${currentModel?.model ?? 'deepseek-v4-flash'}`}</span>
+                  <span className="truncate">{`${currentSelectionStale ? '⚠ ' : ''}${currentGroup?.name ?? currentModel?.provider ?? 'deepseek'}/${currentModel?.model ?? 'deepseek-v4-flash'}`}</span>
                   <ChevronDownIcon />
                 </button>
 
                 {modelMenuOpen ? (
-                  <div className="popover-menu model-flyout shadow-flyout">
+                  <div className="absolute bottom-full right-0 z-[130] mb-1.5 min-w-[210px] rounded-[10px] border border-border-strong bg-surface-1 p-1 shadow-[0_10px_30px_rgba(0,0,0,0.4)]">
                     {modelGroups.map((group) => (
-                      <div
+                      <button
                         key={group.id}
-                        className="model-provider-row"
+                        className="flex w-full cursor-pointer items-center justify-between rounded-md px-2.5 py-[7px] text-left text-[11px] text-soft transition-colors hover:bg-accent hover:text-foreground"
                         onClick={() => { const first = group.models[0]; if (first) void selectModel(group.id, first.id); setModelMenuOpen(false) }}
                       >
                         <span>{group.name}</span>
-                        <div className="row-end">
+                        <span className="flex items-center gap-1 [&_svg]:size-[13px]">
                           <ProviderPingIndicator ping={providerPings[group.id]} />
-                          {currentModel?.provider === group.id ? <CheckIcon className="check-icon" /> : null}
+                          {currentModel?.provider === group.id ? <CheckIcon className="text-primary" /> : null}
                           <ChevronRightIcon />
-                        </div>
-                      </div>
-                    ))}
-                    {currentGroup && currentGroup.models.length > 1 ? <div className="menu-divider" /> : null}
-                    {currentGroup && currentGroup.models.length > 1 ? currentGroup.models.map((model) => (
-                      <button
-                        key={model.id}
-                        className={`menu-item model-item ${currentModel?.model === model.id ? 'active' : ''}`}
-                        onClick={() => { void selectModel(currentGroup.id, model.id); setModelMenuOpen(false) }}
-                      >
-                        <ProviderPingDot ping={providerPings[currentGroup.id]} />
-                        {model.name ?? model.id}
-                        {currentModel?.model === model.id ? <CheckIcon className="check-icon" /> : null}
+                        </span>
                       </button>
+                    ))}
+                    {currentGroup && currentGroup.models.length > 1 ? <div className="my-1 h-px bg-border" /> : null}
+                    {currentGroup && currentGroup.models.length > 1 ? currentGroup.models.map((model) => (
+                      <MenuItem key={model.id} active={currentModel?.model === model.id} onClick={() => { void selectModel(currentGroup.id, model.id); setModelMenuOpen(false) }}>
+                        <span className="flex items-center gap-1.5">
+                          <ProviderPingDot ping={providerPings[currentGroup.id]} />
+                          {model.name ?? model.id}
+                        </span>
+                        {currentModel?.model === model.id ? <CheckIcon className="text-primary" /> : null}
+                      </MenuItem>
                     )) : null}
-                    <div className="menu-divider" />
-                    <button className="menu-item" onClick={() => { setModelMenuOpen(false); if (onOpenSettings) onOpenSettings() }}>
+                    <div className="my-1 h-px bg-border" />
+                    {reasoningEfforts.length > 0 ? (<>
+                      <button
+                        className="flex w-full cursor-pointer items-center gap-1.5 rounded-md px-2.5 py-[7px] text-left text-[11px] text-soft transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[13px] [&_svg]:shrink-0"
+                        onClick={() => setEffortPickerOpen(!effortPickerOpen)}
+                      >
+                        <BrainIcon />
+                        <span>Reasoning</span>
+                        <span className="ml-auto flex items-center gap-1 text-faint">
+                          {reasoningEfforts.find((effort) => effort.id === activeEffort)?.name ?? 'Auto'}
+                          <ChevronDownIcon className={cn('transition-transform', effortPickerOpen && 'rotate-180')} />
+                        </span>
+                      </button>
+                      {effortPickerOpen ? reasoningEfforts.map((effort) => (
+                        <MenuItem key={effort.id} active={activeEffort === effort.id} onClick={() => { void selectReasoningEffort(effort.id); setEffortPickerOpen(false) }}>
+                          {effort.name}
+                          {activeEffort === effort.id ? <CheckIcon className="text-primary" /> : null}
+                        </MenuItem>
+                      )) : null}
+                      {currentModelMeta?.reasoning?.defaultEffort ? (
+                        <MenuItem onClick={() => { void selectReasoningEffort(currentModelMeta.reasoning!.defaultEffort!); setModelMenuOpen(false) }}>
+                          <span className="flex items-center gap-1.5"><RotateIcon />Reset to default</span>
+                          {activeEffort === currentModelMeta.reasoning.defaultEffort ? <CheckIcon className="text-primary" /> : null}
+                        </MenuItem>
+                      ) : null}
+                      <div className="my-1 h-px bg-border" />
+                    </>) : null}
+                    <MenuItem onClick={() => { setModelMenuOpen(false); if (onOpenSettings) onOpenSettings() }}>
                       Manage models
-                    </button>
+                    </MenuItem>
                   </div>
                 ) : null}
               </div>
-
-              {reasoningEfforts.length > 0 ? (
-                <div className="menu-anchor">
-                  <button
-                    className="thought-picker-button"
-                    onClick={() => { setThoughtMenuOpen(!thoughtMenuOpen); setModelMenuOpen(false); setPermissionMenuOpen(false); closeMention() }}
-                  >
-                    <BrainIcon />
-                    <span>{reasoningEfforts.find((effort) => effort.id === activeEffort)?.name ?? 'Auto'}</span>
-                    <ChevronDownIcon />
-                  </button>
-                  {thoughtMenuOpen ? (
-                    <div className="popover-menu shadow-flyout">
-                      {reasoningEfforts.map((effort) => (
-                        <button
-                          key={effort.id}
-                          className={`menu-item ${activeEffort === effort.id ? 'active' : ''}`}
-                          onClick={() => { void selectReasoningEffort(effort.id); setThoughtMenuOpen(false) }}
-                        >
-                          {effort.name}
-                          {activeEffort === effort.id ? <CheckIcon className="check-icon" /> : null}
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
               </>) : null}
 
               {busy ? (
-                <button className="send-pill-button stop" onClick={() => void stop()} title="Cancel the running turn">
+                <button
+                  className="grid size-[25px] shrink-0 place-items-center rounded-[7px] bg-primary text-primary-foreground transition-[filter] enabled:hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-35 [&_svg]:size-3.5"
+                  onClick={() => void stop()}
+                  title="Cancel the running turn"
+                >
                   <StopIcon />
                 </button>
               ) : (
-                <button className="send-pill-button" disabled={!prompt.trim()} onClick={() => void run()} title="Send">
+                <button
+                  className="grid size-[25px] shrink-0 place-items-center rounded-[7px] bg-primary text-primary-foreground transition-[filter] enabled:hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-35 [&_svg]:size-3.5"
+                  disabled={!prompt.trim()}
+                  onClick={() => void run()}
+                  title="Send"
+                >
                   <ArrowUpIcon />
                 </button>
               )}
@@ -1070,8 +1218,107 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
           </div>
         </div>
 
-        <div className="chat-footnote">Browser actions run in the pane you can see.</div>
+        <div className="px-3 pb-2.5 pt-1.5 text-center text-[8px] text-fainter">Browser actions run in the pane you can see.</div>
       </aside>
+    </div>
+  )
+}
+
+/**
+ * Session thread card in the left sidebar. The card stays a plain select
+ * button; Archive/Unarchive lives on a sibling kebab that swaps in for the
+ * timestamp on hover, so no interactive element nests inside another.
+ */
+function SessionCard({ active, busy, title, time, engineChip, cardTitle, archived = false, menuOpen, onMenuOpenChange, onToggleArchive, onClick }: {
+  active: boolean
+  busy: boolean
+  title: string
+  time: string
+  engineChip?: string
+  cardTitle?: string
+  archived?: boolean
+  menuOpen: boolean
+  onMenuOpenChange(open: boolean): void
+  onToggleArchive(): void
+  onClick(): void
+}) {
+  return (
+    <div className="group relative">
+      <button
+        className={cn(
+          'flex w-full items-center justify-between rounded-lg border border-border-soft bg-surface-1 px-2.5 py-1.5 text-left text-[11px] text-soft transition-colors',
+          active
+            ? 'border-border-strong bg-secondary text-foreground shadow-sm'
+            : 'hover:bg-accent hover:text-foreground',
+        )}
+        {...(cardTitle ? { title: cardTitle } : {})}
+        onClick={onClick}
+      >
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className={cn('size-[5px] shrink-0 rounded-full', busy ? 'bg-primary' : 'bg-faint opacity-40')} />
+          <ChatIcon className="size-[13px] shrink-0 text-faint" />
+          <span className="truncate font-medium">{title}</span>
+          {engineChip ? (
+            <span className="shrink-0 rounded-md border border-border-soft px-1.5 py-px text-[9px] font-semibold uppercase tracking-[0.04em] text-soft">
+              {engineChip}
+            </span>
+          ) : null}
+        </span>
+        <span className={cn('shrink-0 text-[10px] text-faint transition-opacity', menuOpen ? 'opacity-0' : 'group-hover:opacity-0')}>{time}</span>
+      </button>
+      <button
+        aria-label="Chat options"
+        className={cn(
+          'absolute right-[4px] top-1/2 hidden -translate-y-1/2 place-items-center rounded-[5px] p-px text-faint transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[14px]',
+          menuOpen ? 'grid' : 'group-hover:grid',
+        )}
+        onClick={() => onMenuOpenChange(!menuOpen)}
+      >
+        <MoreHorizontalIcon />
+      </button>
+      {menuOpen ? (
+        <>
+          {/* Click-away catcher sits under the flyout and above the page. */}
+          <div className="fixed inset-0 z-[135]" onMouseDown={() => onMenuOpenChange(false)} />
+          <div className="absolute right-0 top-full z-[140] mt-1 min-w-[124px] rounded-[10px] border border-border-strong bg-surface-1 p-1 shadow-[0_10px_30px_rgba(0,0,0,0.4)]">
+            <button
+              className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[11px] text-soft transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[13px]"
+              onClick={onToggleArchive}
+            >
+              <ArchiveIcon />
+              <span>{archived ? 'Unarchive' : 'Archive'}</span>
+            </button>
+          </div>
+        </>
+      ) : null}
+    </div>
+  )
+}
+
+/** Generic flyout menu row with optional check mark. */
+function MenuItem({ children, active = false, onClick }: {
+  children: ReactNode
+  active?: boolean | undefined
+  onClick(): void
+}) {
+  return (
+    <button
+      className={cn(
+        'flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-[11px] transition-colors [&_svg]:size-[13px]',
+        active ? 'bg-accent text-foreground' : 'text-soft hover:bg-accent hover:text-foreground',
+      )}
+      onClick={onClick}
+    >
+      {children}
+    </button>
+  )
+}
+
+function ContextRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between px-2.5 py-1 font-mono text-[9px] text-soft">
+      <span>{label}</span>
+      <span className="text-faint">{value}</span>
     </div>
   )
 }
@@ -1086,42 +1333,53 @@ function ThreadEntryView({ entry, onAnswerApproval, onOpenFile }: ThreadEntryVie
   switch (entry.kind) {
     case 'user':
       return (
-        <article className="chat-message user" key={entry.id}>
-          <div className="message-label">You</div>
-          <div className="message-content">{entry.text}</div>
+        <article className="mb-2.5 ml-6 block rounded-lg border border-info/20 bg-info/[0.07] px-[11px] py-2.5" key={entry.id}>
+          <div className="mb-[7px] flex items-center gap-[5px] text-[9px] font-semibold text-muted-foreground">You</div>
+          <div className="whitespace-pre-wrap [overflow-wrap:anywhere] text-[11px]/[1.55] text-soft">{entry.text}</div>
         </article>
       )
     case 'assistant':
       return (
-        <article className="chat-message assistant" key={entry.id}>
-          <div className="message-label"><SparkIcon /> Harness</div>
-          <div className="message-content">{entry.text}{entry.streaming ? <span className="stream-caret" /> : null}</div>
+        <article className="mr-2 mb-2.5 block rounded-lg border border-primary/15 bg-primary/[0.055] px-[11px] py-2.5" key={entry.id}>
+          <div className="mb-[7px] flex items-center gap-[5px] text-[9px] font-semibold text-muted-foreground [&_svg]:size-[13px] [&_svg]:text-primary"><SparkIcon /> Harness</div>
+          <div className="whitespace-pre-wrap [overflow-wrap:anywhere] text-[11px]/[1.55] text-soft">{entry.text}{entry.streaming ? <span className="ml-0.5 inline-block h-[11px] w-1.5 animate-caret-blink bg-primary align-bottom" /> : null}</div>
         </article>
       )
     case 'notice':
       return (
-        <article className={`chat-message system ${entry.tone === 'error' ? 'error' : ''}`} key={entry.id}>
-          <div className="message-label">Runtime</div>
-          <div className="message-content">{entry.text}</div>
+        <article
+          className={cn(
+            'mb-2.5 block rounded-lg border px-[11px] py-2.5',
+            entry.tone === 'error'
+              ? 'border-destructive bg-destructive/10 text-destructive'
+              : 'border-warning/25 bg-warning/10',
+          )}
+          key={entry.id}
+        >
+          <div className="mb-[7px] flex items-center gap-[5px] text-[9px] font-semibold text-muted-foreground">Runtime</div>
+          <div className={cn('whitespace-pre-wrap [overflow-wrap:anywhere] text-[11px]/[1.55]', entry.tone === 'error' ? 'text-destructive' : 'text-soft')}>{entry.text}</div>
         </article>
       )
     case 'tool':
       return (
-        <article className={`tool-card ${entry.status}`} key={entry.id}>
-          <div className="tool-card-head">
-            <span className="tool-name">{entry.name}</span>
-            <span className="tool-status">{entry.status === 'running' ? 'running…' : entry.status === 'error' ? 'failed' : 'done'}</span>
-          </div>
-          {entry.args !== undefined && entry.name.startsWith('fs_') ? <div className="tool-card-path">{toolPath(entry.args)}</div> : null}
-          {entry.result ? <pre className="tool-card-result">{entry.result}</pre> : null}
-        </article>
+        <ToolCardView entry={entry} key={entry.id} />
       )
     case 'todo':
       return (
-        <article className="todo-card" key={entry.id}>
+        <article className="mb-2 rounded-lg border border-border-soft bg-composer px-2.5 py-2" key={entry.id}>
           {entry.items.map((item: TodoItem, index) => (
-            <div className={`todo-row ${item.status}`} key={`${item.content}-${index}`}>
-              <span className="todo-check">{item.status === 'completed' ? '✓' : item.status === 'in_progress' ? '·' : ''}</span>
+            <div
+              className={cn('flex items-center gap-[7px] py-[3px] text-[10px]', item.status === 'completed' ? 'text-faint line-through' : 'text-soft')}
+              key={`${item.content}-${index}`}
+            >
+              <span
+                className={cn(
+                  'grid size-[13px] shrink-0 place-items-center rounded border border-border-strong text-[9px]',
+                  item.status === 'in_progress' ? 'border-info text-info' : 'text-primary',
+                )}
+              >
+                {item.status === 'completed' ? '✓' : item.status === 'in_progress' ? '·' : ''}
+              </span>
               <span>{item.content}</span>
             </div>
           ))}
@@ -1129,18 +1387,30 @@ function ThreadEntryView({ entry, onAnswerApproval, onOpenFile }: ThreadEntryVie
       )
     case 'approval':
       return (
-        <article className="approval-card" key={entry.id}>
-          <div className="approval-head"><ShieldIcon /> Approval required</div>
-          <div className="approval-body">
-            <span className="approval-tool">{entry.toolName}</span>
-            {entry.reason ? <span className="approval-reason">{entry.reason}</span> : null}
+        <article className="mb-2.5 rounded-lg border border-warning/25 bg-warning/10 px-[11px] py-2.5" key={entry.id}>
+          <div className="mb-[7px] flex items-center gap-1.5 text-[10px] font-semibold text-foreground [&_svg]:size-[13px] [&_svg]:text-warning">
+            <ShieldIcon /> Approval required
+          </div>
+          <div className="mb-2 flex flex-col gap-1">
+            <span className="font-mono text-[9px] text-soft">{entry.toolName}</span>
+            {entry.reason ? <span className="text-[10px]/[1.45] text-muted-foreground">{entry.reason}</span> : null}
           </div>
           {entry.resolved ? (
-            <div className="approval-resolved">{entry.resolved === 'allowed-once' ? 'Allowed once' : 'Rejected'}</div>
+            <div className="mt-[7px] text-[9px] text-muted-foreground">{entry.resolved === 'allowed-once' ? 'Allowed once' : 'Rejected'}</div>
           ) : (
-            <div className="approval-actions">
-              <button className="approval-allow" onClick={() => onAnswerApproval?.(entry, 'allowed-once')}>Allow once</button>
-              <button className="approval-reject" onClick={() => onAnswerApproval?.(entry, 'rejected')}>Reject</button>
+            <div className="flex gap-[7px]">
+              <button
+                className="cursor-pointer rounded-[5px] border border-primary/30 bg-primary/10 px-[11px] py-[5px] text-[10px] text-primary transition-colors hover:bg-primary/[0.16]"
+                onClick={() => onAnswerApproval?.(entry, 'allowed-once')}
+              >
+                Allow once
+              </button>
+              <button
+                className="cursor-pointer rounded-[5px] border border-border-strong bg-transparent px-[11px] py-[5px] text-[10px] text-muted-foreground transition-colors hover:text-foreground"
+                onClick={() => onAnswerApproval?.(entry, 'rejected')}
+              >
+                Reject
+              </button>
             </div>
           )}
         </article>
@@ -1150,6 +1420,39 @@ function ThreadEntryView({ entry, onAnswerApproval, onOpenFile }: ThreadEntryVie
     default:
       return null
   }
+}
+
+function ToolCardView({ entry }: { entry: Extract<ThreadEntry, { kind: 'tool' }> }) {
+  return (
+    <article
+      className={cn(
+        'mb-2 rounded-lg border bg-meta px-2.5 py-2',
+        entry.status === 'running' && 'border-info/20',
+        entry.status === 'error' && 'border-destructive',
+        !entry.status || (entry.status !== 'running' && entry.status !== 'error') ? 'border-border-soft' : '',
+      )}
+    >
+      <div className="mb-[5px] flex items-center justify-between gap-2">
+        <span className="truncate font-mono text-[9px] font-semibold text-soft">{entry.name}</span>
+        <span
+          className={cn(
+            'shrink-0 text-[8px] uppercase tracking-[0.08em]',
+            entry.status === 'running' ? 'animate-pulse-dot text-info' : entry.status === 'error' ? 'text-destructive' : 'text-faint',
+          )}
+        >
+          {entry.status === 'running' ? 'running…' : entry.status === 'error' ? 'failed' : 'done'}
+        </span>
+      </div>
+      {entry.args !== undefined && entry.name.startsWith('fs_') ? (
+        <div className="truncate font-mono text-[8px] text-primary">{toolPath(entry.args)}</div>
+      ) : null}
+      {entry.result ? (
+        <pre className="mt-1.5 max-h-[140px] overflow-auto whitespace-pre-wrap [overflow-wrap:anywhere] rounded-[5px] border border-border-soft bg-surface-0 px-2 py-[7px] font-mono text-[8px]/[1.5] text-muted-foreground">
+          {entry.result}
+        </pre>
+      ) : null}
+    </article>
+  )
 }
 
 function QuestionCard({ entry }: { entry: Extract<ThreadEntry, { kind: 'question' }> }) {
@@ -1183,16 +1486,21 @@ function QuestionCard({ entry }: { entry: Extract<ThreadEntry, { kind: 'question
   }
 
   return (
-    <article className="question-card" key={entry.id}>
-      <div className="approval-head">Questions</div>
+    <article className="mb-2.5 rounded-lg border border-warning/25 bg-warning/10 px-[11px] py-2.5" key={entry.id}>
+      <div className="mb-[7px] flex items-center gap-1.5 text-[10px] font-semibold text-foreground">Questions</div>
       {entry.questions.map((question) => (
-        <div className="question-block" key={question.id}>
-          <div className="question-text">{question.question}</div>
-          <div className="question-options">
+        <div className="mb-2 last:mb-0" key={question.id}>
+          <div className="text-[10px]/[1.5] text-soft">{question.question}</div>
+          <div className="mt-1.5 flex flex-wrap gap-[5px]">
             {(question.options ?? []).map((option) => (
               <button
                 key={option.label}
-                className={`question-option ${(selections[question.id] ?? []).includes(option.label) ? 'selected' : ''}`}
+                className={cn(
+                  'cursor-pointer rounded-[5px] border px-[9px] py-1 text-[9px] transition-colors',
+                  (selections[question.id] ?? []).includes(option.label)
+                    ? 'border-primary/30 bg-primary/10 text-primary'
+                    : 'border-border-strong bg-transparent text-muted-foreground hover:text-foreground',
+                )}
                 onClick={() => toggleOption(question, option.label, question.multiSelect ?? false)}
                 title={option.description}
               >
@@ -1201,7 +1509,7 @@ function QuestionCard({ entry }: { entry: Extract<ThreadEntry, { kind: 'question
             ))}
           </div>
           <input
-            className="question-custom"
+            className="mt-1.5 w-full rounded-[5px] border border-border-strong bg-surface-0 px-2 py-[5px] text-[10px] text-foreground outline-none placeholder:text-faint focus:border-primary/40"
             placeholder="Other…"
             value={custom[question.id] ?? ''}
             onChange={(event) => setCustom((current) => ({ ...current, [question.id]: event.target.value }))}
@@ -1209,10 +1517,15 @@ function QuestionCard({ entry }: { entry: Extract<ThreadEntry, { kind: 'question
         </div>
       ))}
       {entry.resolved ? (
-        <div className="approval-resolved">Answered</div>
+        <div className="mt-[7px] text-[9px] text-muted-foreground">Answered</div>
       ) : (
-        <div className="approval-actions">
-          <button className="approval-allow" onClick={() => void submit()}>Submit answers</button>
+        <div className="flex gap-[7px]">
+          <button
+            className="cursor-pointer rounded-[5px] border border-primary/30 bg-primary/10 px-[11px] py-[5px] text-[10px] text-primary transition-colors hover:bg-primary/[0.16]"
+            onClick={() => void submit()}
+          >
+            Submit answers
+          </button>
         </div>
       )}
     </article>
@@ -1402,15 +1715,15 @@ function ProviderPingIndicator({ ping }: { ping: PingEntry | undefined }) {
   if (!ping) return null
   if ('testing' in ping) {
     return (
-      <span className="ping-indicator" title="Probing the provider server…">
-        <span className="ping-dot testing" />
+      <span className="inline-flex items-center gap-1" title="Probing the provider server…">
+        <span className="size-[7px] shrink-0 animate-ping-pulse rounded-full bg-faint" />
       </span>
     )
   }
   return (
-    <span className="ping-indicator" title={pingTitle(ping)}>
-      <span className={`ping-dot ${ping.state}`} />
-      {ping.state === 'ok' && ping.latencyMs !== undefined ? <span className="ping-ms">{ping.latencyMs}ms</span> : null}
+    <span className="inline-flex items-center gap-1" title={pingTitle(ping)}>
+      <PingDot state={ping.state} />
+      {ping.state === 'ok' && ping.latencyMs !== undefined ? <span className="font-mono text-[9px] text-faint">{ping.latencyMs}ms</span> : null}
     </span>
   )
 }
@@ -1418,6 +1731,21 @@ function ProviderPingIndicator({ ping }: { ping: PingEntry | undefined }) {
 /** Compact status dot for a single model row, colored by its provider's probe. */
 function ProviderPingDot({ ping }: { ping: PingEntry | undefined }) {
   if (!ping) return null
-  if ('testing' in ping) return <span className="ping-dot testing" title="Probing the provider server…" />
-  return <span className={`ping-dot ${ping.state}`} title={pingTitle(ping)} />
+  if ('testing' in ping) return <span className="size-[7px] shrink-0 animate-ping-pulse rounded-full bg-faint" title="Probing the provider server…" />
+  return <PingDot state={ping.state} title={pingTitle(ping)} />
+}
+
+function PingDot({ state, title }: { state: ProviderPingResult['state']; title?: string }) {
+  return (
+    <span
+      className={cn(
+        'inline-block size-[7px] shrink-0 rounded-full',
+        state === 'ok' && 'bg-green-400 shadow-[0_0_6px_rgba(74,222,128,0.55)]',
+        state === 'auth' && 'bg-amber-500 shadow-[0_0_6px_rgba(245,158,11,0.55)]',
+        state === 'unreachable' && 'bg-red-400 shadow-[0_0_6px_rgba(248,113,113,0.55)]',
+        !state || (state !== 'ok' && state !== 'auth' && state !== 'unreachable') ? 'bg-fainter' : '',
+      )}
+      title={title}
+    />
+  )
 }

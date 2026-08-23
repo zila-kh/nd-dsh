@@ -1,16 +1,31 @@
 import './design.js'
 import './organization.js'
 import { contextBridge, ipcRenderer } from 'electron'
-import { IPC, type DesktopApi } from '../shared/contracts.js'
+import { IPC, type DesktopApi, type ModelProvider } from '../shared/contracts.js'
 
 const api: DesktopApi = {
   app: { info: () => ipcRenderer.invoke(IPC.appInfo) },
+  window: {
+    setFloatMode: (enabled) => ipcRenderer.invoke(IPC.windowSetFloatMode, enabled),
+    resizeFloatWindow: (width, height) => ipcRenderer.invoke(IPC.windowResizeFloatWindow, width, height),
+    moveFloatWindow: (deltaX, deltaY) => ipcRenderer.invoke(IPC.windowMoveFloatWindow, deltaX, deltaY),
+    onFloatMode: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, enabled: boolean) => listener(enabled)
+      ipcRenderer.on(IPC.windowFloatModeEvent, handler)
+      return () => ipcRenderer.removeListener(IPC.windowFloatModeEvent, handler)
+    },
+  },
   providers: {
     list: () => ipcRenderer.invoke(IPC.providersList),
     save: (providers) => ipcRenderer.invoke(IPC.providersSave, providers),
     setApiKey: (providerId, apiKey) => ipcRenderer.invoke(IPC.providersSetApiKey, providerId, apiKey),
     clearApiKey: (providerId) => ipcRenderer.invoke(IPC.providersClearApiKey, providerId),
     ping: (providerId, force) => ipcRenderer.invoke(IPC.providersPing, providerId, force),
+    onChanged: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, providers: ModelProvider[]) => listener(providers)
+      ipcRenderer.on(IPC.providersChangedEvent, handler)
+      return () => ipcRenderer.removeListener(IPC.providersChangedEvent, handler)
+    },
   },
   engines: {
     list: () => ipcRenderer.invoke(IPC.enginesList),
@@ -19,12 +34,17 @@ const api: DesktopApi = {
     sessions: () => ipcRenderer.invoke(IPC.enginesSessions),
     transcript: (sessionId) => ipcRenderer.invoke(IPC.enginesTranscript, sessionId),
   },
+  sessions: {
+    setArchived: (sessionId, archived) => ipcRenderer.invoke(IPC.sessionsSetArchived, sessionId, archived),
+  },
   capture: {
     inspectApp: (copyToClipboard, scope) => ipcRenderer.invoke(IPC.captureInspectApp, copyToClipboard, scope),
     inspectElement: (scope) => ipcRenderer.invoke(IPC.captureInspectElement, scope),
-    stageElement: (element, targetTitle) => ipcRenderer.invoke(IPC.captureStageElement, element, targetTitle),
+    stageElement: (element, targetTitle, pickId) => ipcRenderer.invoke(IPC.captureStageElement, element, targetTitle, pickId),
     elementAttachments: () => ipcRenderer.invoke(IPC.captureElementAttachments),
     removeElement: (id) => ipcRenderer.invoke(IPC.captureRemoveElement, id),
+    copyElementContext: (pickId) => ipcRenderer.invoke(IPC.captureCopyElementContext, pickId),
+    copyElementShot: (pickId) => ipcRenderer.invoke(IPC.captureCopyElementShot, pickId),
   },
   browser: {
     state: () => ipcRenderer.invoke(IPC.browserState),

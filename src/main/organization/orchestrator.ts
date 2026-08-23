@@ -1,6 +1,6 @@
 import type { CodingEngineDescriptor, DshEventFrame } from '../../shared/contracts.js'
 import { ND_HARNESS_ENGINE_ID } from '../../shared/coding-engines.js'
-import type { OrganizationRun, OrganizationRunReceipt, OrganizationTask, ProjectPlanInput } from '../../shared/organization.js'
+import type { OrganizationAgent, OrganizationRole, OrganizationRun, OrganizationRunReceipt, OrganizationTask, ProjectPlanInput } from '../../shared/organization.js'
 import type { CodingEngineRegistry } from '../engines/coding-engine-registry.js'
 import type { EngineSessionRouter } from '../engines/engine-session-router.js'
 import type { HarnessService } from '../harness/harness-service.js'
@@ -16,6 +16,16 @@ interface ReviewVerdict {
 
 const MAX_AUTOPILOT_EXECUTION_ATTEMPTS = 3
 
+/**
+ * Gateway session events and host lifecycle events arrive on two separate
+ * WebSocket connections, so the final assistant/message of a session can be
+ * delivered shortly AFTER the matching session-status(complete). Structured
+ * results (pm plans, review verdicts) must wait out this grace period before
+ * the run is declared "structured result missing", or valid plans get
+ * discarded on every race the host socket wins.
+ */
+const STRUCTURED_RESULT_GRACE_MS = 2_500
+
 type WorkflowKind = 'plan' | 'execute' | 'review'
 
 /** The execution-relevant slice of an engine descriptor. */
@@ -27,6 +37,7 @@ const DEFAULT_WORKER_INSTRUCTIONS = '\nExecution engine: ND Harness. Work direct
 export class OrganizationOrchestrator {
   private finalText = new Map<string, string>()
   private structuredHandled = new Set<string>()
+  private structuredInFlight = new Set<string>()
   private autoAdvance = new Map<string, string>()
 
   constructor(
@@ -43,9 +54,15 @@ export class OrganizationOrchestrator {
     this.assertPolicy(await this.store.policy(context.company.id, 'internal.plan'), explicit, 'internal planning')
     await this.assertNoActiveRun(projectId)
     await this.prepareWorkspace(context.project.workspacePath)
+    const pmAgent = context.agents.find((item) => {
+      const role = context.roles.find((r) => r.id === item.roleId)
+      return role?.name.toLowerCase().includes('product manager')
+    })
+    const pmRole = pmAgent ? context.roles.find((r) => r.id === pmAgent.roleId) : context.roles.find((r) => r.name.toLowerCase().includes('product manager'))
+    const modelOpts = this.resolveAgentModel(pmAgent, pmRole)
     const sessionId = await this.harness.createSession()
     const run = await this.store.beginRun('pm-plan', context.company.id, projectId, sessionId)
-    await this.harness.run(pmPrompt(context), { sessionId })
+    await this.harness.run(pmPrompt(context), { sessionId, ...modelOpts })
     return receipt(run)
   }
 
@@ -56,6 +73,7 @@ export class OrganizationOrchestrator {
     if (context.task.status !== 'ready' && context.task.status !== 'blocked') throw new Error(`Task is ${context.task.status}; only ready or blocked tasks can run`)
     const engine = await this.resolveTaskEngine(context.agent?.id)
     const prompt = workerPrompt(context, engine)
+    const modelOpts = this.resolveAgentModel(context.agent, context.role)
     await this.assertNoActiveRun(context.project.id)
     await this.prepareWorkspace(context.project.workspacePath)
     // Engine routing is transport-level only: the session is created on the
@@ -66,22 +84,29 @@ export class OrganizationOrchestrator {
       : { engineId: ND_HARNESS_ENGINE_ID, sessionId: await this.harness.createSession() }
     const run = await this.store.beginRun('task-execution', context.company.id, context.project.id, target.sessionId, context.task.id, context.task.goalId)
     await this.store.markExecution(context.task.id, target.sessionId)
-    if (this.engineRuns) await this.engineRuns.run(prompt, { sessionId: target.sessionId })
-    else await this.harness.run(prompt, { sessionId: target.sessionId })
+    if (this.engineRuns) await this.engineRuns.run(prompt, { sessionId: target.sessionId, ...modelOpts })
+    else await this.harness.run(prompt, { sessionId: target.sessionId, ...modelOpts })
     return receipt(run)
   }
 
   async reviewTask(taskId: string, explicit = true): Promise<OrganizationRunReceipt> {
     const context = await this.store.taskContext(taskId)
+    const projectCtx = await this.store.projectContext(context.project.id)
     this.assertPolicy(await this.store.policy(context.company.id, 'task.review'), explicit, 'task review')
     if (!explicit && context.company.autonomyLevel < 3) throw new Error('Autonomy level 3+ is required for automatic review')
     if (context.task.status !== 'review') throw new Error('Task must be ready for review')
+    const reviewerAgent = projectCtx.agents.find((item) => {
+      const role = projectCtx.roles.find((r) => r.id === item.roleId)
+      return role?.name.toLowerCase().includes('reviewer')
+    })
+    const reviewerRole = reviewerAgent ? projectCtx.roles.find((r) => r.id === reviewerAgent.roleId) : projectCtx.roles.find((r) => r.name.toLowerCase().includes('reviewer'))
+    const modelOpts = this.resolveAgentModel(reviewerAgent, reviewerRole)
     await this.assertNoActiveRun(context.project.id)
     await this.prepareWorkspace(context.project.workspacePath)
     const sessionId = await this.harness.createSession()
     const run = await this.store.beginRun('task-review', context.company.id, context.project.id, sessionId, context.task.id, context.task.goalId)
     await this.store.markReviewStarted(taskId, sessionId)
-    await this.harness.run(reviewPrompt(context.task, context), { sessionId })
+    await this.harness.run(reviewPrompt(context.task, context), { sessionId, ...modelOpts })
     return receipt(run)
   }
 
@@ -114,14 +139,23 @@ export class OrganizationOrchestrator {
     if (ready && workflow.has('execute')) return this.runTask(ready.id, explicit)
 
     const hasGoals = state.goals.some((goal) => goal.projectId === id)
-    if (!hasGoals && workflow.has('plan')) return this.planProject(id, explicit)
+    if (!hasGoals && workflow.has('plan')) {
+      const hasFailedPlan = state.runs.some((run) => run.projectId === id && run.kind === 'pm-plan' && run.status === 'failed')
+      if (hasFailedPlan && !explicit) return null
+      return this.planProject(id, explicit)
+    }
     return null
   }
 
   async handleHarnessEvent(frame: DshEventFrame): Promise<void> {
+    // TODO(remove): temporary e2e diagnostics for plan-event delivery.
+    if (frame.kind !== 'session-status' || frame.running === false) {
+      console.warn(`[org-debug] frame kind=${frame.kind} type=${frame.event?.type ?? '-'} session=${frame.sessionId ? frame.sessionId.slice(0, 13) : 'none'}`)
+    }
     const sessionId = frame.sessionId
     if (!sessionId) return
     const run = await this.store.runBySession(sessionId)
+    console.warn(`[org-debug] run=${run ? `${run.kind}:${run.status}` : 'none'} session=${sessionId.slice(0, 13)}`)
 
     if (frame.kind === 'session-event' && frame.event && run) {
       if (frame.event.type === 'assistant/message') {
@@ -145,7 +179,9 @@ export class OrganizationOrchestrator {
       await this.store.completeRun(run.id, this.finalText.get(sessionId), frame.message ?? 'Agent error')
       if (run.taskId) await this.failTask(run.taskId, frame.message ?? 'Agent error')
       this.cleanupSession(sessionId)
-      await this.continueProject(run.projectId)
+      if (run.kind !== 'pm-plan') {
+        await this.continueProject(run.projectId)
+      }
       return
     }
 
@@ -171,6 +207,23 @@ export class OrganizationOrchestrator {
 
     if (run && this.structuredHandled.has(sessionId)) {
       await this.store.completeRun(run.id, this.finalText.get(sessionId))
+    } else if (run && (run.kind === 'pm-plan' || run.kind === 'task-review')) {
+      // The completion status may beat the final assistant/message across the
+      // two gateway sockets. Wait out the grace period; if the structured
+      // result lands in the meantime it is applied normally and the run
+      // completes successfully instead of failing as "missing".
+      await new Promise((resolve) => setTimeout(resolve, STRUCTURED_RESULT_GRACE_MS))
+      const reopened = await this.store.runBySession(sessionId)
+      if (!reopened) {
+        this.cleanupSession(sessionId)
+        return
+      }
+      if (this.structuredHandled.has(sessionId)) {
+        await this.store.completeRun(run.id, this.finalText.get(sessionId))
+      } else {
+        await this.store.completeRun(run.id, this.finalText.get(sessionId), `Expected structured ${run.kind} result was not produced`)
+        if (run.taskId) await this.failTask(run.taskId, 'Structured review result was not produced')
+      }
     } else if (run) {
       await this.store.completeRun(run.id, this.finalText.get(sessionId), `Expected structured ${run.kind} result was not produced`)
       if (run.taskId) await this.failTask(run.taskId, 'Structured review result was not produced')
@@ -182,10 +235,21 @@ export class OrganizationOrchestrator {
   }
 
   private async handlePlan(projectId: string, sessionId: string, text: string): Promise<void> {
+    // TODO(remove): temporary e2e diagnostics.
+    console.warn(`[org-debug] handlePlan called textLen=${text.length} hasTag=${text.includes('nd-dsh-plan')}`)
     const plan = extractTaggedJson<ProjectPlanInput>(text, 'nd-dsh-plan')
     if (!plan) return
     validatePlan(plan)
-    await this.store.applyPlan(projectId, plan)
+    // Duplicate delivery across the two gateway sockets must not create the
+    // plan twice; claim the session synchronously before any await.
+    if (this.structuredInFlight.has(sessionId)) return
+    this.structuredInFlight.add(sessionId)
+    try {
+      await this.store.applyPlan(projectId, plan)
+      console.warn(`[org-debug] plan applied for project ${projectId.slice(0, 8)}`)
+    } finally {
+      this.structuredInFlight.delete(sessionId)
+    }
     this.structuredHandled.add(sessionId)
     this.autoAdvance.set(sessionId, projectId)
   }
@@ -194,16 +258,24 @@ export class OrganizationOrchestrator {
     const review = extractTaggedJson<ReviewVerdict>(text, 'nd-dsh-review')
     if (!review) return
     if ((review.verdict !== 'pass' && review.verdict !== 'fail') || typeof review.summary !== 'string' || !review.summary.trim()) throw new Error('Invalid ND-DSH review result')
-    const issueText = review.issues?.length ? `\nIssues: ${review.issues.join('; ')}` : ''
-    const summary = `${review.summary}${issueText}`
-    const context = await this.store.taskContext(taskId)
-    const executionAttempts = await this.store.executionAttemptCount(taskId)
-    const automaticRework = review.verdict === 'fail'
-      && context.company.autonomyLevel >= 4
-      && executionAttempts < MAX_AUTOPILOT_EXECUTION_ATTEMPTS
+    // Duplicate delivery across the two gateway sockets must not complete the
+    // review twice; claim the session synchronously before any await.
+    if (this.structuredInFlight.has(sessionId)) return
+    this.structuredInFlight.add(sessionId)
+    try {
+      const issueText = review.issues?.length ? `\nIssues: ${review.issues.join('; ')}` : ''
+      const summary = `${review.summary}${issueText}`
+      const context = await this.store.taskContext(taskId)
+      const executionAttempts = await this.store.executionAttemptCount(taskId)
+      const automaticRework = review.verdict === 'fail'
+        && context.company.autonomyLevel >= 4
+        && executionAttempts < MAX_AUTOPILOT_EXECUTION_ATTEMPTS
 
-    await this.store.completeReview(taskId, review.verdict === 'pass', summary, review.memory ?? [])
-    if (automaticRework) await this.store.queueRework(taskId, summary)
+      await this.store.completeReview(taskId, review.verdict === 'pass', summary, review.memory ?? [])
+      if (automaticRework) await this.store.queueRework(taskId, summary)
+    } finally {
+      this.structuredInFlight.delete(sessionId)
+    }
     this.structuredHandled.add(sessionId)
     this.autoAdvance.set(sessionId, projectId)
   }
@@ -221,6 +293,12 @@ export class OrganizationOrchestrator {
     } catch (error) {
       console.warn('Organization autopilot paused:', error instanceof Error ? error.message : String(error))
     }
+  }
+
+  private resolveAgentModel(agent?: OrganizationAgent, role?: OrganizationRole): { provider?: string; model?: string } {
+    const provider = agent?.providerId ?? role?.providerId
+    const model = agent?.modelId ?? role?.modelId
+    return provider && model ? { provider, model } : {}
   }
 
   private async failTask(taskId: string, message: string): Promise<void> {
@@ -266,6 +344,7 @@ export class OrganizationOrchestrator {
   private cleanupSession(sessionId: string): void {
     this.finalText.delete(sessionId)
     this.structuredHandled.delete(sessionId)
+    this.structuredInFlight.delete(sessionId)
     this.autoAdvance.delete(sessionId)
   }
 
@@ -321,7 +400,13 @@ function messageText(message: unknown): string | undefined {
 function extractTaggedJson<T>(text: string, tag: string): T | undefined {
   const match = new RegExp(`<${tag}>\\s*([\\s\\S]*?)\\s*</${tag}>`).exec(text)
   if (!match?.[1]) return undefined
-  return JSON.parse(match[1]) as T
+  let raw = match[1].trim()
+  if (raw.startsWith('```')) raw = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
+  try {
+    return JSON.parse(raw) as T
+  } catch {
+    return undefined
+  }
 }
 
 function validatePlan(plan: ProjectPlanInput): void {

@@ -1,5 +1,15 @@
 import { useEffect, useState } from 'react'
 import type { AgentPresetSummary } from '../../../shared/contracts'
+import {
+  SettingsButton,
+  SettingsNote,
+  SettingsRow,
+  SettingsSection,
+  StatusChip,
+  rowPathText,
+  rowStack,
+  rowTitle,
+} from './settings-primitives'
 
 interface PresetSettingsProps {
   onError(message: string): void
@@ -73,43 +83,44 @@ export function PresetSettings({ onError }: PresetSettingsProps) {
   }
 
   return (
-    <div className="settings-scroll">
-      <section className="settings-section">
-        <h2>Agent presets</h2>
-        <p className="settings-note">
+    <div className="min-h-0 overflow-auto px-[26px] pb-[42px] pt-1.5">
+      <SettingsSection title="Agent presets" className="mt-3.5">
+        <SettingsNote>
           Each session composes its agent from one preset. Creator mode is the shipped <code>cordis</code> preset
           (creates custom presets); Code mode is the shipped <code>code</code> (PTC) preset.
-        </p>
+        </SettingsNote>
         {!loaded ? (
-          <div className="settings-note">Loading presets…</div>
+          <SettingsNote>Loading presets…</SettingsNote>
         ) : presets.length === 0 ? (
-          <div className="settings-note">No presets are available in this deployment.</div>
+          <SettingsNote>No presets are available in this deployment.</SettingsNote>
         ) : (
-          presets.map((preset) => (
-            <div className="settings-row" key={preset.id}>
-              <div>
-                <strong>{preset.name ?? preset.id}</strong>
-                <span className="settings-path">{preset.description ?? preset.id}</span>
-                {preset.trust === 'system' ? <span className="settings-status">shipped</span> : null}
-                {preset.isDefault ? <span className="settings-status good">default</span> : null}
-              </div>
-              <div className="settings-row-actions">
-                <button className="settings-button" disabled={busyId === preset.id} onClick={() => void startSession(preset)}>
-                  New session
-                </button>
-                <button
-                  className={`settings-button ${preset.isDefault ? 'active' : ''}`}
-                  disabled={busyId === preset.id || preset.isDefault === true}
-                  onClick={() => void setDefault(preset)}
-                >
-                  {preset.isDefault ? 'Default' : 'Set default'}
-                </button>
-              </div>
-            </div>
-          ))
+          <div className="space-y-1.5">
+            {presets.map((preset) => (
+              <SettingsRow key={preset.id}>
+                <div className={rowStack}>
+                  <strong className={rowTitle}>{preset.name ?? preset.id}</strong>
+                  <span className={rowPathText}>{preset.description ?? preset.id}</span>
+                  {preset.trust === 'system' ? <StatusChip neutral>shipped</StatusChip> : null}
+                  {preset.isDefault ? <StatusChip good>default</StatusChip> : null}
+                </div>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <SettingsButton disabled={busyId === preset.id} onClick={() => void startSession(preset)}>
+                    New session
+                  </SettingsButton>
+                  <SettingsButton
+                    active={preset.isDefault}
+                    disabled={busyId === preset.id || preset.isDefault === true}
+                    onClick={() => void setDefault(preset)}
+                  >
+                    {preset.isDefault ? 'Default' : 'Set default'}
+                  </SettingsButton>
+                </div>
+              </SettingsRow>
+            ))}
+          </div>
         )}
-        {notice ? <div className="settings-note good">{notice}</div> : null}
-      </section>
+        {notice ? <SettingsNote good>{notice}</SettingsNote> : null}
+      </SettingsSection>
     </div>
   )
 }

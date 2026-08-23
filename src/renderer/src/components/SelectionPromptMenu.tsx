@@ -79,11 +79,11 @@ export function SelectionPromptMenu({ containerRef, actions, onRun }: SelectionP
   return (
     <div
       ref={menuRef}
-      className="editor-floating-bar"
       role="toolbar"
       aria-label="Selection actions"
       style={{ left: position.x, top: position.y }}
       onMouseDown={(event) => event.preventDefault()}
+      className="fixed z-50 flex select-none gap-0.5 rounded-[7px] border border-(--prompt-menu-border) bg-(--prompt-menu-bg) p-[3px] shadow-[0_8px_24px_rgba(0,0,0,0.35)]"
     >
       {actions.map((action) => (
         <button
@@ -93,6 +93,7 @@ export function SelectionPromptMenu({ containerRef, actions, onRun }: SelectionP
             onRun(action.id, position.text)
             setPosition(null)
           }}
+          className="flex items-center gap-1.5 rounded-[5px] px-[9px] py-[5px] text-[11px] whitespace-nowrap text-(--prompt-menu-text) transition-colors hover:bg-(--prompt-menu-hover) focus-visible:-outline-offset-1 focus-visible:outline focus-visible:outline-1 focus-visible:outline-primary [&_svg]:size-[13px]"
         >
           {action.icon}
           <span>{action.label}</span>

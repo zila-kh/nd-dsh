@@ -1,9 +1,9 @@
-import { app, clipboard, dialog, ipcMain, nativeImage, shell, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
-import type { BrowserBounds, DshSurface, HarnessRunOptions, InspectScope, QaSuiteId, ThemeMode } from '../shared/contracts.js'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, screen, shell, type IpcMainInvokeEvent } from 'electron'
+import type { BrowserBounds, DshSurface, HarnessRunOptions, InspectScope, ModelProvider, QaSuiteId, ThemeMode } from '../shared/contracts.js'
 import { IPC } from '../shared/contracts.js'
 import { projectRoot } from './app-paths.js'
 import { capturePrimaryDisplay, captureSelfWindow } from './capture/app-capture.js'
-import { describePick, ExternalElementStage, pickElementInExternalApp, pickElementInSelfWindow, type ExternalPick } from './capture/external-inspect.js'
+import { describePick, ExternalElementStage, formatExternalElementContext, pickElementInExternalApp, RecentPickStore, type ExternalPick } from './capture/external-inspect.js'
 import type { BrowserController } from './browser/browser-controller.js'
 import type { DshSurfaceController } from './dsh/dsh-surface.js'
 import type { CodingEngineRegistry } from './engines/coding-engine-registry.js'
@@ -12,12 +12,15 @@ import type { GitService } from './git/git-service.js'
 import type { HarnessService } from './harness/harness-service.js'
 import type { ProviderStore } from './providers.js'
 import type { QaService } from './qa/qa-service.js'
+import type { SessionArchiveStore } from './sessions/session-archive-store.js'
 import type { ThemeService } from './theme.js'
 import type { ProjectWorkspaceCoordinator } from './workspace/project-workspace-coordinator.js'
 import type { WorkspaceRegistry } from './workspace/workspace-registry.js'
 
 interface IpcDependencies {
   window: BrowserWindow
+  /** Preload script path, reused by the frameless float overlay window. */
+  preloadPath: string
   browser: BrowserController
   dshSurface: DshSurfaceController
   engines: CodingEngineRegistry
@@ -28,8 +31,10 @@ interface IpcDependencies {
   theme: ThemeService
   providers: ProviderStore
   externalElements: ExternalElementStage
+  recentPicks: RecentPickStore
   git: GitService
   qa: QaService
+  sessionArchive: SessionArchiveStore
 }
 
 type Handler = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown | Promise<unknown>
@@ -60,12 +65,91 @@ export function registerIpc(deps: IpcDependencies): () => void {
     channels.push(channel)
   }
 
+  let floatWindow: BrowserWindow | null = null
+
+  const FLOAT_PILL_WIDTH = 170
+  const FLOAT_PILL_HEIGHT = 56
+
+  // The float overlay is a second frameless, fully transparent window that
+  // loads the same renderer bundle under #/float — there the app draws only
+  // the movable action pill, so no OS chrome or background ever shows.
+  const getFloatOverlayWindow = (): BrowserWindow => {
+    if (floatWindow && !floatWindow.isDestroyed()) return floatWindow
+    floatWindow = new BrowserWindow({
+      width: FLOAT_PILL_WIDTH,
+      height: FLOAT_PILL_HEIGHT,
+      frame: false,
+      transparent: true,
+      backgroundColor: '#00000000',
+      resizable: false,
+      skipTaskbar: true,
+      hasShadow: false,
+      show: false,
+      webPreferences: {
+        preload: deps.preloadPath,
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+      },
+    })
+    const currentUrl = deps.window.webContents.getURL()
+    if (currentUrl) void floatWindow.loadURL(`${currentUrl.split('#')[0]}#/float`)
+    return floatWindow
+  }
+
   handle(IPC.appInfo, () => ({
     name: app.getName(),
     version: app.getVersion(),
     platform: process.platform,
     projectRoot: projectRoot(),
   }))
+
+  handle(IPC.windowSetFloatMode, async (_event, enabled) => {
+    if (enabled === true) {
+      const overlay = getFloatOverlayWindow()
+      const { x, y, width } = screen.getPrimaryDisplay().workArea
+      const showOverlay = (): void => {
+        if (floatWindow && !floatWindow.isDestroyed()) {
+          floatWindow.setBounds({
+            x: x + width - FLOAT_PILL_WIDTH - 24,
+            y: y + 48,
+            width: FLOAT_PILL_WIDTH,
+            height: FLOAT_PILL_HEIGHT,
+          })
+          floatWindow.show()
+        }
+      }
+      if (!overlay.isVisible()) {
+        if (overlay.webContents.isLoading()) overlay.once('ready-to-show', showOverlay)
+        else showOverlay()
+      }
+      if (!deps.window.isDestroyed()) deps.window.hide()
+      return { float: true }
+    }
+    if (floatWindow && !floatWindow.isDestroyed()) floatWindow.hide()
+    if (deps.window.isMinimized()) deps.window.restore()
+    deps.window.show()
+    deps.window.focus()
+    deps.window.webContents.send(IPC.windowFloatModeEvent, false)
+    return { float: false }
+  })
+
+  // Overlay-only helpers: grow/shrink for the popup card, drag-to-move.
+  handle(IPC.windowResizeFloatWindow, (_event, width, height) => {
+    if (!floatWindow || floatWindow.isDestroyed()) return
+    const w = typeof width === 'number' ? Math.max(60, Math.round(width)) : FLOAT_PILL_WIDTH
+    const h = typeof height === 'number' ? Math.max(40, Math.round(height)) : FLOAT_PILL_HEIGHT
+    const [currX = 0, currY = 0] = floatWindow.getPosition()
+    floatWindow.setBounds({ x: currX, y: currY, width: w, height: h })
+  })
+
+  handle(IPC.windowMoveFloatWindow, (_event, deltaX, deltaY) => {
+    if (!floatWindow || floatWindow.isDestroyed()) return
+    const dx = typeof deltaX === 'number' ? deltaX : 0
+    const dy = typeof deltaY === 'number' ? deltaY : 0
+    const [currX = 0, currY = 0] = floatWindow.getPosition()
+    floatWindow.setPosition(currX + Math.round(dx), currY + Math.round(dy))
+  })
 
   handle(IPC.enginesList, () => deps.engines.list())
   handle(IPC.enginesAssignments, () => deps.engines.assignments())
@@ -74,19 +158,26 @@ export function registerIpc(deps: IpcDependencies): () => void {
     asString(engineId, 'Engine id', 256),
   ))
   // Non-harness chat sessions (currently the direct Codex engine) surfaced
-  // alongside gateway sessions in the workbench chat panel.
-  handle(IPC.enginesSessions, () => deps.engineRouter.sessions())
+  // alongside gateway sessions in the workbench chat panel. ND-side archive
+  // flags are stamped on both listings here; neither runtime stores them.
+  handle(IPC.enginesSessions, async () => {
+    const [items, archivedIds] = await Promise.all([deps.engineRouter.sessions(), deps.sessionArchive.archivedIds()])
+    if (archivedIds.size === 0) return items
+    return items.map((item) => (archivedIds.has(item.sessionId) ? { ...item, archived: true } : item))
+  })
   handle(IPC.enginesTranscript, (_event, value) => deps.engineRouter.transcript(asString(value, 'Session id', 128)))
+  // Archival covers every chat thread (harness or engine-backed); the id list
+  // returns so the renderer can reconcile its local copies.
+  handle(IPC.sessionsSetArchived, (_event, sessionId, archived) =>
+    deps.sessionArchive.setArchived(asString(sessionId, 'Session id', 128), archived === true))
 
-  // Element-level inspect: 'external' attaches to another Electron app's
-  // loopback debug port and injects the picker via CDP Runtime.evaluate;
-  // 'self' runs the identical picker inside this app's own renderer. The
-  // pick returns to the renderer, which offers Add-to-chat; staged elements
-  // ride along with the next prompt (see ExternalElementStage).
+  // External element inspection attaches to another Electron app's loopback
+  // debug port and injects the picker via CDP Runtime.evaluate. Self-window
+  // inspection stays inside our renderer DOM and never crosses this IPC path.
+  // External picks and screenshots remain in the trusted RecentPickStore.
   handle(IPC.captureInspectElement, async (_event, scope) => {
-    const outcome = asInspectScope(scope) === 'self'
-      ? await pickElementInSelfWindow(deps.window.webContents)
-      : await pickElementInExternalApp()
+    if (asInspectScope(scope) !== 'external') throw new Error('Self element inspection must run inside the ND renderer')
+    const outcome = await pickElementInExternalApp()
     if (outcome.kind === 'unreachable') return { outcome: 'unreachable' as const, message: outcome.message }
     if (outcome.kind === 'canceled') return { outcome: 'canceled' as const }
     const description = describePick(outcome.pick)
@@ -96,16 +187,41 @@ export function registerIpc(deps: IpcDependencies): () => void {
       targetTitle: outcome.pick.targetTitle,
       shortName: description.shortName,
       hover: description.hover,
+      pickId: deps.recentPicks.put(outcome.pick, outcome.screenshot),
+      hasShot: Boolean(outcome.screenshot),
     }
   })
 
-  handle(IPC.captureStageElement, (_event, element, targetTitle) => deps.externalElements.stage(
-    { element: asExternalElement(element), targetTitle: asString(targetTitle, 'Target title', 256) },
-  ))
+  handle(IPC.captureStageElement, (_event, element, targetTitle, pickId) => {
+    // A stored recent pick is preferred: it keeps the full capture (selector,
+    // styles, source) exactly as collected, plus any element screenshot.
+    const id = typeof pickId === 'string' && pickId.trim() ? pickId : undefined
+    const stored = id ? deps.recentPicks.get(id) : undefined
+    if (id && stored) return deps.externalElements.stage(stored, deps.recentPicks.screenshot(id))
+    return deps.externalElements.stage(
+      { element: asExternalElement(element), targetTitle: asString(targetTitle, 'Target title', 256) },
+    )
+  })
 
   handle(IPC.captureElementAttachments, () => deps.externalElements.views())
 
   handle(IPC.captureRemoveElement, (_event, id) => deps.externalElements.remove(asString(id, 'Element id', 128)))
+
+  // Copy helpers for the picked-element dialog: the full agent-ready context
+  // block (same text the agent receives) and the cropped element image.
+  handle(IPC.captureCopyElementContext, (_event, pickId) => {
+    const pick = deps.recentPicks.get(asString(pickId, 'Pick id', 128))
+    if (!pick) return false
+    clipboard.writeText(formatExternalElementContext(pick, deps.recentPicks.screenshot(asString(pickId, 'Pick id', 128))))
+    return true
+  })
+
+  handle(IPC.captureCopyElementShot, (_event, pickId) => {
+    const shot = deps.recentPicks.screenshot(asString(pickId, 'Pick id', 128))
+    if (!shot) return false
+    clipboard.writeImage(nativeImage.createFromBuffer(Buffer.from(shot.data, 'base64')))
+    return true
+  })
 
   // Inspect capture: 'external' grabs the primary display (cross-app),
   // 'self' renders this ND-DSH window's own contents. Either way the
@@ -217,12 +333,18 @@ export function registerIpc(deps: IpcDependencies): () => void {
   handle(IPC.themeSet, (_event, value) => deps.theme.set(asThemeMode(value)))
 
   handle(IPC.providersList, () => deps.providers.list())
-  handle(IPC.providersSave, (_event, value) => deps.providers.save(value))
-  handle(IPC.providersSetApiKey, (_event, providerId, apiKey) => deps.providers.setApiKey(
+  // Provider metadata changes must reach open surfaces (e.g. the chat model
+  // picker) so stale selections are re-checked against the live catalog.
+  const emitProvidersChanged = (providers: ModelProvider[]): ModelProvider[] => {
+    if (!deps.window.isDestroyed()) deps.window.webContents.send(IPC.providersChangedEvent, providers)
+    return providers
+  }
+  handle(IPC.providersSave, (_event, value) => emitProvidersChanged(deps.providers.save(value)))
+  handle(IPC.providersSetApiKey, (_event, providerId, apiKey) => emitProvidersChanged(deps.providers.setApiKey(
     asString(providerId, 'Provider id', 256),
     asString(apiKey, 'API key', 32_768),
-  ))
-  handle(IPC.providersClearApiKey, (_event, providerId) => deps.providers.clearApiKey(asString(providerId, 'Provider id', 256)))
+  )))
+  handle(IPC.providersClearApiKey, (_event, providerId) => emitProvidersChanged(deps.providers.clearApiKey(asString(providerId, 'Provider id', 256))))
   handle(IPC.providersPing, (_event, providerId, force) => deps.providers.ping(asString(providerId, 'Provider id', 256), Boolean(force)))
 
   handle(IPC.gitState, () => deps.git.current)
@@ -340,9 +462,20 @@ function asExternalElement(value: unknown): ExternalPick['element'] {
   const role = optional('role', 128)
   const ariaLabel = optional('ariaLabel', 256)
   const text = optional('text', 300)
-  const html = optional('html', 1_200)
+  const html = optional('html', 3_000)
   const url = optional('url', 2_048)
   const pageTitle = optional('pageTitle', 256)
+  const selector = optional('selector', 2_048)
+  const source = optional('source', 512)
+  const stylesRecord = record.styles
+  let styles: Record<string, string> | undefined
+  if (stylesRecord && typeof stylesRecord === 'object') {
+    const entries = Object.entries(stylesRecord as Record<string, unknown>)
+      .filter((entry): entry is [string, string] => typeof entry[0] === 'string' && typeof entry[1] === 'string')
+      .slice(0, 16)
+      .map(([property, value]) => [property.slice(0, 64), value.slice(0, 160)] as const)
+    if (entries.length > 0) styles = Object.fromEntries(entries)
+  }
   const classes = Array.isArray(record.classes)
     ? record.classes.filter((item): item is string => typeof item === 'string').slice(0, 12)
     : undefined
@@ -360,6 +493,9 @@ function asExternalElement(value: unknown): ExternalPick['element'] {
     ...(html !== undefined ? { html } : {}),
     ...(url !== undefined ? { url } : {}),
     ...(pageTitle !== undefined ? { pageTitle } : {}),
+    ...(selector !== undefined ? { selector } : {}),
+    ...(styles !== undefined ? { styles } : {}),
+    ...(source !== undefined ? { source } : {}),
     box: { x: box.x as number, y: box.y as number, width: box.width as number, height: box.height as number },
   }
 }

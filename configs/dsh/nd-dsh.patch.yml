@@ -64,10 +64,10 @@
         transport: stdio
         command: !!js process.execPath
         args:
-          - !!js process.env.ND_DSH_EXTERNAL_INSPECT_ENTRY
+          - !!js process.env.ND_DSH_EXTERNAL_INSPECT_ENTRY ?? ''
           - mcp
         env:
-          PATH: !!js process.env.PATH
+          PATH: !!js process.env.PATH ?? ''
           ND_DSH_EXTERNAL_CDP_PORT: !!js process.env.ND_DSH_EXTERNAL_CDP_PORT ?? '9333'
         toolCallTimeoutMs: 120000
         failOnStartupError: false
@@ -107,16 +107,16 @@
         transport: stdio
         command: !!js process.execPath
         args:
-          - !!js process.env.ND_DSH_AGENT_BROWSER_ENTRY
+          - !!js process.env.ND_DSH_AGENT_BROWSER_ENTRY ?? ''
           - mcp
           - --tools
           - core,network,state,debug,tabs,react
         env:
-          PATH: !!js process.env.PATH
-          AGENT_BROWSER_CONFIG: !!js process.env.ND_DSH_AGENT_BROWSER_CONFIG
-          AGENT_BROWSER_SESSION: !!js process.env.ND_DSH_AGENT_BROWSER_SESSION
+          PATH: !!js process.env.PATH ?? ''
+          AGENT_BROWSER_CONFIG: !!js process.env.ND_DSH_AGENT_BROWSER_CONFIG ?? ''
+          AGENT_BROWSER_SESSION: !!js process.env.ND_DSH_AGENT_BROWSER_SESSION ?? ''
         toolCallTimeoutMs: 120000
-        failOnStartupError: true
+        failOnStartupError: false
         reconnect:
           enabled: true
           initialDelayMs: 500
