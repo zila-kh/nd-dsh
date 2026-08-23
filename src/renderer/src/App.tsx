@@ -41,6 +41,10 @@ function hashForView(view: ProductView): string {
   return `#/${view}`
 }
 
+function isFloatOverlayRoute(): boolean {
+  return window.location.hash.replace(/^#\/?/, '').split(/[/?]/)[0] === 'float'
+}
+
 function harnessDotClasses(state: HarnessStatus['state'] | undefined): string {
   if (state === 'ready' || state === 'running') return 'bg-primary'
   if (state === 'starting') return 'bg-info animate-pulse-dot'
@@ -66,6 +70,7 @@ const navButtonClasses = (active: boolean): string =>
   )
 
 export default function App() {
+  const isFloatOverlay = isFloatOverlayRoute()
   const uiPreview = window.ndDshRuntimeMode === 'ui-preview'
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null)
   const [browserState, setBrowserState] = useState<BrowserState | null>(null)
@@ -81,7 +86,10 @@ export default function App() {
   const [appInspectCountdown, setAppInspectCountdown] = useState<number | null>(null)
   const [appInspectInFlight, setAppInspectInFlight] = useState(false)
   const [elementInspectActive, setElementInspectActive] = useState(false)
-  const [inspectScope, setInspectScope] = useState<InspectScope>('self')
+  // The dedicated overlay window loads the same bundle at #/float. Initialize
+  // it directly in external mode so it never renders the full workbench into
+  // the compact pill bounds before effects get a chance to run.
+  const [inspectScope, setInspectScope] = useState<InspectScope>(() => isFloatOverlay ? 'external' : 'self')
   const [pendingPick, setPendingPick] = useState<{ element: ExternalElementPickView; targetTitle: string; shortName: string; hover: string; pickId?: string; hasShot?: boolean } | null>(null)
   const [pendingAppInspect, setPendingAppInspect] = useState<{ displayLabel: string; width: number; height: number; copiedToClipboard: boolean; scope: InspectScope } | null>(null)
   const [elementAttachmentVersion, setElementAttachmentVersion] = useState(0)
@@ -99,7 +107,7 @@ export default function App() {
 
   useEffect(() => {
     if (inspectScope === 'external') {
-      void window.ndDsh.window?.setFloatMode(true)
+      if (!isFloatOverlay) void window.ndDsh.window?.setFloatMode(true)
       document.documentElement.classList.add('float-mode')
       document.body.classList.add('float-mode')
       document.getElementById('root')?.classList.add('float-mode')
@@ -108,9 +116,25 @@ export default function App() {
       document.body.classList.remove('float-mode')
       document.getElementById('root')?.classList.remove('float-mode')
     }
-  }, [inspectScope, pendingAppInspect, pendingPick])
+  }, [inspectScope, isFloatOverlay])
+
+  useEffect(() => {
+    if (isFloatOverlay) return
+    return window.ndDsh.window?.onFloatMode?.((enabled) => {
+      setInspectScope(enabled ? 'external' : 'self')
+    })
+  }, [isFloatOverlay])
+
+  useEffect(() => {
+    if (!isFloatOverlay) return
+    const hasSummary = pendingAppInspect !== null
+    void window.ndDsh.window?.resizeFloatWindow(hasSummary ? 324 : 170, hasSummary ? 194 : 56)
+  }, [isFloatOverlay, pendingAppInspect])
 
   const handlePillPointerDown = (e: React.PointerEvent<HTMLDivElement>): void => {
+    // Buttons opt out of the draggable region. Capturing their pointer on the
+    // parent retargets pointer-up and prevents their click handlers from firing.
+    if (e.target instanceof Element && e.target.closest('.app-no-drag')) return
     pillDragRef.current = { x: e.clientX, y: e.clientY }
     e.currentTarget.setPointerCapture(e.pointerId)
   }
@@ -294,6 +318,7 @@ export default function App() {
   }
 
   useEffect(() => {
+    if (isFloatOverlay) return
     void Promise.all([
       window.ndDsh.workspace.state().then(setWorkspace),
       window.ndDsh.browser.state().then(setBrowserState),
@@ -317,9 +342,10 @@ export default function App() {
       void window.ndDsh.browser.setVisible(false).catch(() => undefined)
       void window.ndDsh.dshView.setVisible(false).catch(() => undefined)
     }
-  }, [notify])
+  }, [isFloatOverlay, notify])
 
   useEffect(() => {
+    if (isFloatOverlay) return
     let mounted = true
     void window.ndDsh.theme.state()
       .then((state) => { if (mounted) setTheme(state) })
@@ -329,7 +355,7 @@ export default function App() {
       mounted = false
       offTheme()
     }
-  }, [notify])
+  }, [isFloatOverlay, notify])
 
   useEffect(() => {
     if (!theme) return
@@ -338,6 +364,7 @@ export default function App() {
   }, [theme])
 
   useEffect(() => {
+    if (isFloatOverlay) return
     const target = hashForView(view)
     if (window.location.hash === target) return
     try {
@@ -345,7 +372,7 @@ export default function App() {
     } catch {
       window.location.hash = target
     }
-  }, [view])
+  }, [isFloatOverlay, view])
 
   useEffect(() => {
     const onPopState = (): void => setView(viewFromHash())

@@ -148,14 +148,9 @@ export class OrganizationOrchestrator {
   }
 
   async handleHarnessEvent(frame: DshEventFrame): Promise<void> {
-    // TODO(remove): temporary e2e diagnostics for plan-event delivery.
-    if (frame.kind !== 'session-status' || frame.running === false) {
-      console.warn(`[org-debug] frame kind=${frame.kind} type=${frame.event?.type ?? '-'} session=${frame.sessionId ? frame.sessionId.slice(0, 13) : 'none'}`)
-    }
     const sessionId = frame.sessionId
     if (!sessionId) return
     const run = await this.store.runBySession(sessionId)
-    console.warn(`[org-debug] run=${run ? `${run.kind}:${run.status}` : 'none'} session=${sessionId.slice(0, 13)}`)
 
     if (frame.kind === 'session-event' && frame.event && run) {
       if (frame.event.type === 'assistant/message') {
@@ -235,8 +230,6 @@ export class OrganizationOrchestrator {
   }
 
   private async handlePlan(projectId: string, sessionId: string, text: string): Promise<void> {
-    // TODO(remove): temporary e2e diagnostics.
-    console.warn(`[org-debug] handlePlan called textLen=${text.length} hasTag=${text.includes('nd-dsh-plan')}`)
     const plan = extractTaggedJson<ProjectPlanInput>(text, 'nd-dsh-plan')
     if (!plan) return
     validatePlan(plan)
@@ -246,7 +239,6 @@ export class OrganizationOrchestrator {
     this.structuredInFlight.add(sessionId)
     try {
       await this.store.applyPlan(projectId, plan)
-      console.warn(`[org-debug] plan applied for project ${projectId.slice(0, 8)}`)
     } finally {
       this.structuredInFlight.delete(sessionId)
     }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import type { BrowserState, HarnessStatus, WorkspaceState } from '../../../shared/contracts'
+import type { BrowserState, HarnessStatus, UiSourceLocation, UiTarget, WorkspaceState } from '../../../shared/contracts'
 import type {
   DesignComponentEntry,
   DesignFreeformDocumentEntry,
@@ -9,6 +9,19 @@ import type {
 } from '../../../shared/design'
 import { BrowserPane } from './BrowserPane'
 import { cn } from '../lib/utils'
+import { Button } from './ui/button'
+import { Badge } from './ui/badge'
+import { Card } from './ui/card'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip'
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from './ui/resizable'
+import {
+  BrowserIcon,
+  ChevronRightIcon,
+  CloseIcon,
+  SparkIcon,
+  SidebarToggleIcon,
+} from './Icons'
+import { LucidePenTool, LucideLayout, LucideCode, LucideLayers, LucideSave, LucideWand2, LucideCheck, LucideCircleAlert, LucidePlus } from 'lucide-react'
 
 interface DesignViewProps {
   active: boolean
@@ -20,76 +33,58 @@ interface DesignViewProps {
   onError(message: string): void
 }
 
-type DesignSurface = 'live' | 'templates' | 'library' | 'canvas' | 'freeform'
-
-const sectionButton = cn(
-  'h-[29px] rounded-md border border-border-strong bg-secondary px-2 text-xs text-soft transition-colors',
-  'hover:bg-accent hover:text-foreground',
-  'disabled:pointer-events-none disabled:opacity-45',
-)
-const primaryButton = cn(
-  'h-[29px] rounded-md border border-primary/30 bg-primary/10 px-2 text-xs text-primary transition-colors',
-  'hover:bg-primary/[0.16]',
-  'disabled:pointer-events-none disabled:opacity-45',
-)
+type DesignSurface = 'live' | 'freeform' | 'templates' | 'library' | 'canvas'
 
 export function DesignView({ active, workspace, browser, harness, onWorkspaceChanged, onAskAgent, onError }: DesignViewProps) {
-  const [prompt, setPrompt] = useState('')
   const [project, setProject] = useState<DesignProjectState | null>(null)
   const [freeform, setFreeform] = useState<DesignFreeformState | null>(null)
   const [surface, setSurface] = useState<DesignSurface>('live')
+  const [prompt, setPrompt] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
-  const selected = surface === 'live' ? browser?.selectedTarget : undefined
-  const source = selected?.source ?? selected?.react?.source
-  const bindingBlocked = workspace?.binding === 'unlinked' || workspace?.binding === 'missing'
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [inspectorCollapsed, setInspectorCollapsed] = useState(false)
 
   useEffect(() => {
     let mounted = true
-    void window.ndDshDesign.freeformState()
-      .then((state) => { if (mounted) setFreeform(state) })
-      .catch((cause) => { if (mounted) onError(errorMessage(cause)) })
-    const off = window.ndDshDesign.onFreeformState((state) => {
-      if (mounted) setFreeform(state)
-    })
+    if (!active) return undefined
+
+    const updateState = (next: DesignProjectState): void => {
+      if (!mounted) return
+      setProject(next)
+    }
+
+    const updateFreeform = (next: DesignFreeformState): void => {
+      if (!mounted) return
+      setFreeform(next)
+      if (next.status === 'ready' && next.documentPath) {
+        setSurface('freeform')
+      }
+    }
+
+    window.ndDshDesign.state()
+      .then(updateState)
+      .catch((cause: unknown) => { if (mounted) onError(errorMessage(cause)) })
+
+    window.ndDshDesign.freeformState()
+      .then(updateFreeform)
+      .catch((cause: unknown) => { if (mounted) onError(errorMessage(cause)) })
+
+    const unsubFreeform = window.ndDshDesign.onFreeformState(updateFreeform)
+
     return () => {
       mounted = false
-      off()
-      void window.ndDshDesign.freeformSetVisible(false).catch(() => undefined)
+      unsubFreeform()
     }
-  }, [])
+  }, [active, onError])
 
-  useEffect(() => {
-    if (!active || bindingBlocked) return
-    let mounted = true
-    setBusy('scan')
-    void window.ndDshDesign.refresh()
-      .then((state) => {
-        if (!mounted) return
-        setProject(state)
-        setSurface((current) => current === 'freeform' && freeform?.documentPath ? 'freeform' : initialSurface(state, browser))
-      })
-      .catch((cause) => { if (mounted) onError(errorMessage(cause)) })
-      .finally(() => { if (mounted) setBusy(null) })
-    return () => { mounted = false }
-  }, [active, bindingBlocked, workspace?.root, workspace?.projectId])
+  const selected = browser?.selectedTarget
+  const source = selected?.source
 
   const chooseWorkspace = async (): Promise<void> => {
     try {
       onWorkspaceChanged(await window.ndDsh.workspace.pick())
-    } catch (cause) {
+    } catch (cause: unknown) {
       onError(errorMessage(cause))
-    }
-  }
-
-  const refreshProject = async (): Promise<void> => {
-    setBusy('scan')
-    try {
-      setProject(await window.ndDshDesign.refresh())
-      setFreeform(await window.ndDshDesign.freeformState())
-    } catch (cause) {
-      onError(errorMessage(cause))
-    } finally {
-      setBusy(null)
     }
   }
 
@@ -97,46 +92,34 @@ export function DesignView({ active, workspace, browser, harness, onWorkspaceCha
     setBusy(`template:${template.path}`)
     try {
       await window.ndDshDesign.previewHtml(template.path)
-      setProject(await window.ndDshDesign.state())
       setSurface('live')
-    } catch (cause) {
+    } catch (cause: unknown) {
       onError(errorMessage(cause))
     } finally {
       setBusy(null)
     }
+  }
+
+  const useTemplate = (template: DesignTemplateEntry): void => {
+    onAskAgent(`Use template ${template.name} (${template.path}) as reference for the active project. Keep the layout and copy structure, map it to our design tokens and components, edit real source files, and verify in the live app.`)
   }
 
   const startDevPreview = async (): Promise<void> => {
-    setBusy('dev')
+    setBusy('dev-preview')
     try {
       await window.ndDshDesign.startDevPreview()
-      setProject(await window.ndDshDesign.state())
-      setSurface('live')
-    } catch (cause) {
+    } catch (cause: unknown) {
       onError(errorMessage(cause))
     } finally {
       setBusy(null)
     }
   }
 
-  const stopManagedPreview = async (): Promise<void> => {
-    setBusy('stop')
+  const stopDevPreview = async (): Promise<void> => {
+    setBusy('dev-preview')
     try {
       await window.ndDshDesign.stopPreview()
-      setProject(await window.ndDshDesign.refresh())
-    } catch (cause) {
-      onError(errorMessage(cause))
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  const openFreeform = async (document: DesignFreeformDocumentEntry): Promise<void> => {
-    setBusy(`freeform:${document.path}`)
-    try {
-      setFreeform(await window.ndDshDesign.freeformOpen(document.path))
-      setSurface('freeform')
-    } catch (cause) {
+    } catch (cause: unknown) {
       onError(errorMessage(cause))
     } finally {
       setBusy(null)
@@ -144,13 +127,23 @@ export function DesignView({ active, workspace, browser, harness, onWorkspaceCha
   }
 
   const createFreeform = async (): Promise<void> => {
-    setBusy('freeform:new')
+    setBusy('freeform:create')
     try {
-      const path = nextFreeformPath(project)
-      setFreeform(await window.ndDshDesign.freeformCreate(path))
-      setProject(await window.ndDshDesign.refresh())
+      setFreeform(await window.ndDshDesign.freeformCreate(''))
       setSurface('freeform')
-    } catch (cause) {
+    } catch (cause: unknown) {
+      onError(errorMessage(cause))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const openFreeform = async (path: string): Promise<void> => {
+    setBusy(`freeform:${path}`)
+    try {
+      setFreeform(await window.ndDshDesign.freeformOpen(path))
+      setSurface('freeform')
+    } catch (cause: unknown) {
       onError(errorMessage(cause))
     } finally {
       setBusy(null)
@@ -161,8 +154,7 @@ export function DesignView({ active, workspace, browser, harness, onWorkspaceCha
     setBusy('freeform:save')
     try {
       setFreeform(await window.ndDshDesign.freeformSave())
-      setProject(await window.ndDshDesign.refresh())
-    } catch (cause) {
+    } catch (cause: unknown) {
       onError(errorMessage(cause))
     } finally {
       setBusy(null)
@@ -173,8 +165,8 @@ export function DesignView({ active, workspace, browser, harness, onWorkspaceCha
     setBusy('freeform:close')
     try {
       setFreeform(await window.ndDshDesign.freeformClose())
-      setProject(await window.ndDshDesign.refresh())
-    } catch (cause) {
+      setSurface('live')
+    } catch (cause: unknown) {
       onError(errorMessage(cause))
     } finally {
       setBusy(null)
@@ -187,12 +179,12 @@ export function DesignView({ active, workspace, browser, harness, onWorkspaceCha
     try {
       if (freeform.dirty) setFreeform(await window.ndDshDesign.freeformSave())
       onAskAgent(`Build the ND Pencil Freeform design at ${path} into the active project's real application source. Treat the .op document as design intent, reuse existing project components and shadcn/ui where possible, preserve design tokens and accessibility, start or reuse the project runtime, and verify the result in Design Mode. Do not replace production source with a detached generated mockup.`)
-    } catch (cause) {
+    } catch (cause: unknown) {
       onError(errorMessage(cause))
     }
   }
 
-  const submit = (event: FormEvent): void => {
+  const submitPrompt = (event: FormEvent): void => {
     event.preventDefault()
     const text = prompt.trim()
     if (!text) return
@@ -207,561 +199,921 @@ export function DesignView({ active, workspace, browser, harness, onWorkspaceCha
     onAskAgent(`Use the existing shadcn component ${component.name} from ${component.path} in the current UI. Preserve the project's component conventions, tokens, variants, accessibility, and responsive behavior. Edit the real source files and verify the result in the live app.`)
   }
 
-  const sourceSwitcherClasses = (isActive: boolean): string =>
-    cn(
-      sectionButton,
-      'flex items-center justify-between text-left [&>span]:truncate [&>b]:min-w-6 [&>b]:text-right [&>b]:text-[10px] [&>b]:tracking-[0.06em] [&>b]:text-faint',
-      isActive && 'border-primary/20 bg-primary/[0.06] text-primary [&>b]:text-primary hover:bg-primary/[0.06]',
-    )
-
   return (
-    <div className="grid h-full w-full min-h-0 min-w-0 grid-cols-[220px_minmax(0,1fr)_250px] bg-surface-0 min-[1181px]:grid-cols-[250px_minmax(0,1fr)_290px]">
-      <aside className="flex min-h-0 min-w-0 flex-col overflow-auto border-r border-border-soft bg-sidebar">
-        <div className="flex flex-col gap-[3px] border-b border-border-soft p-3.5">
-          <small className="text-[11px] font-extrabold tracking-[0.12em] text-primary">DESIGN</small>
-          <strong className="truncate text-base font-bold text-strong">{workspace?.projectName ?? workspace?.name ?? 'No project'}</strong>
-          <span className="truncate text-xs text-faint">{project ? projectLabel(project) : workspace?.companyName ?? 'Standalone workspace'}</span>
-        </div>
+    <TooltipProvider>
+      <div className="flex h-full w-full min-h-0 min-w-0 flex-col bg-surface-0">
+        {/* Top bar: Design surface switcher */}
+        <header className="flex h-11 shrink-0 items-center justify-between border-b border-border-soft bg-surface-1/80 px-3 backdrop-blur">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <span className="flex size-6 items-center justify-center rounded-md bg-primary/10 text-[11px] font-black tracking-wider text-primary">
+                ND
+              </span>
+              <span className="text-xs font-bold text-strong truncate max-w-[160px]">
+                {workspace?.projectName ?? workspace?.name ?? 'Design Mode'}
+              </span>
+            </div>
 
-        <section className="flex flex-col gap-1.5 border-b border-border-soft px-3.5 py-3">
-          <header className="mb-0.5 text-[11px] font-extrabold uppercase tracking-[0.08em] text-faint">Design sources</header>
-          <button className={sourceSwitcherClasses(surface === 'live')} onClick={() => setSurface('live')}>
-            <span>Live app</span><b>{project?.capabilities.liveApp ? 'APP' : browser?.url && browser.url !== 'about:blank' ? 'URL' : '—'}</b>
-          </button>
-          <button className={sourceSwitcherClasses(surface === 'templates')} onClick={() => setSurface('templates')}>
-            <span>HTML / templates</span><b>{project?.templates.length ?? 0}</b>
-          </button>
-          <button className={sourceSwitcherClasses(surface === 'library')} onClick={() => setSurface('library')}>
-            <span>shadcn library</span><b>{project?.shadcn.components.length ?? 0}</b>
-          </button>
-          <button className={sourceSwitcherClasses(surface === 'canvas')} onClick={() => setSurface('canvas')}>
-            <span>Code canvas</span><b>NEW</b>
-          </button>
-          <button className={sourceSwitcherClasses(surface === 'freeform')} onClick={() => setSurface('freeform')}>
-            <span>ND Pencil</span><b>{project?.freeform.documents.length ?? 0}</b>
-          </button>
-          <button className={cn(sectionButton, 'mt-0.5 justify-center border-dashed text-faint')} disabled={busy === 'scan' || bindingBlocked} onClick={() => void refreshProject()}>
-            {busy === 'scan' ? 'Scanning…' : 'Refresh project index'}
-          </button>
-        </section>
+            <div className="h-4 w-px bg-border-soft" />
 
-        <section className="flex flex-col gap-1.5 border-b border-border-soft px-3.5 py-3">
-          <header className="mb-0.5 text-[11px] font-extrabold uppercase tracking-[0.08em] text-faint">AI design actions</header>
-          {surface === 'freeform' && freeform?.documentPath ? <>
-            <button className={primaryButton} onClick={() => void buildFreeform()}>Build ND Pencil into app</button>
-            <button className={sectionButton} onClick={() => onAskAgent(`Review the ND Pencil design at ${freeform.documentPath} for layout consistency, hierarchy, accessibility, and design-system reuse. Improve the .op design through the ND Pencil editor while keeping it a Freeform artifact; do not change production application code unless I ask.`)}>Improve ND Pencil</button>
-          </> : <>
-            <button className={sectionButton} disabled={!selected} onClick={() => selected && onAskAgent('Improve the selected UI while preserving the project design language. Edit the real source and verify the result in Design Mode.')}>Improve selected</button>
-            <button className={sectionButton} disabled={!selected} onClick={() => selected && onAskAgent('Make the selected UI responsive and verify it at mobile, tablet, and desktop widths.')}>Make responsive</button>
-            <button className={sectionButton} disabled={!selected} onClick={() => selected && onAskAgent('Review the selected UI for accessibility, layout, and interaction problems, then fix them in the real source.')}>Fix accessibility</button>
-          </>}
-        </section>
-
-        <section className="flex flex-col gap-1.5 border-b border-border-soft px-3.5 py-3">
-          <header className="mb-0.5 text-[11px] font-extrabold uppercase tracking-[0.08em] text-faint">Project context</header>
-          <div
-            className={cn(
-              'flex flex-col gap-[3px] rounded-[7px] border border-border-soft bg-surface-0 p-2',
-              workspace?.binding === 'project' && 'border-primary/20',
-              (workspace?.binding === 'missing' || workspace?.binding === 'unlinked') && 'border-warning/25 bg-warning/10',
-            )}
-          >
-            <strong className="text-xs">{workspace?.binding === 'project' ? 'Project workspace linked' : workspace?.binding === 'missing' ? 'Workspace missing' : workspace?.binding === 'unlinked' ? 'Workspace not linked' : 'Standalone workspace'}</strong>
-            <span className="truncate font-mono text-[11px] text-faint">{workspace?.projectWorkspacePath ?? workspace?.root ?? 'Select a workspace'}</span>
+            {/* Surface navigation tabs */}
+            <nav className="flex items-center gap-1">
+              <SurfaceTab
+                active={surface === 'live'}
+                icon={<BrowserIcon className="size-3.5" />}
+                label="Live App"
+                onClick={() => setSurface('live')}
+              />
+              <SurfaceTab
+                active={surface === 'freeform'}
+                icon={<LucidePenTool className="size-3.5" />}
+                label="ND Pencil"
+                badge={freeform?.documentPath ? (freeform.dirty ? '●' : 'ready') : (project?.freeform.documents.length ? String(project.freeform.documents.length) : undefined)}
+                badgeVariant={freeform?.dirty ? 'warning' : 'default'}
+                onClick={() => setSurface('freeform')}
+              />
+              <SurfaceTab
+                active={surface === 'templates'}
+                icon={<LucideLayout className="size-3.5" />}
+                label="Templates"
+                badge={project?.templates.length ? String(project.templates.length) : undefined}
+                onClick={() => setSurface('templates')}
+              />
+              <SurfaceTab
+                active={surface === 'library'}
+                icon={<LucideLayers className="size-3.5" />}
+                label="Components"
+                badge={project?.shadcn.components.length ? String(project.shadcn.components.length) : undefined}
+                onClick={() => setSurface('library')}
+              />
+              <SurfaceTab
+                active={surface === 'canvas'}
+                icon={<LucideCode className="size-3.5" />}
+                label="Code Canvas"
+                onClick={() => setSurface('canvas')}
+              />
+            </nav>
           </div>
-          {surface === 'freeform' ? (
-            <div className={cn('flex items-center justify-between gap-2 rounded-md border border-border-soft bg-surface-0 px-2 py-1.5', freeform?.available ? 'border-primary/20' : 'border-warning/25 bg-warning/10')}>
-              <span className="shrink-0 text-[11px] text-faint">Freeform engine</span>
-              <code className="truncate text-[11px] text-soft">{freeform?.available ? `ND Pencil ${freeform.version ?? 'built in'}` : 'ND Pencil unavailable'}</code>
-            </div>
-          ) : null}
-          {project?.devCommand ? <>
-            <div className="flex items-center justify-between gap-2 rounded-md border border-border-soft bg-surface-0 px-2 py-1.5">
-              <span className="shrink-0 text-[11px] text-faint">Dev runtime</span>
-              <code className="truncate text-[11px] text-soft">{project.devCommand}</code>
-            </div>
-            <button className={primaryButton} disabled={busy !== null} onClick={() => void startDevPreview()}>{busy === 'dev' ? 'Starting runtime…' : project.preview?.kind === 'dev-server' ? 'Restart dev preview' : 'Start dev preview'}</button>
-          </> : null}
-          {project?.preview ? <>
-            <div className="flex items-center justify-between gap-2 rounded-md border border-border-soft bg-surface-0 px-2 py-1.5">
-              <span className="shrink-0 text-[11px] text-faint">Managed preview</span>
-              <code className="truncate text-[11px] text-soft">{project.preview.kind === 'static-html' ? project.preview.templatePath ?? 'HTML' : project.preview.url}</code>
-            </div>
-            <button className={sectionButton} disabled={busy !== null} onClick={() => void stopManagedPreview()}>{busy === 'stop' ? 'Stopping…' : 'Stop managed preview'}</button>
-          </> : null}
-          {bindingBlocked ? <button className={primaryButton} onClick={() => void chooseWorkspace()}>Select workspace</button> : null}
-        </section>
 
-        <form className="mt-auto flex flex-col gap-[7px] p-3.5" onSubmit={submit}>
-          <textarea
-            value={prompt}
-            onChange={(event) => setPrompt(event.target.value)}
-            placeholder={selected ? 'Ask AI to change the selected UI…' : surface === 'canvas' ? 'Describe what to create on the code canvas…' : surface === 'freeform' ? 'Ask ND to edit this ND Pencil canvas…' : 'Describe the design change…'}
-            className="min-h-[88px] resize-y rounded-[7px] border border-border-strong bg-background p-[9px] text-xs/[1.45] text-foreground outline-none focus:border-primary/40"
-          />
-          <button className={primaryButton} disabled={!prompt.trim() || bindingBlocked || harness?.state === 'running'}>Open in Agent</button>
-        </form>
-      </aside>
+          <div className="flex items-center gap-1.5">
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              title={sidebarCollapsed ? 'Expand left panel' : 'Collapse left panel'}
+              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+            >
+              <SidebarToggleIcon collapsed={sidebarCollapsed} className="size-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              title={inspectorCollapsed ? 'Expand right panel' : 'Collapse right panel'}
+              onClick={() => setInspectorCollapsed(!inspectorCollapsed)}
+            >
+              <SidebarToggleIcon collapsed={!inspectorCollapsed} className="size-3.5" />
+            </Button>
+          </div>
+        </header>
 
-      <main className="flex min-h-0 min-w-0 overflow-hidden bg-surface-0">
-        {bindingBlocked ? (
-          <WorkspaceEmpty workspace={workspace} onChoose={() => void chooseWorkspace()} />
-        ) : surface === 'live' ? (
-          <BrowserPane active={active} state={browser} onSnapshot={() => undefined} onError={onError} />
-        ) : surface === 'templates' ? (
-          <TemplateSurface
-            project={project}
-            busy={busy}
-            onPreview={(template) => void previewTemplate(template)}
-            onUse={(template) => onAskAgent(`Use ${template.path} as the active design template. Inspect its markup, styles, and scripts, then implement the requested product UI by editing the real workspace files. Preserve useful visual language and verify the result in Design Mode.`)}
-          />
-        ) : surface === 'library' ? (
-          <ShadcnSurface project={project} onUse={useComponent} onAgent={onAskAgent} />
-        ) : surface === 'freeform' ? (
-          <FreeformSurface
-            active={active}
-            project={project}
-            state={freeform}
-            busy={busy}
-            onOpen={(document) => void openFreeform(document)}
-            onCreate={() => void createFreeform()}
-            onSave={() => void saveFreeform()}
-            onClose={() => void closeFreeform()}
-            onBuild={() => void buildFreeform()}
-            onError={onError}
-          />
-        ) : (
-          <CodeCanvas project={project} onAgent={onAskAgent} />
-        )}
-      </main>
+        {/* Resizable 3-pane body */}
+        <div className="flex flex-1 min-h-0 min-w-0">
+          <ResizablePanelGroup direction={'horizontal' as const} className="h-full w-full">
+            {/* Left Sidebar Panel */}
+            {!sidebarCollapsed ? (
+              <ResizablePanel defaultSize={18} minSize={14} maxSize={26} className="min-w-[200px]">
+                <aside className="flex h-full w-full flex-col overflow-y-auto border-r border-border-soft bg-sidebar">
+                  <div className="flex flex-col gap-1 border-b border-border-soft p-3">
+                    <small className="text-[10px] font-bold tracking-widest text-primary uppercase">Workspace</small>
+                    <strong className="truncate text-sm font-semibold text-strong">
+                      {workspace?.projectName ?? workspace?.name ?? 'No project'}
+                    </strong>
+                    <span className="truncate text-xs text-faint">
+                      {project ? projectLabel(project) : workspace?.companyName ?? 'Standalone workspace'}
+                    </span>
+                  </div>
 
-      <aside className="flex min-h-0 min-w-0 flex-col overflow-auto border-l border-border-soft bg-sidebar">
-        <div className="flex flex-col gap-[3px] border-b border-border-soft p-3.5">
-          <small className="text-[11px] font-extrabold tracking-[0.12em] text-primary">INSPECTOR</small>
-          <strong className="truncate text-base font-bold text-strong">{selected?.react?.component ?? selected?.tagName ?? surfaceTitle(surface)}</strong>
-          <span className="truncate text-xs text-faint">{source ? `${source.file}:${source.line}` : selected ? selected.selector : inspectorSubtitle(surface, freeform)}</span>
+                  {/* Context actions */}
+                  <div className="flex flex-col gap-1 border-b border-border-soft p-3">
+                    <header className="mb-1 text-[10px] font-bold tracking-widest text-faint uppercase">AI Design Actions</header>
+                    {surface === 'freeform' && freeform?.documentPath ? (
+                      <Button
+                        variant="default"
+                        size="xs"
+                        className="justify-start gap-1.5 font-medium"
+                        onClick={buildFreeform}
+                      >
+                        <LucideWand2 className="size-3" />
+                        Build ND Pencil into app
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        size="xs"
+                        className="justify-start gap-1.5 text-xs"
+                        onClick={() => {
+                          if (selected) {
+                            onAskAgent(`Improve the selected UI component ${selected.react?.component ?? selected.tagName}. Make it polished, accessible, responsive, and aligned with project tokens.`)
+                          } else {
+                            onAskAgent(`Review the active UI in Design Mode. Recommend visual, spacing, hierarchy, and token refinements.`)
+                          }
+                        }}
+                      >
+                        <SparkIcon className="size-3 text-primary" />
+                        {selected ? `Improve ${selected.react?.component ?? selected.tagName}` : 'Improve active UI'}
+                      </Button>
+                    )}
+
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      className="justify-start text-xs text-muted-foreground hover:text-foreground"
+                      onClick={() => onAskAgent(`Make the active page layout fully responsive across desktop, tablet, and mobile breakpoints.`)}
+                    >
+                      <ChevronRightIcon className="size-3 text-faint" />
+                      Make responsive
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      className="justify-start text-xs text-muted-foreground hover:text-foreground"
+                      onClick={() => onAskAgent(`Audit accessibility for the active screen. Improve color contrast, focus rings, ARIA roles, and keyboard navigation.`)}
+                    >
+                      <ChevronRightIcon className="size-3 text-faint" />
+                      Fix accessibility
+                    </Button>
+                  </div>
+
+                  {/* Project Context & Preview Server control */}
+                  {project ? (
+                    <div className="flex flex-col gap-2 border-b border-border-soft p-3 text-xs">
+                      <header className="text-[10px] font-bold tracking-widest text-faint uppercase">Project Info</header>
+                      <div className="flex flex-col gap-1 text-muted-foreground">
+                        <div className="flex justify-between">
+                          <span>Framework:</span>
+                          <span className="font-medium text-strong">{project.frameworks.join(', ') || 'Custom HTML/JS'}</span>
+                        </div>
+                        {project.preview?.url ? (
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-emerald-500 font-medium">● Dev Server</span>
+                            <Button
+                              variant="ghost"
+                              size="xs"
+                              className="h-5 px-1.5 text-[10px] text-destructive hover:bg-destructive/10"
+                              disabled={busy === 'dev-preview'}
+                              onClick={stopDevPreview}
+                            >
+                              Stop
+                            </Button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-faint">Preview offline</span>
+                            <Button
+                              variant="outline"
+                              size="xs"
+                              className="h-5 px-1.5 text-[10px]"
+                              disabled={busy === 'dev-preview'}
+                              onClick={startDevPreview}
+                            >
+                              Start preview
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {/* AI Prompt Input at bottom of sidebar */}
+                  <div className="mt-auto flex flex-col border-t border-border-soft p-3">
+                    <form onSubmit={submitPrompt} className="flex flex-col gap-2">
+                      <textarea
+                        value={prompt}
+                        onChange={(e) => setPrompt(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                            e.preventDefault()
+                            submitPrompt(e)
+                          }
+                        }}
+                        placeholder={selected ? `Ask about ${selected.react?.component ?? selected.tagName}…` : 'Ask agent to design or edit… (Ctrl+Enter)'}
+                        className="w-full min-h-[70px] resize-none rounded-md border border-border-soft bg-surface-2 p-2 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-primary/50 focus:outline-none"
+                      />
+                      <Button type="submit" size="xs" className="w-full gap-1.5 font-medium" disabled={!prompt.trim()}>
+                        <SparkIcon className="size-3" />
+                        Send to Agent
+                      </Button>
+                    </form>
+                  </div>
+                </aside>
+              </ResizablePanel>
+            ) : null}
+
+            {!sidebarCollapsed ? <ResizableHandle withHandle /> : null}
+
+            {/* Main Surface Panel */}
+            <ResizablePanel defaultSize={62} minSize={40} className="relative flex min-h-0 min-w-0 flex-col bg-surface-0">
+              {workspace?.binding === 'missing' || !workspace ? (
+                <WorkspaceEmpty workspace={workspace} onChoose={chooseWorkspace} />
+              ) : (
+                <>
+                  {surface === 'live' && (
+                    <BrowserPane active={active} state={browser} onSnapshot={() => undefined} onError={onError} />
+                  )}
+                  {surface === 'freeform' && (
+                    <FreeformSurface
+                      active={active}
+                      project={project}
+                      state={freeform}
+                      busy={busy}
+                      onOpen={openFreeform}
+                      onCreate={createFreeform}
+                      onSave={saveFreeform}
+                      onClose={closeFreeform}
+                      onBuild={buildFreeform}
+                      onError={onError}
+                    />
+                  )}
+                  {surface === 'templates' && (
+                    <TemplateSurface project={project} busy={busy} onPreview={previewTemplate} onUse={useTemplate} />
+                  )}
+                  {surface === 'library' && (
+                    <ShadcnSurface project={project} onUse={useComponent} />
+                  )}
+                  {surface === 'canvas' && (
+                    <CodeCanvas project={project} onAskAgent={onAskAgent} />
+                  )}
+                </>
+              )}
+            </ResizablePanel>
+
+            {!inspectorCollapsed ? <ResizableHandle withHandle /> : null}
+
+            {/* Right Inspector Panel */}
+            {!inspectorCollapsed ? (
+              <ResizablePanel defaultSize={20} minSize={16} maxSize={32} className="min-w-[220px]">
+                <aside className="flex h-full w-full flex-col overflow-y-auto border-l border-border-soft bg-sidebar">
+                  <header className="flex h-9 shrink-0 items-center justify-between border-b border-border-soft px-3">
+                    <span className="text-[10px] font-bold tracking-widest text-faint uppercase">
+                      {inspectorTitle(surface, selected)}
+                    </span>
+                  </header>
+
+                  <div className="flex flex-col flex-1 overflow-y-auto">
+                    {surface === 'freeform' ? (
+                      <FreeformInspector state={freeform} project={project} onBuild={buildFreeform} />
+                    ) : selected ? (
+                      <DomInspector selected={selected} source={source} onAskAgent={onAskAgent} />
+                    ) : (
+                      <SurfaceOverview surface={surface} project={project} freeform={freeform} />
+                    )}
+                  </div>
+                </aside>
+              </ResizablePanel>
+            ) : null}
+          </ResizablePanelGroup>
         </div>
-        {selected ? (
-          <>
-            <section className="flex flex-col gap-0 border-b border-border-soft px-3.5 pt-2.5">
-              <header className="mb-0.5 text-[11px] font-extrabold uppercase tracking-[0.08em] text-faint">Runtime</header>
-              <Property label="Element" value={selected.tagName} />
-              <Property label="Selector" value={selected.selector} />
-              <Property label="Size" value={`${Math.round(selected.bounds.width)} × ${Math.round(selected.bounds.height)}`} />
-              {selected.react?.hierarchy.length ? <Property label="React" value={selected.react.hierarchy.join(' › ')} /> : null}
-            </section>
-            <section className="flex flex-col gap-0 border-b border-border-soft px-3.5 pt-2.5">
-              <header className="mb-0.5 text-[11px] font-extrabold uppercase tracking-[0.08em] text-faint">Layout & style</header>
-              {['display', 'position', 'width', 'height', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left', 'gap', 'font-size', 'font-weight', 'background-color', 'color', 'border-radius'].map((key) => (
-                selected.computedStyle[key] ? <Property key={key} label={key} value={selected.computedStyle[key]} /> : null
-              ))}
-            </section>
-          </>
-        ) : surface === 'freeform' ? (
-          <FreeformInspector state={freeform} project={project} onBuild={() => void buildFreeform()} />
-        ) : (
-          <ProjectInspector project={project} surface={surface} />
-        )}
-      </aside>
-    </div>
+      </div>
+    </TooltipProvider>
   )
 }
 
-function FreeformSurface({ active, project, state, busy, onOpen, onCreate, onSave, onClose, onBuild, onError }: {
+function SurfaceTab({
+  active,
+  icon,
+  label,
+  badge,
+  badgeVariant = 'default',
+  onClick,
+}: {
   active: boolean
-  project: DesignProjectState | null
-  state: DesignFreeformState | null
-  busy: string | null
-  onOpen(document: DesignFreeformDocumentEntry): void
-  onCreate(): void
-  onSave(): void
-  onClose(): void
-  onBuild(): void
-  onError(message: string): void
+  icon: ReactNode
+  label: string
+  badge?: string | undefined
+  badgeVariant?: 'default' | 'warning' | undefined
+  onClick(): void
 }) {
-  if (!state?.available) {
-    return <div className="h-full w-full min-h-0 min-w-0 overflow-auto bg-surface-0 p-7">
-      <header className="mx-auto mb-[22px] flex max-w-[980px] items-start justify-between gap-6">
-        <div className="min-w-0">
-          <small className="mb-[7px] block text-[11px] font-extrabold tracking-[0.12em] text-primary">FREEFORM · ND PENCIL</small>
-          <h2 className="m-0 text-[26px] font-bold tracking-tight text-strong">ND Pencil is built into ND.</h2>
-          <p className="mt-[7px] max-w-[660px] text-sm/[1.6] text-muted-foreground">In a source checkout the pinned engine implementation must be compiled once. Distributed ND builds package it automatically; users never install a separate design application.</p>
-        </div>
-        <span className="shrink-0 rounded-full border border-border-soft bg-sidebar px-2 py-[5px] text-[11px] text-faint">ENGINE</span>
-      </header>
-      <SurfaceEmpty title="ND Pencil runtime is not built" text={state?.error ?? 'Build the pinned runtime to enable the editable vector canvas.'} />
-      <div className="mx-auto my-3.5 flex max-w-[520px] justify-center rounded-lg border border-border-soft bg-sidebar px-3 py-2.5">
-        <code className="text-xs text-soft">pnpm nd-pencil:build</code>
-      </div>
-    </div>
-  }
-
-  if (state.documentPath) {
-    return <NdPencilPane active={active} state={state} busy={busy} onSave={onSave} onClose={onClose} onBuild={onBuild} onError={onError} />
-  }
-
-  const documents = project?.freeform.documents ?? []
-  return <div className="h-full w-full min-h-0 min-w-0 overflow-auto bg-surface-0 p-7">
-    <header className="mx-auto mb-[22px] flex max-w-[980px] items-start justify-between gap-6">
-      <div className="min-w-0">
-        <small className="mb-[7px] block text-[11px] font-extrabold tracking-[0.12em] text-primary">FREEFORM · ND PENCIL</small>
-        <h2 className="m-0 text-[26px] font-bold tracking-tight text-strong">Explore visually before production code.</h2>
-        <p className="mt-[7px] max-w-[660px] text-sm/[1.6] text-muted-foreground">ND Pencil designs are real versionable <code>.op</code> files inside this project. The editor is native to ND and always follows the active workspace.</p>
-      </div>
-      <button
-        className="h-[30px] shrink-0 rounded-md border border-primary/30 bg-primary/10 px-[11px] text-xs text-primary transition-colors hover:bg-primary/[0.16] disabled:pointer-events-none disabled:opacity-45"
-        disabled={busy !== null}
-        onClick={onCreate}
-      >
-        {busy === 'freeform:new' ? 'Creating…' : 'New ND Pencil'}
-      </button>
-    </header>
-    {documents.length ? <div className="mx-auto grid max-w-[980px] grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2.5">
-      {documents.map((document) => <SourceCard
-        key={document.path}
-        icon="NP"
-        name={document.name}
-        path={document.path}
-        note="ND Pencil · editable Freeform canvas"
-        actionLabel={busy === `freeform:${document.path}` ? 'Opening…' : 'Open canvas'}
-        actionDisabled={busy !== null}
-        onAction={() => onOpen(document)}
-      />)}
-    </div> : <div className="mx-auto flex max-w-[760px] flex-col items-center gap-3">
-      <SurfaceEmpty title="No ND Pencil designs yet" text="Create one to sketch frames, layouts, flows, or visual alternatives without turning the design artifact into production source." />
-      <LargeActionButton onClick={onCreate}>Create first ND Pencil design</LargeActionButton>
-    </div>}
-  </div>
-}
-
-function NdPencilPane({ active, state, busy, onSave, onClose, onBuild, onError }: {
-  active: boolean
-  state: DesignFreeformState
-  busy: string | null
-  onSave(): void
-  onClose(): void
-  onBuild(): void
-  onError(message: string): void
-}) {
-  const surfaceRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    const surface = surfaceRef.current
-    if (!surface) return
-    let frame = 0
-    const sync = (): void => {
-      cancelAnimationFrame(frame)
-      frame = requestAnimationFrame(() => {
-        const rect = surface.getBoundingClientRect()
-        void window.ndDshDesign.freeformSetBounds({ x: rect.x, y: rect.y, width: rect.width, height: rect.height }).catch((cause) => onError(errorMessage(cause)))
-      })
-    }
-    const observer = new ResizeObserver(sync)
-    observer.observe(surface)
-    window.addEventListener('resize', sync)
-    sync()
-    return () => {
-      cancelAnimationFrame(frame)
-      observer.disconnect()
-      window.removeEventListener('resize', sync)
-    }
-  }, [])
-
-  useEffect(() => {
-    void window.ndDshDesign.freeformSetVisible(active).catch((cause) => onError(errorMessage(cause)))
-    if (active) requestAnimationFrame(() => {
-      const rect = surfaceRef.current?.getBoundingClientRect()
-      if (rect) void window.ndDshDesign.freeformSetBounds({ x: rect.x, y: rect.y, width: rect.width, height: rect.height })
-        .catch((cause) => onError(errorMessage(cause)))
-    })
-    return () => { void window.ndDshDesign.freeformSetVisible(false).catch(() => undefined) }
-  }, [active, onError])
-
-  return <section className="flex h-full w-full min-h-0 min-w-0 flex-col bg-surface-0">
-    {/* Native WebContentsView host — bounds-synced over CDP; keep this DOM stable. */}
-    <div className="flex h-9 shrink-0 min-w-0 items-center justify-between gap-3 border-b border-border-soft bg-secondary px-2">
-      <div className="flex min-w-0 items-center gap-[7px]">
-        <span className={cn(
-          'block size-[7px] shrink-0 rounded-full',
-          state.status === 'ready' ? 'bg-primary' : state.status === 'starting' ? 'bg-warning' : 'bg-destructive',
-        )} />
-        <strong className="max-w-[300px] truncate text-xs font-bold text-strong">{state.documentName}</strong>
-        {state.dirty ? <b className="text-[11px] text-warning">●</b> : null}
-        <small className="text-[11px] text-faint">ND Pencil</small>
-      </div>
-      <div className="flex min-w-0 items-center justify-end gap-[7px]">
-        <span className="text-[11px] text-faint">{state.version ? `ND Pencil engine ${state.version}` : 'ND Pencil'}</span>
-        <button
-          className="h-6 rounded-[5px] border border-border-strong bg-secondary px-2 text-[11px] text-soft transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-45"
-          disabled={busy !== null || state.status !== 'ready' || !state.dirty}
-          onClick={onSave}
-        >
-          {busy === 'freeform:save' ? 'Saving…' : 'Save'}
-        </button>
-        <button
-          className="h-6 rounded-[5px] border border-primary/30 bg-primary/10 px-2 text-[11px] text-primary transition-colors hover:bg-primary/[0.16] disabled:pointer-events-none disabled:opacity-45"
-          disabled={state.status !== 'ready'}
-          onClick={onBuild}
-        >
-          Build this
-        </button>
-        <button
-          className="h-6 rounded-[5px] border border-border-strong bg-secondary px-2 text-[11px] text-soft transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-45"
-          disabled={busy !== null}
-          onClick={onClose}
-        >
-          Close
-        </button>
-      </div>
-    </div>
-    <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-surface-0" ref={surfaceRef}>
-      <div className="m-auto flex flex-col items-center gap-[9px] text-xs text-faint">
-        {state.status === 'starting' ? <div className="size-5 animate-spin rounded-full border border-border-strong border-t-primary" /> : null}
-        <span>{state.status === 'starting' ? 'Starting ND Pencil canvas…' : state.error ?? 'ND Pencil canvas'}</span>
-      </div>
-    </div>
-  </section>
-}
-
-function FreeformInspector({ state, project, onBuild }: { state: DesignFreeformState | null; project: DesignProjectState | null; onBuild(): void }) {
-  return <>
-    <section className="flex flex-col gap-0 border-b border-border-soft px-3.5 pt-2.5">
-      <header className="mb-0.5 text-[11px] font-extrabold uppercase tracking-[0.08em] text-faint">ND Pencil</header>
-      <Property label="Engine" value="ND Pencil · built in" />
-      <Property label="Status" value={state?.status ?? 'loading'} />
-      {state?.documentPath ? <Property label="Document" value={state.documentPath} /> : null}
-      <Property label="Saved" value={state?.dirty ? 'Unsaved changes' : 'Up to date'} />
-      <Property label="Files" value={String(project?.freeform.documents.length ?? 0)} />
-    </section>
-    {state?.documentPath ? (
-      <section className="flex flex-col gap-1.5 border-b border-border-soft px-3.5 py-3">
-        <header className="mb-0.5 text-[11px] font-extrabold uppercase tracking-[0.08em] text-faint">Handoff</header>
-        <button className={primaryButton} onClick={onBuild}>Build ND Pencil into live app</button>
-        <p className="m-0 mt-0.5 text-[11px]/[1.55] text-faint">The .op document remains a design artifact. ND builds the selected concept into the project's real HTML/React/shadcn source.</p>
-      </section>
-    ) : null}
-  </>
-}
-
-function WorkspaceEmpty({ workspace, onChoose }: { workspace: WorkspaceState | null; onChoose(): void }) {
-  return <div className="mx-auto my-auto flex w-[min(520px,calc(100%-48px))] flex-col items-center text-center">
-    <div className="grid size-[54px] place-items-center rounded-[14px] border border-primary/30 bg-primary/10 text-lg font-black tracking-[0.08em] text-primary">ND</div>
-    <h2 className="mb-[5px] mt-3.5 text-[22px] font-bold text-strong">{workspace?.binding === 'missing' ? 'Project workspace unavailable' : 'Link this project to a workspace'}</h2>
-    <p className="mb-3.5 max-w-[460px] text-sm/[1.55] text-muted-foreground">{workspace?.warning ?? 'Design Mode always follows the active project workspace. Select the project folder to continue.'}</p>
-    <button className={cn(primaryButton, 'px-3.5')} onClick={onChoose}>Select workspace</button>
-  </div>
-}
-
-function TemplateSurface({ project, busy, onPreview, onUse }: { project: DesignProjectState | null; busy: string | null; onPreview(template: DesignTemplateEntry): void; onUse(template: DesignTemplateEntry): void }) {
-  const templates = project?.templates ?? []
-  return <div className="h-full w-full min-h-0 min-w-0 overflow-auto bg-surface-0 p-7 max-[1180px]:p-5">
-    <header className="mx-auto mb-[22px] flex max-w-[980px] items-start justify-between gap-6">
-      <div className="min-w-0">
-        <small className="mb-[7px] block text-[11px] font-extrabold tracking-[0.12em] text-primary">HTML & TEMPLATE SOURCES</small>
-        <h2 className="m-0 text-[26px] font-bold tracking-tight text-strong">Use existing markup as the design.</h2>
-        <p className="mt-[7px] max-w-[660px] text-sm/[1.6] text-muted-foreground">Plain HTML runs in ND's loopback preview. Server-side templates stay source-first and are handed to the agent/project runtime.</p>
-      </div>
-      <span className="shrink-0 rounded-full border border-border-soft bg-sidebar px-2 py-[5px] text-[11px] text-faint">{templates.length} found</span>
-    </header>
-    {templates.length ? <div className="mx-auto grid max-w-[980px] grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2.5">
-      {templates.map((template) => <SourceCard
-        key={template.path}
-        icon={template.kind === 'html' ? 'HTML' : 'TPL'}
-        name={template.name}
-        path={template.path}
-        note={template.previewable ? 'Static preview + inspect' : `${template.kind} · project runtime`}
-        actionLabel={busy === `template:${template.path}` ? 'Opening…' : 'Preview'}
-        actionDisabled={busy !== null}
-        onAction={() => onPreview(template)}
-        secondaryLabel="Use with Agent"
-        onSecondary={() => onUse(template)}
-      />)}
-    </div> : <SurfaceEmpty title="No HTML templates found" text="Create or add HTML, EJS, Handlebars, Nunjucks, or Liquid files in this workspace. Design Mode will index them automatically." />}
-  </div>
-}
-
-function ShadcnSurface({ project, onUse, onAgent }: { project: DesignProjectState | null; onUse(component: DesignComponentEntry): void; onAgent(prompt: string): void }) {
-  const shadcn = project?.shadcn
-  return <div className="h-full w-full min-h-0 min-w-0 overflow-auto bg-surface-0 p-7 max-[1180px]:p-5">
-    <header className="mx-auto mb-[22px] flex max-w-[980px] items-start justify-between gap-6">
-      <div className="min-w-0">
-        <small className="mb-[7px] block text-[11px] font-extrabold tracking-[0.12em] text-primary">SHADCN DESIGN LIBRARY</small>
-        <h2 className="m-0 text-[26px] font-bold tracking-tight text-strong">{shadcn?.detected ? 'Project components are source assets.' : 'shadcn is not initialized yet.'}</h2>
-        <p className="mt-[7px] max-w-[660px] text-sm/[1.6] text-muted-foreground">ND indexes installed components from the active workspace. Using one composes the real component instead of exporting fake canvas code.</p>
-      </div>
-      <span className="shrink-0 rounded-full border border-border-soft bg-sidebar px-2 py-[5px] text-[11px] text-faint">{shadcn?.components.length ?? 0} components</span>
-    </header>
-    {shadcn?.detected ? <>
-      <div className="mx-auto mb-3.5 flex max-w-[980px] flex-wrap gap-[7px]">
-        <span className="rounded-md border border-border-soft bg-sidebar px-2 py-1.5 text-[11px] text-faint">Config <code className="text-soft">{shadcn.configPath ?? 'inferred'}</code></span>
-        {shadcn.style ? <span className="rounded-md border border-border-soft bg-sidebar px-2 py-1.5 text-[11px] text-faint">Style <code className="text-soft">{shadcn.style}</code></span> : null}
-        {shadcn.baseColor ? <span className="rounded-md border border-border-soft bg-sidebar px-2 py-1.5 text-[11px] text-faint">Base <code className="text-soft">{shadcn.baseColor}</code></span> : null}
-      </div>
-      {shadcn.components.length ? <div className="mx-auto grid max-w-[980px] grid-cols-[repeat(auto-fill,minmax(230px,1fr))] gap-2">
-        {shadcn.components.map((component) => (
-          <button
-            key={component.path}
-            className="grid grid-cols-[34px_minmax(0,1fr)_auto] items-center gap-[9px] rounded-lg border border-border-soft bg-sidebar p-[9px] text-left text-foreground transition-colors hover:border-primary/20 hover:bg-accent"
-            onClick={() => onUse(component)}
-          >
-            <span className="grid size-[34px] place-items-center rounded-[7px] border border-border-strong bg-surface-0 text-[11px] font-black text-faint">UI</span>
-            <div className="flex min-w-0 flex-col gap-[3px]">
-              <strong className="text-sm">{component.name}</strong>
-              <code className="truncate text-[10px] text-faint">{component.path}</code>
-            </div>
-            <b className="text-[11px] font-bold text-primary">Use</b>
-          </button>
-        ))}
-      </div> : <SurfaceEmpty title="No installed UI components found" text="The shadcn config exists, but no components/ui source files were detected." />}
-    </> : <div className="mx-auto flex max-w-[760px] flex-col items-center gap-3">
-      <SurfaceEmpty title="Start a shadcn project from the canvas" text="shadcn belongs inside the active project so source code remains the single source of truth." />
-      <LargeActionButton onClick={() => onAgent('Inspect the active workspace and set up shadcn/ui only if it is compatible with the existing stack. Keep generated components inside the project, preserve existing conventions, then build a minimal page and verify it in Design Mode.')}>Set up with Agent</LargeActionButton>
-    </div>}
-  </div>
-}
-
-function CodeCanvas({ project, onAgent }: { project: DesignProjectState | null; onAgent(prompt: string): void }) {
-  return <div className="flex h-full w-full min-h-0 min-w-0 flex-col items-center justify-center overflow-auto bg-surface-0 p-7 max-[1180px]:p-5">
-    <div className="mx-auto flex max-w-[700px] flex-col items-center text-center">
-      <div className="mb-3.5 grid size-[54px] place-items-center rounded-[14px] border border-primary/30 bg-primary/10 text-lg font-black tracking-[0.08em] text-primary">+</div>
-      <small className="mb-[7px] block text-[11px] font-extrabold tracking-[0.12em] text-primary">CODE-FIRST CANVAS</small>
-      <h2 className="m-0 text-[26px] font-bold tracking-tight text-strong">Start visually. Ship real source.</h2>
-      <p className="mt-[7px] max-w-[660px] text-sm/[1.6] text-muted-foreground">This is the production path. ND asks the agent to create the first working screen directly in this workspace, then the live runtime becomes the editable canvas.</p>
-    </div>
-    <div className="mt-6 grid w-[min(720px,100%)] grid-cols-[repeat(2,minmax(210px,1fr))] gap-2.5 max-[1180px]:grid-cols-1">
-      <StarterTile glyph="HTML" title="Static HTML canvas" detail="Real markup + CSS" onClick={() => onAgent('Create a polished static HTML design canvas in the active workspace using real index.html/CSS/JS files. Keep it production-quality, start a preview that Design Mode can inspect, and do not create a detached mockup format.')} />
-      <StarterTile glyph="RE" title="React canvas" detail="Components + live runtime" onClick={() => onAgent('Inspect the active workspace. If it is empty, create a minimal React + Vite application; otherwise preserve the existing compatible React stack. Build the first polished responsive screen in real source files, run the dev server, and verify it in Design Mode.')} />
-      <StarterTile glyph="UI" title="shadcn canvas" detail="Real project components" onClick={() => onAgent('Inspect the active workspace and create a shadcn/ui design canvas using the project stack. Initialize shadcn only when compatible, use real installed components and CSS variables, build a polished first screen, run it, and verify it in Design Mode.')} />
-      <StarterTile glyph="ND" title="Existing stack" detail="Detect + preserve project" onClick={() => onAgent(`Use the active project's existing stack (${project?.frameworks.join(', ') || 'detect it first'}) as the design canvas. Build a polished first screen directly in production source, preserve conventions and dependencies, start the project runtime, and verify it in Design Mode.`)} />
-    </div>
-  </div>
-}
-
-function StarterTile({ glyph, title, detail, onClick }: { glyph: string; title: string; detail: string; onClick(): void }) {
   return (
     <button
-      className="grid min-h-[76px] grid-cols-[36px_minmax(0,1fr)] grid-rows-[auto_auto] gap-x-2.5 gap-y-0.5 rounded-[10px] border border-border-soft bg-sidebar p-3 text-left text-foreground transition-colors hover:border-primary/20 hover:bg-accent"
       onClick={onClick}
+      className={cn(
+        'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+        active
+          ? 'bg-primary/10 text-primary font-semibold'
+          : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+      )}
     >
-      <b className="col-start-1 row-span-2 row-start-1 grid size-9 place-items-center self-center rounded-lg border border-primary/20 bg-primary/[0.06] text-xs text-primary">{glyph}</b>
-      <strong className="col-start-2 row-start-2 self-end text-sm">{title}</strong>
-      <span className="col-start-2 row-start-1 self-start text-[11px] text-faint">{detail}</span>
+      {icon}
+      <span>{label}</span>
+      {badge ? (
+        <Badge
+          variant={badgeVariant === 'warning' ? 'destructive' : 'secondary'}
+          className={cn(
+            'ml-0.5 h-4 px-1 text-[10px] font-semibold',
+            badgeVariant === 'warning' && 'bg-amber-500/20 text-amber-500 border-amber-500/30'
+          )}
+        >
+          {badge}
+        </Badge>
+      ) : null}
     </button>
   )
 }
 
-function SourceCard({ icon, name, path, note, actionLabel, actionDisabled, onAction, secondaryLabel, onSecondary }: {
+function FreeformSurface({
+  active,
+  project,
+  state,
+  busy,
+  onOpen,
+  onCreate,
+  onSave,
+  onClose,
+  onBuild,
+  onError,
+}: {
+  active: boolean
+  project: DesignProjectState | null
+  state: DesignFreeformState | null
+  busy: string | null
+  onOpen(path: string): Promise<void>
+  onCreate(): Promise<void>
+  onSave(): Promise<void>
+  onClose(): Promise<void>
+  onBuild(): Promise<void>
+  onError(message: string): void
+}) {
+  if (state?.documentPath && state.status !== 'error') {
+    return (
+      <NdPencilPane
+        active={active}
+        state={state}
+        busy={busy}
+        onSave={onSave}
+        onClose={onClose}
+        onBuild={onBuild}
+        onError={onError}
+      />
+    )
+  }
+
+  if (state?.available === false) {
+    return (
+      <SurfaceEmpty
+        title="ND Pencil runtime initialization needed"
+        text={state?.error ?? 'The native ND Pencil Freeform engine is initializing.'}
+        actionLabel="Retry ND Pencil"
+        onAction={onCreate}
+      />
+    )
+  }
+
+  const docs = project?.freeform.documents ?? []
+
+  return (
+    <div className="h-full w-full min-h-0 min-w-0 overflow-y-auto bg-surface-0 p-6">
+      <div className="mx-auto flex max-w-4xl flex-col gap-6">
+        <header className="flex items-start justify-between gap-4 border-b border-border-soft pb-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <Badge variant="outline" className="border-primary/30 text-primary">
+                ND Pencil Native Canvas
+              </Badge>
+            </div>
+            <h2 className="mt-1 text-2xl font-bold tracking-tight text-strong">Freeform Vector & UI Design</h2>
+            <p className="mt-1 max-w-xl text-xs text-muted-foreground">
+              Create and edit vector concepts using ND Pencil. Documents (`.op`) stay in your project directory as design intent.
+            </p>
+          </div>
+          <Button
+            size="sm"
+            className="gap-1.5"
+            disabled={busy === 'freeform:create'}
+            onClick={() => onCreate()}
+          >
+            <LucidePlus className="size-4" />
+            New ND Pencil Canvas
+          </Button>
+        </header>
+
+        {docs.length > 0 ? (
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-3">
+            {docs.map((doc) => (
+              <Card
+                key={doc.path}
+                className="group relative flex flex-col justify-between border-border-soft bg-surface-1 p-4 transition-all hover:border-primary/40 hover:shadow-sm cursor-pointer"
+                onClick={() => onOpen(doc.path)}
+              >
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="flex size-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+                      <LucidePenTool className="size-4" />
+                    </span>
+                  </div>
+                  <strong className="truncate text-sm font-bold text-strong group-hover:text-primary">
+                    {doc.name}
+                  </strong>
+                  <span className="truncate text-xs text-faint">{doc.path}</span>
+                </div>
+                <div className="mt-4 flex items-center justify-between border-t border-border-soft/60 pt-2.5">
+                  <span className="text-[10px] text-muted-foreground">.op design artifact</span>
+                  <Button size="xs" variant="ghost" className="h-6 gap-1 text-xs text-primary">
+                    Open <ChevronRightIcon className="size-3" />
+                  </Button>
+                </div>
+              </Card>
+            ))}
+          </div>
+        ) : (
+          <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border-soft p-12 text-center">
+            <span className="flex size-12 items-center justify-center rounded-xl bg-primary/10 text-primary mb-3">
+              <LucidePenTool className="size-6" />
+            </span>
+            <h3 className="text-base font-semibold text-strong">No ND Pencil documents yet</h3>
+            <p className="mt-1 max-w-sm text-xs text-muted-foreground">
+              Start a new freeform canvas to sketch components, layout ideas, or high-fidelity UI designs.
+            </p>
+            <Button size="sm" className="mt-4 gap-1.5" disabled={busy === 'freeform:create'} onClick={() => onCreate()}>
+              <LucidePlus className="size-4" />
+              Create First Design
+            </Button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function NdPencilPane({
+  active,
+  state,
+  busy,
+  onSave,
+  onClose,
+  onBuild,
+  onError,
+}: {
+  active: boolean
+  state: DesignFreeformState
+  busy: string | null
+  onSave(): Promise<void>
+  onClose(): Promise<void>
+  onBuild(): Promise<void>
+  onError(message: string): void
+}) {
+  const surfaceRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    let animationFrame = 0
+
+    const updateBounds = (): void => {
+      const el = surfaceRef.current
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      void window.ndDshDesign.freeformSetBounds({
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+      }).catch((cause: unknown) => onError(errorMessage(cause)))
+    }
+
+    const scheduleUpdate = (): void => {
+      cancelAnimationFrame(animationFrame)
+      animationFrame = requestAnimationFrame(updateBounds)
+    }
+
+    const observer = new ResizeObserver(scheduleUpdate)
+    if (surfaceRef.current) observer.observe(surfaceRef.current)
+    window.addEventListener('resize', scheduleUpdate)
+    scheduleUpdate()
+
+    return () => {
+      cancelAnimationFrame(animationFrame)
+      observer.disconnect()
+      window.removeEventListener('resize', scheduleUpdate)
+    }
+  }, [onError])
+
+  useEffect(() => {
+    void window.ndDshDesign.freeformSetVisible(active).catch((cause: unknown) => onError(errorMessage(cause)))
+    return () => {
+      void window.ndDshDesign.freeformSetVisible(false).catch((cause: unknown) => onError(errorMessage(cause)))
+    }
+  }, [active, onError])
+
+  return (
+    <div className="flex h-full w-full min-h-0 min-w-0 flex-col bg-surface-0">
+      {/* Embedded canvas bar */}
+      <header className="flex h-10 shrink-0 items-center justify-between border-b border-border-soft bg-surface-1 px-3 text-xs">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="flex size-5 items-center justify-center rounded bg-primary/10 text-primary">
+            <LucidePenTool className="size-3" />
+          </span>
+          <span className="truncate font-semibold text-strong max-w-[240px]">
+            {state.documentPath ? state.documentPath.split('/').pop() : 'ND Pencil'}
+          </span>
+
+          {state.dirty ? (
+            <Badge variant="outline" className="gap-1 border-amber-500/40 bg-amber-500/10 text-[10px] text-amber-500">
+              <span className="size-1.5 rounded-full bg-amber-500 animate-pulse" /> Unsaved changes
+            </Badge>
+          ) : (
+            <Badge variant="outline" className="gap-1 border-emerald-500/30 bg-emerald-500/10 text-[10px] text-emerald-500">
+              <LucideCheck className="size-2.5" /> Up to date
+            </Badge>
+          )}
+
+          {state.version ? (
+            <span className="text-[10px] text-faint">Engine v{state.version}</span>
+          ) : null}
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                size="xs"
+                variant={state.dirty ? 'default' : 'outline'}
+                disabled={busy === 'freeform:save'}
+                onClick={() => void onSave()}
+              >
+                <LucideSave className="size-3" />
+                {state.dirty ? 'Save (Ctrl+S)' : 'Saved'}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Save design changes to disk</TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                size="xs"
+                variant="secondary"
+                disabled={busy === 'freeform:build'}
+                onClick={() => void onBuild()}
+              >
+                <LucideWand2 className="size-3 text-primary" />
+                Build into App
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Hand off canvas design to AI agent to construct production UI</TooltipContent>
+          </Tooltip>
+
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            title="Close Canvas"
+            disabled={busy === 'freeform:close'}
+            onClick={() => void onClose()}
+          >
+            <CloseIcon className="size-3.5" />
+          </Button>
+        </div>
+      </header>
+
+      {/* Surface target container for child WebContentsView bounds sync */}
+      <div ref={surfaceRef} className="relative flex-1 min-h-0 min-w-0 bg-[#121212]">
+        {state.status !== 'ready' && (
+          <div className="absolute inset-0 flex items-center justify-center bg-surface-0/90 backdrop-blur text-xs text-muted-foreground">
+            {state.status === 'starting' ? (
+              <div className="flex items-center gap-2">
+                <span className="size-2 rounded-full bg-primary animate-ping" />
+                Starting ND Pencil canvas…
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 text-destructive">
+                <LucideCircleAlert className="size-4" />
+                {state.error ?? 'ND Pencil canvas error'}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function FreeformInspector({
+  state,
+  project,
+  onBuild,
+}: {
+  state: DesignFreeformState | null
+  project: DesignProjectState | null
+  onBuild(): void
+}) {
+  return (
+    <div className="flex flex-col gap-4 p-3.5 text-xs">
+      <div className="flex flex-col gap-2 rounded-lg border border-border-soft bg-surface-1 p-3">
+        <header className="text-[10px] font-bold tracking-widest text-primary uppercase">ND Pencil Document</header>
+        <Property label="Engine" value="Native Vector Canvas" />
+        <Property label="Status" value={state?.status ?? 'loading'} />
+        {state?.documentPath ? <Property label="Path" value={state.documentPath} /> : null}
+        <Property label="State" value={state?.dirty ? 'Unsaved changes' : 'Saved'} />
+        <Property label="Total Docs" value={String(project?.freeform.documents.length ?? 0)} />
+      </div>
+
+      {state?.documentPath ? (
+        <div className="flex flex-col gap-2 rounded-lg border border-border-soft bg-surface-1 p-3">
+          <header className="text-[10px] font-bold tracking-widest text-faint uppercase">AI Handoff</header>
+          <p className="text-[11px] text-muted-foreground">
+            Transform this vector canvas design into production React components and HTML in your project.
+          </p>
+          <Button size="sm" className="mt-1 gap-1.5" onClick={onBuild}>
+            <LucideWand2 className="size-3.5" />
+            Build into Live App
+          </Button>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function DomInspector({
+  selected,
+  source,
+  onAskAgent,
+}: {
+  selected: UiTarget
+  source?: UiSourceLocation | undefined
+  onAskAgent(prompt: string): void
+}) {
+  return (
+    <div className="flex flex-col gap-4 p-3.5 text-xs">
+      <div className="flex flex-col gap-2 rounded-lg border border-border-soft bg-surface-1 p-3">
+        <header className="text-[10px] font-bold tracking-widest text-primary uppercase">Selected Element</header>
+        <Property label="Tag" value={`<${selected.tagName.toLowerCase()}>`} />
+        {selected.react?.component ? <Property label="React Component" value={selected.react.component} /> : null}
+        {source ? <Property label="Source" value={`${source.file}:${source.line}`} /> : null}
+      </div>
+
+      <Button
+        size="sm"
+        variant="outline"
+        className="gap-1.5"
+        onClick={() => onAskAgent(`Refactor component ${selected.react?.component ?? selected.tagName} at ${source?.file ?? 'active view'} to match project design system.`)}
+      >
+        <SparkIcon className="size-3 text-primary" />
+        Edit Element Source
+      </Button>
+    </div>
+  )
+}
+
+function SurfaceOverview({
+  surface,
+  project,
+  freeform,
+}: {
+  surface: DesignSurface
+  project: DesignProjectState | null
+  freeform: DesignFreeformState | null
+}) {
+  return (
+    <div className="flex flex-col gap-3 p-3.5 text-xs text-muted-foreground">
+      <header className="text-[10px] font-bold tracking-widest text-faint uppercase">Surface Context</header>
+      <div className="rounded-lg border border-border-soft bg-surface-1 p-3 flex flex-col gap-2">
+        <strong className="text-strong text-xs">{surfaceLabel(surface)}</strong>
+        <p className="text-[11px] leading-relaxed">
+          {inspectorSubtitle(surface, freeform)}
+        </p>
+      </div>
+
+      {project ? (
+        <div className="flex flex-col gap-1.5">
+          <div className="flex justify-between">
+            <span>Shadcn components:</span>
+            <span className="font-semibold text-strong">{project.shadcn.components.length}</span>
+          </div>
+          <div className="flex justify-between">
+            <span>HTML Templates:</span>
+            <span className="font-semibold text-strong">{project.templates.length}</span>
+          </div>
+          <div className="flex justify-between">
+            <span>Freeform Docs:</span>
+            <span className="font-semibold text-strong">{project.freeform.documents.length}</span>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function WorkspaceEmpty({ workspace, onChoose }: { workspace: WorkspaceState | null; onChoose(): void }) {
+  return (
+    <div className="mx-auto my-auto flex w-[min(520px,calc(100%-48px))] flex-col items-center text-center">
+      <div className="grid size-[54px] place-items-center rounded-[14px] border border-primary/30 bg-primary/10 text-lg font-black tracking-[0.08em] text-primary">
+        ND
+      </div>
+      <h2 className="mb-[5px] mt-3.5 text-[22px] font-bold text-strong">
+        {workspace?.binding === 'missing' ? 'Project workspace unavailable' : 'Link this project to a workspace'}
+      </h2>
+      <p className="mb-3.5 max-w-[460px] text-sm/[1.55] text-muted-foreground">
+        {workspace?.warning ?? 'Design Mode always follows the active project workspace. Select the project folder to continue.'}
+      </p>
+      <Button onClick={onChoose}>Select workspace</Button>
+    </div>
+  )
+}
+
+function TemplateSurface({
+  project,
+  busy,
+  onPreview,
+  onUse,
+}: {
+  project: DesignProjectState | null
+  busy: string | null
+  onPreview(template: DesignTemplateEntry): void
+  onUse(template: DesignTemplateEntry): void
+}) {
+  const templates = project?.templates ?? []
+  return (
+    <div className="h-full w-full min-h-0 min-w-0 overflow-auto bg-surface-0 p-7">
+      <header className="mx-auto mb-[22px] flex max-w-[980px] items-start justify-between gap-6">
+        <div className="min-w-0">
+          <small className="mb-[7px] block text-[11px] font-extrabold tracking-[0.12em] text-primary">HTML & TEMPLATE SOURCES</small>
+          <h2 className="m-0 text-[26px] font-bold tracking-tight text-strong">Use existing markup as the design.</h2>
+          <p className="mt-[7px] max-w-[660px] text-sm/[1.6] text-muted-foreground">Plain HTML runs in ND's loopback preview. Server-side templates stay source-first and are handed to the agent/project runtime.</p>
+        </div>
+        <Badge variant="secondary" className="shrink-0">{templates.length} found</Badge>
+      </header>
+      {templates.length ? (
+        <div className="mx-auto grid max-w-[980px] grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2.5">
+          {templates.map((template) => (
+            <SourceCard
+              key={template.path}
+              icon={template.kind === 'html' ? 'HTML' : 'TPL'}
+              name={template.name}
+              path={template.path}
+              note={template.previewable ? 'Static preview + inspect' : `${template.kind} · project runtime`}
+              actionLabel={busy === `template:${template.path}` ? 'Opening…' : 'Preview'}
+              secondaryLabel="Use with agent"
+              onAction={() => onPreview(template)}
+              onSecondaryAction={() => onUse(template)}
+            />
+          ))}
+        </div>
+      ) : (
+        <SurfaceEmpty title="No template or HTML sources found" text="Add .html or project template files under the workspace to use them as design sources." />
+      )}
+    </div>
+  )
+}
+
+function ShadcnSurface({
+  project,
+  onUse,
+}: {
+  project: DesignProjectState | null
+  onUse(component: DesignComponentEntry): void
+}) {
+  const components = project?.shadcn.components ?? []
+  return (
+    <div className="h-full w-full min-h-0 min-w-0 overflow-auto bg-surface-0 p-7">
+      <header className="mx-auto mb-[22px] flex max-w-[980px] items-start justify-between gap-6">
+        <div className="min-w-0">
+          <small className="mb-[7px] block text-[11px] font-extrabold tracking-[0.12em] text-primary">SHADCN / COMPONENT LIBRARY</small>
+          <h2 className="m-0 text-[26px] font-bold tracking-tight text-strong">Reuse verified project UI components.</h2>
+          <p className="mt-[7px] max-w-[660px] text-sm/[1.6] text-muted-foreground">ND indexes installed shadcn components directly from your workspace so design changes reuse existing design tokens instead of duplicating UI.</p>
+        </div>
+        <Badge variant="secondary" className="shrink-0">{components.length} components</Badge>
+      </header>
+      {components.length ? (
+        <div className="mx-auto grid max-w-[980px] grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2.5">
+          {components.map((component) => (
+            <SourceCard
+              key={component.path}
+              icon="UI"
+              name={component.name}
+              path={component.path}
+              note="Installed UI component"
+              actionLabel="Use in design"
+              onAction={() => onUse(component)}
+            />
+          ))}
+        </div>
+      ) : (
+        <SurfaceEmpty title="No installed shadcn components detected" text="Install shadcn/ui components in your project folder to reuse them here." />
+      )}
+    </div>
+  )
+}
+
+function CodeCanvas({ project, onAskAgent }: { project: DesignProjectState | null; onAskAgent(prompt: string): void }) {
+  return (
+    <div className="h-full w-full min-h-0 min-w-0 overflow-auto bg-surface-0 p-7">
+      <div className="mx-auto max-w-[980px]">
+        <small className="mb-[7px] block text-[11px] font-extrabold tracking-[0.12em] text-primary">CODE CANVAS</small>
+        <h2 className="m-0 text-[26px] font-bold tracking-tight text-strong">Direct source-first design.</h2>
+        <p className="mt-[7px] max-w-[660px] text-sm/[1.6] text-muted-foreground">Edit real code files directly and verify instantly in the live runtime.</p>
+        <div className="mt-6 flex flex-wrap gap-2">
+          {project?.frameworks.map((f) => (
+            <Badge key={f} variant="outline" className="border-primary/20 bg-primary/5 text-primary">
+              {f}
+            </Badge>
+          ))}
+        </div>
+        <Button
+          size="sm"
+          className="mt-6 gap-1.5"
+          onClick={() => onAskAgent(`Open the primary entry point file for this project and start editing the UI.`)}
+        >
+          <SparkIcon className="size-4" />
+          Edit Code with Agent
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function SourceCard({
+  icon,
+  name,
+  path,
+  note,
+  actionLabel,
+  secondaryLabel,
+  onAction,
+  onSecondaryAction,
+}: {
   icon: string
   name: string
   path: string
   note: string
   actionLabel: string
-  actionDisabled: boolean
-  onAction(): void
   secondaryLabel?: string
-  onSecondary?(): void
+  onAction(): void
+  onSecondaryAction?(): void
 }) {
   return (
-    <article className="flex min-h-[170px] min-w-0 flex-col rounded-[10px] border border-border-soft bg-sidebar p-[13px]">
-      <div className="mb-3 grid h-[30px] w-[38px] place-items-center rounded-[7px] border border-primary/20 bg-primary/[0.06] text-[11px] font-black tracking-[0.05em] text-primary">{icon}</div>
-      <strong className="text-[15px] font-bold text-strong">{name}</strong>
-      <code className="mt-1 truncate text-[11px] text-faint">{path}</code>
-      <small className="mt-[7px] text-[11px] text-muted-foreground">{note}</small>
-      <footer className="mt-auto flex gap-1.5 pt-3">
-        <button
-          className="h-[27px] rounded-md border border-primary/30 bg-primary/10 px-[9px] text-[11px] text-primary transition-colors hover:bg-primary/[0.16] disabled:pointer-events-none disabled:opacity-50"
-          disabled={actionDisabled}
-          onClick={onAction}
-        >
-          {actionLabel}
-        </button>
-        {secondaryLabel && onSecondary ? (
-          <button
-            className="h-[27px] rounded-md border border-border-strong bg-secondary px-[9px] text-[11px] text-soft transition-colors hover:bg-accent hover:text-foreground"
-            onClick={onSecondary}
-          >
-            {secondaryLabel}
-          </button>
+    <Card className="flex flex-col justify-between border-border-soft bg-surface-1 p-3.5 transition-all hover:border-primary/30">
+      <div>
+        <div className="flex items-center justify-between">
+          <Badge variant="outline" className="text-[10px] text-primary">{icon}</Badge>
+        </div>
+        <strong className="mt-2 block truncate text-sm font-semibold text-strong">{name}</strong>
+        <span className="block truncate text-xs text-faint">{path}</span>
+        <p className="mt-1 text-[11px] text-muted-foreground">{note}</p>
+      </div>
+      <div className="mt-3 flex gap-1.5">
+        <Button size="xs" variant="default" className="flex-1 text-xs" onClick={onAction}>{actionLabel}</Button>
+        {secondaryLabel && onSecondaryAction ? (
+          <Button size="xs" variant="outline" className="text-xs" onClick={onSecondaryAction}>{secondaryLabel}</Button>
         ) : null}
-      </footer>
-    </article>
+      </div>
+    </Card>
   )
 }
 
-function ProjectInspector({ project, surface }: { project: DesignProjectState | null; surface: DesignSurface }) {
-  if (!project) return <div className="px-3.5 py-[18px] text-xs/[1.55] text-faint">Design Mode is indexing the active workspace.</div>
-  return <>
-    <section className="flex flex-col gap-0 border-b border-border-soft px-3.5 pt-2.5">
-      <header className="mb-0.5 text-[11px] font-extrabold uppercase tracking-[0.08em] text-faint">Project design index</header>
-      <Property label="Mode" value={project.kind} />
-      <Property label="Stack" value={project.frameworks.join(', ') || 'No framework detected'} />
-      <Property label="Templates" value={String(project.templates.length)} />
-      <Property label="shadcn" value={project.shadcn.detected ? `${project.shadcn.components.length} components` : 'Not detected'} />
-      <Property label="ND Pencil" value={`${project.freeform.documents.length} .op documents`} />
-    </section>
-    <div className="px-3.5 py-[18px] text-xs/[1.55] text-faint">{surface === 'live' ? 'Select an element in the live canvas to attach component, source, CSS, and runtime context.' : 'This source is indexed from the active workspace. Production changes still go through real project files.'}</div>
-  </>
-}
-
-function SurfaceEmpty({ title, text }: { title: string; text: string }) {
+function SurfaceEmpty({
+  title,
+  text,
+  actionLabel,
+  onAction,
+}: {
+  title: string
+  text: string
+  actionLabel?: string
+  onAction?(): void
+}) {
   return (
-    <div className="mx-auto my-11 max-w-[720px] rounded-[10px] border border-dashed border-border-strong bg-sidebar p-6 text-center">
+    <div className="mx-auto my-auto flex max-w-[420px] flex-col items-center text-center p-6">
       <strong className="text-base font-bold text-strong">{title}</strong>
-      <p className="mx-auto mt-[7px] max-w-[580px] text-xs/[1.6] text-muted-foreground">{text}</p>
+      <p className="mt-1 text-xs text-muted-foreground">{text}</p>
+      {actionLabel && onAction && (
+        <Button size="sm" className="mt-4" onClick={onAction}>{actionLabel}</Button>
+      )}
     </div>
-  )
-}
-
-function LargeActionButton({ children, onClick }: { children: ReactNode; onClick(): void }) {
-  return (
-    <button
-      className="h-8 rounded-md border border-primary/30 bg-primary/10 px-3.5 text-xs text-primary transition-colors hover:bg-primary/[0.16]"
-      onClick={onClick}
-    >
-      {children}
-    </button>
   )
 }
 
 function Property({ label, value }: { label: string; value: string }) {
   return (
-    <div className="grid grid-cols-[86px_minmax(0,1fr)] items-start gap-2 border-b border-border-soft py-1.5 last:border-b-0">
-      <span className="text-[11px] capitalize text-faint">{label}</span>
-      <code className="[overflow-wrap:anywhere] text-[11px]/[1.4] text-soft">{value}</code>
+    <div className="flex items-center justify-between py-0.5">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="font-semibold text-strong truncate max-w-[140px] text-right">{value}</span>
     </div>
   )
 }
 
-function initialSurface(project: DesignProjectState, browser: BrowserState | null): DesignSurface {
-  if (project.kind === 'canvas' && project.freeform.documents.length > 0) return 'freeform'
-  if (project.capabilities.liveApp || (browser?.url && browser.url !== 'about:blank')) return 'live'
-  if (project.templates.length > 0) return 'templates'
-  if (project.shadcn.detected) return 'library'
-  return 'canvas'
-}
-
-function nextFreeformPath(project: DesignProjectState | null): string {
-  const paths = new Set(project?.freeform.documents.map((document) => document.path) ?? [])
-  if (!paths.has('.nd/design/home.op')) return '.nd/design/home.op'
-  let index = 2
-  while (paths.has(`.nd/design/design-${index}.op`)) index += 1
-  return `.nd/design/design-${index}.op`
-}
-
 function projectLabel(project: DesignProjectState): string {
-  if (project.kind === 'shadcn') return `shadcn · ${project.frameworks.join(' + ') || 'web'}`
-  if (project.frameworks.length) return project.frameworks.join(' + ')
-  if (project.templates.length) return `${project.templates.length} template${project.templates.length === 1 ? '' : 's'}`
-  if (project.freeform.documents.length) return `${project.freeform.documents.length} ND Pencil design${project.freeform.documents.length === 1 ? '' : 's'}`
-  return 'Code canvas ready'
+  if (!project.frameworks.length) return 'Generic HTML/JS project'
+  return project.frameworks.join(' · ')
 }
 
-function surfaceTitle(surface: DesignSurface): string {
-  if (surface === 'templates') return 'Template source'
-  if (surface === 'library') return 'Component library'
-  if (surface === 'canvas') return 'Code canvas'
-  if (surface === 'freeform') return 'ND Pencil canvas'
-  return 'Nothing selected'
+function surfaceLabel(surface: DesignSurface): string {
+  if (surface === 'templates') return 'Template Source'
+  if (surface === 'library') return 'Component Library'
+  if (surface === 'canvas') return 'Code Canvas'
+  if (surface === 'freeform') return 'ND Pencil Canvas'
+  return 'Live Application'
+}
+
+function inspectorTitle(surface: DesignSurface, selected: UiTarget | undefined): string {
+  if (selected) return 'Selected Element'
+  if (surface === 'freeform') return 'ND Pencil Canvas'
+  return 'Inspector'
 }
 
 function inspectorSubtitle(surface: DesignSurface, freeform: DesignFreeformState | null): string {

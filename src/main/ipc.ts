@@ -65,6 +65,20 @@ export function registerIpc(deps: IpcDependencies): () => void {
     channels.push(channel)
   }
 
+  // The compact overlay is a separate, sandboxed renderer. Channels registered
+  // here accept the primary renderer or that exact overlay main frame; every
+  // other desktop IPC channel remains exclusive to the primary renderer.
+  const handleFloatOverlay = (channel: string, listener: Handler): void => {
+    ipcMain.removeHandler(channel)
+    ipcMain.handle(channel, async (event: IpcMainInvokeEvent, ...args: unknown[]) => {
+      if (event.sender !== deps.window.webContents || event.senderFrame !== deps.window.webContents.mainFrame) {
+        assertFloatOverlaySender(event, floatWindow)
+      }
+      return listener(event, ...args)
+    })
+    channels.push(channel)
+  }
+
   let floatWindow: BrowserWindow | null = null
 
   const FLOAT_PILL_WIDTH = 170
@@ -104,7 +118,7 @@ export function registerIpc(deps: IpcDependencies): () => void {
     projectRoot: projectRoot(),
   }))
 
-  handle(IPC.windowSetFloatMode, async (_event, enabled) => {
+  const setFloatMode = async (_event: IpcMainInvokeEvent, enabled: unknown): Promise<{ float: boolean }> => {
     if (enabled === true) {
       const overlay = getFloatOverlayWindow()
       const { x, y, width } = screen.getPrimaryDisplay().workArea
@@ -132,10 +146,11 @@ export function registerIpc(deps: IpcDependencies): () => void {
     deps.window.focus()
     deps.window.webContents.send(IPC.windowFloatModeEvent, false)
     return { float: false }
-  })
+  }
+  handleFloatOverlay(IPC.windowSetFloatMode, setFloatMode)
 
   // Overlay-only helpers: grow/shrink for the popup card, drag-to-move.
-  handle(IPC.windowResizeFloatWindow, (_event, width, height) => {
+  handleFloatOverlay(IPC.windowResizeFloatWindow, (_event, width, height) => {
     if (!floatWindow || floatWindow.isDestroyed()) return
     const w = typeof width === 'number' ? Math.max(60, Math.round(width)) : FLOAT_PILL_WIDTH
     const h = typeof height === 'number' ? Math.max(40, Math.round(height)) : FLOAT_PILL_HEIGHT
@@ -143,7 +158,7 @@ export function registerIpc(deps: IpcDependencies): () => void {
     floatWindow.setBounds({ x: currX, y: currY, width: w, height: h })
   })
 
-  handle(IPC.windowMoveFloatWindow, (_event, deltaX, deltaY) => {
+  handleFloatOverlay(IPC.windowMoveFloatWindow, (_event, deltaX, deltaY) => {
     if (!floatWindow || floatWindow.isDestroyed()) return
     const dx = typeof deltaX === 'number' ? deltaX : 0
     const dy = typeof deltaY === 'number' ? deltaY : 0
@@ -175,7 +190,7 @@ export function registerIpc(deps: IpcDependencies): () => void {
   // debug port and injects the picker via CDP Runtime.evaluate. Self-window
   // inspection stays inside our renderer DOM and never crosses this IPC path.
   // External picks and screenshots remain in the trusted RecentPickStore.
-  handle(IPC.captureInspectElement, async (_event, scope) => {
+  const inspectExternalElement = async (_event: IpcMainInvokeEvent, scope: unknown) => {
     if (asInspectScope(scope) !== 'external') throw new Error('Self element inspection must run inside the ND renderer')
     const outcome = await pickElementInExternalApp()
     if (outcome.kind === 'unreachable') return { outcome: 'unreachable' as const, message: outcome.message }
@@ -190,7 +205,8 @@ export function registerIpc(deps: IpcDependencies): () => void {
       pickId: deps.recentPicks.put(outcome.pick, outcome.screenshot),
       hasShot: Boolean(outcome.screenshot),
     }
-  })
+  }
+  handleFloatOverlay(IPC.captureInspectElement, inspectExternalElement)
 
   handle(IPC.captureStageElement, (_event, element, targetTitle, pickId) => {
     // A stored recent pick is preferred: it keeps the full capture (selector,
@@ -227,7 +243,7 @@ export function registerIpc(deps: IpcDependencies): () => void {
   // 'self' renders this ND-DSH window's own contents. Either way the
   // screenshot bridges straight into the ND chat session and optionally
   // onto the clipboard. Image bytes never reach the renderer.
-  handle(IPC.captureInspectApp, async (_event, copyFlag, scope) => {
+  const inspectApp = async (_event: IpcMainInvokeEvent, copyFlag: unknown, scope: unknown) => {
     const inspectScope = asInspectScope(scope)
     const capture = inspectScope === 'self'
       ? await captureSelfWindow(deps.window)
@@ -247,7 +263,8 @@ export function registerIpc(deps: IpcDependencies): () => void {
       height: capture.height,
       displayLabel: capture.displayLabel,
     }
-  })
+  }
+  handleFloatOverlay(IPC.captureInspectApp, inspectApp)
 
   handle(IPC.browserState, () => deps.browser.state())
   handle(IPC.browserSetBounds, (_event, value) => deps.browser.setBounds(asBounds(value)))
@@ -372,6 +389,12 @@ export function registerIpc(deps: IpcDependencies): () => void {
 function assertTrustedSender(event: IpcMainInvokeEvent, window: BrowserWindow): void {
   if (window.isDestroyed() || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) {
     throw new Error('Rejected IPC from an untrusted renderer frame')
+  }
+}
+
+function assertFloatOverlaySender(event: IpcMainInvokeEvent, floatWindow: BrowserWindow | null): void {
+  if (!floatWindow || floatWindow.isDestroyed() || event.sender !== floatWindow.webContents || event.senderFrame !== floatWindow.webContents.mainFrame) {
+    throw new Error('Rejected IPC from an untrusted float overlay frame')
   }
 }
 

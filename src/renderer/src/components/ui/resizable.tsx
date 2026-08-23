@@ -1,5 +1,6 @@
 "use client"
 
+import type { ReactNode } from "react"
 import { GripVerticalIcon } from "lucide-react"
 import * as ResizablePrimitive from "react-resizable-panels"
 
@@ -7,11 +8,16 @@ import { cn } from "@renderer/lib/utils"
 
 function ResizablePanelGroup({
   className,
+  direction = "horizontal",
   ...props
-}: ResizablePrimitive.GroupProps) {
+}: Omit<ResizablePrimitive.GroupProps, "orientation"> & {
+  direction?: "horizontal" | "vertical"
+  children?: ReactNode
+}) {
   return (
     <ResizablePrimitive.Group
       data-slot="resizable-panel-group"
+      orientation={direction}
       className={cn(
         "flex h-full w-full aria-[orientation=vertical]:flex-col",
         className

@@ -220,6 +220,14 @@ async function createWindow(cdpPort: number): Promise<void> {
   window.webContents.on('will-redirect', (event, url) => {
     if (!allowedRenderer(url)) event.preventDefault()
   })
+  window.webContents.on('before-input-event', (event, input) => {
+    if ((input.control || input.meta) && input.key.toLowerCase() === 's' && input.type === 'keyDown') {
+      if (ndPencil.state().visible && ndPencil.state().dirty) {
+        event.preventDefault()
+        void ndPencil.save().catch((error) => console.error('Shortcut save failed:', error))
+      }
+    }
+  })
 
   window.once('ready-to-show', () => window.show())
   if (rendererUrl) await window.loadURL(rendererUrl)
