@@ -124,6 +124,7 @@ export function registerIpc(deps: IpcDependencies): () => void {
       const { x, y, width } = screen.getPrimaryDisplay().workArea
       const showOverlay = (): void => {
         if (floatWindow && !floatWindow.isDestroyed()) {
+          floatWindow.webContents.send(IPC.windowFloatModeEvent, true)
           floatWindow.setBounds({
             x: x + width - FLOAT_PILL_WIDTH - 24,
             y: y + 48,

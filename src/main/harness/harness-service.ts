@@ -98,13 +98,16 @@ export class HarnessService {
     this.activeSessionId = sessionId
     this.canceledSessions.delete(sessionId)
 
-    if (options?.provider && options?.model) {
-      await this.rpcWithRecovery(this.gateway ?? gateway, 'session.selectModel', {
+    const activeGateway = this.gateway ?? gateway
+    const targetProvider = options?.provider ?? this.statusValue.provider
+    const targetModel = options?.model ?? this.statusValue.model
+    if (targetProvider && targetModel) {
+      await this.rpcWithRecovery(activeGateway, 'session.selectModel', {
         sessionId,
-        provider: options.provider,
-        model: options.model,
+        provider: targetProvider,
+        model: targetModel,
       }).catch((cause) => {
-        console.warn(`Failed to select model ${options.provider}/${options.model} on session ${sessionId}:`, cause)
+        console.warn(`Failed to select model ${targetProvider}/${targetModel} on session ${sessionId}:`, cause)
       })
     }
 

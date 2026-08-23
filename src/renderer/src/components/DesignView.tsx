@@ -129,7 +129,9 @@ export function DesignView({ active, workspace, browser, harness, onWorkspaceCha
   const createFreeform = async (): Promise<void> => {
     setBusy('freeform:create')
     try {
-      setFreeform(await window.ndDshDesign.freeformCreate(''))
+      const path = nextFreeformPath(project)
+      setFreeform(await window.ndDshDesign.freeformCreate(path))
+      setProject(await window.ndDshDesign.refresh())
       setSurface('freeform')
     } catch (cause: unknown) {
       onError(errorMessage(cause))
@@ -154,6 +156,7 @@ export function DesignView({ active, workspace, browser, harness, onWorkspaceCha
     setBusy('freeform:save')
     try {
       setFreeform(await window.ndDshDesign.freeformSave())
+      setProject(await window.ndDshDesign.refresh())
     } catch (cause: unknown) {
       onError(errorMessage(cause))
     } finally {
@@ -165,6 +168,7 @@ export function DesignView({ active, workspace, browser, harness, onWorkspaceCha
     setBusy('freeform:close')
     try {
       setFreeform(await window.ndDshDesign.freeformClose())
+      setProject(await window.ndDshDesign.refresh())
       setSurface('live')
     } catch (cause: unknown) {
       onError(errorMessage(cause))
@@ -1095,6 +1099,14 @@ function Property({ label, value }: { label: string; value: string }) {
       <span className="font-semibold text-strong truncate max-w-[140px] text-right">{value}</span>
     </div>
   )
+}
+
+function nextFreeformPath(project: DesignProjectState | null): string {
+  const paths = new Set(project?.freeform.documents.map((doc) => doc.path) ?? [])
+  if (!paths.has('.nd/design/home.op')) return '.nd/design/home.op'
+  let index = 2
+  while (paths.has(`.nd/design/design-${index}.op`)) index += 1
+  return `.nd/design/design-${index}.op`
 }
 
 function projectLabel(project: DesignProjectState): string {

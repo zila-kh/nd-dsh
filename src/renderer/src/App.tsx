@@ -119,9 +119,8 @@ export default function App() {
   }, [inspectScope, isFloatOverlay])
 
   useEffect(() => {
-    if (isFloatOverlay) return
     return window.ndDsh.window?.onFloatMode?.((enabled) => {
-      setInspectScope(enabled ? 'external' : 'self')
+      if (!isFloatOverlay || enabled) setInspectScope(enabled ? 'external' : 'self')
     })
   }, [isFloatOverlay])
 
@@ -450,7 +449,6 @@ export default function App() {
             aria-label="Restore full ND-DSH app window"
             className="app-no-drag grid size-7 place-items-center rounded-full text-faint hover:bg-accent hover:text-foreground transition-colors"
             onClick={() => {
-              setInspectScope('self')
               void window.ndDsh.window?.setFloatMode(false)
             }}
             title="Restore full ND-DSH app window"
