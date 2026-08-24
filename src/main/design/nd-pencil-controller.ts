@@ -303,7 +303,10 @@ export class NdPencilController {
     if (!this.window.isDestroyed()) {
       try { this.window.contentView.removeChildView(this.view) } catch { /* window teardown */ }
     }
-    if (!this.view.webContents.isDestroyed()) this.view.webContents.close()
+    // Electron may clear a WebContentsView's webContents while the parent window
+    // is already tearing down, even though the controller still holds the view.
+    const contents = this.view.webContents
+    if (contents && !contents.isDestroyed()) contents.close()
   }
 
   private async startDocument(relativePath: string, absolutePath: string, json: string | undefined, creating: boolean): Promise<void> {
