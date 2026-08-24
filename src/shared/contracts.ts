@@ -532,6 +532,17 @@ export interface DesktopApi {
   app: {
     info(): Promise<AppInfo>
   }
+  /** Pluggable capability providers (engine/memory/context) and subject routing. */
+  capabilities: {
+    providers(): Promise<import('./capabilities.js').CapabilityDescriptor[]>
+    assignments(): Promise<import('./capabilities.js').CapabilityAssignmentSnapshot>
+    assign(subjectType: import('./capabilities.js').CapabilitySubjectType, subjectId: string, kind: import('./capabilities.js').CapabilityKind, providerId: string): Promise<import('./capabilities.js').CapabilityAssignmentSnapshot>
+    onChanged(listener: (assignments: import('./capabilities.js').CapabilityAssignmentSnapshot) => void): () => void
+    statuses(): Promise<Record<string, import('./capabilities.js').CapabilityProviderStatus>>
+    verify(providerId: string): Promise<Record<string, import('./capabilities.js').CapabilityProviderStatus>>
+    setEnabled(providerId: string, enabled: boolean): Promise<Record<string, import('./capabilities.js').CapabilityProviderStatus>>
+    onStatusChanged(listener: (statuses: Record<string, import('./capabilities.js').CapabilityProviderStatus>) => void): () => void
+  }
   providers: {
     list(): Promise<ModelProvider[]>
     save(providers: ModelProvider[]): Promise<ModelProvider[]>

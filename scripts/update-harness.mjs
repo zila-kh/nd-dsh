@@ -8,19 +8,19 @@ import { fileURLToPath } from 'node:url'
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const harnessRoot = join(root, 'vendor', 'deepseek-harness')
 const pinPath = join(root, 'vendor', 'deepseek-harness.json')
-const vendorReadmePath = join(root, 'vendor', 'README.md')
-const projectReadmePath = join(root, 'README.md')
 const requestedRef = process.argv[2]?.trim()
 
 if (process.argv.includes('--help') || process.argv.includes('-h')) {
-  console.log('Usage: node scripts/update-harness.mjs <tag-or-commit>')
-  console.log('Fetches one explicit upstream ref, checks it out detached, and records the exact resulting commit.')
+  console.log('Usage: node scripts/update-harness.mjs [tag-or-commit]')
+  console.log('Syncs the Harness submodule to the latest upstream commit by default.')
+  console.log('An explicit ref is available for debugging or downgrades only.')
   process.exit(0)
 }
 
-if (!requestedRef || requestedRef.startsWith('-') || /\s/.test(requestedRef)) {
-  console.error('An explicit DeepSeek Harness tag or commit is required.')
-  console.error('Example: corepack pnpm run dsh:update -- 141eb6fef83422698aef7a981029e843e8161534')
+if (requestedRef !== undefined && (!requestedRef || requestedRef.startsWith('-') || /\s/.test(requestedRef))) {
+  console.error('An explicit DeepSeek Harness ref must be a single tag or commit.')
+  console.error('Example: corepack pnpm dsh:update              # sync to upstream latest')
+  console.error('         corepack pnpm dsh:update -- <tag-or-commit>')
   process.exit(1)
 }
 if (!existsSync(join(harnessRoot, '.git'))) {
@@ -30,32 +30,29 @@ if (!existsSync(join(harnessRoot, '.git'))) {
 const status = await capture('git', ['status', '--porcelain'], harnessRoot)
 if (status.trim()) throw new Error('DeepSeek Harness has local changes. Clean the submodule before updating it.')
 
-await run('git', ['fetch', '--depth=1', 'origin', requestedRef], harnessRoot)
-await run('git', ['checkout', '--detach', 'FETCH_HEAD'], harnessRoot)
-
-const commit = (await capture('git', ['rev-parse', 'HEAD'], harnessRoot)).trim()
-const packageJson = JSON.parse(await fs.readFile(join(harnessRoot, 'package.json'), 'utf8'))
-const release = typeof packageJson.version === 'string' ? packageJson.version : 'unknown'
 const currentPin = JSON.parse(await fs.readFile(pinPath, 'utf8'))
 const repository = typeof currentPin.repository === 'string'
   ? currentPin.repository
   : 'https://github.com/deepseek-ai/deepseek-harness.git'
+const branch = typeof currentPin.branch === 'string' && currentPin.branch.trim()
+  ? currentPin.branch.trim()
+  : 'master'
 
-await fs.writeFile(pinPath, `${JSON.stringify({ repository, commit, release }, null, 2)}\n`)
-await updateTextFile(vendorReadmePath, commit, release)
-await updateTextFile(projectReadmePath, commit, release)
+await run('git', ['fetch', '--depth=1', 'origin', requestedRef ?? branch], harnessRoot)
+await run('git', ['checkout', '--detach', 'FETCH_HEAD'], harnessRoot)
+await run('git', ['submodule', 'update', '--init', '--recursive'], harnessRoot)
 
-console.log(`Harness checked out at ${commit} (${release}).`)
-console.log('Review upstream breaking changes and adapters, run bootstrap/checks, then commit the gitlink and pin metadata together.')
+const commit = (await capture('git', ['rev-parse', 'HEAD'], harnessRoot)).trim()
+const packageJson = JSON.parse(await fs.readFile(join(harnessRoot, 'package.json'), 'utf8'))
+const release = typeof packageJson.version === 'string' ? packageJson.version : 'unknown'
 
-async function updateTextFile(path, nextCommit, nextRelease) {
-  let content = await fs.readFile(path, 'utf8')
-  content = content.replace(/commit\s+`[0-9a-f]{40}`/i, `commit \`${nextCommit}\``)
-  content = content.replace(/commit:\s+`[0-9a-f]{40}`/i, `commit: \`${nextCommit}\``)
-  content = content.replace(/\(`[^`]+`\)\./, `(\`${nextRelease}\`).`)
-  content = content.replace(/release at that commit:\s+`[^`]+`/i, `release at that commit: \`${nextRelease}\``)
-  await fs.writeFile(path, content)
-}
+// Provenance snapshot of the last sync; informational only, nothing pins to it.
+await fs.writeFile(pinPath, `${JSON.stringify({ repository, branch, lastSyncedCommit: commit, lastSyncedRelease: release }, null, 2)}\n`)
+
+console.log(requestedRef
+  ? `Harness synced to explicit ref ${requestedRef} at ${commit} (${release}).`
+  : `Harness synced to upstream ${branch} latest at ${commit} (${release}).`)
+console.log('Review upstream breaking changes against the ND overlay and adapters, run corepack pnpm verify && corepack pnpm test, then commit the moved submodule gitlink together with any adapter fixes.')
 
 function run(command, args, cwd) {
   return new Promise((resolvePromise, reject) => {
@@ -77,8 +74,9 @@ function capture(command, args, cwd) {
     child.stdout.on('data', (chunk) => { stdout += chunk })
     child.stderr.on('data', (chunk) => { stderr += chunk })
     child.once('error', reject)
-    child.once('close', (code) => code === 0
-      ? resolvePromise(stdout)
-      : reject(new Error(stderr.trim() || `${command} exited with ${String(code)}`)))
+    child.once('close', (code) => {
+      if (code === 0) return resolvePromise(stdout)
+      reject(new Error(stderr.trim() || `${command} exited with code ${String(code)}`))
+    })
   })
 }

@@ -1,7 +1,7 @@
 # ND-DSH contributor guidance
 
 - ND owns the product control plane: companies, projects, roles, agents, tasks, skills, memory, policies, provider routes, and coding-engine contracts.
-- Keep DeepSeek Harness as a pinned runtime submodule/adapter. Do not copy or patch its core into this repository.
+- Keep DeepSeek Harness as an upstream-tracking runtime submodule/adapter (sync to latest at bootstrap or via `dsh:update`; no frozen commit pins during beta). Do not copy or patch its core into this repository.
 - Treat DeepSeek as a model-provider compatibility route, not ND product identity.
 - Treat Codex and future coding products as replaceable engine adapters. Do not leak engine-specific branching into organization-domain state machines.
 - The embedded `WebContentsView` is the canonical browser. Never launch a hidden automation browser for agent tasks.

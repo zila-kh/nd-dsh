@@ -8,9 +8,9 @@ import { fileURLToPath } from 'node:url'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const pin = JSON.parse(await fs.readFile(join(root, 'vendor', 'deepseek-harness.json'), 'utf8'))
-const harnessCommit = typeof pin.commit === 'string' ? pin.commit.toLowerCase() : ''
+// Harness tracks upstream latest during beta; metadata records provenance only.
+const harnessBranch = typeof pin.branch === 'string' ? pin.branch.trim() : ''
 const harnessRepository = typeof pin.repository === 'string' ? pin.repository : ''
-const harnessRelease = typeof pin.release === 'string' ? pin.release : ''
 const errors = []
 const notes = []
 
@@ -64,11 +64,10 @@ for (const stale of [
   }
 }
 
-if (!/^[0-9a-f]{40}$/.test(harnessCommit)) errors.push('Harness pin must contain a full 40-character commit SHA')
+if (!harnessBranch) errors.push('Harness metadata must name the tracked upstream branch')
 if (harnessRepository !== 'https://github.com/deepseek-ai/deepseek-harness.git') {
   errors.push('Harness repository must be the official deepseek-ai/deepseek-harness repository')
 }
-if (!harnessRelease) errors.push('Harness pin metadata must include the upstream release')
 
 const packageJson = JSON.parse(await fs.readFile(join(root, 'package.json'), 'utf8'))
 const expectedPins = {
@@ -90,18 +89,28 @@ if (Object.keys(packageJson.scripts ?? {}).some((name) => name.includes('mock') 
   errors.push('package.json must not expose the retired mock/web-sidecar prototype as a product script')
 }
 
+// The Harness submodule tracks upstream latest; the ND Pencil submodule stays commit-pinned.
+function gitmodulesSection(content, submodulePath) {
+  const escaped = submodulePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`\\[submodule "${escaped}"\\]([^\\[])`).exec(content)?.[1] ?? ''
+}
 const gitmodules = await fs.readFile(join(root, '.gitmodules'), 'utf8')
-if (!gitmodules.includes(harnessRepository)) errors.push('DeepSeek Harness submodule URL is missing or differs from pin metadata')
-if (/^\s*branch\s*=/m.test(gitmodules)) errors.push('Pinned Harness submodule must not track a moving branch')
+const harnessSection = gitmodulesSection(gitmodules, 'vendor/deepseek-harness')
+if (!harnessSection.includes(harnessRepository)) errors.push('DeepSeek Harness submodule URL is missing or differs from pin metadata')
+if (harnessBranch && !new RegExp(`^\\s*branch\\s*=\\s*${harnessBranch}\\s*$`, 'm').test(harnessSection)) {
+  errors.push(`DeepSeek Harness submodule must track the upstream ${harnessBranch} branch`)
+}
+if (/^\s*branch\s*=/m.test(gitmodulesSection(gitmodules, 'vendor/openpencil'))) {
+  errors.push('Pinned ND Pencil upstream submodule must not track a moving branch')
+}
 
 const vendorReadme = await fs.readFile(join(root, 'vendor/README.md'), 'utf8')
 const projectReadme = await fs.readFile(join(root, 'README.md'), 'utf8')
 for (const [name, content] of [['vendor/README.md', vendorReadme], ['README.md', projectReadme]]) {
-  if (!content.includes(harnessCommit)) errors.push(`${name} does not contain the pinned Harness commit ${harnessCommit}`)
-  if (!content.includes(harnessRelease)) errors.push(`${name} does not contain the pinned Harness release ${harnessRelease}`)
+  if (!content.includes('upstream latest')) errors.push(`${name} must document that the Harness runtime tracks upstream latest`)
 }
-if (!projectReadme.includes('dsh:update -- <tag-or-commit>')) {
-  errors.push('README must document explicit-ref Harness updates')
+if (!projectReadme.includes('corepack pnpm dsh:update')) {
+  errors.push('README must document Harness runtime syncs through dsh:update')
 }
 
 const patch = await fs.readFile(join(root, 'configs/dsh/nd-dsh.patch.yml'), 'utf8')
@@ -258,14 +267,14 @@ const harnessRoot = join(root, 'vendor', 'deepseek-harness')
 if (existsSync(join(harnessRoot, 'package.json'))) {
   try {
     const actual = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: harnessRoot, encoding: 'utf8' }).trim().toLowerCase()
-    if (actual !== harnessCommit) errors.push(`populated Harness submodule is ${actual}, expected ${harnessCommit}`)
+    notes.push(`Harness submodule checked out at ${actual.slice(0, 12)} (tracks upstream ${harnessBranch || 'master'} latest).`)
     const dirty = execFileSync('git', ['status', '--porcelain'], { cwd: harnessRoot, encoding: 'utf8' }).trim()
     if (dirty) errors.push('populated Harness submodule has local changes')
   } catch (error) {
     errors.push(`could not verify populated Harness submodule: ${commandError(error)}`)
   }
 } else {
-  notes.push('Harness submodule is not populated in this archive; bootstrap will initialize the exact pin.')
+  notes.push('Harness submodule is not populated in this archive; bootstrap will initialize and sync it to upstream latest.')
 }
 
 if (existsSync(join(root, '.git'))) {
@@ -276,8 +285,8 @@ if (existsSync(join(root, '.git'))) {
     }).trim()
     if (!stage) {
       errors.push('repository is initialized but the Harness submodule gitlink is missing')
-    } else if (!stage.startsWith(`160000 ${harnessCommit} `)) {
-      errors.push(`repository gitlink does not match Harness pin: ${stage}`)
+    } else if (!stage.startsWith('160000 ')) {
+      errors.push(`repository Harness gitlink is malformed: ${stage}`)
     }
   } catch (error) {
     errors.push(`could not verify repository gitlink: ${commandError(error)}`)

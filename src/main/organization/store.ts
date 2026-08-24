@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
-import { dirname } from 'node:path'
+import { dirname, isAbsolute, resolve } from 'node:path'
 import type {
   AgentStatus,
   Company,
@@ -269,6 +269,18 @@ export class OrganizationStore {
     await this.save()
   }
 
+  /** A failed review run releases its session so the Review action can retry. */
+  async clearReviewSession(taskId: string): Promise<void> {
+    await this.load()
+    const task = this.task(taskId)
+    delete task.reviewSessionId
+    task.updatedAt = Date.now()
+    for (const agent of this.value.agents.filter((item) => item.status === 'reviewing' && item.currentTaskId === taskId)) {
+      this.setAgent(agent.id, 'idle')
+    }
+    await this.save()
+  }
+
   async completeReview(taskId: string, passed: boolean, summary: string, memories: Array<{ title: string; content: string; tags?: string[] }> = []): Promise<void> {
     await this.load()
     const task = this.task(taskId)
@@ -415,10 +427,28 @@ export class OrganizationStore {
   }
   private activateCompany(id: string): void { this.company(id); this.value.activeCompanyId = id; const project = this.value.projects.find((item) => item.companyId === id); if (project) this.value.activeProjectId = project.id; else delete this.value.activeProjectId }
   private createProject(input: Extract<OrganizationMutation, { type: 'project.create' }>): void {
-    this.company(input.companyId); const now = Date.now(); const project: Project = { id: randomUUID(), companyId: input.companyId, name: clean(input.name), objective: clean(input.objective), status: 'planning', repoUrls: input.repoUrls?.map(clean).filter(Boolean) ?? [], teamIds: [], progress: 0, ...(input.workspacePath?.trim() ? { workspacePath: input.workspacePath.trim() } : {}), createdAt: now, updatedAt: now }
+    this.company(input.companyId); const now = Date.now(); const workspacePath = normalizeWorkspacePath(input.workspacePath); const project: Project = {
+      id: randomUUID(), companyId: input.companyId, name: clean(input.name), objective: clean(input.objective), status: 'planning', repoUrls: input.repoUrls?.map(clean).filter(Boolean) ?? [], teamIds: [], progress: 0,
+      ...(workspacePath ? { workspacePath } : {}),
+      createdAt: now, updatedAt: now,
+    }
+    applyRuntimeFields(project, input)
     this.value.projects.push(project); this.value.activeCompanyId = input.companyId; this.value.activeProjectId = project.id; this.activity(input.companyId, project.id, 'project.created', `Created project “${project.name}”.`)
   }
-  private updateProject(id: string, patch: Extract<OrganizationMutation, { type: 'project.update' }>['patch']): void { const project = this.project(id); Object.assign(project, patch); project.name = clean(project.name); project.objective = clean(project.objective); project.updatedAt = Date.now() }
+  private updateProject(id: string, patch: Extract<OrganizationMutation, { type: 'project.update' }>['patch']): void {
+    const project = this.project(id)
+    const { workspacePath, ...rest } = patch
+    Object.assign(project, rest)
+    if (workspacePath !== undefined) {
+      const normalized = normalizeWorkspacePath(workspacePath)
+      if (normalized) project.workspacePath = normalized
+      else deleteProjectKey(project, 'workspacePath')
+    }
+    project.name = clean(project.name)
+    project.objective = clean(project.objective)
+    applyRuntimeFields(project, patch)
+    project.updatedAt = Date.now()
+  }
   private activateProject(id: string): void { const project = this.project(id); this.value.activeProjectId = id; this.value.activeCompanyId = project.companyId }
   private createTeam(input: Extract<OrganizationMutation, { type: 'team.create' }>): void { this.company(input.companyId); for (const roleId of input.roleIds ?? []) this.assertRoleCompany(roleId, input.companyId); this.value.teams.push({ id: randomUUID(), companyId: input.companyId, name: clean(input.name), purpose: clean(input.purpose), roleIds: input.roleIds ?? [], skillIds: input.skillIds ?? [] }) }
   private createRole(input: Extract<OrganizationMutation, { type: 'role.create' }>): void { this.company(input.companyId); this.value.roles.push({ id: randomUUID(), companyId: input.companyId, name: clean(input.name), responsibility: clean(input.responsibility), systemPrompt: clean(input.systemPrompt), skillIds: input.skillIds ?? [], ...(input.providerId ? { providerId: input.providerId } : {}), ...(input.modelId ? { modelId: input.modelId } : {}) }) }
@@ -529,3 +559,44 @@ function clone<T>(value: T): T { return structuredClone(value) }
 function mergeBuiltins(skills: OrganizationSkill[]): OrganizationSkill[] { const custom = skills.filter((item) => item.scope !== 'builtin'); return [...clone(BUILTIN_SKILLS), ...custom] }
 function priority(value: OrganizationTask['priority']): number { return value === 'critical' ? 4 : value === 'high' ? 3 : value === 'medium' ? 2 : 1 }
 function short(value: string): string { return value.length > 14 ? `${value.slice(0, 6)}…${value.slice(-5)}` : value }
+
+/**
+ * Project runtime fields arrive from free-form inputs; blank text and
+ * out-of-range ports mean "unset" and must delete the stored key instead of
+ * persisting an empty string that later reads as configured.
+ */
+function applyRuntimeFields(target: Project, source: { startCommand?: string; testCommand?: string; targetPort?: number; targetUrl?: string; healthCheckPath?: string }): void {
+  const text = (key: 'startCommand' | 'testCommand' | 'targetUrl' | 'healthCheckPath'): void => {
+    const value = source[key]
+    if (value === undefined) return
+    const trimmed = value.trim()
+    if (trimmed) target[key] = trimmed
+    else deleteProjectKey(target, key)
+  }
+  text('startCommand'); text('testCommand'); text('targetUrl'); text('healthCheckPath')
+  const port = source.targetPort
+  if (port === undefined) return
+  if (Number.isInteger(port) && port >= 1 && port <= 65_535) target.targetPort = port
+  else deleteProjectKey(target, 'targetPort')
+}
+
+function deleteProjectKey(target: object, key: string): void { delete (target as Record<string, unknown>)[key] }
+
+/**
+ * Project workspaces are durable machine paths, not shell snippets. Keep them
+ * canonical and reject escaped/control-character input before it can strand a
+ * project in an impossible workspace after a restart.
+ */
+function normalizeWorkspacePath(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string') throw new Error('Workspace path must be text')
+  const path = value.trim()
+  if (!path) return undefined
+  if (/[\u0000-\u001f]/.test(path)) {
+    throw new Error('Workspace path contains control characters. Select the folder instead of pasting an escaped path.')
+  }
+  if (!isAbsolute(path)) {
+    throw new Error('Workspace path must be absolute. Select the project folder instead of entering a relative path.')
+  }
+  return resolve(path)
+}

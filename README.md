@@ -39,10 +39,9 @@ ND owns identity, configuration, authorization, orchestration, and durable state
 
 ### ND Harness
 
-The primary engine is the pinned DeepSeek Harness runtime, used as infrastructure rather than product identity. ND adds its own provider routing, workspace scope, permissions, browser MCP, agent preset, organization context, and desktop lifecycle around it.
+The primary engine is the DeepSeek Harness runtime, tracked to upstream latest and used as infrastructure rather than product identity. ND adds its own provider routing, workspace scope, permissions, browser MCP, agent preset, organization context, and desktop lifecycle around it.
 
-Pinned upstream release: **0.1.0-rc.8**  
-Pinned upstream commit: **141eb6fef83422698aef7a981029e843e8161534**
+Upstream runtime: **tracks latest** — `deepseek-ai/deepseek-harness` `master`, synced at bootstrap or via `corepack pnpm dsh:update`.
 
 ### Codex CLI (direct)
 
@@ -52,7 +51,7 @@ Native Codex authentication, `HOME` / `CODEX_HOME`, model selection, project tru
 
 ### Codex CLI (delegated fallback)
 
-The pinned Harness also contains `@deepseek-ai/dsh-subagent-codex`, which starts its package-local `codex app-server --stdio` process as a one-shot delegate inside an ND Harness run (engine id `codex`). It remains available as a fallback when the direct engine is not usable.
+The vendored Harness also contains `@deepseek-ai/dsh-subagent-codex`, which starts its package-local `codex app-server --stdio` process as a one-shot delegate inside an ND Harness run (engine id `codex`). It remains available as a fallback when the direct engine is not usable.
 
 AI employees can be assigned an available coding engine from Workforce. The assignment is durable ND state. Engine-specific worker guidance ships with each engine descriptor, so organization workflow code never branches on engine ids: delegated workers hand implementation to Codex and then validate the workspace themselves, while direct workers implement natively in Codex before the normal independent review step.
 
@@ -97,7 +96,7 @@ Requirements:
 - Git
 - a supported Electron desktop OS
 
-Clone with submodules, or let bootstrap initialize the pinned Harness checkout:
+Clone with submodules, or let bootstrap initialize the Harness checkout and sync it to upstream latest:
 
 ```sh
 git clone --recurse-submodules https://github.com/zila-kh/nd-dsh.git
@@ -137,15 +136,16 @@ The QA view in the app runs the same unit and e2e suites from inside ND-DSH and 
 
 GitHub Actions runs the same repository invariants, type checks, unit tests, and production desktop build on branch/PR changes.
 
-## Updating the pinned Harness
+## Syncing the Harness runtime
 
-Harness is a pinned git submodule and must never silently track a moving upstream branch. Update it only through an explicit tag or full commit and review the resulting runtime/config compatibility:
+The Harness submodule tracks upstream latest instead of a frozen pin while ND-DSH is in beta. Every `corepack pnpm bootstrap` syncs it to the newest upstream commit, and you can re-sync on demand:
 
 ```sh
-corepack pnpm dsh:update -- <tag-or-commit>
+corepack pnpm dsh:update                          # sync to upstream latest
+corepack pnpm dsh:update -- <tag-or-commit>       # optional explicit ref for debugging/downgrades
 ```
 
-The pin metadata in `vendor/deepseek-harness.json`, the submodule gitlink, this README, and `vendor/README.md` must remain aligned. The current required pin is release **0.1.0-rc.8** at **141eb6fef83422698aef7a981029e843e8161534**.
+Review the resulting runtime/config compatibility against the ND overlay and adapters, run the checks below, and commit the moved submodule gitlink together with any adapter fixes. Provenance of the last sync (branch, commit, release) is recorded informationally in `vendor/deepseek-harness.json`; nothing enforces a specific commit.
 
 ## Project status
 
@@ -206,7 +206,7 @@ src/shared/               cross-process contracts
 configs/dsh/              ND Harness overlay and agent preset
 .dsh/skills/              repository-local ND skills
 tests/                    product/unit contracts
-vendor/deepseek-harness/  pinned runtime submodule
+vendor/deepseek-harness/  runtime submodule (tracks upstream latest)
 ```
 
 ## License

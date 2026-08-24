@@ -8,6 +8,13 @@ export type TaskPriority = 'low' | 'medium' | 'high' | 'critical'
 export type OrganizationRunKind = 'pm-plan' | 'task-execution' | 'task-review'
 export type OrganizationRunStatus = 'running' | 'completed' | 'failed'
 export type OrganizationScope = 'builtin' | 'company' | 'project' | 'team' | 'role' | 'agent'
+export type ProjectRuntimeState = 'stopped' | 'starting' | 'ready' | 'unreachable'
+
+/**
+ * The report contract for beta projects pins the app under development at
+ * :3000; ND-DSH's own preview port is never assumed as a project target.
+ */
+export const DEFAULT_PROJECT_PORT = 3000
 
 export interface Company {
   id: string
@@ -29,8 +36,33 @@ export interface Project {
   repoUrls: string[]
   teamIds: string[]
   progress: number
+  /** Shell command that starts the project's dev server, run in workspacePath. */
+  startCommand?: string
+  /** Command used when validating or QA-ing the project (informational + agent hint). */
+  testCommand?: string
+  /** Port of the running app; defaults to 3000. Never ND-DSH's own preview port. */
+  targetPort?: number
+  /** Explicit full target URL; wins over targetPort when set. */
+  targetUrl?: string
+  /** Path appended to the target URL for health checks; defaults to '/'. */
+  healthCheckPath?: string
   createdAt: number
   updatedAt: number
+}
+
+/** Live state of a project's dev-server runtime and its browser target. */
+export interface ProjectRuntimeStatus {
+  projectId: string
+  state: ProjectRuntimeState
+  /** Resolved URL the built-in browser should open for this project. */
+  targetUrl?: string
+  port?: number
+  pid?: number
+  startedAt?: number
+  checkedAt?: number
+  lastError?: string
+  /** Workspace validation findings from the latest check/start attempt. */
+  validation?: string[]
 }
 
 export interface OrganizationRole {
@@ -224,8 +256,8 @@ export type OrganizationMutation =
   | { type: 'company.create'; name: string; mission: string }
   | { type: 'company.update'; id: string; patch: Partial<Pick<Company, 'name' | 'mission' | 'autonomyLevel' | 'status'>> }
   | { type: 'company.activate'; id: string }
-  | { type: 'project.create'; companyId: string; name: string; objective: string; workspacePath?: string; repoUrls?: string[] }
-  | { type: 'project.update'; id: string; patch: Partial<Pick<Project, 'name' | 'objective' | 'status' | 'workspacePath' | 'repoUrls' | 'teamIds'>> }
+  | { type: 'project.create'; companyId: string; name: string; objective: string; workspacePath?: string; repoUrls?: string[]; startCommand?: string; testCommand?: string; targetPort?: number; targetUrl?: string; healthCheckPath?: string }
+  | { type: 'project.update'; id: string; patch: Partial<Pick<Project, 'name' | 'objective' | 'status' | 'workspacePath' | 'repoUrls' | 'teamIds' | 'startCommand' | 'testCommand' | 'targetPort' | 'targetUrl' | 'healthCheckPath'>> }
   | { type: 'project.activate'; id: string }
   | { type: 'team.create'; companyId: string; name: string; purpose: string; roleIds?: string[]; skillIds?: string[] }
   | { type: 'role.create'; companyId: string; name: string; responsibility: string; systemPrompt: string; skillIds?: string[]; providerId?: string; modelId?: string }
@@ -256,6 +288,10 @@ export interface OrganizationDesktopApi {
   reviewTask(taskId: string): Promise<OrganizationRunReceipt>
   runNext(projectId?: string): Promise<OrganizationRunReceipt | null>
   onChanged(listener: (state: OrganizationSnapshot) => void): () => void
+  projectRuntime(projectId: string): Promise<ProjectRuntimeStatus>
+  startProjectRuntime(projectId: string): Promise<ProjectRuntimeStatus>
+  stopProjectRuntime(projectId: string): Promise<ProjectRuntimeStatus>
+  onRuntimeChanged(listener: (status: ProjectRuntimeStatus) => void): () => void
 }
 
 export const ORGANIZATION_IPC = {
@@ -266,4 +302,8 @@ export const ORGANIZATION_IPC = {
   reviewTask: 'organization:review-task',
   runNext: 'organization:run-next',
   changed: 'organization:changed',
+  runtimeState: 'organization:runtime-state',
+  runtimeStart: 'organization:runtime-start',
+  runtimeStop: 'organization:runtime-stop',
+  runtimeChanged: 'organization:runtime-changed',
 } as const

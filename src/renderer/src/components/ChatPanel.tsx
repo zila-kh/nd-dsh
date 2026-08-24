@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type KeyboardEvent, type ReactNode, Fragment } from 'react'
 import type {
   CodingEngineDescriptor,
   DshEventFrame,
@@ -12,6 +12,7 @@ import type {
   WorkspaceSuggestion,
 } from '../../../shared/contracts'
 import { CODEX_CLI_ENGINE_ID, ND_HARNESS_ENGINE_ID } from '../../../shared/coding-engines'
+import { DisplayGroup, groupEntries } from '../../../shared/chat-grouping'
 import type { AskQuestion, ThreadEntry, TodoItem } from '../lib/types'
 import { FOLDER_ACCENT, SKILL_ACCENT, fileExtensionOf, fileAccent } from '../lib/file-accents'
 import { applyMention, detectMentionTrigger } from '../../../shared/mentions'
@@ -845,20 +846,31 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
               <p className="m-0 max-w-[300px] text-[9px]/[1.6]">Ask anything about this workspace — open files, inspect the browser, or plan company goals. Context used during the thread appears on the composer badge.</p>
             </div>
           ) : null}
-          {entries.map((entry) => (
-            <ThreadEntryView
-              key={entry.id}
-              entry={entry}
-              onAnswerApproval={answerApproval}
-              {...(onOpenFile ? { onOpenFile } : {})}
-            />
+          {groupEntries(entries).map((group) => (
+            <Fragment key={group.key}>
+              {group.kind === 'tool-group' ? (
+                <ToolGroupView group={group} {...(onOpenFile ? { onOpenFile } : {})} />
+              ) : (
+                <ThreadEntryView
+                  entry={group.entry}
+                  onAnswerApproval={answerApproval}
+                  {...(onOpenFile ? { onOpenFile } : {})}
+                />
+              )}
+            </Fragment>
           ))}
           {busy ? (
-            <div className="flex items-center gap-1 p-[9px] text-[9px] text-faint">
-              <span className="size-1 animate-thinking rounded-full bg-primary" />
-              <span className="size-1 animate-thinking rounded-full bg-primary [animation-delay:160ms]" />
-              <span className="mr-1 size-1 animate-thinking rounded-full bg-primary [animation-delay:320ms]" />
-              <em className="font-normal not-italic">{status?.state === 'starting' && onHarnessThread ? 'Starting pinned runtime' : onHarnessThread ? 'Harness is working' : `${activeEngineName} is working`}</em>
+            <div className="mb-2 flex items-center gap-2.5">
+              <span className="grid size-[20px] shrink-0 place-items-center rounded-full bg-primary/15 [&_svg]:size-[11px]">
+                <span className="flex items-center gap-[3px]">
+                  <span className="size-1 animate-thinking rounded-full bg-primary" />
+                  <span className="size-1 animate-thinking rounded-full bg-primary [animation-delay:160ms]" />
+                  <span className="size-1 animate-thinking rounded-full bg-primary [animation-delay:320ms]" />
+                </span>
+              </span>
+              <em className="text-[11px] font-normal not-italic text-faint">
+                {status?.state === 'starting' && onHarnessThread ? 'Starting runtime…' : onHarnessThread ? 'Thinking…' : `${activeEngineName} is working…`}
+              </em>
             </div>
           ) : null}
         </div>
@@ -1333,40 +1345,45 @@ function ThreadEntryView({ entry, onAnswerApproval, onOpenFile }: ThreadEntryVie
   switch (entry.kind) {
     case 'user':
       return (
-        <article className="mb-2.5 ml-6 block rounded-lg border border-info/20 bg-info/[0.07] px-[11px] py-2.5" key={entry.id}>
-          <div className="mb-[7px] flex items-center gap-[5px] text-[9px] font-semibold text-muted-foreground">You</div>
-          <div className="whitespace-pre-wrap [overflow-wrap:anywhere] text-[11px]/[1.55] text-soft">{entry.text}</div>
-        </article>
+        <div className="mb-4 flex justify-end">
+          <article className="max-w-[85%] rounded-2xl rounded-br-sm bg-info/[0.13] px-3.5 py-2.5">
+            <div className="whitespace-pre-wrap [overflow-wrap:anywhere] text-[12.5px]/[1.65] text-foreground">{entry.text}</div>
+          </article>
+        </div>
       )
     case 'assistant':
       return (
-        <article className="mr-2 mb-2.5 block rounded-lg border border-primary/15 bg-primary/[0.055] px-[11px] py-2.5" key={entry.id}>
-          <div className="mb-[7px] flex items-center gap-[5px] text-[9px] font-semibold text-muted-foreground [&_svg]:size-[13px] [&_svg]:text-primary"><SparkIcon /> Harness</div>
-          <div className="whitespace-pre-wrap [overflow-wrap:anywhere] text-[11px]/[1.55] text-soft">{entry.text}{entry.streaming ? <span className="ml-0.5 inline-block h-[11px] w-1.5 animate-caret-blink bg-primary align-bottom" /> : null}</div>
+        <article className="mb-2 flex items-start gap-2.5">
+          <span className="mt-[2px] grid size-[20px] shrink-0 place-items-center rounded-full bg-primary/15 text-primary [&_svg]:size-[11px]">
+            <SparkIcon />
+          </span>
+          <div className="min-w-0 flex-1 pb-1 whitespace-pre-wrap [overflow-wrap:anywhere] text-[12.5px]/[1.7] text-foreground/90">
+            {entry.text}
+            {entry.streaming ? <span className="ml-0.5 inline-block h-[13px] w-1.5 animate-caret-blink bg-primary align-bottom" /> : null}
+          </div>
         </article>
       )
     case 'notice':
       return (
         <article
           className={cn(
-            'mb-2.5 block rounded-lg border px-[11px] py-2.5',
+            'mb-3 ml-[30px] rounded-lg border px-3 py-2.5',
             entry.tone === 'error'
-              ? 'border-destructive bg-destructive/10 text-destructive'
-              : 'border-warning/25 bg-warning/10',
+              ? 'border-destructive/30 bg-destructive/[0.08] text-destructive'
+              : 'border-warning/20 bg-warning/[0.07]',
           )}
-          key={entry.id}
         >
-          <div className="mb-[7px] flex items-center gap-[5px] text-[9px] font-semibold text-muted-foreground">Runtime</div>
+          <div className="mb-1 text-[9px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/70">Runtime</div>
           <div className={cn('whitespace-pre-wrap [overflow-wrap:anywhere] text-[11px]/[1.55]', entry.tone === 'error' ? 'text-destructive' : 'text-soft')}>{entry.text}</div>
         </article>
       )
     case 'tool':
-      return (
-        <ToolCardView entry={entry} key={entry.id} />
-      )
+      // groupEntries() handles all tool entries; this branch only fires for
+      // entries rendered outside the feed (e.g. approval previews).
+      return <ToolCardView entry={entry} />
     case 'todo':
       return (
-        <article className="mb-2 rounded-lg border border-border-soft bg-composer px-2.5 py-2" key={entry.id}>
+        <article className="mb-3 ml-[30px] rounded-lg border border-border-soft bg-surface-1 px-2.5 py-2">
           {entry.items.map((item: TodoItem, index) => (
             <div
               className={cn('flex items-center gap-[7px] py-[3px] text-[10px]', item.status === 'completed' ? 'text-faint line-through' : 'text-soft')}
@@ -1374,8 +1391,8 @@ function ThreadEntryView({ entry, onAnswerApproval, onOpenFile }: ThreadEntryVie
             >
               <span
                 className={cn(
-                  'grid size-[13px] shrink-0 place-items-center rounded border border-border-strong text-[9px]',
-                  item.status === 'in_progress' ? 'border-info text-info' : 'text-primary',
+                  'grid size-[13px] shrink-0 place-items-center rounded border text-[9px]',
+                  item.status === 'completed' ? 'border-primary/40 text-primary' : item.status === 'in_progress' ? 'border-info text-info' : 'border-border-strong',
                 )}
               >
                 {item.status === 'completed' ? '✓' : item.status === 'in_progress' ? '·' : ''}
@@ -1387,26 +1404,26 @@ function ThreadEntryView({ entry, onAnswerApproval, onOpenFile }: ThreadEntryVie
       )
     case 'approval':
       return (
-        <article className="mb-2.5 rounded-lg border border-warning/25 bg-warning/10 px-[11px] py-2.5" key={entry.id}>
-          <div className="mb-[7px] flex items-center gap-1.5 text-[10px] font-semibold text-foreground [&_svg]:size-[13px] [&_svg]:text-warning">
+        <article className="mb-3 ml-[30px] rounded-lg border border-warning/25 bg-warning/[0.07] px-3 py-2.5">
+          <div className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold text-foreground [&_svg]:size-[13px] [&_svg]:text-warning">
             <ShieldIcon /> Approval required
           </div>
-          <div className="mb-2 flex flex-col gap-1">
+          <div className="mb-2.5 flex flex-col gap-1">
             <span className="font-mono text-[9px] text-soft">{entry.toolName}</span>
             {entry.reason ? <span className="text-[10px]/[1.45] text-muted-foreground">{entry.reason}</span> : null}
           </div>
           {entry.resolved ? (
-            <div className="mt-[7px] text-[9px] text-muted-foreground">{entry.resolved === 'allowed-once' ? 'Allowed once' : 'Rejected'}</div>
+            <div className="text-[9px] text-muted-foreground">{entry.resolved === 'allowed-once' ? '✓ Allowed once' : '✗ Rejected'}</div>
           ) : (
-            <div className="flex gap-[7px]">
+            <div className="flex gap-2">
               <button
-                className="cursor-pointer rounded-[5px] border border-primary/30 bg-primary/10 px-[11px] py-[5px] text-[10px] text-primary transition-colors hover:bg-primary/[0.16]"
+                className="cursor-pointer rounded-md border border-primary/30 bg-primary/10 px-3 py-1.5 text-[10px] font-medium text-primary transition-colors hover:bg-primary/[0.18]"
                 onClick={() => onAnswerApproval?.(entry, 'allowed-once')}
               >
                 Allow once
               </button>
               <button
-                className="cursor-pointer rounded-[5px] border border-border-strong bg-transparent px-[11px] py-[5px] text-[10px] text-muted-foreground transition-colors hover:text-foreground"
+                className="cursor-pointer rounded-md border border-border-strong bg-transparent px-3 py-1.5 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                 onClick={() => onAnswerApproval?.(entry, 'rejected')}
               >
                 Reject
@@ -1455,6 +1472,89 @@ function ToolCardView({ entry }: { entry: Extract<ThreadEntry, { kind: 'tool' }>
   )
 }
 
+function ToolGroupView({ group, onOpenFile }: {
+  group: Extract<DisplayGroup, { kind: 'tool-group' }>
+  onOpenFile?: (path: string) => void
+}) {
+  const hasRunning = group.tools.some((t) => t.status === 'running')
+  const hasError = group.tools.some((t) => t.status === 'error')
+  // Auto-open while tools are running so the user sees live activity.
+  const [open, setOpen] = useState(hasRunning)
+
+  // If a group transitions from running→done, keep the open state stable.
+  const prevRunning = useRef(hasRunning)
+  useEffect(() => {
+    if (!prevRunning.current && hasRunning) setOpen(true)
+    prevRunning.current = hasRunning
+  }, [hasRunning])
+
+  const iconEl = group.icon === 'file' ? (
+    <FileIcon className={cn(hasError ? 'text-destructive' : 'text-soft/60')} />
+  ) : group.icon === 'skill' ? (
+    <SparkIcon className="text-primary/60" />
+  ) : group.icon === 'read' ? (
+    <FileIcon className="text-faint" />
+  ) : (
+    <ContextIcon className={cn(hasRunning ? 'text-info' : hasError ? 'text-destructive' : 'text-faint')} />
+  )
+
+  return (
+    <div className="mb-2 ml-[30px]">
+      {/* Summary row — matches the ZCode reference pill style */}
+      <button
+        className={cn(
+          'flex items-center gap-1.5 rounded-md py-[3px] pl-[5px] pr-2 text-[11px] transition-colors hover:bg-accent [&_svg]:size-[11px]',
+          hasError ? 'text-destructive' : hasRunning ? 'text-info' : 'text-faint hover:text-foreground',
+        )}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {iconEl}
+        <span className="font-medium">
+          {group.label}
+          {hasRunning ? <span className="ml-1 inline-block animate-pulse-dot">…</span> : null}
+        </span>
+        <ChevronDownIcon className={cn('ml-0.5 transition-transform [&]:size-[10px]', open && 'rotate-180')} />
+      </button>
+
+      {/* Expanded sub-rows */}
+      {open ? (
+        <div className="mt-0.5 flex flex-col pl-1.5">
+          {group.tools.map((tool) => {
+            const path = toolPath(tool.args)
+            const rowLabel = path ?? tool.name
+            const clickable = Boolean(path && onOpenFile)
+            const Wrapper = clickable ? 'button' : 'div'
+            return (
+              <Wrapper
+                key={tool.id}
+                className={cn(
+                  'flex items-center gap-1.5 rounded-[5px] px-[7px] py-[3px] text-left font-mono text-[9px] [&_svg]:size-[10px] [&_svg]:shrink-0',
+                  clickable
+                    ? 'cursor-pointer text-soft/80 transition-colors hover:bg-accent hover:text-foreground'
+                    : 'cursor-default text-faint',
+                  tool.status === 'error' && '!text-destructive',
+                )}
+                {...(clickable ? { onClick: () => onOpenFile!(path!) } : {})}
+                title={tool.result ? tool.result.slice(0, 120) : tool.name}
+              >
+                {group.icon === 'file' || group.icon === 'read' ? <FileIcon /> : group.icon === 'skill' ? <SparkIcon /> : <ContextIcon />}
+                <span className="min-w-0 truncate">{rowLabel}</span>
+                {tool.status === 'running' ? (
+                  <span className="ml-auto shrink-0 animate-pulse-dot font-sans text-[8px] not-italic text-info">running</span>
+                ) : tool.status === 'error' ? (
+                  <span className="ml-auto shrink-0 font-sans text-[8px] not-italic text-destructive">failed</span>
+                ) : (
+                  <ChevronRightIcon className="ml-auto shrink-0 text-fainter/50" />
+                )}
+              </Wrapper>
+            )
+          })}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function QuestionCard({ entry }: { entry: Extract<ThreadEntry, { kind: 'question' }> }) {
   const [selections, setSelections] = useState<Record<string, string[]>>({})
   const [custom, setCustom] = useState<Record<string, string>>({})
@@ -1486,8 +1586,8 @@ function QuestionCard({ entry }: { entry: Extract<ThreadEntry, { kind: 'question
   }
 
   return (
-    <article className="mb-2.5 rounded-lg border border-warning/25 bg-warning/10 px-[11px] py-2.5" key={entry.id}>
-      <div className="mb-[7px] flex items-center gap-1.5 text-[10px] font-semibold text-foreground">Questions</div>
+    <article className="mb-3 ml-[30px] rounded-lg border border-warning/25 bg-warning/[0.07] px-3 py-2.5">
+      <div className="mb-2 text-[10px] font-semibold text-foreground">Questions</div>
       {entry.questions.map((question) => (
         <div className="mb-2 last:mb-0" key={question.id}>
           <div className="text-[10px]/[1.5] text-soft">{question.question}</div>
@@ -1496,10 +1596,10 @@ function QuestionCard({ entry }: { entry: Extract<ThreadEntry, { kind: 'question
               <button
                 key={option.label}
                 className={cn(
-                  'cursor-pointer rounded-[5px] border px-[9px] py-1 text-[9px] transition-colors',
+                  'cursor-pointer rounded-md border px-2.5 py-1 text-[10px] font-medium transition-colors',
                   (selections[question.id] ?? []).includes(option.label)
                     ? 'border-primary/30 bg-primary/10 text-primary'
-                    : 'border-border-strong bg-transparent text-muted-foreground hover:text-foreground',
+                    : 'border-border-strong bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground',
                 )}
                 onClick={() => toggleOption(question, option.label, question.multiSelect ?? false)}
                 title={option.description}
@@ -1509,7 +1609,7 @@ function QuestionCard({ entry }: { entry: Extract<ThreadEntry, { kind: 'question
             ))}
           </div>
           <input
-            className="mt-1.5 w-full rounded-[5px] border border-border-strong bg-surface-0 px-2 py-[5px] text-[10px] text-foreground outline-none placeholder:text-faint focus:border-primary/40"
+            className="mt-1.5 w-full rounded-md border border-border-strong bg-surface-0 px-2.5 py-[5px] text-[10px] text-foreground outline-none placeholder:text-faint focus:border-primary/40"
             placeholder="Other…"
             value={custom[question.id] ?? ''}
             onChange={(event) => setCustom((current) => ({ ...current, [question.id]: event.target.value }))}
@@ -1517,11 +1617,11 @@ function QuestionCard({ entry }: { entry: Extract<ThreadEntry, { kind: 'question
         </div>
       ))}
       {entry.resolved ? (
-        <div className="mt-[7px] text-[9px] text-muted-foreground">Answered</div>
+        <div className="mt-2 text-[9px] text-muted-foreground">✓ Answered</div>
       ) : (
-        <div className="flex gap-[7px]">
+        <div className="mt-2 flex gap-2">
           <button
-            className="cursor-pointer rounded-[5px] border border-primary/30 bg-primary/10 px-[11px] py-[5px] text-[10px] text-primary transition-colors hover:bg-primary/[0.16]"
+            className="cursor-pointer rounded-md border border-primary/30 bg-primary/10 px-3 py-1.5 text-[10px] font-medium text-primary transition-colors hover:bg-primary/[0.18]"
             onClick={() => void submit()}
           >
             Submit answers

@@ -25,7 +25,7 @@ The current product is coding-first: an AI PM plans work, assigned workers opera
 
 - ND-DSH is the **product and control plane**. Model vendors and coding runtimes are **replaceable implementation dependencies**.
 - DeepSeek is a **model-provider compatibility route**, not product identity.
-- DeepSeek Harness is a **pinned runtime submodule/adapter** (currently release `0.1.0-rc.8`, commit `141eb6fef83422698aef7a981029e843e8161534`). Never copy or patch its core into this repository.
+- DeepSeek Harness is an **upstream-tracking runtime submodule/adapter** (tracks latest `master`; synced at bootstrap or via `dsh:update`). Never copy or patch its core into this repository.
 - Codex and future coding products are **replaceable engine adapters**. No engine-specific fields or branching may leak into the organization-domain state machines (Company, Project, Task, Role, Skill, Workflow).
 - The embedded `WebContentsView` is the **canonical browser**. Never launch a hidden automation browser for agent tasks; browser tools must share `ND_DSH_AGENT_BROWSER_CONFIG` and `ND_DSH_AGENT_BROWSER_SESSION`.
 
@@ -265,7 +265,7 @@ Legacy/unused renderer components: `ActivityRail.tsx`, `LeftSidebarToggle.tsx`, 
 - **Isolation**: companies are hard isolation boundaries; no silent cross-company reuse of roles/memory/policies/workforce.
 - **Replaceability**: no engine- or vendor-specific fields in organization-domain objects.
 - **Verification gate**: `pnpm verify`, `pnpm typecheck`, `pnpm test`, `pnpm build` must pass before publishing changes; CI runs the same invariants.
-- **Dev tooling**: Node 24+, pnpm 11 via Corepack; `corepack pnpm bootstrap` initializes the pinned submodule runtime; `corepack pnpm dsh:update -- <tag-or-commit>` is the only way to move the Harness pin (pin metadata in `vendor/deepseek-harness.json`, the submodule gitlink, README, and `vendor/README.md` must stay aligned).
+- **Dev tooling**: Node 24+, pnpm 11 via Corepack; `corepack pnpm bootstrap` initializes the submodule runtime and syncs Harness to upstream latest; `corepack pnpm dsh:update` re-syncs on demand (an explicit tag-or-commit is available for debugging/downgrades), recording provenance in `vendor/deepseek-harness.json`.
 
 ---
 

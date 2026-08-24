@@ -1,10 +1,30 @@
 import './design.js'
 import './organization.js'
 import { contextBridge, ipcRenderer } from 'electron'
+import { CAPABILITIES_IPC, type CapabilityAssignmentSnapshot, type CapabilityKind, type CapabilitySubjectType } from '../shared/capabilities.js'
 import { IPC, type DesktopApi, type ModelProvider } from '../shared/contracts.js'
 
 const api: DesktopApi = {
   app: { info: () => ipcRenderer.invoke(IPC.appInfo) },
+  capabilities: {
+    providers: () => ipcRenderer.invoke(CAPABILITIES_IPC.providers),
+    assignments: () => ipcRenderer.invoke(CAPABILITIES_IPC.assignments),
+    assign: (subjectType: CapabilitySubjectType, subjectId: string, kind: CapabilityKind, providerId: string) =>
+      ipcRenderer.invoke(CAPABILITIES_IPC.assign, subjectType, subjectId, kind, providerId) as Promise<CapabilityAssignmentSnapshot>,
+    onChanged: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, assignments: CapabilityAssignmentSnapshot) => listener(assignments)
+      ipcRenderer.on(CAPABILITIES_IPC.changedEvent, handler)
+      return () => ipcRenderer.removeListener(CAPABILITIES_IPC.changedEvent, handler)
+    },
+    statuses: () => ipcRenderer.invoke(CAPABILITIES_IPC.statuses),
+    verify: (providerId: string) => ipcRenderer.invoke(CAPABILITIES_IPC.verify, providerId),
+    setEnabled: (providerId: string, enabled: boolean) => ipcRenderer.invoke(CAPABILITIES_IPC.setEnabled, providerId, enabled),
+    onStatusChanged: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, statuses: Parameters<typeof listener>[0]) => listener(statuses)
+      ipcRenderer.on(CAPABILITIES_IPC.statusChangedEvent, handler)
+      return () => ipcRenderer.removeListener(CAPABILITIES_IPC.statusChangedEvent, handler)
+    },
+  },
   window: {
     setFloatMode: (enabled) => ipcRenderer.invoke(IPC.windowSetFloatMode, enabled),
     resizeFloatWindow: (width, height) => ipcRenderer.invoke(IPC.windowResizeFloatWindow, width, height),

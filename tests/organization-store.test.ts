@@ -94,4 +94,54 @@ describe('OrganizationStore', () => {
     expect(state.memory.find((item) => item.title === 'Rule')?.content).toContain('review releases')
     expect(JSON.parse(await readFile(path, 'utf8')).version).toBe(1)
   })
+
+  it('stores project runtime fields and clears blank or invalid ones instead of persisting them', async () => {
+    const store = await storeFixture()
+    let state = await store.mutate({ type: 'company.create', name: 'Runtime Co', mission: 'Run the app under development' })
+    const company = state.companies[0]!
+    state = await store.mutate({
+      type: 'project.create',
+      companyId: company.id,
+      name: 'Todo Beta',
+      objective: 'Ship Todo',
+      workspacePath: '/workspace/todo',
+      startCommand: 'npm run dev',
+      targetPort: 3000,
+    })
+    const project = state.projects[0]!
+    expect(project.startCommand).toBe('npm run dev')
+    expect(project.targetPort).toBe(3000)
+
+    state = await store.mutate({
+      type: 'project.update',
+      id: project.id,
+      patch: { startCommand: '   ', targetPort: 0, targetUrl: 'http://localhost:3000', healthCheckPath: '/healthz' },
+    })
+    const updated = state.projects.find((item) => item.id === project.id)!
+    expect(updated.startCommand).toBeUndefined()
+    expect(updated.targetPort).toBeUndefined()
+    expect(updated.targetUrl).toBe('http://localhost:3000')
+    expect(updated.healthCheckPath).toBe('/healthz')
+  })
+
+  it('rejects escaped or relative workspace paths before they can strand a project', async () => {
+    const store = await storeFixture()
+    const company = (await store.mutate({ type: 'company.create', name: 'Workspace Co', mission: 'Keep workspaces valid' })).companies[0]!
+
+    await expect(store.mutate({
+      type: 'project.create',
+      companyId: company.id,
+      name: 'Broken path',
+      objective: 'Should not persist',
+      workspacePath: 'C:Users\tbroken',
+    })).rejects.toThrow(/control characters/i)
+
+    await expect(store.mutate({
+      type: 'project.create',
+      companyId: company.id,
+      name: 'Relative path',
+      objective: 'Should not persist',
+      workspacePath: 'examples/todo',
+    })).rejects.toThrow(/must be absolute/i)
+  })
 })

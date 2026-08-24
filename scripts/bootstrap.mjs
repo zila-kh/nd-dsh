@@ -11,14 +11,17 @@ const ndPencilUpstreamRoot = join(root, 'vendor', 'openpencil')
 const harnessPin = JSON.parse(await fs.readFile(join(root, 'vendor', 'deepseek-harness.json'), 'utf8'))
 const ndPencilUpstreamPin = JSON.parse(await fs.readFile(join(root, 'vendor', 'openpencil.json'), 'utf8'))
 const harnessRepository = requireString(harnessPin.repository, 'vendor/deepseek-harness.json repository')
-const harnessCommit = requireCommit(harnessPin.commit, 'Harness commit')
+// Harness tracks upstream latest during beta; only ND Pencil is commit-pinned.
+const harnessBranch = typeof harnessPin.branch === 'string' && harnessPin.branch.trim()
+  ? harnessPin.branch.trim()
+  : 'master'
 const ndPencilUpstreamRepository = requireString(ndPencilUpstreamPin.repository, 'vendor/openpencil.json repository')
 const ndPencilUpstreamCommit = requireCommit(ndPencilUpstreamPin.commit, 'ND Pencil upstream commit')
 const flags = new Set(process.argv.slice(2))
 
 if (flags.has('--help')) {
   console.log(`Usage: node scripts/bootstrap.mjs [options]\n\n` +
-    `  --check                Verify prerequisites and pinned upstream sources only\n` +
+    `  --check                Verify prerequisites and upstream sources only\n` +
     `  --skip-root-install    Skip the ND-DSH pnpm install\n` +
     `  --skip-dsh-build       Skip install/build inside DeepSeek Harness\n` +
     `  --build-nd-pencil      Compile and stage the bundled ND Pencil runtime\n`)
@@ -30,15 +33,15 @@ if (nodeMajor < 24) {
   throw new Error(`Node.js 24 or newer is required by agent-browser. Current: ${process.version}`)
 }
 
-await ensurePinnedSource({
+await ensureSource({
   name: 'Harness',
   root: harnessRoot,
   marker: 'package.json',
   submodulePath: 'vendor/deepseek-harness',
   repository: harnessRepository,
-  commit: harnessCommit,
+  branch: harnessBranch,
 })
-await ensurePinnedSource({
+await ensureSource({
   name: 'ND Pencil upstream',
   root: ndPencilUpstreamRoot,
   marker: 'Cargo.toml',
@@ -46,7 +49,7 @@ await ensurePinnedSource({
   repository: ndPencilUpstreamRepository,
   commit: ndPencilUpstreamCommit,
 })
-await verifyPinnedSource('Harness', harnessRoot, harnessCommit)
+await syncTrackedSource('Harness', harnessRoot, harnessBranch)
 await verifyPinnedSource('ND Pencil upstream', ndPencilUpstreamRoot, ndPencilUpstreamCommit)
 
 if (flags.has('--check')) {
@@ -59,8 +62,12 @@ if (!flags.has('--skip-root-install')) {
 }
 
 if (!flags.has('--skip-dsh-build')) {
-  await run('corepack', ['pnpm', 'install', '--frozen-lockfile'], harnessRoot)
-  await run('corepack', ['pnpm', 'run', 'build'], harnessRoot)
+  // Upstream's lefthook postinstall refuses submodule worktrees (core.worktree
+  // lives in the common git config); CI=true is its supported opt-out. Git hooks
+  // inside the vendored checkout are unwanted regardless.
+  const harnessEnv = { CI: 'true' }
+  await run('corepack', ['pnpm', 'install', '--frozen-lockfile'], harnessRoot, { env: harnessEnv })
+  await run('corepack', ['pnpm', 'run', 'build'], harnessRoot, { env: harnessEnv })
 }
 
 if (flags.has('--build-nd-pencil')) {
@@ -74,14 +81,18 @@ console.log('\nND-DSH bootstrap complete. Configure a model provider in Settings
 console.log('  corepack pnpm dev')
 console.log('Codex CLI is available as an optional coding engine when native Codex authentication is configured.')
 
-async function ensurePinnedSource({ name, root: sourceRoot, marker, submodulePath, repository, commit }) {
+async function ensureSource({ name, root: sourceRoot, marker, submodulePath, repository, commit, branch }) {
   if (existsSync(join(sourceRoot, marker))) return
 
   await fs.mkdir(dirname(sourceRoot), { recursive: true })
   if (existsSync(join(root, '.git'))) {
-    console.log(`Initializing pinned ${name} submodule...`)
+    console.log(`Initializing ${name} submodule...`)
     await run('git', ['submodule', 'sync', '--', submodulePath], root)
     await run('git', ['submodule', 'update', '--init', '--recursive', '--', submodulePath], root)
+  } else if (branch) {
+    console.log(`Source archive detected; cloning the latest ${name} ${branch} checkout...`)
+    await run('git', ['clone', '--depth=1', '--branch', branch, repository, sourceRoot], root)
+    await run('git', ['submodule', 'update', '--init', '--recursive'], sourceRoot)
   } else {
     console.log(`Source archive detected; cloning the pinned ${name} checkout...`)
     await run('git', ['clone', '--filter=blob:none', '--no-checkout', repository, sourceRoot], root)
@@ -90,7 +101,22 @@ async function ensurePinnedSource({ name, root: sourceRoot, marker, submodulePat
     await run('git', ['submodule', 'update', '--init', '--recursive'], sourceRoot)
   }
 
-  if (!existsSync(join(sourceRoot, marker))) throw new Error(`Pinned ${name} source was not initialized correctly.`)
+  if (!existsSync(join(sourceRoot, marker))) throw new Error(`${name} source was not initialized correctly.`)
+}
+
+/**
+ * Harness tracks upstream latest: move an initialized checkout to the head of
+ * the tracked branch instead of enforcing a frozen pin.
+ */
+async function syncTrackedSource(name, sourceRoot, branch) {
+  const status = await capture('git', ['status', '--porcelain'], sourceRoot)
+  if (status.trim()) throw new Error(`${name} submodule has local changes. Clean it before bootstrapping.`)
+
+  await run('git', ['fetch', '--depth=1', 'origin', branch], sourceRoot)
+  await run('git', ['checkout', '--detach', 'FETCH_HEAD'], sourceRoot)
+  await run('git', ['submodule', 'update', '--init', '--recursive'], sourceRoot)
+  const current = (await capture('git', ['rev-parse', 'HEAD'], sourceRoot)).trim().toLowerCase()
+  console.log(`${name} synced to upstream ${branch} latest at ${current.slice(0, 12)}.`)
 }
 
 async function verifyPinnedSource(name, sourceRoot, expectedCommit) {
@@ -120,13 +146,13 @@ function requireCommit(value, field) {
   return commit.toLowerCase()
 }
 
-function run(command, args, cwd) {
+function run(command, args, cwd, options = {}) {
   console.log(`\n> ${command} ${args.join(' ')}`)
   return new Promise((resolvePromise, reject) => {
     const child = spawn(platformExecutable(command), args, {
       cwd,
       stdio: 'inherit',
-      env: process.env,
+      env: { ...process.env, ...options.env },
     })
     child.once('error', reject)
     child.once('close', (code) => {

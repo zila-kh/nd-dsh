@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import type { AppInfo, BrowserState, HarnessStatus, ThemeMode, ThemeState, WorkspaceState } from '../../../shared/contracts'
 import { MonitorIcon, MoonIcon, SunIcon } from './Icons'
 import { BridgePill } from './bridge-pill'
+import { CapabilitySettings } from './CapabilitySettings'
 import { EngineSettings } from './EngineSettings'
 import { ModelSettings } from './ModelSettings'
 import { PresetSettings } from './PresetSettings'
@@ -28,12 +29,13 @@ interface SettingsPaneProps {
   onError(message: string): void
 }
 
-type SettingsTab = 'general' | 'appearance' | 'models' | 'engines' | 'presets'
+type SettingsTab = 'general' | 'appearance' | 'models' | 'capabilities' | 'engines' | 'presets'
 
 const TABS: { id: SettingsTab; label: string }[] = [
   { id: 'general', label: 'General' },
   { id: 'appearance', label: 'Appearance' },
   { id: 'models', label: 'Models' },
+  { id: 'capabilities', label: 'Capabilities' },
   { id: 'engines', label: 'Coding engines' },
   { id: 'presets', label: 'Agent presets' },
 ]
@@ -114,6 +116,8 @@ export function SettingsPane({ theme, onSelectTheme, workspace, onWorkspaceChang
       <div className="grid min-h-0 grid-rows-[minmax(0,1fr)] overflow-hidden">
         {tab === 'models' ? (
           <ModelSettings onError={onError} />
+        ) : tab === 'capabilities' ? (
+          <CapabilitySettings onError={onError} />
         ) : tab === 'engines' ? (
           <EngineSettings onError={onError} />
         ) : tab === 'presets' ? (

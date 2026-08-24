@@ -1,10 +1,12 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, screen, shell, type IpcMainInvokeEvent } from 'electron'
+import { CAPABILITIES_IPC, type CapabilityKind, type CapabilityProviderStatus, type CapabilitySubjectType } from '../shared/capabilities.js'
 import type { BrowserBounds, DshSurface, HarnessRunOptions, InspectScope, ModelProvider, QaSuiteId, ThemeMode } from '../shared/contracts.js'
 import { IPC } from '../shared/contracts.js'
 import { projectRoot } from './app-paths.js'
 import { capturePrimaryDisplay, captureSelfWindow } from './capture/app-capture.js'
 import { describePick, ExternalElementStage, formatExternalElementContext, pickElementInExternalApp, RecentPickStore, type ExternalPick } from './capture/external-inspect.js'
 import type { BrowserController } from './browser/browser-controller.js'
+import type { CapabilityRegistry } from './capabilities/capability-registry.js'
 import type { DshSurfaceController } from './dsh/dsh-surface.js'
 import type { CodingEngineRegistry } from './engines/coding-engine-registry.js'
 import type { EngineSessionRouter } from './engines/engine-session-router.js'
@@ -24,6 +26,7 @@ interface IpcDependencies {
   browser: BrowserController
   dshSurface: DshSurfaceController
   engines: CodingEngineRegistry
+  capabilities: CapabilityRegistry
   engineRouter: EngineSessionRouter
   harness: HarnessService
   projectWorkspace: ProjectWorkspaceCoordinator
@@ -169,6 +172,33 @@ export function registerIpc(deps: IpcDependencies): () => void {
 
   handle(IPC.enginesList, () => deps.engines.list())
   handle(IPC.enginesAssignments, () => deps.engines.assignments())
+  // Pluggable capability layer: catalog, subject routing, and the
+  // verify-before-enable lifecycle. Both mutations broadcast fresh snapshots
+  // so every open surface renders the same provider state.
+  const emitCapabilityStatuses = async (operation: Promise<unknown>): Promise<unknown> => {
+    const statuses = await operation
+    if (!deps.window.isDestroyed()) {
+      deps.window.webContents.send(CAPABILITIES_IPC.statusChangedEvent, await deps.capabilities.statuses())
+    }
+    return statuses
+  }
+  handle(CAPABILITIES_IPC.providers, () => deps.capabilities.list())
+  handle(CAPABILITIES_IPC.assignments, () => deps.capabilities.assignments())
+  handle(CAPABILITIES_IPC.statuses, () => deps.capabilities.statuses())
+  handle(CAPABILITIES_IPC.verify, (_event, providerId) =>
+    emitCapabilityStatuses(deps.capabilities.verify(asString(providerId, 'Provider id', 256))))
+  handle(CAPABILITIES_IPC.setEnabled, (_event, providerId, enabled) =>
+    emitCapabilityStatuses(deps.capabilities.setEnabled(asString(providerId, 'Provider id', 256), enabled === true)))
+  handle(CAPABILITIES_IPC.assign, async (_event, subjectType, subjectId, kind, providerId) => {
+    const snapshot = await deps.capabilities.assign(
+      asCapabilitySubjectType(subjectType),
+      asString(subjectId, 'Subject id', 256),
+      asCapabilityKind(kind),
+      asString(providerId, 'Provider id', 256),
+    )
+    if (!deps.window.isDestroyed()) deps.window.webContents.send(CAPABILITIES_IPC.changedEvent, snapshot)
+    return snapshot
+  })
   handle(IPC.enginesAssign, (_event, agentId, engineId) => deps.engines.assign(
     asString(agentId, 'Agent id', 256),
     asString(engineId, 'Engine id', 256),
@@ -424,7 +454,18 @@ function asPathList(value: unknown): string[] {
 }
 
 function asQaSuite(value: unknown): QaSuiteId {
-  if (value !== 'unit' && value !== 'e2e') throw new Error('QA suite must be one of: unit, e2e')
+  if (value === 'unit' || value === 'e2e') return value
+  if (typeof value === 'string' && /^script:[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$/.test(value)) return value as QaSuiteId
+  throw new Error('QA suite must be a supported project script or one of: unit, e2e')
+}
+
+function asCapabilitySubjectType(value: unknown): CapabilitySubjectType {
+  if (value !== 'agent' && value !== 'role' && value !== 'team') throw new Error('Capability subject must be one of: agent, role, team')
+  return value
+}
+
+function asCapabilityKind(value: unknown): CapabilityKind {
+  if (value !== 'engine' && value !== 'memory' && value !== 'context') throw new Error('Capability kind must be one of: engine, memory, context')
   return value
 }
 

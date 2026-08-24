@@ -12,6 +12,7 @@ corepack pnpm test
 corepack pnpm build
 ```
 
-Keep commits focused. Upstream dependency bumps must use
-`corepack pnpm run dsh:update -- <tag-or-commit>`, identify the exact resulting
-SHA, explain adapter or Cordis changes, and preserve the same-browser invariant.
+Keep commits focused. Harness runtime syncs use
+`corepack pnpm run dsh:update` (upstream latest by default; an explicit
+tag-or-commit is available for debugging or downgrades). Explain adapter or
+Cordis changes in the commit and preserve the same-browser invariant.

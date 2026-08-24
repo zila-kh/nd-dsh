@@ -12,7 +12,7 @@ ND-DSH is the product and control plane. Model vendors and coding runtimes are r
 | company policy | ND-DSH | orchestrator + main-process approval gate |
 | model-provider routes | ND-DSH | provider compiler → Harness LLM adapters |
 | coding-engine routes | ND-DSH | engine registry + per-employee assignments |
-| primary coding runtime | ND-DSH adapter | pinned DeepSeek Harness |
+| primary coding runtime | ND-DSH adapter | DeepSeek Harness (tracks upstream latest) |
 | delegated Codex execution | ND-DSH adapter | pinned Harness Codex provider → official Codex app-server |
 | visible browser | ND-DSH / Electron | one `WebContentsView` + exact CDP target |
 | browser automation | ND-DSH integration | agent-browser + Harness MCP client |

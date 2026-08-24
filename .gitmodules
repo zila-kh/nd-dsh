@@ -1,6 +1,7 @@
 [submodule "vendor/deepseek-harness"]
 	path = vendor/deepseek-harness
 	url = https://github.com/deepseek-ai/deepseek-harness.git
+	branch = master
 [submodule "vendor/openpencil"]
 	path = vendor/openpencil
 	url = https://github.com/ZSeven-W/openpencil.git

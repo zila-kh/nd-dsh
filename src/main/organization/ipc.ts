@@ -1,5 +1,6 @@
 import { ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
 import { ORGANIZATION_IPC, type OrganizationMutation, type OrganizationSnapshot } from '../../shared/organization.js'
+import type { ProjectRuntimeService } from '../workspace/project-runtime.js'
 import type { ProjectWorkspaceCoordinator } from '../workspace/project-workspace-coordinator.js'
 import type { OrganizationOrchestrator } from './orchestrator.js'
 import type { OrganizationStore } from './store.js'
@@ -15,6 +16,7 @@ export function registerOrganizationIpc(
   store: OrganizationStore,
   orchestrator: OrganizationOrchestrator,
   projectWorkspace: ProjectWorkspaceCoordinator,
+  projectRuntime?: ProjectRuntimeService,
 ): () => void {
   const channels: string[] = []
   const handle = (channel: string, listener: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown | Promise<unknown>): void => {
@@ -47,6 +49,13 @@ export function registerOrganizationIpc(
   handle(ORGANIZATION_IPC.runTask, (_event, value) => orchestrator.runTask(asId(value, 'Task id')))
   handle(ORGANIZATION_IPC.reviewTask, (_event, value) => orchestrator.reviewTask(asId(value, 'Task id')))
   handle(ORGANIZATION_IPC.runNext, (_event, value) => orchestrator.runNext(value === undefined || value === null ? undefined : asId(value, 'Project id')))
+
+  // Project dev-server lifecycle: validate → start → health → open browser.
+  if (projectRuntime) {
+    handle(ORGANIZATION_IPC.runtimeState, (_event, value) => projectRuntime.status(asId(value, 'Project id')))
+    handle(ORGANIZATION_IPC.runtimeStart, (_event, value) => projectRuntime.start(asId(value, 'Project id')))
+    handle(ORGANIZATION_IPC.runtimeStop, (_event, value) => projectRuntime.stop(asId(value, 'Project id')))
+  }
 
   return () => { for (const channel of channels) ipcMain.removeHandler(channel) }
 }

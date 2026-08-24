@@ -352,7 +352,6 @@ export class HarnessService {
       DSH_HOME: dshHome,
       DSH_CWD: workspaceRoot,
       DSH_PERMISSION_MODE: process.env.ND_DSH_PERMISSION_MODE ?? 'workspace-write',
-      DSH_SESSION_ROOT: join(app.getPath('userData'), 'sessions'),
     }
 
     this.updateStatus('starting')

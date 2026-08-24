@@ -1,15 +1,14 @@
 # Vendored upstreams
 
-ND-DSH pins implementation/runtime upstreams as Git submodules so product code can target tested revisions without mixing third-party product identity into the ND control plane.
+ND-DSH vendors implementation/runtime upstreams as Git submodules so product code targets known revisions without mixing third-party product identity into the ND control plane. The ND Pencil upstream is commit-pinned; DeepSeek Harness tracks upstream latest while ND-DSH is in beta.
 
 ## DeepSeek Harness
 
 - repository: `https://github.com/deepseek-ai/deepseek-harness.git`
-- commit: `141eb6fef83422698aef7a981029e843e8161534`
-- release at that commit: `0.1.0-rc.8`
-- metadata: `deepseek-harness.json`
+- tracked branch: `master` (upstream latest; synced at bootstrap or via `pnpm dsh:update`)
+- provenance metadata: `deepseek-harness.json` records the last-synced commit/release informationally
 
-DeepSeek Harness is ND's pinned agent runtime adapter.
+DeepSeek Harness is ND's agent runtime adapter, tracked to upstream latest. Do not copy or patch its core into this repository.
 
 ## ND Pencil upstream implementation
 

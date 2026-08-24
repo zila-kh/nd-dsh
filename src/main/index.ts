@@ -1,5 +1,6 @@
 import 'dotenv/config'
 import { app, BrowserWindow } from 'electron'
+import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
 import { dirname, join } from 'node:path'
 import process from 'node:process'
@@ -16,8 +17,11 @@ import { registerDesignIpc } from './design/ipc.js'
 import { NdPencilController } from './design/nd-pencil-controller.js'
 import { DshSurfaceController } from './dsh/dsh-surface.js'
 import { pickFreePort } from './dsh/gateway-client.js'
+import { CapabilityAssignmentStore } from './capabilities/capability-assignment-store.js'
+import { CapabilityRegistry } from './capabilities/capability-registry.js'
+import { CapabilityStatusStore } from './capabilities/capability-status-store.js'
+import { ND_ORG_MEMORY_ID, ND_WORKSPACE_CONTEXT_ID } from '../shared/capabilities.js'
 import { CodexCliEngine } from './engines/codex/codex-cli-engine.js'
-import { EngineAssignmentStore } from './engines/engine-assignment-store.js'
 import { CodingEngineRegistry } from './engines/coding-engine-registry.js'
 import { EngineSessionRouter } from './engines/engine-session-router.js'
 import { GitService } from './git/git-service.js'
@@ -32,6 +36,7 @@ import { QaService } from './qa/qa-service.js'
 import { SessionArchiveStore } from './sessions/session-archive-store.js'
 import { ThemeService } from './theme.js'
 import { ProjectWorkspaceCoordinator } from './workspace/project-workspace-coordinator.js'
+import { ProjectRuntimeService } from './workspace/project-runtime.js'
 import { WorkspaceRegistry } from './workspace/workspace-registry.js'
 import { WorkspaceService } from './workspace/workspace-service.js'
 
@@ -67,7 +72,6 @@ async function createWindow(cdpPort: number): Promise<void> {
   const workspace = new WorkspaceService(process.env.ND_DSH_WORKSPACE?.trim() || process.cwd())
   const providers = new ProviderStore()
   const userData = app.getPath('userData')
-  const engines = new CodingEngineRegistry(new EngineAssignmentStore(join(userData, 'engine-assignments.json')))
   const sessionArchive = new SessionArchiveStore(join(userData, 'session-archive.json'))
   const isMac = process.platform === 'darwin'
 
@@ -106,28 +110,66 @@ async function createWindow(cdpPort: number): Promise<void> {
   const organizationStore = new OrganizationStore(join(userData, 'organization.json'))
   const interruptedRuns = await organizationStore.reconcileInterruptedRuns()
   if (interruptedRuns > 0) console.warn(`Recovered ${interruptedRuns} interrupted organization run(s) from the previous app session.`)
-  const projectWorkspace = new ProjectWorkspaceCoordinator(organizationStore, workspace, harness)
+  const projectWorkspace = new ProjectWorkspaceCoordinator(organizationStore, workspace, harness, workspaces)
   await projectWorkspace.initialize()
+  // One durable routing store for every pluggable capability (engine, memory,
+  // context) across agents, roles, and teams; engines resolve through it too.
+  // Built here so backing-service probes can close over the live services.
+  const capabilityAssignments = new CapabilityAssignmentStore(join(userData, 'capability-assignments.json'))
+  const capabilityStatuses = new CapabilityStatusStore(join(userData, 'capability-statuses.json'))
+  const engines = new CodingEngineRegistry(capabilityAssignments)
+  const capabilities = new CapabilityRegistry(capabilityAssignments, engines, capabilityStatuses, {
+    [ND_ORG_MEMORY_ID]: async () => { await organizationStore.state() },
+    [ND_WORKSPACE_CONTEXT_ID]: async () => {
+      const state = workspace.state()
+      if (state.binding === 'missing') throw new Error(state.warning ?? 'The project workspace is unavailable on disk.')
+    },
+  })
+  // Validate → Start → health check → open the built-in browser on the app
+  // under development. The ND renderer origin is reserved so a project can
+  // never load ND-DSH's own preview recursively inside the browser pane.
+  const projectRuntime = new ProjectRuntimeService({
+    store: organizationStore,
+    spawnProcess: spawn,
+    reservedOrigin: () => {
+      try { return window.isDestroyed() ? undefined : new URL(window.webContents.getURL()).origin } catch { return undefined }
+    },
+    onTargetReady: (_projectId, url) => {
+      void browser.navigate(url).catch((error) => {
+        console.warn(`Browser could not open the project target ${url}:`, error instanceof Error ? error.message : String(error))
+      })
+    },
+  })
   const design = new DesignService(workspace, browser)
   const ndPencil = new NdPencilController(window, workspace, projectRoot(), ndPencilPreload)
   await ndPencil.initialize()
-  const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter)
+  const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter, projectRuntime, capabilities)
   const approvalGate = new OrganizationApprovalGate(organizationStore, harness)
   const git = new GitService(workspace)
   const qa = new QaService()
   qa.setProjectRoot(workspace.state().root)
-  const disposeIpc = registerIpc({ window, preloadPath: preload, browser, dshSurface, engines, engineRouter, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, qa, sessionArchive })
+  const disposeIpc = registerIpc({ window, preloadPath: preload, browser, dshSurface, engines, engineRouter, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, qa, sessionArchive, capabilities })
   const disposeDesignIpc = registerDesignIpc(window, design, ndPencil)
-  const disposeOrganizationIpc = registerOrganizationIpc(window, organizationStore, organization, projectWorkspace)
+  const disposeOrganizationIpc = registerOrganizationIpc(window, organizationStore, organization, projectWorkspace, projectRuntime)
   mainWindow = window
   activeHarness = harness
   activeNdPencil = ndPencil
+
+  projectRuntime.setListener((status) => {
+    if (!window.isDestroyed()) window.webContents.send(ORGANIZATION_IPC.runtimeChanged, status)
+  })
 
   organizationStore.setOnChanged((state) => {
     if (!window.isDestroyed()) window.webContents.send(ORGANIZATION_IPC.changed, state)
   })
   let lastWorkspaceRoot = workspace.state().root
   workspace.setStateListener((state) => {
+    // Project checks and a running dev server always belong to the active
+    // workspace; both services dedupe no-op updates themselves.
+    qa.setProjectRoot(state.root)
+    void projectRuntime.handleWorkspaceChanged(state.root).catch((error) => {
+      console.warn('Project runtime workspace synchronization failed:', error instanceof Error ? error.message : String(error))
+    })
     const rootChanged = lastWorkspaceRoot !== state.root
     lastWorkspaceRoot = state.root
     if (rootChanged) void ndPencil.setVisible(false)
@@ -265,6 +307,7 @@ async function createWindow(cdpPort: number): Promise<void> {
     disposeDesignIpc()
     disposeIpc()
     void qa.dispose()
+    void projectRuntime.dispose()
     design.destroy()
     if (activeNdPencil === ndPencil) activeNdPencil = undefined
     void ndPencil.destroy()

@@ -3,15 +3,19 @@ import { join } from 'node:path'
 import type { CodingEngineDescriptor } from '../../shared/contracts.js'
 import { buildCodingEngineCatalog, ND_HARNESS_ENGINE_ID } from '../../shared/coding-engines.js'
 import { codexBinPath, dshPatchPath, harnessCliBinPath, harnessRoot, presetSourceDir } from '../app-paths.js'
-import type { EngineAssignmentStore } from './engine-assignment-store.js'
+import type { CapabilityAssignmentStore } from '../capabilities/capability-assignment-store.js'
 
 /**
  * ND control-plane registry for executable coding engines plus durable
  * per-employee routing. Organization workflow code consumes this abstraction,
  * never vendor package paths or product-specific protocol details.
+ *
+ * Assignments live in the shared capability store so engines, memory, and
+ * context resolve through one mechanism; this class keeps the engine-shaped
+ * surface the renderer and orchestrator already use.
  */
 export class CodingEngineRegistry {
-  constructor(private readonly assignmentsStore: EngineAssignmentStore) {}
+  constructor(private readonly assignmentsStore: CapabilityAssignmentStore) {}
 
   list(): CodingEngineDescriptor[] {
     const harnessReady = existsSync(harnessCliBinPath())
@@ -27,19 +31,27 @@ export class CodingEngineRegistry {
     return buildCodingEngineCatalog({ harnessReady, codexReady, codexCliReady })
   }
 
-  assignments(): Promise<Record<string, string>> {
-    return this.assignmentsStore.all()
+  /** Legacy view: agent id → engine id for agents explicitly off the default. */
+  async assignments(): Promise<Record<string, string>> {
+    const snapshot = await this.assignmentsStore.all()
+    const agents: Record<string, string> = {}
+    for (const [agentId, kinds] of Object.entries(snapshot.agents)) {
+      if (kinds.engine) agents[agentId] = kinds.engine
+    }
+    return agents
   }
 
-  assignedEngine(agentId: string | undefined): Promise<string> {
-    return this.assignmentsStore.engineFor(agentId)
+  async assignedEngine(agentId: string | undefined): Promise<string> {
+    if (!agentId?.trim()) return ND_HARNESS_ENGINE_ID
+    return this.assignmentsStore.resolve('engine', { type: 'agent', id: agentId })
   }
 
   async assign(agentId: string, engineId: string): Promise<Record<string, string>> {
     const descriptor = this.list().find((engine) => engine.id === engineId)
     if (!descriptor) throw new Error(`Unknown coding engine: ${engineId}`)
     if (!descriptor.available) throw new Error(descriptor.unavailableReason ?? `${descriptor.name} is unavailable`)
-    return this.assignmentsStore.assign(agentId, engineId)
+    await this.assignmentsStore.assign('agent', agentId, 'engine', engineId)
+    return this.assignments()
   }
 
   assertAvailable(engineId: string): CodingEngineDescriptor {
@@ -50,6 +62,7 @@ export class CodingEngineRegistry {
   }
 
   async resetToHarness(agentId: string): Promise<Record<string, string>> {
-    return this.assignmentsStore.assign(agentId, ND_HARNESS_ENGINE_ID)
+    await this.assignmentsStore.assign('agent', agentId, 'engine', ND_HARNESS_ENGINE_ID)
+    return this.assignments()
   }
 }

@@ -671,7 +671,7 @@ export default function App() {
         </section>
 
         <section aria-hidden={view !== 'qa'} className={cn('absolute inset-0 overflow-hidden', view === 'qa' ? 'block' : 'hidden')}>
-          <QaView active={view === 'qa'} onError={notify} onAskAgent={askAgent} />
+          <QaView active={view === 'qa'} {...(workspace?.root ? { workspaceRoot: workspace.root } : {})} onError={notify} onAskAgent={askAgent} />
         </section>
 
         <section aria-hidden={view !== 'settings'} className={cn('absolute inset-0 overflow-hidden', view === 'settings' ? 'block' : 'hidden')}>

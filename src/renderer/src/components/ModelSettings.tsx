@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import type { ModelProvider, ProviderPingResult } from '../../../shared/contracts'
-import { BoxIcon, EyeIcon, EyeOffIcon, PencilIcon, PlugIcon, PlusIcon, RotateIcon, TrashIcon } from './Icons'
+import { BoxIcon, CheckIcon, EyeIcon, EyeOffIcon, PencilIcon, PlugIcon, PlusIcon, RotateIcon, TrashIcon } from './Icons'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 import { cn } from '../lib/utils'
 
@@ -54,18 +54,34 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
   const [contextDraft, setContextDraft] = useState('')
   const [testing, setTesting] = useState(false)
   const [pingResult, setPingResult] = useState<ProviderPingResult | null>(null)
+  // Per-model ping state: modelId → 'testing' | ProviderPingResult
+  const [modelPings, setModelPings] = useState<Record<string, 'testing' | ProviderPingResult>>({})
+
+  // Clear per-model pings when the selected provider changes.
+  useEffect(() => {
+    setModelPings({})
+  }, [selectedId])
 
   useEffect(() => {
     let mounted = true
-    void window.ndDsh.providers
-      .list()
-      .then((loaded) => {
-        if (!mounted) return
-        setProviders(loaded)
-        setSelectedId((current) => (loaded.some((provider) => provider.id === current) ? current : (loaded[0]?.id ?? '')))
-      })
-      .catch((cause) => onError(errorMessage(cause)))
-    return () => { mounted = false }
+    const load = (): void => {
+      void window.ndDsh.providers
+        .list()
+        .then((loaded) => {
+          if (!mounted) return
+          setProviders(loaded)
+          setSelectedId((current) => (loaded.some((provider) => provider.id === current) ? current : (loaded[0]?.id ?? '')))
+        })
+        .catch((cause) => onError(errorMessage(cause)))
+    }
+    load()
+    const unsubscribe = window.ndDsh.providers.onChanged(() => {
+      if (mounted) load()
+    })
+    return () => {
+      mounted = false
+      unsubscribe()
+    }
   }, [onError])
 
   useEffect(() => {
@@ -190,6 +206,23 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
       onError(errorMessage(cause))
     } finally {
       setTesting(false)
+    }
+  }
+
+  /** Probe the provider endpoint on behalf of a specific model row. */
+  const testModel = async (modelId: string): Promise<void> => {
+    if (!selected || modelPings[modelId] === 'testing') return
+    setModelPings((current) => ({ ...current, [modelId]: 'testing' }))
+    try {
+      const result = await window.ndDsh.providers.ping(selected.id, true)
+      setModelPings((current) => ({ ...current, [modelId]: result }))
+    } catch (cause) {
+      onError(errorMessage(cause))
+      setModelPings((current) => {
+        const next = { ...current }
+        delete next[modelId]
+        return next
+      })
     }
   }
 
@@ -321,7 +354,11 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
             <div className="mt-5">
               <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-(--models-muted)">Model list</div>
               <div className="space-y-1.5">
-                {selected.models.map((model) => (
+                {selected.models.map((model) => {
+                  const modelPing = modelPings[model.id]
+                  const isTesting = modelPing === 'testing'
+                  const pingRes = modelPing !== undefined && modelPing !== 'testing' ? modelPing : null
+                  return (
                   <div className="flex items-center justify-between gap-2.5 rounded-[9px] border border-(--models-border) bg-(--models-bg) px-3 py-[9px]" key={model.id}>
                     {editingModelId === model.id ? (
                       <input
@@ -337,6 +374,24 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
                       />
                     ) : <span className="min-w-0 truncate font-mono text-[12px]">{model.id}</span>}
                     <div className="flex shrink-0 items-center gap-0.5">
+                      {/* Per-model ping result badge */}
+                      {pingRes ? (
+                        <span
+                          className={cn(
+                            'mr-1 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold',
+                            pingRes.state === 'ok' && 'bg-green-500/15 text-green-400',
+                            pingRes.state === 'auth' && 'bg-amber-500/15 text-amber-400',
+                            pingRes.state === 'unreachable' && 'bg-red-500/15 text-red-400',
+                          )}
+                          title={pingLabel(pingRes)}
+                        >
+                          {pingRes.state === 'ok'
+                            ? `✓ ${pingRes.latencyMs ?? '?'}ms`
+                            : pingRes.state === 'auth'
+                              ? '✗ Auth'
+                              : '✗ Offline'}
+                        </span>
+                      ) : null}
                       {editingContextModelId === model.id ? (
                         <input
                           className="h-[26px] w-[200px] rounded-md border border-(--models-border-2) bg-(--models-field) px-2 font-mono text-[12px] text-(--models-text) outline-none"
@@ -351,12 +406,27 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
                           }}
                         />
                       ) : <span className="rounded-full bg-(--models-field) px-2 py-0.5 text-[11px] text-(--models-muted)">{model.context}</span>}
+                      {/* Test this model's provider connection */}
+                      <button
+                        className={cn(miniIconButton, isTesting && 'text-(--models-green) opacity-70')}
+                        title={`Test connection for ${model.id}`}
+                        aria-label={`Test connection for model ${model.id}`}
+                        disabled={isTesting}
+                        onClick={() => void testModel(model.id)}
+                      >
+                        {isTesting
+                          ? <RotateIcon className="animate-spin" />
+                          : pingRes?.state === 'ok'
+                            ? <CheckIcon />
+                            : <RotateIcon />}
+                      </button>
                       <button className={miniIconButton} title="Edit model context" aria-label={`Edit context of ${model.id}`} onClick={() => { setContextDraft(model.context); setEditingContextModelId(model.id) }}><PlugIcon /></button>
                       <button className={miniIconButton} title="Edit model id" aria-label={`Edit model ${model.id}`} onClick={() => { setModelDraft(model.id); setEditingModelId(model.id) }}><PencilIcon /></button>
                       <button className={cn(miniIconButton, 'hover:text-destructive')} title="Delete model" aria-label={`Delete model ${model.id}`} onClick={() => removeModel(model.id)}><TrashIcon /></button>
                     </div>
                   </div>
-                ))}
+                  )
+                })}
               </div>
               <button className="mt-2.5 flex items-center gap-[7px] rounded-[9px] border border-(--models-border-2) bg-(--models-field) px-3 py-[7px] text-[12px] text-(--models-muted) transition-colors hover:text-(--models-text) [&_svg]:size-3.5" onClick={addModel}>
                 <PlusIcon />Add model

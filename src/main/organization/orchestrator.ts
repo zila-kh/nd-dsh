@@ -46,6 +46,14 @@ export class OrganizationOrchestrator {
     private readonly workspace: WorkspaceService,
     private readonly engines?: Pick<CodingEngineRegistry, 'assignedEngine' | 'assertAvailable'>,
     private readonly engineRuns?: Pick<EngineSessionRouter, 'createSession' | 'run'>,
+    /** Optional project dev-server runtime; checked (and opened when healthy) before workers execute. */
+    private readonly projectRuntime?: { check(projectId: string): Promise<unknown> },
+    /**
+     * Optional pluggable-capability registry. Before execution it fails closed
+     * when an agent's assigned engine/memory/context provider is unavailable,
+     * so misconfiguration surfaces as a visible, retryable run error.
+     */
+    private readonly capabilities?: { assertUsableForAgent(agent?: { id?: string; roleId?: string; teamId?: string }): Promise<void> },
   ) {}
 
   async planProject(projectId: string, explicit = true): Promise<OrganizationRunReceipt> {
@@ -62,7 +70,14 @@ export class OrganizationOrchestrator {
     const modelOpts = this.resolveAgentModel(pmAgent, pmRole)
     const sessionId = await this.harness.createSession()
     const run = await this.store.beginRun('pm-plan', context.company.id, projectId, sessionId)
-    await this.harness.run(pmPrompt(context), { sessionId, ...modelOpts })
+    try {
+      await this.harness.run(pmPrompt(context), { sessionId, ...modelOpts })
+    } catch (cause) {
+      // A failed dispatch must release the run lock, or every later Run/plan
+      // click dies on "another organization run is already active".
+      await this.store.completeRun(run.id, undefined, errorMessage(cause)).catch(() => undefined)
+      throw cause
+    }
     return receipt(run)
   }
 
@@ -76,6 +91,8 @@ export class OrganizationOrchestrator {
     const modelOpts = this.resolveAgentModel(context.agent, context.role)
     await this.assertNoActiveRun(context.project.id)
     await this.prepareWorkspace(context.project.workspacePath)
+    await this.warmProjectTarget(context.project.id)
+    await this.capabilities?.assertUsableForAgent(context.agent)
     // Engine routing is transport-level only: the session is created on the
     // assigned engine through the router, and completion arrives as the same
     // shared event frames every engine emits.
@@ -83,9 +100,15 @@ export class OrganizationOrchestrator {
       ? await this.engineRuns.createSession(engine.id)
       : { engineId: ND_HARNESS_ENGINE_ID, sessionId: await this.harness.createSession() }
     const run = await this.store.beginRun('task-execution', context.company.id, context.project.id, target.sessionId, context.task.id, context.task.goalId)
-    await this.store.markExecution(context.task.id, target.sessionId)
-    if (this.engineRuns) await this.engineRuns.run(prompt, { sessionId: target.sessionId, ...modelOpts })
-    else await this.harness.run(prompt, { sessionId: target.sessionId, ...modelOpts })
+    try {
+      await this.store.markExecution(context.task.id, target.sessionId)
+      if (this.engineRuns) await this.engineRuns.run(prompt, { sessionId: target.sessionId, ...modelOpts })
+      else await this.harness.run(prompt, { sessionId: target.sessionId, ...modelOpts })
+    } catch (cause) {
+      await this.store.completeRun(run.id, undefined, errorMessage(cause)).catch(() => undefined)
+      await this.failTask(context.task.id, errorMessage(cause))
+      throw cause
+    }
     return receipt(run)
   }
 
@@ -106,7 +129,14 @@ export class OrganizationOrchestrator {
     const sessionId = await this.harness.createSession()
     const run = await this.store.beginRun('task-review', context.company.id, context.project.id, sessionId, context.task.id, context.task.goalId)
     await this.store.markReviewStarted(taskId, sessionId)
-    await this.harness.run(reviewPrompt(context.task, context), { sessionId, ...modelOpts })
+    try {
+      await this.harness.run(reviewPrompt(context.task, context), { sessionId, ...modelOpts })
+    } catch (cause) {
+      await this.store.completeRun(run.id, undefined, errorMessage(cause)).catch(() => undefined)
+      // Release the review session so the Review action stays retryable.
+      await this.store.clearReviewSession(taskId).catch(() => undefined)
+      throw cause
+    }
     return receipt(run)
   }
 
@@ -350,6 +380,20 @@ export class OrganizationOrchestrator {
     await this.harness.close()
     await this.workspace.setRoot(workspacePath)
   }
+
+  /**
+   * Validate → health-check the project target before a worker runs, opening
+   * the browser on success (the runtime service fires that callback). A dev
+   * server that will not start is reported but never blocks code execution.
+   */
+  private async warmProjectTarget(projectId: string): Promise<void> {
+    if (!this.projectRuntime) return
+    try {
+      await this.projectRuntime.check(projectId)
+    } catch (error) {
+      console.warn('Project target check skipped:', error instanceof Error ? error.message : String(error))
+    }
+  }
 }
 
 function pmPrompt(context: Awaited<ReturnType<OrganizationStore['projectContext']>>): string {
@@ -378,6 +422,10 @@ function receipt(run: OrganizationRun): OrganizationRunReceipt {
     ...(run.taskId ? { taskId: run.taskId } : {}),
     kind: run.kind,
   }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 function messageText(message: unknown): string | undefined {

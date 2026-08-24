@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import type { CodingEngineDescriptor, ModelProvider, WorkspaceState } from '../../../shared/contracts'
+import type { CapabilityAssignmentSnapshot, CapabilityDescriptor, CapabilityKind, CapabilityProviderStatus } from '../../../shared/capabilities'
+import { DEFAULT_CAPABILITY_PROVIDER } from '../../../shared/capabilities'
 import { ND_HARNESS_ENGINE_ID } from '../../../shared/coding-engines'
-import type { OrganizationPolicyEffect, OrganizationSnapshot, OrganizationTask, TaskPriority } from '../../../shared/organization'
+import type { OrganizationPolicyEffect, OrganizationRun, OrganizationSnapshot, OrganizationTask, ProjectRuntimeStatus, TaskPriority } from '../../../shared/organization'
+import { DEFAULT_PROJECT_PORT } from '../../../shared/organization'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 import { cn } from '../lib/utils'
 
@@ -27,6 +30,10 @@ const orgInput = cn(
   'min-w-0 rounded-md border border-border-strong bg-background px-[9px] py-[7px] text-sm text-foreground outline-none',
   'focus:border-primary/40',
 )
+const CAPABILITY_SELECTS: Array<{ kind: CapabilityKind; label: string; title: string }> = [
+  { kind: 'memory', label: 'Memory', title: 'Durable recall source used when this employee runs' },
+  { kind: 'context', label: 'Context', title: 'How workspace understanding is gathered before this employee runs' },
+]
 
 export function OrganizationDashboard({ workspace, onOpenDeepSeek, onError }: Props) {
   const [state, setState] = useState<OrganizationSnapshot | null>(null)
@@ -38,7 +45,12 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onError }: Pr
   const [memoryDraft, setMemoryDraft] = useState({ title: '', content: '' })
   const [engines, setEngines] = useState<CodingEngineDescriptor[]>([])
   const [engineAssignments, setEngineAssignments] = useState<Record<string, string>>({})
+  const [capabilityProviders, setCapabilityProviders] = useState<CapabilityDescriptor[]>([])
+  const [capabilityAssignments, setCapabilityAssignments] = useState<CapabilityAssignmentSnapshot>({ version: 1, agents: {}, roles: {}, teams: {} })
+  const [capabilityStatuses, setCapabilityStatuses] = useState<Record<string, CapabilityProviderStatus>>({})
   const [providers, setProviders] = useState<ModelProvider[]>([])
+  const [runtime, setRuntime] = useState<ProjectRuntimeStatus | null>(null)
+  const [runtimeDraft, setRuntimeDraft] = useState({ startCommand: '', testCommand: '', targetUrl: '', targetPort: '', healthCheckPath: '' })
 
   useEffect(() => {
     let mounted = true
@@ -60,14 +72,19 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onError }: Pr
 
   useEffect(() => {
     let mounted = true
-    void Promise.all([window.ndDsh.engines.list(), window.ndDsh.engines.assignments()])
-      .then(([catalog, assignments]) => {
+    void Promise.all([window.ndDsh.engines.list(), window.ndDsh.engines.assignments(), window.ndDsh.capabilities.providers(), window.ndDsh.capabilities.assignments(), window.ndDsh.capabilities.statuses()])
+      .then(([catalog, engineRouting, providers, assignments, statuses]) => {
         if (!mounted) return
         setEngines(catalog)
-        setEngineAssignments(assignments)
+        setEngineAssignments(engineRouting)
+        setCapabilityProviders(providers)
+        setCapabilityAssignments(assignments)
+        setCapabilityStatuses(statuses)
       })
       .catch((cause) => onError(errorMessage(cause)))
-    return () => { mounted = false }
+    const offAssignments = window.ndDsh.capabilities.onChanged((value) => { if (mounted) setCapabilityAssignments(value) })
+    const offStatuses = window.ndDsh.capabilities.onStatusChanged((value) => { if (mounted) setCapabilityStatuses(value) })
+    return () => { mounted = false; offAssignments(); offStatuses() }
   }, [onError])
 
   const company = useMemo(() => state?.companies.find((item) => item.id === state.activeCompanyId) ?? null, [state])
@@ -81,6 +98,78 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onError }: Pr
   const policies = useMemo(() => state?.policies.filter((item) => item.companyId === company?.id) ?? [], [state, company?.id])
   const memory = useMemo(() => state?.memory.filter((item) => item.companyId === company?.id && (!item.projectId || item.projectId === project?.id)) ?? [], [state, company?.id, project?.id])
   const runs = useMemo(() => state?.runs.filter((item) => item.companyId === company?.id && (!project || item.projectId === project.id)).slice(0, 8) ?? [], [state, company?.id, project])
+  const activity = useMemo(() => state?.activity.filter((item) => item.companyId === company?.id && (!project || !item.projectId || item.projectId === project.id)).slice(0, 12) ?? [], [state, company?.id, project])
+
+  // Dev-server lifecycle state for the active project, kept live by the
+  // main-process runtime service.
+  useEffect(() => {
+    return window.ndDshOrganization.onRuntimeChanged(setRuntime)
+  }, [])
+
+  useEffect(() => {
+    if (!project) return
+    setRuntimeDraft({
+      startCommand: project.startCommand ?? '',
+      testCommand: project.testCommand ?? '',
+      targetUrl: project.targetUrl ?? '',
+      targetPort: project.targetPort !== undefined ? String(project.targetPort) : '',
+      healthCheckPath: project.healthCheckPath ?? '',
+    })
+    let mounted = true
+    void window.ndDshOrganization.projectRuntime(project.id)
+      .then((status) => { if (mounted) setRuntime(status) })
+      .catch(() => undefined)
+    return () => { mounted = false }
+    // Reseed only when switching projects; snapshot refreshes must not clobber typing.
+  }, [project?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const activeRuntime = runtime && (!project || runtime.projectId === project.id) ? runtime : null
+
+  async function saveRuntimeSettings(event: FormEvent): Promise<void> {
+    event.preventDefault()
+    if (!project) return
+    await action('runtime-save', () => mutate({
+      type: 'project.update',
+      id: project.id,
+      patch: {
+        startCommand: runtimeDraft.startCommand,
+        testCommand: runtimeDraft.testCommand,
+        targetUrl: runtimeDraft.targetUrl,
+        healthCheckPath: runtimeDraft.healthCheckPath,
+        // Port 0 is not a valid port; the store clears the field instead of storing it.
+        targetPort: runtimeDraft.targetPort.trim() ? Number(runtimeDraft.targetPort) : 0,
+      },
+    }))
+  }
+
+  async function openProjectTarget(): Promise<void> {
+    if (!project || !activeRuntime?.targetUrl) return
+    await action('runtime-open', () => window.ndDsh.browser.navigate(activeRuntime.targetUrl!))
+  }
+
+  async function controlRuntime(step: 'start' | 'stop' | 'restart'): Promise<void> {
+    if (!project) return
+    await action(`runtime-${step}`, async () => {
+      if (step === 'stop') setRuntime(await window.ndDshOrganization.stopProjectRuntime(project.id))
+      else {
+        if (step === 'restart') await window.ndDshOrganization.stopProjectRuntime(project.id)
+        setRuntime(await window.ndDshOrganization.startProjectRuntime(project.id))
+      }
+    })
+  }
+
+  async function selectProjectWorkspace(): Promise<void> {
+    await action('workspace-select', async () => {
+      await window.ndDsh.workspace.pick()
+    })
+  }
+
+  function retryRun(run: OrganizationRun): Promise<unknown> {
+    if (run.kind === 'pm-plan') return window.ndDshOrganization.planProject(run.projectId)
+    if (run.kind === 'task-review' && run.taskId) return window.ndDshOrganization.reviewTask(run.taskId)
+    if (run.taskId) return window.ndDshOrganization.runTask(run.taskId)
+    return window.ndDshOrganization.runNext(run.projectId)
+  }
 
   async function action(key: string, fn: () => Promise<unknown>): Promise<void> {
     if (busy) return
@@ -160,6 +249,29 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onError }: Pr
     })
   }
 
+  async function assignCapability(agentId: string, kind: CapabilityKind, providerId: string): Promise<void> {
+    await action(`capability-${kind}-${agentId}`, async () => {
+      setCapabilityAssignments(await window.ndDsh.capabilities.assign('agent', agentId, kind, providerId))
+    })
+  }
+
+  /** Options for one capability kind; unusable entries stay visible but disabled with their reason. */
+  function capabilityOptions(kind: CapabilityKind): Array<{ id: string; name: string; usable: boolean; suffix: string; reason?: string }> {
+    return capabilityProviders
+      .filter((provider) => provider.kind === kind)
+      .map((provider) => {
+        const enabled = capabilityStatuses[provider.id]?.enabled ?? provider.integration === 'builtin'
+        const usable = provider.available && enabled
+        const reason = !provider.available
+          ? provider.unavailableReason ?? `${provider.name} is not installed.`
+          : usable
+            ? undefined
+            : `${provider.name} is disabled. Enable it in Settings → Capabilities after a passing verification.`
+        const suffix = !provider.available ? ' (unavailable)' : enabled ? '' : ' (disabled)'
+        return { id: provider.id, name: provider.name, usable, suffix, ...(reason !== undefined ? { reason } : {}) }
+      })
+  }
+
   if (!state) {
     return (
       <div className="flex h-full min-h-0 items-center justify-center gap-3 bg-surface-0 text-muted-foreground">
@@ -188,6 +300,13 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onError }: Pr
   const completed = tasks.filter((item) => item.status === 'completed').length
   const activeWorkers = agents.filter((item) => item.status === 'working' || item.status === 'reviewing').length
   const blockers = tasks.filter((item) => item.status === 'blocked').length
+  const timeline = [
+    { label: 'Planned', done: goals.length > 0 },
+    { label: 'Ready', done: tasks.some((item) => item.status !== 'backlog') },
+    { label: 'Building', done: tasks.some((item) => ['in_progress', 'review', 'completed'].includes(item.status)) },
+    { label: 'Review', done: tasks.some((item) => ['review', 'completed'].includes(item.status)) },
+    { label: 'Complete', done: tasks.length > 0 && tasks.every((item) => item.status === 'completed') },
+  ]
 
   return <div className="grid h-full min-h-0 grid-rows-[auto_auto_auto_auto_minmax(0,1fr)] overflow-hidden bg-surface-0 text-foreground">
     <header className="flex items-center justify-between gap-[18px] border-b border-border-soft bg-sidebar px-4 py-3">
@@ -242,10 +361,11 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onError }: Pr
         </button>
       ))}
     </div>
-    <form className="grid grid-cols-[1fr_2fr_1.5fr_auto] gap-[7px] border-b border-border-soft bg-secondary px-4 py-2" onSubmit={(event) => void createProject(event)}>
+    <form className="grid grid-cols-[1fr_2fr_1.5fr_auto_auto] gap-[7px] border-b border-border-soft bg-secondary px-4 py-2" onSubmit={(event) => void createProject(event)}>
       <input placeholder="New project" value={projectDraft.name} onChange={(event) => setProjectDraft((value) => ({ ...value, name: event.target.value }))} required className={orgInput} />
       <input placeholder="Objective" value={projectDraft.objective} onChange={(event) => setProjectDraft((value) => ({ ...value, objective: event.target.value }))} required className={orgInput} />
       <input placeholder="Workspace path" value={projectDraft.workspacePath} onChange={(event) => setProjectDraft((value) => ({ ...value, workspacePath: event.target.value }))} className={orgInput} />
+      <button type="button" className={orgButton} disabled={!workspace?.root || busy !== null} onClick={() => setProjectDraft((value) => ({ ...value, workspacePath: workspace?.root ?? '' }))}>Use open workspace</button>
       <button className={orgButton}>Add project</button>
     </form>
     <nav className="flex gap-1 border-b border-border-soft bg-secondary px-4 py-1.5">
@@ -271,6 +391,15 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onError }: Pr
           <Stat label="Tasks" value={`${completed}/${tasks.length}`} detail={`${blockers} blocked`} />
           <Stat label="Policy gates" value={`${policies.filter((item) => item.effect === 'ask').length}`} detail="require a human decision" />
         </div>
+        <div className="mb-2.5 flex flex-wrap items-center gap-x-[7px] gap-y-1.5 rounded-[9px] border border-border-soft bg-sidebar px-[11px] py-2">
+          <small className="mr-1 text-[10px] font-bold uppercase tracking-[0.12em] text-faint">Timeline</small>
+          {timeline.map((step, index) => (
+            <span key={step.label} className="flex items-center gap-[7px]">
+              {index > 0 ? <span className="text-fainter">→</span> : null}
+              <span className={cn('rounded-full border px-2 py-0.5 text-[11px] font-semibold', step.done ? 'border-primary/30 bg-primary/10 text-primary' : 'border-border-strong bg-secondary text-faint')}>{step.label}</span>
+            </span>
+          ))}
+        </div>
         <div className="mb-2.5 grid grid-cols-1 gap-2.5 min-[1100px]:grid-cols-2">
           <Card title="Goals" action={project ? <button className={orgButton} disabled={busy !== null} onClick={() => void action('plan', () => window.ndDshOrganization.planProject(project.id))}>AI PM plan</button> : undefined}>
             {goals.length ? goals.map((goal) => (
@@ -279,8 +408,83 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onError }: Pr
           </Card>
           <Card title="Live runs">
             {runs.length ? runs.map((run) => (
-              <Row key={run.id} left={<><strong className="truncate text-sm">{run.kind}</strong><small className="truncate text-xs text-faint">{run.status} · {short(run.sessionId)}</small></>} />
+              <div key={run.id} className="border-b border-border-soft py-2 last:border-b-0">
+                <Row
+                  left={<>
+                    <strong className="truncate text-sm">{runKindLabel(run.kind)}</strong>
+                    <small className="truncate text-xs text-faint">{run.status} · {short(run.sessionId)} · {clock(run.startedAt)}</small>
+                  </>}
+                  right={run.status === 'failed'
+                    ? <button className={cn(orgButton, 'h-[22px] shrink-0 px-1.5 text-[11px]')} disabled={busy !== null} onClick={() => void action(`retry-${run.id}`, () => retryRun(run))}>Retry</button>
+                    : run.status === 'running'
+                      ? <span className="shrink-0 text-xs font-semibold text-primary">running…</span>
+                      : undefined}
+                />
+                {run.error ? (
+                  <p className="m-0 mt-1.5 max-h-[88px] overflow-auto whitespace-pre-wrap break-words rounded-[7px] border border-destructive/25 bg-destructive/[0.06] p-[7px] text-xs/[1.45] text-destructive" title={run.error}>
+                    {run.error.length > 500 ? `${run.error.slice(0, 500)}…` : run.error}
+                  </p>
+                ) : null}
+              </div>
             )) : <Empty text="PM, worker and reviewer runs appear here." />}
+          </Card>
+        </div>
+        <div className="grid grid-cols-1 gap-2.5 min-[1100px]:grid-cols-2">
+          <Card title={`Project runtime${project ? ` · ${project.name}` : ''}`}>
+            {project ? (
+              <div className="flex flex-col gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={cn('inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.06em]', runtimeChipClass(activeRuntime?.state))}>
+                    {activeRuntime?.state ?? 'stopped'}
+                  </span>
+                  {activeRuntime?.targetUrl ? <code className="min-w-0 truncate font-mono text-xs text-soft" title={activeRuntime.targetUrl}>{activeRuntime.targetUrl}</code> : null}
+                  <div className="ml-auto flex shrink-0 gap-[7px]">
+                    <button className={orgButton} disabled={busy !== null} onClick={() => void openProjectTarget()}>Open in Browser</button>
+                    {activeRuntime?.state === 'starting' || activeRuntime?.state === 'ready' ? (
+                      <>
+                        <button className={orgButton} disabled={busy !== null} onClick={() => void controlRuntime('restart')}>Restart</button>
+                        <button className={orgButton} disabled={busy !== null} onClick={() => void controlRuntime('stop')}>Stop</button>
+                      </>
+                    ) : (
+                      <button className={orgPrimaryButton} disabled={busy !== null} onClick={() => void controlRuntime('start')}>Start</button>
+                    )}
+                  </div>
+                </div>
+                {workspace?.binding === 'missing' || !project.workspacePath ? (
+                  <div className="flex items-center justify-between gap-2 rounded-[7px] border border-warning/30 bg-warning/[0.06] px-[7px] py-1.5 text-xs text-warning">
+                    <span>Link the project folder before running the app or checks.</span>
+                    <button type="button" className={orgButton} disabled={busy !== null} onClick={() => void selectProjectWorkspace()}>Select workspace</button>
+                  </div>
+                ) : null}
+                {activeRuntime?.lastError ? (
+                  <p className="m-0 max-h-[110px] overflow-auto whitespace-pre-wrap break-words rounded-[7px] border border-destructive/25 bg-destructive/[0.06] p-[7px] text-xs/[1.45] text-destructive">
+                    {activeRuntime.lastError.length > 600 ? `${activeRuntime.lastError.slice(0, 600)}…` : activeRuntime.lastError}
+                  </p>
+                ) : null}
+                {activeRuntime?.validation?.length ? (
+                  <ul className="m-0 list-none p-0 text-[11px]/[1.5] text-muted-foreground">
+                    {activeRuntime.validation.map((line) => <li key={line}>· {line}</li>)}
+                  </ul>
+                ) : null}
+                <form className="grid grid-cols-1 gap-[7px] min-[900px]:grid-cols-2" onSubmit={(event) => void saveRuntimeSettings(event)}>
+                  <input placeholder="Start command (e.g. npm run dev)" value={runtimeDraft.startCommand} onChange={(event) => setRuntimeDraft((value) => ({ ...value, startCommand: event.target.value }))} className={orgInput} />
+                  <input placeholder="Test command (informational)" value={runtimeDraft.testCommand} onChange={(event) => setRuntimeDraft((value) => ({ ...value, testCommand: event.target.value }))} className={orgInput} />
+                  <input placeholder="Target URL — overrides port (e.g. http://localhost:3000)" value={runtimeDraft.targetUrl} onChange={(event) => setRuntimeDraft((value) => ({ ...value, targetUrl: event.target.value }))} className={orgInput} />
+                  <input placeholder={`Target port (default ${DEFAULT_PROJECT_PORT})`} inputMode="numeric" value={runtimeDraft.targetPort} onChange={(event) => setRuntimeDraft((value) => ({ ...value, targetPort: event.target.value }))} className={orgInput} />
+                  <input placeholder="Health-check path (/)" value={runtimeDraft.healthCheckPath} onChange={(event) => setRuntimeDraft((value) => ({ ...value, healthCheckPath: event.target.value }))} className={orgInput} />
+                  <button className={orgButton}>Save runtime</button>
+                </form>
+              </div>
+            ) : <Empty text="Create a project to configure its dev server and browser target." />}
+          </Card>
+          <Card title="Activity">
+            {activity.length ? activity.map((item) => (
+              <Row
+                key={item.id}
+                left={<><strong className="truncate font-mono text-xs">{item.type}</strong><small className="text-xs/[1.45] text-muted-foreground">{item.message}</small></>}
+                right={<small className="shrink-0 text-[10px] text-faint">{clock(item.createdAt)}</small>}
+              />
+            )) : <Empty text="Workforce activity lands here as it happens." />}
           </Card>
         </div>
       </> : null}
@@ -363,6 +567,26 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onError }: Pr
                         </SelectContent>
                       </Select>
                     </label>
+                    {CAPABILITY_SELECTS.map(({ kind, label, title }) => {
+                      const value = capabilityAssignments.agents[agent.id]?.[kind] ?? DEFAULT_CAPABILITY_PROVIDER[kind]
+                      return (
+                        <label key={kind} title={title} className="flex items-center gap-1.5 text-[11px] text-faint">
+                          {label}
+                          <Select value={value} disabled={busy !== null} onValueChange={(next) => void assignCapability(agent.id, kind, next)}>
+                            <SelectTrigger className="h-7 w-[130px] rounded-md border-border-strong bg-secondary px-2 text-[11px] text-soft">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {capabilityOptions(kind).map((option) => (
+                                <SelectItem key={option.id} value={option.id} disabled={!option.usable} title={option.reason}>
+                                  {`${option.name}${option.suffix}`}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </label>
+                      )
+                    })}
                   </div>
                 }
               />
@@ -484,4 +708,15 @@ function Empty({ text }: { text: string }) {
 function sectionLabel(value: Section): string { return value === 'workforce' ? 'Teams & Skills' : value === 'knowledge' ? 'Memory & Policies' : `${value[0]?.toUpperCase()}${value.slice(1)}` }
 function initials(value: string): string { return value.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('') || 'ND' }
 function short(value: string): string { return value.length > 14 ? `${value.slice(0, 6)}…${value.slice(-5)}` : value }
+function clock(value: number): string { return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) }
+function runKindLabel(kind: OrganizationRun['kind']): string {
+  if (kind === 'pm-plan') return 'AI PM plan'
+  return kind === 'task-review' ? 'Independent review' : 'Builder execution'
+}
+function runtimeChipClass(state: ProjectRuntimeStatus['state'] | undefined): string {
+  if (state === 'ready') return 'border-primary/30 bg-primary/10 text-primary'
+  if (state === 'starting') return 'border-info/30 bg-info/10 text-info'
+  if (state === 'unreachable') return 'border-destructive/30 bg-destructive/[0.08] text-destructive'
+  return 'border-border-strong bg-secondary text-muted-foreground'
+}
 function errorMessage(cause: unknown): string { return cause instanceof Error ? cause.message : String(cause) }

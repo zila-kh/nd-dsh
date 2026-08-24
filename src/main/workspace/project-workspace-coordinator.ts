@@ -4,6 +4,7 @@ import type { WorkspaceState } from '../../shared/contracts.js'
 import type { OrganizationMutation, OrganizationSnapshot, Project } from '../../shared/organization.js'
 import type { HarnessService } from '../harness/harness-service.js'
 import type { WorkspaceService } from './workspace-service.js'
+import type { WorkspaceRegistry } from './workspace-registry.js'
 import type { OrganizationStore } from '../organization/store.js'
 
 const ACTIVE_CONTEXT_MUTATIONS = new Set<OrganizationMutation['type']>([
@@ -18,6 +19,7 @@ export class ProjectWorkspaceCoordinator {
     private readonly store: OrganizationStore,
     private readonly workspace: WorkspaceService,
     private readonly harness: HarnessService,
+    private readonly workspaceRegistry?: WorkspaceRegistry,
   ) {}
 
   state(): WorkspaceState {
@@ -115,21 +117,38 @@ export class ProjectWorkspaceCoordinator {
       })
     }
 
-    const absolute = resolve(path)
+    let selectedPath = path
+    let absolute = resolve(selectedPath)
     try {
       const stats = await fs.stat(absolute)
       if (!stats.isDirectory()) throw new Error('not a directory')
     } catch {
-      if (closeHarness) await this.harness.close()
-      return this.workspace.setContext({
-        binding: 'missing',
-        companyId: company.id,
-        companyName: company.name,
-        projectId: project.id,
-        projectName: project.name,
-        projectWorkspacePath: path,
-        warning: `Project workspace is unavailable: ${path}`,
-      })
+      const recovered = await this.workspaceRegistry?.findLegacyEscapedRoot(path)
+      if (recovered) {
+        absolute = resolve(recovered)
+        try {
+          const stats = await fs.stat(absolute)
+          if (!stats.isDirectory()) throw new Error('not a directory')
+          selectedPath = recovered
+          // Persist only an exact match to a folder the user previously chose.
+          await this.store.mutate({ type: 'project.update', id: project.id, patch: { workspacePath: recovered } })
+        } catch {
+          selectedPath = path
+          absolute = resolve(path)
+        }
+      }
+      if (selectedPath === path) {
+        if (closeHarness) await this.harness.close()
+        return this.workspace.setContext({
+          binding: 'missing',
+          companyId: company.id,
+          companyName: company.name,
+          projectId: project.id,
+          projectName: project.name,
+          projectWorkspacePath: path,
+          warning: `Project workspace is unavailable: ${path}`,
+        })
+      }
     }
 
     if (this.workspace.state().root !== absolute && closeHarness) await this.harness.close()

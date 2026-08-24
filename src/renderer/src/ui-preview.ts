@@ -10,6 +10,24 @@ import type {
   WorkspaceState,
 } from '../../shared/contracts'
 import { buildCodingEngineCatalog } from '../../shared/coding-engines'
+import type {
+  CapabilityAssignmentSnapshot,
+  CapabilityDescriptor,
+  CapabilityKind,
+  CapabilityProviderStatus,
+  CapabilitySubjectType,
+} from '../../shared/capabilities'
+import {
+  DEFAULT_CAPABILITY_PROVIDER,
+  GRAPHIFY_CONTEXT_ID,
+  ND_CODEX_CLI_CAPABILITY_ID,
+  ND_HARNESS_CAPABILITY_ID,
+  ND_MEMORY_MCP_ID,
+  ND_ORG_MEMORY_ID,
+  ND_SESSION_RECALL_ID,
+  ND_WORKSPACE_CONTEXT_ID,
+  OPENVIKING_MEMORY_ID,
+} from '../../shared/capabilities'
 import type { DesignDesktopApi, DesignFreeformState, DesignProjectState } from '../../shared/design'
 import type { OrganizationDesktopApi, OrganizationMutation, OrganizationSnapshot } from '../../shared/organization'
 
@@ -78,6 +96,99 @@ let providers: ModelProvider[] = [
 
 const engines = buildCodingEngineCatalog({ harnessReady: true, codexReady: true, codexCliReady: true })
 let assignments: Record<string, string> = { 'agent-pm': 'nd-harness', 'agent-builder': 'codex-cli', 'agent-reviewer': 'nd-harness' }
+
+const ADAPTER_SLOT_NOTE = 'Adapter slot reserved. The integration ships in an upcoming ND release; built-ins stay active meanwhile.'
+
+/** Mirrors the main-process registry catalog so preview settings and dashboards render real shapes. */
+const capabilityProviders: CapabilityDescriptor[] = [
+  ...engines.map((engine): CapabilityDescriptor => ({
+    id: engine.id,
+    kind: 'engine',
+    name: engine.name,
+    integration: engine.id === ND_HARNESS_CAPABILITY_ID ? 'builtin' : 'adapter',
+    available: engine.available,
+    description: engine.description,
+    ...(engine.unavailableReason !== undefined ? { unavailableReason: engine.unavailableReason } : {}),
+  })),
+  {
+    id: ND_ORG_MEMORY_ID,
+    kind: 'memory',
+    name: 'ND Organization Memory',
+    integration: 'builtin',
+    available: true,
+    description: 'Company/project-scoped durable memory owned by the organization store; injected into PM, worker, and review prompts.',
+  },
+  {
+    id: OPENVIKING_MEMORY_ID,
+    kind: 'memory',
+    name: 'OpenViking Memory',
+    integration: 'adapter',
+    available: false,
+    description: 'External context-database adapter for long-horizon checkpointed recall across parallel workers.',
+    unavailableReason: ADAPTER_SLOT_NOTE,
+  },
+  {
+    id: ND_MEMORY_MCP_ID,
+    kind: 'memory',
+    name: 'ND Memory MCP',
+    integration: 'adapter',
+    available: false,
+    description: 'ND organization memory exposed as live in-loop worker tools inside harness sessions via a patch-row MCP plugin.',
+    unavailableReason: `${ADAPTER_SLOT_NOTE} Delivered through the sanctioned harness patch overlay — no vendored core changes.`,
+  },
+  {
+    id: ND_WORKSPACE_CONTEXT_ID,
+    kind: 'context',
+    name: 'ND Workspace Context',
+    integration: 'builtin',
+    available: true,
+    description: 'Workspace files, git state, live browser UI targets, annotations, and screenshots attached to prompts by the ND runtime.',
+  },
+  {
+    id: ND_SESSION_RECALL_ID,
+    kind: 'context',
+    name: 'Harness Session Recall',
+    integration: 'adapter',
+    available: false,
+    description: 'Mounts the harness session-search index as worker tools for recall over past coding sessions.',
+    unavailableReason: `Dormant upstream today. ${ADAPTER_SLOT_NOTE}`,
+  },
+  {
+    id: GRAPHIFY_CONTEXT_ID,
+    kind: 'context',
+    name: 'Graphify Repo Map',
+    integration: 'adapter',
+    available: false,
+    description: 'Local AST code-graph adapter for blast-radius analysis and token-cheap repo mapping inside workers.',
+    unavailableReason: ADAPTER_SLOT_NOTE,
+  },
+]
+
+let capabilityAssignments: CapabilityAssignmentSnapshot = {
+  version: 1,
+  agents: { 'agent-pm': { engine: ND_HARNESS_CAPABILITY_ID }, 'agent-builder': { engine: ND_CODEX_CLI_CAPABILITY_ID }, 'agent-reviewer': { engine: ND_HARNESS_CAPABILITY_ID } },
+  roles: {},
+  teams: {},
+}
+
+const capabilityStatusOverrides: Record<string, CapabilityProviderStatus> = {}
+
+function previewCapabilityStatus(providerId: string): CapabilityProviderStatus {
+  const override = capabilityStatusOverrides[providerId]
+  if (override) return override
+  const builtin = capabilityProviders.find((item) => item.id === providerId)?.integration === 'builtin'
+  return {
+    providerId,
+    enabled: builtin,
+    ...(builtin ? { lastVerifiedAt: now } : {}),
+  }
+}
+
+function capabilityStatusesView(): Record<string, CapabilityProviderStatus> {
+  const view: Record<string, CapabilityProviderStatus> = {}
+  for (const descriptor of capabilityProviders) view[descriptor.id] = previewCapabilityStatus(descriptor.id)
+  return view
+}
 
 let git: GitStatusSnapshot = {
   root: workspace.root,
@@ -173,6 +284,39 @@ const archivedPreviewSessions = new Set<string>()
 
 const desktopApi: DesktopApi = {
   app: { info: async () => ({ name: 'ND-DSH', version: '0.1.0-dev-preview', platform: 'web-preview', projectRoot: workspace.root }) },
+  capabilities: {
+    providers: async () => capabilityProviders,
+    assignments: async () => capabilityAssignments,
+    assign: async (subjectType: CapabilitySubjectType, subjectId, kind, providerId) => {
+      const mapKey = subjectType === 'agent' ? 'agents' as const : subjectType === 'role' ? 'roles' as const : 'teams' as const
+      const map = { ...capabilityAssignments[mapKey] }
+      if (providerId === DEFAULT_CAPABILITY_PROVIDER[kind]) {
+        // Mirrors the durable store: re-assigning the default deletes the sparse key.
+        const entry = map[subjectId]
+        if (entry) {
+          const { [kind]: _defaulted, ...rest } = entry
+          if (Object.keys(rest).length > 0) map[subjectId] = rest
+          else delete map[subjectId]
+        }
+      } else {
+        map[subjectId] = { ...map[subjectId], [kind]: providerId }
+      }
+      capabilityAssignments = { ...capabilityAssignments, [mapKey]: map }
+      return capabilityAssignments
+    },
+    onChanged: () => () => {},
+    statuses: async () => capabilityStatusesView(),
+    verify: async (providerId) => {
+      // Success marks the provider verified and enabled, clearing any earlier failure.
+      capabilityStatusOverrides[providerId] = { providerId, enabled: true, lastProbeAt: Date.now(), lastVerifiedAt: Date.now() }
+      return capabilityStatusesView()
+    },
+    setEnabled: async (providerId, enabled) => {
+      capabilityStatusOverrides[providerId] = { ...previewCapabilityStatus(providerId), enabled }
+      return capabilityStatusesView()
+    },
+    onStatusChanged: () => () => {},
+  },
   providers: {
     list: async () => providers,
     save: async (value) => (providers = value.map((provider) => ({ ...provider, apiKey: '' }))),
@@ -319,6 +463,10 @@ const organizationApi: OrganizationDesktopApi = {
   reviewTask: async (taskId) => ({ runId: 'preview-review', sessionId: 'preview-session', projectId: organization.activeProjectId!, taskId, kind: 'task-review' }),
   runNext: async (projectId) => ({ runId: 'preview-next', sessionId: 'preview-session', projectId: projectId ?? organization.activeProjectId!, kind: 'task-execution' }),
   onChanged: organizationEvents.on,
+  projectRuntime: async (projectId) => ({ projectId, state: 'ready', targetUrl: 'http://localhost:3000/', port: 3000, checkedAt: now }),
+  startProjectRuntime: async (projectId) => ({ projectId, state: 'starting', targetUrl: 'http://localhost:3000/', port: 3000 }),
+  stopProjectRuntime: async (projectId) => ({ projectId, state: 'stopped', targetUrl: 'http://localhost:3000/', port: 3000 }),
+  onRuntimeChanged: () => () => undefined,
 }
 
 export function installDevelopmentUiPreview(): void {

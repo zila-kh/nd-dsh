@@ -65,6 +65,13 @@ function makeCheckout(options: { unit?: boolean; e2e?: boolean }): string {
   return root
 }
 
+function makeProjectWorkspace(scripts: Record<string, string>): string {
+  const root = mkdtempSync(join(tmpdir(), 'nd-dsh-qa-project-'))
+  createdRoots.push(root)
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts }))
+  return root
+}
+
 function sequentialClock(): () => number {
   let tick = 1_000_000
   return () => (tick += 10)
@@ -156,6 +163,20 @@ describe('qa service', () => {
     const unit = state.suites.find((suite) => suite.id === 'unit')
     expect(unit?.status).toBe('failed')
     expect(unit?.lastExitCode).toBe(3)
+  })
+
+  it('runs a detected project script in its workspace', async () => {
+    const root = makeCheckout({})
+    const workspace = makeProjectWorkspace({ test: 'vitest run' })
+    const { spawnProcess, calls, children } = makeSpawner()
+    const service = new QaService({ root, spawnProcess })
+    service.setProjectRoot(workspace)
+
+    const pendingRun = service.run('script:test')
+    expect(calls[0]).toMatchObject({ command: 'npm', args: ['run', 'test'], cwd: workspace })
+    children[0]?.emitExit(0, null)
+    const state = await pendingRun
+    expect(state.suites.find((suite) => suite.id === 'script:test')).toMatchObject({ kind: 'project', status: 'passed' })
   })
 
   it('stop kills the child and leaves the suite idle', async () => {

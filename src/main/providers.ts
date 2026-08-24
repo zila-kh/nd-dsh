@@ -33,7 +33,10 @@ function defaultProvider(): ModelProvider {
     baseUrl: process.env.ND_DSH_BASE_URL?.trim() || DEFAULT_BASE_URL,
     apiFormat: DEFAULT_API_FORMAT,
     apiKey: process.env.DEEPSEEK_API_KEY?.trim() ?? '',
-    models: [{ id: model, context: DEFAULT_CONTEXT }],
+    models: [
+      { id: model, context: DEFAULT_CONTEXT },
+      ...(model !== 'deepseek-v4-pro' ? [{ id: 'deepseek-v4-pro', context: DEFAULT_CONTEXT }] : []),
+    ],
   }
 }
 

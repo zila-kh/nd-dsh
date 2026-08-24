@@ -33,6 +33,17 @@ export class WorkspaceRegistry {
   }
 
   /**
+   * Find a previously selected folder whose legacy escaped form exactly
+   * matches a persisted project path. This narrowly repairs a Windows path
+   * that was typed through an escape-processing input bridge (for example
+   * `\\todo` becoming a tab plus `odo`); it never guesses a new folder.
+   */
+  async findLegacyEscapedRoot(path: string): Promise<string | undefined> {
+    await this.load()
+    return this.items.find((item) => legacyEscapedWorkspacePath(item.root) === path)?.root
+  }
+
+  /**
    * Startup migration: make sure the root the app booted with is pinned and
    * active so the sidebar is never empty after upgrading from the
    * single-workspace build.
@@ -241,4 +252,27 @@ function finiteNumber(value: unknown): number | undefined {
 /** Workspace identity is case-insensitive only where the filesystem is. */
 function rootKeyFor(root: string): string {
   return process.platform === 'win32' ? root.toLowerCase() : root
+}
+
+/** Simulates the legacy escape handling only for matching known saved roots. */
+export function legacyEscapedWorkspacePath(root: string): string {
+  let result = ''
+  for (let index = 0; index < root.length; index += 1) {
+    const character = root[index]
+    if (character !== '\\' || index === root.length - 1) {
+      result += character
+      continue
+    }
+    const escaped = root[index += 1]!
+    // The single-line project field historically flattened an escaped `\\n`
+    // into a space before persistence; other control escapes survive as-is.
+    result += escaped === 'n' ? ' '
+      : escaped === 'r' ? '\r'
+        : escaped === 't' ? '\t'
+          : escaped === 'b' ? '\b'
+            : escaped === 'f' ? '\f'
+              : escaped === 'v' ? '\v'
+                : escaped
+  }
+  return result
 }
