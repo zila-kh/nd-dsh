@@ -159,8 +159,10 @@ export class CapabilityRegistry {
 
   async statuses(): Promise<Record<string, CapabilityProviderStatus>> {
     const stored = await this.statusStore.all()
+    const descriptors = this.list()
+    await this.reconcileSharedSourceRuntimes(descriptors, stored)
     const view: Record<string, CapabilityProviderStatus> = {}
-    for (const descriptor of this.list()) {
+    for (const descriptor of descriptors) {
       view[descriptor.id] = this.mergeStatus(descriptor.id, descriptor, stored[descriptor.id])
     }
     return view
@@ -239,10 +241,13 @@ export class CapabilityRegistry {
         && (result.sourceUrl !== descriptor.setup!.sourceUrl || result.integrity !== descriptor.setup!.integrity)) {
         throw new Error('Installer source or computed integrity does not match ND\'s approved package metadata.')
       }
-      return await this.statusStore.recordSetup(providerId, {
+      const installed = await this.statusStore.recordSetup(providerId, {
         state: 'installed', at: Date.now(), progress: 100, message: 'Setup complete. Verify before enabling.',
         installedVersion: result.installedVersion, prerequisites: check.prerequisites,
       })
+      const stored = await this.statusStore.all()
+      await this.reconcileSharedSourceRuntimes(this.list(), stored)
+      return installed
     } catch (cause) {
       const error = cause instanceof Error ? cause.message : String(cause)
       const current = await this.statusStore.get(providerId)
@@ -325,6 +330,11 @@ export class CapabilityRegistry {
   }
 
   private mergeStatus(providerId: string, descriptor: CapabilityDescriptor, stored?: CapabilityProviderStatus): CapabilityProviderStatus {
+    const operationalStatus = descriptor.available ? {
+      ...(stored?.lastVerifiedAt !== undefined ? { lastVerifiedAt: stored.lastVerifiedAt } : {}),
+      ...(stored?.lastError !== undefined ? { lastError: stored.lastError } : {}),
+      ...(stored?.lastProbeAt !== undefined ? { lastProbeAt: stored.lastProbeAt } : {}),
+    } : {}
     const setupStatus = descriptor.setup ? {
       setupState: stored?.setupState ?? 'not-installed' as const,
       ...(stored?.setupProgress !== undefined ? { setupProgress: stored.setupProgress } : {}),
@@ -336,11 +346,42 @@ export class CapabilityRegistry {
     } : {}
     return {
       providerId,
-      enabled: stored?.enabled ?? descriptor.integration === 'builtin',
-      ...(stored?.lastVerifiedAt !== undefined ? { lastVerifiedAt: stored.lastVerifiedAt } : {}),
-      ...(stored?.lastError !== undefined ? { lastError: stored.lastError } : {}),
-      ...(stored?.lastProbeAt !== undefined ? { lastProbeAt: stored.lastProbeAt } : {}),
+      enabled: descriptor.available ? (stored?.enabled ?? descriptor.integration === 'builtin') : false,
+      ...operationalStatus,
       ...setupStatus,
+    }
+  }
+
+  private async reconcileSharedSourceRuntimes(
+    descriptors: CapabilityDescriptor[],
+    stored: Record<string, CapabilityProviderStatus>,
+  ): Promise<void> {
+    const installed = new Map<string, CapabilityProviderStatus>()
+    for (const descriptor of descriptors) {
+      if (descriptor.setup?.mode !== 'source-runtime') continue
+      const status = stored[descriptor.id]
+      if (status?.setupState === 'installed' && status.installedVersion === descriptor.setup.version) {
+        installed.set(sourceRuntimeKey(descriptor.setup), status)
+      }
+    }
+    for (const descriptor of descriptors) {
+      if (descriptor.setup?.mode !== 'source-runtime' || stored[descriptor.id]?.setupState === 'installed') continue
+      const source = installed.get(sourceRuntimeKey(descriptor.setup))
+      const adapter = this.setupAdapters[descriptor.id]
+      if (!source || !adapter) continue
+      try {
+        await adapter.verify()
+        stored[descriptor.id] = await this.statusStore.recordSetup(descriptor.id, {
+          state: 'installed',
+          at: Date.now(),
+          progress: 100,
+          message: 'Shared runtime setup complete. Verify before enabling.',
+          installedVersion: descriptor.setup.version,
+          ...(source.prerequisites ? { prerequisites: source.prerequisites } : {}),
+        })
+      } catch {
+        // A capability-specific verification may still require separate setup.
+      }
     }
   }
 
@@ -357,6 +398,10 @@ export class CapabilityRegistry {
     if (!descriptor) throw new Error(`Unknown ${kind} provider: ${providerId}`)
     return descriptor
   }
+}
+
+function sourceRuntimeKey(descriptor: Extract<CapabilitySetupDescriptor, { mode: 'source-runtime' }>): string {
+  return `${descriptor.runtimeId}\u0000${descriptor.version}\u0000${descriptor.sourceUrl}`
 }
 
 function assertTrustedSetupDescriptor(descriptor: CapabilitySetupDescriptor): void {

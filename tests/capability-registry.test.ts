@@ -79,6 +79,16 @@ const APPROVED_GRAPHIFY_SETUP = {
   fields: [{ id: 'workspace_token', label: 'Workspace token', required: true, sensitive: true }],
 }
 
+const SHARED_HARNESS_SETUP = {
+  mode: 'source-runtime' as const,
+  sourceLabel: 'DeepSeek Harness source checkout',
+  sourceUrl: 'https://github.com/deepseek-ai/deepseek-harness',
+  runtimeId: 'DeepSeek Harness runtime',
+  version: '0.2.0-test',
+  prerequisites: ['Node.js 24 or newer'],
+  fields: [],
+}
+
 describe('CapabilityRegistry', () => {
   it('recovers an interrupted persisted setup as retryable failure after restart', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'nd-dsh-capability-status-recovery-'))
@@ -105,6 +115,24 @@ describe('CapabilityRegistry', () => {
     })
   })
 
+  it('shares one successful source-runtime setup across capabilities backed by the same runtime', async () => {
+    const setupAdapters: CapabilitySetupAdapters = Object.fromEntries(
+      [ND_MEMORY_MCP_ID, ND_SESSION_RECALL_ID].map((providerId) => [providerId, {
+        descriptor: SHARED_HARNESS_SETUP,
+        checkPrerequisites: async () => [{ id: 'node', label: 'Node.js 24 or newer', met: true }],
+        install: async () => ({ installedVersion: SHARED_HARNESS_SETUP.version }),
+        verify: async () => undefined,
+      }]),
+    )
+    const { registry } = await registryFixture({}, [], setupAdapters)
+
+    await expect(registry.setup(ND_MEMORY_MCP_ID, {})).resolves.toMatchObject({ setupState: 'installed' })
+    await expect(registry.statuses()).resolves.toMatchObject({
+      [ND_MEMORY_MCP_ID]: { setupState: 'installed', installedVersion: SHARED_HARNESS_SETUP.version },
+      [ND_SESSION_RECALL_ID]: { setupState: 'installed', installedVersion: SHARED_HARNESS_SETUP.version },
+    })
+  })
+
   it('lists available builtins plus four unavailable adapter slots with reasons', async () => {
     const { registry } = await registryFixture()
     const byId = new Map(registry.list().map((item) => [item.id, item]))
@@ -119,6 +147,19 @@ describe('CapabilityRegistry', () => {
     }
     expect(byId.get(ND_CODEX_DELEGATED_CAPABILITY_ID)?.available).toBe(false)
     expect(byId.get(ND_CODEX_CLI_CAPABILITY_ID)?.available).toBe(true)
+  })
+
+  it('does not expose stale enabled or verification state for an unavailable adapter', async () => {
+    const { registry, statuses } = await registryFixture()
+    await statuses.recordProbe(GRAPHIFY_CONTEXT_ID, { ok: true, at: 123 })
+    await statuses.setEnabled(GRAPHIFY_CONTEXT_ID, true)
+
+    await expect(registry.statuses()).resolves.toMatchObject({
+      [GRAPHIFY_CONTEXT_ID]: { enabled: false },
+    })
+    const status = (await registry.statuses())[GRAPHIFY_CONTEXT_ID]
+    expect(status?.lastVerifiedAt).toBeUndefined()
+    expect(status?.lastProbeAt).toBeUndefined()
   })
 
   it('stamps verification on success and records failures that invalidate any earlier pass', async () => {
