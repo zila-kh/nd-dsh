@@ -21,6 +21,8 @@ export function registerDesignIpc(window: BrowserWindow, design: DesignService, 
   handle(DESIGN_IPC.startDevPreview, () => design.startDevPreview())
   handle(DESIGN_IPC.stopPreview, () => design.stopPreview())
   handle(DESIGN_IPC.freeformState, () => ndPencil.state())
+  handle(DESIGN_IPC.freeformInitialize, () => ndPencil.reinitialize())
+  handle(DESIGN_IPC.freeformSetup, () => ndPencil.setup())
   handle(DESIGN_IPC.freeformSetBounds, (_event, value) => ndPencil.setBounds(asBounds(value)))
   handle(DESIGN_IPC.freeformSetVisible, (_event, value) => ndPencil.setVisible(Boolean(value)))
   handle(DESIGN_IPC.freeformOpen, (_event, value) => ndPencil.open(asPath(value, 'Freeform path')))

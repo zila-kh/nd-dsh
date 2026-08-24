@@ -1,10 +1,10 @@
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { CodingEngineRegistry } from '../src/main/engines/coding-engine-registry.js'
 import { CapabilityAssignmentStore } from '../src/main/capabilities/capability-assignment-store.js'
-import { CapabilityRegistry, type CapabilityBuiltinProbes } from '../src/main/capabilities/capability-registry.js'
+import { CapabilityRegistry, type CapabilityBuiltinProbes, type CapabilitySetupAdapters } from '../src/main/capabilities/capability-registry.js'
 import { CapabilityStatusStore } from '../src/main/capabilities/capability-status-store.js'
 import type { CodingEngineDescriptor } from '../src/shared/contracts.js'
 import {
@@ -46,12 +46,18 @@ interface RegistryFixture {
   registry: CapabilityRegistry
   assignments: CapabilityAssignmentStore
   statuses: CapabilityStatusStore
+  statusPath: string
 }
 
-async function registryFixture(builtinProbes: CapabilityBuiltinProbes = {}, extraEngines: CodingEngineDescriptor[] = []): Promise<RegistryFixture> {
+async function registryFixture(
+  builtinProbes: CapabilityBuiltinProbes = {},
+  extraEngines: CodingEngineDescriptor[] = [],
+  setupAdapters: CapabilitySetupAdapters = {},
+): Promise<RegistryFixture> {
   const dir = await mkdtemp(join(tmpdir(), 'nd-dsh-capability-registry-'))
   const assignments = new CapabilityAssignmentStore(join(dir, 'capability-assignments.json'))
-  const statuses = new CapabilityStatusStore(join(dir, 'capability-statuses.json'))
+  const statusPath = join(dir, 'capability-statuses.json')
+  const statuses = new CapabilityStatusStore(statusPath)
   const catalog = [
     ...buildCodingEngineCatalog({ harnessReady: true, codexReady: false, codexCliReady: true }),
     ...extraEngines,
@@ -60,10 +66,45 @@ async function registryFixture(builtinProbes: CapabilityBuiltinProbes = {}, extr
     list: () => catalog,
     assign: async () => ({}),
   }
-  return { registry: new CapabilityRegistry(assignments, engines, statuses, builtinProbes), assignments, statuses }
+  return { registry: new CapabilityRegistry(assignments, engines, statuses, builtinProbes, setupAdapters), assignments, statuses, statusPath }
+}
+
+const APPROVED_GRAPHIFY_SETUP = {
+  sourceLabel: 'Graphify',
+  sourceUrl: 'https://github.com/Graphify-Labs/graphify',
+  packageId: 'graphifyy',
+  version: '1.2.3',
+  integrity: `sha256-${'a'.repeat(64)}` as const,
+  prerequisites: ['Python 3.12'],
+  fields: [{ id: 'workspace_token', label: 'Workspace token', required: true, sensitive: true }],
 }
 
 describe('CapabilityRegistry', () => {
+  it('recovers an interrupted persisted setup as retryable failure after restart', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'nd-dsh-capability-status-recovery-'))
+    const statusPath = join(directory, 'capability-statuses.json')
+    await writeFile(statusPath, JSON.stringify({
+      version: 1,
+      providers: {
+        [ND_MEMORY_MCP_ID]: {
+          providerId: ND_MEMORY_MCP_ID,
+          enabled: false,
+          setupState: 'installing',
+          setupProgress: 55,
+          setupMessage: 'Building Harness runtime packages',
+        },
+      },
+    }))
+
+    await expect(new CapabilityStatusStore(statusPath).get(ND_MEMORY_MCP_ID)).resolves.toMatchObject({
+      enabled: false,
+      setupState: 'failed',
+      setupProgress: 55,
+      setupMessage: expect.stringMatching(/interrupted/i),
+      setupError: expect.stringMatching(/retry/i),
+    })
+  })
+
   it('lists available builtins plus four unavailable adapter slots with reasons', async () => {
     const { registry } = await registryFixture()
     const byId = new Map(registry.list().map((item) => [item.id, item]))
@@ -117,6 +158,89 @@ describe('CapabilityRegistry', () => {
     expect(enabled.enabled).toBe(true)
 
     await expect(registry.setEnabled(GRAPHIFY_CONTEXT_ID, false)).resolves.toMatchObject({ enabled: false })
+  })
+
+  it('runs an approved setup adapter, keeps secrets out of status, and requires a fresh verify after every setup', async () => {
+    const received: string[] = []
+    let verifyHealthy = true
+    const setupAdapters: CapabilitySetupAdapters = {
+      [GRAPHIFY_CONTEXT_ID]: {
+        descriptor: APPROVED_GRAPHIFY_SETUP,
+        checkPrerequisites: async () => [{ id: 'python', label: 'Python 3.12', met: true, detail: '3.12.8' }],
+        install: async (values, report) => {
+          received.push(values.workspace_token ?? '')
+          await report({ state: 'installing', progress: 65, message: 'Installing managed package' })
+          await report({ state: 'configuring', progress: 90, message: 'Writing provider-owned configuration' })
+          return {
+            installedVersion: '1.2.3',
+            sourceUrl: APPROVED_GRAPHIFY_SETUP.sourceUrl,
+            integrity: APPROVED_GRAPHIFY_SETUP.integrity,
+          }
+        },
+        verify: async () => { if (!verifyHealthy) throw new Error('graph service unavailable') },
+      },
+    }
+    const { registry, statusPath } = await registryFixture({}, [], setupAdapters)
+    const descriptor = registry.list().find((item) => item.id === GRAPHIFY_CONTEXT_ID)
+    expect(descriptor).toMatchObject({ available: true, setup: APPROVED_GRAPHIFY_SETUP })
+
+    await expect(registry.setup(GRAPHIFY_CONTEXT_ID, {})).rejects.toThrow(/Workspace token is required/)
+    await expect(registry.setEnabled(GRAPHIFY_CONTEXT_ID, true)).rejects.toThrow(/Download & Setup/)
+    await expect(registry.checkSetup(GRAPHIFY_CONTEXT_ID)).resolves.toMatchObject({ ready: true })
+
+    const installed = await registry.setup(GRAPHIFY_CONTEXT_ID, { workspace_token: 'secret-value' })
+    expect(installed).toMatchObject({ setupState: 'installed', installedVersion: '1.2.3', enabled: false })
+    expect(JSON.stringify(installed)).not.toContain('secret-value')
+    expect(await readFile(statusPath, 'utf8')).not.toContain('secret-value')
+    await expect(new CapabilityStatusStore(statusPath).get(GRAPHIFY_CONTEXT_ID)).resolves.toMatchObject({
+      setupState: 'installed', installedVersion: '1.2.3', enabled: false,
+    })
+    expect(received).toEqual(['secret-value'])
+    await expect(registry.setEnabled(GRAPHIFY_CONTEXT_ID, true)).rejects.toThrow(/verification/i)
+
+    await registry.verify(GRAPHIFY_CONTEXT_ID)
+    await registry.setEnabled(GRAPHIFY_CONTEXT_ID, true)
+    await registry.assign('agent', 'agent-graph', 'context', GRAPHIFY_CONTEXT_ID)
+    await expect(registry.resolve('context', { id: 'agent-graph' })).resolves.toMatchObject({ id: GRAPHIFY_CONTEXT_ID })
+
+    verifyHealthy = false
+    const failed = await registry.verify(GRAPHIFY_CONTEXT_ID)
+    expect(failed.enabled).toBe(false)
+    expect(failed.lastVerifiedAt).toBeUndefined()
+    await expect(registry.resolve('context', { id: 'agent-graph' })).rejects.toThrow(/disabled/i)
+    verifyHealthy = true
+    await registry.verify(GRAPHIFY_CONTEXT_ID)
+    await registry.setEnabled(GRAPHIFY_CONTEXT_ID, true)
+
+    const reinstalled = await registry.setup(GRAPHIFY_CONTEXT_ID, { workspace_token: 'rotated-secret' })
+    expect(reinstalled.enabled).toBe(false)
+    expect(reinstalled.lastVerifiedAt).toBeUndefined()
+    expect(received).toEqual(['secret-value', 'rotated-secret'])
+  })
+
+  it('blocks setup when prerequisites fail and rejects unapproved installer metadata', async () => {
+    const missingPrerequisite: CapabilitySetupAdapters = {
+      [GRAPHIFY_CONTEXT_ID]: {
+        descriptor: APPROVED_GRAPHIFY_SETUP,
+        checkPrerequisites: async () => [{ id: 'python', label: 'Python 3.12', met: false, detail: 'Not found' }],
+        install: async () => { throw new Error('install must not run') },
+        verify: async () => undefined,
+      },
+    }
+    const { registry } = await registryFixture({}, [], missingPrerequisite)
+    await expect(registry.setup(GRAPHIFY_CONTEXT_ID, { workspace_token: 'secret' })).rejects.toThrow(/Missing prerequisites: Python 3.12/)
+    await expect(registry.statuses()).resolves.toMatchObject({
+      [GRAPHIFY_CONTEXT_ID]: { enabled: false, setupState: 'failed', setupError: expect.stringMatching(/Python 3.12/) },
+    })
+
+    const floatingVersion: CapabilitySetupAdapters = {
+      [GRAPHIFY_CONTEXT_ID]: {
+        ...missingPrerequisite[GRAPHIFY_CONTEXT_ID]!,
+        descriptor: { ...APPROVED_GRAPHIFY_SETUP, version: 'latest' },
+      },
+    }
+    const invalid = await registryFixture({}, [], floatingVersion)
+    expect(() => invalid.registry.list()).toThrow(/exact approved version/)
   })
 
   it('refuses to assign an unavailable provider through the registry gate', async () => {

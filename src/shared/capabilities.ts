@@ -23,7 +23,69 @@ export interface CapabilityDescriptor {
   available: boolean
   description: string
   unavailableReason?: string
+  /**
+   * Present only when ND ships a trusted main-process installer for this
+   * provider. The renderer receives display metadata, never commands or an
+   * arbitrary download URL supplied at runtime.
+   */
+  setup?: CapabilitySetupDescriptor
 }
+
+export interface CapabilitySetupField {
+  id: string
+  label: string
+  description?: string
+  required: boolean
+  sensitive?: boolean
+  placeholder?: string
+}
+
+interface CapabilitySetupDescriptorBase {
+  sourceLabel: string
+  sourceUrl: string
+  /** Exact approved version; floating tags such as "latest" are rejected. */
+  version: string
+  prerequisites: string[]
+  fields: CapabilitySetupField[]
+}
+
+/** A reviewed external package whose source and digest are fixed by ND. */
+export interface CapabilityPackageSetupDescriptor extends CapabilitySetupDescriptorBase {
+  mode?: 'approved-package'
+  packageId: string
+  /** Integrity recorded in ND's reviewed provider catalog. */
+  integrity: `sha256-${string}`
+}
+
+/** A runtime already present in an ND source checkout that needs a controlled build. */
+export interface CapabilitySourceRuntimeSetupDescriptor extends CapabilitySetupDescriptorBase {
+  mode: 'source-runtime'
+  runtimeId: string
+}
+
+export type CapabilitySetupDescriptor = CapabilityPackageSetupDescriptor | CapabilitySourceRuntimeSetupDescriptor
+
+export interface CapabilityPrerequisiteResult {
+  id: string
+  label: string
+  met: boolean
+  detail?: string
+}
+
+export interface CapabilitySetupCheck {
+  providerId: string
+  ready: boolean
+  prerequisites: CapabilityPrerequisiteResult[]
+}
+
+export type CapabilitySetupState =
+  | 'not-installed'
+  | 'checking-prerequisites'
+  | 'downloading'
+  | 'installing'
+  | 'configuring'
+  | 'installed'
+  | 'failed'
 
 /** Durable ND-owned routing: subject → capability kind → provider id. Sparse: unset keys mean the default provider. */
 export interface CapabilityAssignmentSnapshot {
@@ -46,6 +108,13 @@ export interface CapabilityProviderStatus {
   /** Error from the latest verify attempt; cleared by the next successful one. */
   lastError?: string
   lastProbeAt?: number
+  setupState?: CapabilitySetupState
+  setupProgress?: number
+  setupMessage?: string
+  setupError?: string
+  installedVersion?: string
+  lastSetupAt?: number
+  prerequisites?: CapabilityPrerequisiteResult[]
 }
 
 export const ND_HARNESS_CAPABILITY_ID = ND_HARNESS_ENGINE_ID
@@ -75,6 +144,8 @@ export const CAPABILITIES_IPC = {
   changedEvent: 'capabilities:changed-event',
   statuses: 'capabilities:statuses',
   verify: 'capabilities:verify',
+  checkSetup: 'capabilities:check-setup',
+  setup: 'capabilities:setup',
   setEnabled: 'capabilities:set-enabled',
   statusChangedEvent: 'capabilities:status-changed-event',
 } as const
@@ -86,6 +157,8 @@ export interface CapabilitiesDesktopApi {
   assign(subjectType: CapabilitySubjectType, subjectId: string, kind: CapabilityKind, providerId: string): Promise<CapabilityAssignmentSnapshot>
   onChanged(listener: (assignments: CapabilityAssignmentSnapshot) => void): () => void
   statuses(): Promise<Record<string, CapabilityProviderStatus>>
+  checkSetup(providerId: string): Promise<CapabilitySetupCheck>
+  setup(providerId: string, values: Record<string, string>): Promise<Record<string, CapabilityProviderStatus>>
   verify(providerId: string): Promise<Record<string, CapabilityProviderStatus>>
   setEnabled(providerId: string, enabled: boolean): Promise<Record<string, CapabilityProviderStatus>>
   onStatusChanged(listener: (statuses: Record<string, CapabilityProviderStatus>) => void): () => void

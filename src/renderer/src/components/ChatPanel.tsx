@@ -5,6 +5,7 @@ import type {
   EngineSessionSummary,
   ExternalElementAttachmentView,
   HarnessStatus,
+  ModelProvider,
   ModelProviderGroup,
   ProviderPingResult,
   SessionModels,
@@ -16,6 +17,7 @@ import { DisplayGroup, groupEntries } from '../../../shared/chat-grouping'
 import type { AskQuestion, ThreadEntry, TodoItem } from '../lib/types'
 import { FOLDER_ACCENT, SKILL_ACCENT, fileExtensionOf, fileAccent } from '../lib/file-accents'
 import { applyMention, detectMentionTrigger } from '../../../shared/mentions'
+import { resolveModelSelectionDisplay, type ModelCatalogState } from '../lib/model-selection'
 import {
   ArchiveIcon,
   ArrowUpIcon,
@@ -30,7 +32,6 @@ import {
   FolderIcon,
   MoreHorizontalIcon,
   PlusIcon,
-  RotateIcon,
   SearchIcon,
   SettingsIcon,
   ShieldIcon,
@@ -45,7 +46,7 @@ interface ChatPanelProps {
   workspaceName?: string
   sessionsCollapsed: boolean
   onError(message: string): void
-  onOpenSettings?(): void
+  onOpenSettings?(tab?: 'models'): void
   onOpenFile?(path: string): void
   externalPrompt?: { id: string; text: string } | null
   onExternalPromptConsumed?(): void
@@ -82,6 +83,7 @@ interface MentionItem {
 const MENTION_MENU_LIMIT = 12
 
 type PingEntry = { testing: true } | ProviderPingResult
+type ModelMenuPane = 'root' | 'model' | 'effort'
 
 function fileMentionTag(relativePath: string): string {
   const extension = fileExtensionOf(relativePath)
@@ -94,13 +96,15 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
   const [threads, setThreads] = useState<Record<string, ThreadEntry[]>>({})
   const [busySessions, setBusySessions] = useState<Set<string>>(new Set())
   const [models, setModels] = useState<SessionModels | null>(null)
+  const [modelCatalogState, setModelCatalogState] = useState<ModelCatalogState>('idle')
+  const [providerRoutes, setProviderRoutes] = useState<ModelProvider[]>([])
   const [providerPings, setProviderPings] = useState<Record<string, PingEntry>>({})
   const [permissionMode, setPermissionMode] = useState('workspace-write')
   const [prompt, setPrompt] = useState('')
   const [sessionsLoaded, setSessionsLoaded] = useState(false)
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false)
-  const [effortPickerOpen, setEffortPickerOpen] = useState(false)
   const [modelMenuOpen, setModelMenuOpen] = useState(false)
+  const [modelMenuPane, setModelMenuPane] = useState<ModelMenuPane>('root')
   const [contextMenuOpen, setContextMenuOpen] = useState(false)
   const [changedFiles, setChangedFiles] = useState<string[]>([])
   const [mentionCaret, setMentionCaret] = useState(0)
@@ -284,6 +288,18 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
     void window.ndDsh.harness.getPermissionMode().then(setPermissionMode).catch(() => undefined)
   }, [])
 
+  const refreshProviderRoutes = useCallback(async (): Promise<void> => {
+    try {
+      setProviderRoutes(await window.ndDsh.providers.list())
+    } catch {
+      setProviderRoutes([])
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshProviderRoutes()
+  }, [refreshProviderRoutes])
+
   useEffect(() => {
     if (!activeSessionId) return
     // Engine-backed threads restore from their ND-side transcript instead of
@@ -309,12 +325,31 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
 
   useEffect(() => {
     // The gateway model catalog only applies to harness sessions.
-    if (!activeSessionId || engineSessionIds.has(activeSessionId)) return
+    setModels(null)
+    if (!activeSessionId || engineSessionIds.has(activeSessionId)) {
+      setModelCatalogState('idle')
+      return
+    }
+    let cancelled = false
+    setModelCatalogState('loading')
     void window.ndDsh.dsh.rpc('session.models', { sessionId: activeSessionId })
       .then((result) => {
-        if (result.ok) setModels(result.value as SessionModels)
+        if (cancelled) return
+        if (result.ok) {
+          setModels(result.value as SessionModels)
+          setModelCatalogState('ready')
+        } else {
+          setModelCatalogState('unavailable')
+        }
       })
-      .catch(() => setModels(null))
+      .catch(() => {
+        if (cancelled) return
+        setModels(null)
+        setModelCatalogState('unavailable')
+      })
+    return () => {
+      cancelled = true
+    }
   }, [activeSessionId, engineSessionIds])
 
   // Provider routes edited in settings (model removed/renamed, provider
@@ -322,14 +357,25 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
   // the picker and its current-selection state stay in sync.
   useEffect(() => {
     return window.ndDsh.providers.onChanged(() => {
+      void refreshProviderRoutes()
       if (!activeSessionId || engineSessionIds.has(activeSessionId)) return
+      setModelCatalogState('loading')
       void window.ndDsh.dsh.rpc('session.models', { sessionId: activeSessionId })
         .then((result) => {
-          if (result.ok) setModels(result.value as SessionModels)
+          if (result.ok) {
+            setModels(result.value as SessionModels)
+            setModelCatalogState('ready')
+          } else {
+            setModels(null)
+            setModelCatalogState('unavailable')
+          }
         })
-        .catch(() => {})
+        .catch(() => {
+          setModels(null)
+          setModelCatalogState('unavailable')
+        })
     })
-  }, [activeSessionId, engineSessionIds])
+  }, [activeSessionId, engineSessionIds, refreshProviderRoutes])
 
   // Opening the model picker probes every provider route for real: the main
   // process sends an authenticated request to each provider server and the
@@ -524,11 +570,11 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
 
   useEffect(() => {
     const handleOutsideClick = (event: MouseEvent): void => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        setModelMenuOpen(false)
-        setPermissionMenuOpen(false)
-        setEffortPickerOpen(false)
-        setContextMenuOpen(false)
+    if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+      setModelMenuOpen(false)
+      setModelMenuPane('root')
+      setPermissionMenuOpen(false)
+      setContextMenuOpen(false)
       }
     }
     document.addEventListener('mousedown', handleOutsideClick)
@@ -586,26 +632,38 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
     }
   }
 
-  const selectModel = async (provider: string, model: string): Promise<void> => {
+  const selectModel = async (provider: string, model: string, reasoningEffort?: string): Promise<void> => {
     if (!activeSessionId) return
     try {
-      await window.ndDsh.dsh.rpc('session.selectModel', { sessionId: activeSessionId, provider, model })
-      setModels((current) => current ? { ...current, current: { provider, model } } : current)
+      await window.ndDsh.dsh.rpc('session.selectModel', {
+        sessionId: activeSessionId,
+        provider,
+        model,
+        ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+      })
+      setModels((current) => current ? {
+        ...current,
+        current: { provider, model, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) },
+      } : current)
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : String(cause))
     }
   }
 
-  const selectReasoningEffort = async (effortId: string): Promise<void> => {
+  const selectReasoningEffort = async (effortId: string | undefined): Promise<void> => {
     if (!activeSessionId || !models) return
     try {
       await window.ndDsh.dsh.rpc('session.selectModel', {
         sessionId: activeSessionId,
         provider: models.current.provider,
         model: models.current.model,
-        reasoningEffort: effortId,
+        ...(effortId === undefined ? {} : { reasoningEffort: effortId }),
       })
-      setModels({ ...models, current: { ...models.current, reasoningEffort: effortId } })
+      const { reasoningEffort: _previousEffort, ...route } = models.current
+      setModels({
+        ...models,
+        current: { ...route, ...(effortId === undefined ? {} : { reasoningEffort: effortId }) },
+      })
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : String(cause))
     }
@@ -640,11 +698,21 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
   const currentModel = models?.current
   const currentGroup = modelGroups.find((group) => group.id === currentModel?.provider)
   const currentModelMeta = currentGroup?.models.find((model) => model.id === currentModel?.model)
+  const modelSelection = resolveModelSelectionDisplay(models, activeSessionId, providerRoutes, modelCatalogState)
   // The session's stored route can reference a provider/model that was since
   // removed or renamed in settings; flag it instead of rendering a ghost route.
-  const currentSelectionStale = Boolean(currentModel && modelGroups.length > 0 && (!currentGroup || !currentModelMeta))
+  const currentSelectionStale = modelSelection.stale
   const reasoningEfforts = currentModelMeta?.reasoning?.efforts ?? []
   const activeEffort = currentModel?.reasoningEffort ?? currentModelMeta?.reasoning?.defaultEffort
+  const activeEffortLabel = currentModelMeta?.reasoning
+    ? reasoningEfforts.find((effort) => effort.id === activeEffort)?.name ?? activeEffort ?? 'Provider default'
+    : undefined
+  const configuredDefault = providerRoutes
+    .filter((provider) => provider.enabled)
+    .flatMap((provider) => provider.models.map((model) => ({ provider, model })))
+    .find(({ model }) => Boolean(model.id.trim()))
+  const triggerModelLabel = currentModelMeta?.name
+    ?? compactModelLabel(currentModel?.model ?? configuredDefault?.model.id ?? modelSelection.label)
 
   const sessionTime = (session: SessionSummary): string => {
     const minutes = Math.round((Date.now() - session.updatedAt) / 60_000)
@@ -703,7 +771,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
                 <ArchiveIcon />
               </button>
               {onOpenSettings ? (
-                <button className="grid size-[22px] place-items-center rounded-[5px] text-faint transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[13px]" onClick={onOpenSettings} title="Settings">
+                <button className="grid size-[22px] place-items-center rounded-[5px] text-faint transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[13px]" onClick={() => onOpenSettings()} title="Settings">
                   <SettingsIcon />
                 </button>
               ) : null}
@@ -767,7 +835,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
         </div>
 
         <footer className="mt-auto border-t border-border-soft px-3 py-2">
-          <button className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-xs font-medium text-soft transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[15px] [&_svg]:text-faint" onClick={onOpenSettings} title="Settings">
+          <button className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-xs font-medium text-soft transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[15px] [&_svg]:text-faint" onClick={() => onOpenSettings?.()} title="Settings">
             <SettingsIcon />
             <span>Settings</span>
           </button>
@@ -1028,14 +1096,14 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
                 <div className="relative">
                   <button
                     className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-[#f59e0b]/30 bg-[#f59e0b]/10 px-1.5 py-[3px] text-[10px] font-medium text-[#f59e0b] transition-colors hover:bg-[#f59e0b]/20 [&_svg]:size-3"
-                    onClick={() => { setPermissionMenuOpen(!permissionMenuOpen); setModelMenuOpen(false); setEffortPickerOpen(false); closeMention() }}
+                    onClick={() => { setPermissionMenuOpen(!permissionMenuOpen); setModelMenuOpen(false); setModelMenuPane('root'); closeMention() }}
                   >
                     <ShieldIcon />
                     <span>{PERMISSION_MODES.find((mode) => mode.id === permissionMode)?.label ?? permissionMode}</span>
                     <ChevronDownIcon />
                   </button>
                   {permissionMenuOpen ? (
-                    <div className="absolute bottom-full right-0 z-[130] mb-1.5 min-w-40 rounded-[10px] border border-border-strong bg-surface-1 p-1 shadow-[0_10px_30px_rgba(0,0,0,0.4)]">
+                    <div className="absolute bottom-full left-0 z-[130] mb-1.5 min-w-40 rounded-[10px] border border-border-strong bg-surface-1 p-1 shadow-[0_10px_30px_rgba(0,0,0,0.4)]">
                       {PERMISSION_MODES.map((mode) => (
                         <MenuItem key={mode.id} active={permissionMode === mode.id} onClick={() => void setSessionPermission(mode.id)}>
                           {mode.label}
@@ -1140,69 +1208,127 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
               <div className="relative">
                 <button
                   className={cn('flex min-w-0 max-w-[135px] shrink items-center gap-1 rounded-md border border-border-soft bg-secondary px-1.5 py-[3px] text-[10px] text-soft transition-colors hover:border-border-strong hover:bg-accent hover:text-foreground [&_svg]:size-3 [&_svg]:shrink-0', currentSelectionStale && 'text-warning')}
-                  title={currentSelectionStale ? `Removed from model catalog — pick another · ${currentModel?.provider ?? ''}/${currentModel?.model ?? ''}` : `${currentGroup?.name ?? currentModel?.provider ?? 'model'}/${currentModel?.model ?? ''}`}
-                  onClick={() => { setModelMenuOpen(!modelMenuOpen); setPermissionMenuOpen(false); setEffortPickerOpen(false); closeMention() }}
+                  title={modelSelection.title}
+                  onClick={() => {
+                    const nextOpen = !modelMenuOpen
+                    setModelMenuOpen(nextOpen)
+                    setModelMenuPane('root')
+                    setPermissionMenuOpen(false)
+                    closeMention()
+                  }}
                 >
-                  <span className="truncate">{`${currentSelectionStale ? '⚠ ' : ''}${currentGroup?.name ?? currentModel?.provider ?? 'deepseek'}/${currentModel?.model ?? 'deepseek-v4-flash'}`}</span>
+                  <span className="truncate font-medium">{triggerModelLabel}</span>
+                  {activeEffortLabel ? <span className="shrink-0 text-faint">· {activeEffortLabel}</span> : null}
                   <ChevronDownIcon />
                 </button>
 
                 {modelMenuOpen ? (
-                  <div className="absolute bottom-full right-0 z-[130] mb-1.5 min-w-[210px] rounded-[10px] border border-border-strong bg-surface-1 p-1 shadow-[0_10px_30px_rgba(0,0,0,0.4)]">
-                    {modelGroups.map((group) => (
-                      <button
-                        key={group.id}
-                        className="flex w-full cursor-pointer items-center justify-between rounded-md px-2.5 py-[7px] text-left text-[11px] text-soft transition-colors hover:bg-accent hover:text-foreground"
-                        onClick={() => { const first = group.models[0]; if (first) void selectModel(group.id, first.id); setModelMenuOpen(false) }}
-                      >
-                        <span>{group.name}</span>
-                        <span className="flex items-center gap-1 [&_svg]:size-[13px]">
-                          <ProviderPingIndicator ping={providerPings[group.id]} />
-                          {currentModel?.provider === group.id ? <CheckIcon className="text-primary" /> : null}
-                          <ChevronRightIcon />
-                        </span>
-                      </button>
-                    ))}
-                    {currentGroup && currentGroup.models.length > 1 ? <div className="my-1 h-px bg-border" /> : null}
-                    {currentGroup && currentGroup.models.length > 1 ? currentGroup.models.map((model) => (
-                      <MenuItem key={model.id} active={currentModel?.model === model.id} onClick={() => { void selectModel(currentGroup.id, model.id); setModelMenuOpen(false) }}>
-                        <span className="flex items-center gap-1.5">
-                          <ProviderPingDot ping={providerPings[currentGroup.id]} />
-                          {model.name ?? model.id}
-                        </span>
-                        {currentModel?.model === model.id ? <CheckIcon className="text-primary" /> : null}
-                      </MenuItem>
-                    )) : null}
-                    <div className="my-1 h-px bg-border" />
-                    {reasoningEfforts.length > 0 ? (<>
-                      <button
-                        className="flex w-full cursor-pointer items-center gap-1.5 rounded-md px-2.5 py-[7px] text-left text-[11px] text-soft transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[13px] [&_svg]:shrink-0"
-                        onClick={() => setEffortPickerOpen(!effortPickerOpen)}
-                      >
-                        <BrainIcon />
-                        <span>Reasoning</span>
-                        <span className="ml-auto flex items-center gap-1 text-faint">
-                          {reasoningEfforts.find((effort) => effort.id === activeEffort)?.name ?? 'Auto'}
-                          <ChevronDownIcon className={cn('transition-transform', effortPickerOpen && 'rotate-180')} />
-                        </span>
-                      </button>
-                      {effortPickerOpen ? reasoningEfforts.map((effort) => (
-                        <MenuItem key={effort.id} active={activeEffort === effort.id} onClick={() => { void selectReasoningEffort(effort.id); setEffortPickerOpen(false) }}>
-                          {effort.name}
-                          {activeEffort === effort.id ? <CheckIcon className="text-primary" /> : null}
-                        </MenuItem>
-                      )) : null}
-                      {currentModelMeta?.reasoning?.defaultEffort ? (
-                        <MenuItem onClick={() => { void selectReasoningEffort(currentModelMeta.reasoning!.defaultEffort!); setModelMenuOpen(false) }}>
-                          <span className="flex items-center gap-1.5"><RotateIcon />Reset to default</span>
-                          {activeEffort === currentModelMeta.reasoning.defaultEffort ? <CheckIcon className="text-primary" /> : null}
-                        </MenuItem>
+                  <div
+                    className="absolute bottom-full right-0 z-[130] mb-1.5 w-[286px] overflow-hidden rounded-xl border border-border-strong bg-surface-1 p-1.5 shadow-[0_14px_40px_rgba(0,0,0,0.42)]"
+                    role="menu"
+                    aria-label="Model controls"
+                  >
+                    {modelMenuPane === 'root' ? (<>
+                      <ModelMenuRow
+                        label="Model"
+                        value={triggerModelLabel}
+                        disabled={modelGroups.length === 0}
+                        onClick={() => setModelMenuPane('model')}
+                      />
+                      {currentModelMeta?.reasoning && reasoningEfforts.length > 0 ? (
+                        <ModelMenuRow
+                          icon={<BrainIcon />}
+                          label="Effort"
+                          value={activeEffortLabel ?? 'Provider default'}
+                          onClick={() => setModelMenuPane('effort')}
+                        />
                       ) : null}
-                      <div className="my-1 h-px bg-border" />
+                      {modelCatalogState === 'loading' ? (
+                        <div className="flex items-center gap-2 px-2.5 py-2 text-[10px] text-faint"><SpinnerIcon className="size-3 animate-spin" />Loading model capabilities…</div>
+                      ) : null}
+                      {activeSessionId && modelCatalogState === 'unavailable' ? (
+                        <div className="rounded-md bg-warning/10 px-2.5 py-2 text-[10px] text-warning">This session’s model catalog is unavailable.</div>
+                      ) : null}
+                      {!activeSessionId ? (
+                        <div className="px-2.5 py-1.5 text-[10px]/[1.4] text-faint">Start a session to change its model and capabilities.</div>
+                      ) : null}
+                      <div className="mx-1 my-1 h-px bg-border" />
+                      <div className="px-2 pb-1 pt-0.5 text-[8px] font-semibold uppercase tracking-[0.11em] text-fainter">Advanced</div>
+                      <MenuItem onClick={() => { setModelMenuOpen(false); setModelMenuPane('root'); if (onOpenSettings) onOpenSettings('models') }}>
+                        <span className="flex items-center gap-2"><SettingsIcon />Manage providers & models</span>
+                        <ChevronRightIcon className="text-faint" />
+                      </MenuItem>
                     </>) : null}
-                    <MenuItem onClick={() => { setModelMenuOpen(false); if (onOpenSettings) onOpenSettings() }}>
-                      Manage models
-                    </MenuItem>
+
+                    {modelMenuPane === 'model' ? (<>
+                      <ModelMenuHeader title="Choose model" onBack={() => setModelMenuPane('root')} />
+                      <div className="max-h-[310px] overflow-y-auto px-0.5 pb-0.5">
+                        {models?.failures.map((failure) => (
+                          <div className="mx-1 mb-1 rounded-md bg-warning/10 px-2 py-1.5 text-[9px]/[1.35] text-warning" key={failure.id}>
+                            {failure.name}: {failure.message}
+                          </div>
+                        ))}
+                        {modelGroups.map((group) => (
+                          <section className="mb-1 last:mb-0" key={group.id}>
+                            <div className="flex items-center gap-1.5 px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.08em] text-faint">
+                              <ProviderPingIndicator ping={providerPings[group.id]} />
+                              <span className="truncate">{group.name}</span>
+                            </div>
+                            {group.models.map((model) => {
+                              const selected = currentModel?.provider === group.id && currentModel.model === model.id
+                              return (
+                                <button
+                                  type="button"
+                                  role="menuitemradio"
+                                  aria-checked={selected}
+                                  className={cn(
+                                    'flex w-full items-center justify-between gap-3 rounded-lg px-2.5 py-2 text-left transition-colors',
+                                    selected ? 'bg-accent text-foreground' : 'text-soft hover:bg-accent hover:text-foreground',
+                                  )}
+                                  key={model.id}
+                                  title={model.description ?? model.id}
+                                  onClick={() => {
+                                    void selectModel(group.id, model.id, model.reasoning?.defaultEffort)
+                                    setModelMenuOpen(false)
+                                    setModelMenuPane('root')
+                                  }}
+                                >
+                                  <span className="min-w-0">
+                                    <span className="block truncate text-[11px] font-medium">{model.name ?? compactModelLabel(model.id)}</span>
+                                    {model.name ? <span className="block truncate font-mono text-[8px] text-fainter">{model.id}</span> : null}
+                                    {model.description ? <span className="mt-0.5 block line-clamp-2 text-[9px]/[1.35] text-faint">{model.description}</span> : null}
+                                  </span>
+                                  {selected ? <CheckIcon className="size-3.5 shrink-0 text-primary" /> : null}
+                                </button>
+                              )
+                            })}
+                          </section>
+                        ))}
+                      </div>
+                    </>) : null}
+
+                    {modelMenuPane === 'effort' && currentModelMeta?.reasoning ? (<>
+                      <ModelMenuHeader title="Reasoning effort" onBack={() => setModelMenuPane('root')} />
+                      <div className="px-0.5 pb-0.5">
+                        {currentModelMeta.reasoning.defaultEffort === undefined ? (
+                          <CapabilityOption
+                            label="Provider default"
+                            active={activeEffort === undefined}
+                            onClick={() => { void selectReasoningEffort(undefined); setModelMenuOpen(false); setModelMenuPane('root') }}
+                          />
+                        ) : null}
+                        {reasoningEfforts.map((effort) => (
+                          <CapabilityOption
+                            key={effort.id}
+                            label={effort.name}
+                            description={effort.description}
+                            badge={effort.id === currentModelMeta.reasoning?.defaultEffort ? 'Default' : undefined}
+                            active={activeEffort === effort.id}
+                            onClick={() => { void selectReasoningEffort(effort.id); setModelMenuOpen(false); setModelMenuPane('root') }}
+                          />
+                        ))}
+                      </div>
+                    </>) : null}
                   </div>
                 ) : null}
               </div>
@@ -1324,6 +1450,80 @@ function MenuItem({ children, active = false, onClick }: {
       {children}
     </button>
   )
+}
+
+function ModelMenuRow({ icon, label, value, disabled = false, onClick }: {
+  icon?: ReactNode
+  label: string
+  value: string
+  disabled?: boolean
+  onClick(): void
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      disabled={disabled}
+      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] text-foreground transition-colors hover:bg-accent disabled:cursor-default disabled:opacity-55 [&_svg]:size-3.5 [&_svg]:shrink-0"
+      onClick={onClick}
+    >
+      {icon ? <span className="text-faint">{icon}</span> : null}
+      <span className="font-medium">{label}</span>
+      <span className="ml-auto max-w-[145px] truncate text-faint">{value}</span>
+      {!disabled ? <ChevronRightIcon className="text-fainter" /> : null}
+    </button>
+  )
+}
+
+function ModelMenuHeader({ title, onBack }: { title: string; onBack(): void }) {
+  return (
+    <div className="mb-1 flex items-center gap-1 border-b border-border px-0.5 pb-1.5">
+      <button
+        type="button"
+        className="grid size-7 place-items-center rounded-md text-faint transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-3.5"
+        aria-label="Back"
+        onClick={onBack}
+      >
+        <ChevronRightIcon className="rotate-180" />
+      </button>
+      <span className="text-[11px] font-semibold text-foreground">{title}</span>
+    </div>
+  )
+}
+
+function CapabilityOption({ label, description, badge, active, onClick }: {
+  label: string
+  description?: string | undefined
+  badge?: string | undefined
+  active: boolean
+  onClick(): void
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitemradio"
+      aria-checked={active}
+      className={cn(
+        'flex w-full items-center justify-between gap-3 rounded-lg px-2.5 py-2 text-left transition-colors',
+        active ? 'bg-accent text-foreground' : 'text-soft hover:bg-accent hover:text-foreground',
+      )}
+      onClick={onClick}
+    >
+      <span className="min-w-0">
+        <span className="flex items-center gap-1.5 text-[11px] font-medium">
+          {label}
+          {badge ? <span className="rounded-full border border-border-strong px-1.5 py-px text-[7px] font-semibold uppercase tracking-wide text-faint">{badge}</span> : null}
+        </span>
+        {description ? <span className="mt-0.5 block text-[9px]/[1.35] text-faint">{description}</span> : null}
+      </span>
+      {active ? <CheckIcon className="size-3.5 shrink-0 text-primary" /> : null}
+    </button>
+  )
+}
+
+function compactModelLabel(value: string): string {
+  const clean = value.replace(/^\u26a0\s*/, '').trim()
+  return clean.split('/').filter(Boolean).at(-1) ?? clean
 }
 
 function ContextRow({ label, value }: { label: string; value: string }) {
@@ -1826,13 +2026,6 @@ function ProviderPingIndicator({ ping }: { ping: PingEntry | undefined }) {
       {ping.state === 'ok' && ping.latencyMs !== undefined ? <span className="font-mono text-[9px] text-faint">{ping.latencyMs}ms</span> : null}
     </span>
   )
-}
-
-/** Compact status dot for a single model row, colored by its provider's probe. */
-function ProviderPingDot({ ping }: { ping: PingEntry | undefined }) {
-  if (!ping) return null
-  if ('testing' in ping) return <span className="size-[7px] shrink-0 animate-ping-pulse rounded-full bg-faint" title="Probing the provider server…" />
-  return <PingDot state={ping.state} title={pingTitle(ping)} />
 }
 
 function PingDot({ state, title }: { state: ProviderPingResult['state']; title?: string }) {

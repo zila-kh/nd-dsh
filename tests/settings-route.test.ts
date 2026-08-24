@@ -1,0 +1,40 @@
+import { describe, expect, it } from 'vitest'
+import { capabilitySubTabFromLocation, generalSubTabFromLocation, settingsHash, settingsTabFromLocation } from '../src/renderer/src/lib/settings-route.js'
+
+describe('settings route', () => {
+  it('builds an addressable model settings tab', () => {
+    expect(settingsHash('models')).toBe('#/settings?tab=model')
+    expect(settingsHash('general', 'workspace')).toBe('#/settings?tab=general&subtab=workspace')
+    expect(settingsHash('capabilities', 'memory')).toBe('#/settings?tab=capabilities&subtab=memory')
+  })
+
+  it('reads settings tabs from the hash query', () => {
+    expect(settingsTabFromLocation({ hash: '#/settings?tab=model', search: '' })).toBe('models')
+    expect(settingsTabFromLocation({ hash: '#/settings?tab=capabilities', search: '' })).toBe('capabilities')
+    expect(settingsTabFromLocation({ hash: '#/settings?tab=workspace', search: '' })).toBe('general')
+  })
+
+  it('reads general sub-tabs from location with runtime as default', () => {
+    expect(generalSubTabFromLocation({ hash: '#/settings?tab=general&subtab=workspace', search: '' })).toBe('workspace')
+    expect(generalSubTabFromLocation({ hash: '#/settings?tab=runtime', search: '' })).toBe('runtime')
+    expect(generalSubTabFromLocation({ hash: '#/settings?tab=browser', search: '' })).toBe('browser')
+    expect(generalSubTabFromLocation({ hash: '#/settings?tab=about', search: '' })).toBe('about')
+    expect(generalSubTabFromLocation({ hash: '#/settings?tab=general', search: '' })).toBe('runtime')
+  })
+
+  it('reads capability sub-tabs from location with engine as default', () => {
+    expect(capabilitySubTabFromLocation({ hash: '#/settings?tab=capabilities&subtab=memory', search: '' })).toBe('memory')
+    expect(capabilitySubTabFromLocation({ hash: '#/settings?tab=capabilities&subtab=context', search: '' })).toBe('context')
+    expect(capabilitySubTabFromLocation({ hash: '#/settings?tab=capabilities&subtab=lifecycle', search: '' })).toBe('lifecycle')
+    expect(capabilitySubTabFromLocation({ hash: '#/settings?tab=capabilities', search: '' })).toBe('engine')
+  })
+
+  it('accepts plural aliases and a regular query string', () => {
+    expect(settingsTabFromLocation({ hash: '#/settings?tab=models', search: '' })).toBe('models')
+    expect(settingsTabFromLocation({ hash: '#/settings', search: '?tab=engine' })).toBe('engines')
+  })
+
+  it('falls back to General for unknown tabs', () => {
+    expect(settingsTabFromLocation({ hash: '#/settings?tab=unknown', search: '' })).toBe('general')
+  })
+})

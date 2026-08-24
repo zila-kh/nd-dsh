@@ -92,7 +92,7 @@ if (Object.keys(packageJson.scripts ?? {}).some((name) => name.includes('mock') 
 // The Harness submodule tracks upstream latest; the ND Pencil submodule stays commit-pinned.
 function gitmodulesSection(content, submodulePath) {
   const escaped = submodulePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  return new RegExp(`\\[submodule "${escaped}"\\]([^\\[])`).exec(content)?.[1] ?? ''
+  return new RegExp(`\\[submodule "${escaped}"\\]([^\\[]*)`).exec(content)?.[1] ?? ''
 }
 const gitmodules = await fs.readFile(join(root, '.gitmodules'), 'utf8')
 const harnessSection = gitmodulesSection(gitmodules, 'vendor/deepseek-harness')

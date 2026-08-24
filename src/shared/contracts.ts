@@ -539,6 +539,8 @@ export interface DesktopApi {
     assign(subjectType: import('./capabilities.js').CapabilitySubjectType, subjectId: string, kind: import('./capabilities.js').CapabilityKind, providerId: string): Promise<import('./capabilities.js').CapabilityAssignmentSnapshot>
     onChanged(listener: (assignments: import('./capabilities.js').CapabilityAssignmentSnapshot) => void): () => void
     statuses(): Promise<Record<string, import('./capabilities.js').CapabilityProviderStatus>>
+    checkSetup(providerId: string): Promise<import('./capabilities.js').CapabilitySetupCheck>
+    setup(providerId: string, values: Record<string, string>): Promise<Record<string, import('./capabilities.js').CapabilityProviderStatus>>
     verify(providerId: string): Promise<Record<string, import('./capabilities.js').CapabilityProviderStatus>>
     setEnabled(providerId: string, enabled: boolean): Promise<Record<string, import('./capabilities.js').CapabilityProviderStatus>>
     onStatusChanged(listener: (statuses: Record<string, import('./capabilities.js').CapabilityProviderStatus>) => void): () => void

@@ -17,6 +17,8 @@ const api: DesktopApi = {
       return () => ipcRenderer.removeListener(CAPABILITIES_IPC.changedEvent, handler)
     },
     statuses: () => ipcRenderer.invoke(CAPABILITIES_IPC.statuses),
+    checkSetup: (providerId: string) => ipcRenderer.invoke(CAPABILITIES_IPC.checkSetup, providerId),
+    setup: (providerId: string, values: Record<string, string>) => ipcRenderer.invoke(CAPABILITIES_IPC.setup, providerId, values),
     verify: (providerId: string) => ipcRenderer.invoke(CAPABILITIES_IPC.verify, providerId),
     setEnabled: (providerId: string, enabled: boolean) => ipcRenderer.invoke(CAPABILITIES_IPC.setEnabled, providerId, enabled),
     onStatusChanged: (listener) => {

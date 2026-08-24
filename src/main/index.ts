@@ -20,6 +20,7 @@ import { pickFreePort } from './dsh/gateway-client.js'
 import { CapabilityAssignmentStore } from './capabilities/capability-assignment-store.js'
 import { CapabilityRegistry } from './capabilities/capability-registry.js'
 import { CapabilityStatusStore } from './capabilities/capability-status-store.js'
+import { createHarnessSourceSetupAdapters } from './capabilities/harness-runtime-setup.js'
 import { ND_ORG_MEMORY_ID, ND_WORKSPACE_CONTEXT_ID } from '../shared/capabilities.js'
 import { CodexCliEngine } from './engines/codex/codex-cli-engine.js'
 import { CodingEngineRegistry } from './engines/coding-engine-registry.js'
@@ -118,13 +119,14 @@ async function createWindow(cdpPort: number): Promise<void> {
   const capabilityAssignments = new CapabilityAssignmentStore(join(userData, 'capability-assignments.json'))
   const capabilityStatuses = new CapabilityStatusStore(join(userData, 'capability-statuses.json'))
   const engines = new CodingEngineRegistry(capabilityAssignments)
+  const capabilitySetupAdapters = createHarnessSourceSetupAdapters()
   const capabilities = new CapabilityRegistry(capabilityAssignments, engines, capabilityStatuses, {
     [ND_ORG_MEMORY_ID]: async () => { await organizationStore.state() },
     [ND_WORKSPACE_CONTEXT_ID]: async () => {
       const state = workspace.state()
       if (state.binding === 'missing') throw new Error(state.warning ?? 'The project workspace is unavailable on disk.')
     },
-  })
+  }, capabilitySetupAdapters)
   // Validate → Start → health check → open the built-in browser on the app
   // under development. The ND renderer origin is reserved so a project can
   // never load ND-DSH's own preview recursively inside the browser pane.

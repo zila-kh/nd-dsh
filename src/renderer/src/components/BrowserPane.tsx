@@ -40,9 +40,11 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
     if (!surface) return
     let animationFrame = 0
     const syncBounds = (): void => {
+      if (!active) return
       cancelAnimationFrame(animationFrame)
       animationFrame = requestAnimationFrame(() => {
         const rect = surface.getBoundingClientRect()
+        if (rect.width === 0 || rect.height === 0) return
         void window.ndDsh.browser.setBounds({ x: rect.x, y: rect.y, width: rect.width, height: rect.height })
           .catch((cause) => onError(cause instanceof Error ? cause.message : String(cause)))
       })
@@ -50,13 +52,13 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
     const observer = new ResizeObserver(syncBounds)
     observer.observe(surface)
     window.addEventListener('resize', syncBounds)
-    syncBounds()
+    if (active) syncBounds()
     return () => {
       cancelAnimationFrame(animationFrame)
       observer.disconnect()
       window.removeEventListener('resize', syncBounds)
     }
-  }, [])
+  }, [active, onError])
 
   useEffect(() => {
     void window.ndDsh.browser.setVisible(active)
@@ -64,8 +66,10 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
     if (active) {
       requestAnimationFrame(() => {
         const rect = surfaceRef.current?.getBoundingClientRect()
-        if (rect) void window.ndDsh.browser.setBounds({ x: rect.x, y: rect.y, width: rect.width, height: rect.height })
-          .catch((cause) => onError(cause instanceof Error ? cause.message : String(cause)))
+        if (rect && rect.width > 0 && rect.height > 0) {
+          void window.ndDsh.browser.setBounds({ x: rect.x, y: rect.y, width: rect.width, height: rect.height })
+            .catch((cause) => onError(cause instanceof Error ? cause.message : String(cause)))
+        }
       })
     }
     return () => {
@@ -140,8 +144,8 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
     : undefined
 
   return (
-    <section className="grid h-full w-full grid-cols-[100%] grid-rows-[39px_minmax(0,1fr)] min-h-0 min-w-0 bg-background" aria-label="Built-in browser">
-      <div className="flex min-w-0 items-center gap-[3px] border-b border-border-soft bg-secondary px-[7px] py-[5px]">
+    <section className="flex flex-1 flex-col h-full w-full min-h-0 min-w-0 bg-background" aria-label="Built-in browser">
+      <div className="flex h-[39px] shrink-0 min-w-0 items-center gap-[3px] border-b border-border-soft bg-secondary px-[7px] py-[5px]">
         <button className={iconButtonClasses} disabled={!state?.canGoBack || state?.annotationMode} onClick={() => void runBrowserAction(() => window.ndDsh.browser.back())} title="Back"><ArrowLeftIcon /></button>
         <button className={iconButtonClasses} disabled={!state?.canGoForward || state?.annotationMode} onClick={() => void runBrowserAction(() => window.ndDsh.browser.forward())} title="Forward"><ArrowRightIcon /></button>
         <button className={iconButtonClasses} disabled={Boolean(state?.annotationMode)} onClick={() => void runBrowserAction(() => window.ndDsh.browser.reload())} title="Reload"><ReloadIcon className={state?.loading ? 'animate-spin' : ''} /></button>
@@ -208,7 +212,7 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
         </BridgePill>
       </div>
       {/* Native WebContentsView host — bounds-synced over CDP; keep this DOM stable. */}
-      <div className="relative min-h-0 min-w-0 overflow-hidden bg-browser" ref={surfaceRef}>
+      <div className="relative flex-1 min-h-0 min-w-0 overflow-hidden bg-browser" ref={surfaceRef}>
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-[10px] text-fainter">
           {state?.loading ? <div className="size-[34px] animate-spin rounded-full border border-border-strong border-t-primary" /> : null}
           <span>{state?.loading ? `Loading ${state.url}` : uiPreview ? 'Browser canvas is desktop-only; controls are simulated in UI preview.' : state?.url === 'about:blank' ? 'Enter a URL to open the shared agent browser.' : 'Shared Electron browser surface'}</span>

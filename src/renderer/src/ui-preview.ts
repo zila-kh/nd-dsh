@@ -123,18 +123,38 @@ const capabilityProviders: CapabilityDescriptor[] = [
     kind: 'memory',
     name: 'OpenViking Memory',
     integration: 'adapter',
-    available: false,
+    available: true,
     description: 'External context-database adapter for long-horizon checkpointed recall across parallel workers.',
-    unavailableReason: ADAPTER_SLOT_NOTE,
+    setup: {
+      mode: 'approved-package',
+      sourceLabel: 'OpenViking Context Database',
+      sourceUrl: 'https://github.com/openviking/openviking',
+      packageId: 'openviking',
+      version: '0.1.0',
+      integrity: 'sha256-openviking010hashplaceholder64chars000000000000000000000000000=',
+      prerequisites: ['Node.js 24 or newer'],
+      fields: [
+        { id: 'endpoint', label: 'Server endpoint URL', placeholder: 'http://localhost:8000', required: true },
+        { id: 'api_key', label: 'API Key', required: false, sensitive: true },
+      ],
+    },
   },
   {
     id: ND_MEMORY_MCP_ID,
     kind: 'memory',
     name: 'ND Memory MCP',
     integration: 'adapter',
-    available: false,
+    available: true,
     description: 'ND organization memory exposed as live in-loop worker tools inside harness sessions via a patch-row MCP plugin.',
-    unavailableReason: `${ADAPTER_SLOT_NOTE} Delivered through the sanctioned harness patch overlay — no vendored core changes.`,
+    setup: {
+      mode: 'source-runtime',
+      sourceLabel: 'DeepSeek Harness source checkout',
+      sourceUrl: 'https://github.com/deepseek-ai/deepseek-harness',
+      runtimeId: 'DeepSeek Harness runtime',
+      version: '0.2.0',
+      prerequisites: ['Node.js 24 or newer', 'Corepack'],
+      fields: [],
+    },
   },
   {
     id: ND_WORKSPACE_CONTEXT_ID,
@@ -149,18 +169,37 @@ const capabilityProviders: CapabilityDescriptor[] = [
     kind: 'context',
     name: 'Harness Session Recall',
     integration: 'adapter',
-    available: false,
+    available: true,
     description: 'Mounts the harness session-search index as worker tools for recall over past coding sessions.',
-    unavailableReason: `Dormant upstream today. ${ADAPTER_SLOT_NOTE}`,
+    setup: {
+      mode: 'source-runtime',
+      sourceLabel: 'DeepSeek Harness source checkout',
+      sourceUrl: 'https://github.com/deepseek-ai/deepseek-harness',
+      runtimeId: 'DeepSeek Harness runtime',
+      version: '0.2.0',
+      prerequisites: ['Node.js 24 or newer', 'Corepack'],
+      fields: [],
+    },
   },
   {
     id: GRAPHIFY_CONTEXT_ID,
     kind: 'context',
     name: 'Graphify Repo Map',
     integration: 'adapter',
-    available: false,
+    available: true,
     description: 'Local AST code-graph adapter for blast-radius analysis and token-cheap repo mapping inside workers.',
-    unavailableReason: ADAPTER_SLOT_NOTE,
+    setup: {
+      mode: 'approved-package',
+      sourceLabel: 'Graphify Repo Map',
+      sourceUrl: 'https://github.com/Graphify-Labs/graphify',
+      packageId: 'graphify',
+      version: '1.0.0',
+      integrity: 'sha256-graphify100hashplaceholder64chars000000000000000000000000000000=',
+      prerequisites: ['Node.js 24 or newer'],
+      fields: [
+        { id: 'workspace_token', label: 'Workspace Token', required: true, sensitive: true },
+      ],
+    },
   },
 ]
 
@@ -306,9 +345,20 @@ const desktopApi: DesktopApi = {
     },
     onChanged: () => () => {},
     statuses: async () => capabilityStatusesView(),
+    checkSetup: async (providerId) => ({ providerId, ready: true, prerequisites: [] }),
+    setup: async (providerId) => {
+      capabilityStatusOverrides[providerId] = {
+        ...previewCapabilityStatus(providerId),
+        enabled: false,
+        setupState: 'installed',
+        setupProgress: 100,
+        setupMessage: 'Setup complete. Verify before enabling.',
+      }
+      return capabilityStatusesView()
+    },
     verify: async (providerId) => {
-      // Success marks the provider verified and enabled, clearing any earlier failure.
-      capabilityStatusOverrides[providerId] = { providerId, enabled: true, lastProbeAt: Date.now(), lastVerifiedAt: Date.now() }
+      // Success marks the provider verified but never enables it implicitly.
+      capabilityStatusOverrides[providerId] = { ...previewCapabilityStatus(providerId), lastProbeAt: Date.now(), lastVerifiedAt: Date.now() }
       return capabilityStatusesView()
     },
     setEnabled: async (providerId, enabled) => {
@@ -446,6 +496,8 @@ const designApi: DesignDesktopApi = {
   startDevPreview: async () => designProject.preview!,
   stopPreview: async () => undefined,
   freeformState: async () => freeform,
+  freeformInitialize: async () => freeform,
+  freeformSetup: async () => freeform,
   freeformSetBounds: async () => undefined,
   freeformSetVisible: async (visible) => { freeform = { ...freeform, visible }; freeformEvents.emit(freeform); return freeform },
   freeformOpen: async (path) => { freeform = { ...freeform, status: 'ready', available: true, documentPath: path, documentName: previewDocumentName(path), visible: true }; freeformEvents.emit(freeform); return freeform },

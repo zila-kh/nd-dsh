@@ -19,6 +19,15 @@ import { ThemeToggle } from './components/ThemeToggle'
 import { TitlebarIconButton } from './components/titlebar-icon-button'
 import { cn } from './lib/utils'
 import { pickSelfElement } from './lib/self-element-picker'
+import {
+  capabilitySubTabFromLocation,
+  generalSubTabFromLocation,
+  settingsHash,
+  settingsTabFromLocation,
+  type CapabilitySubTab,
+  type GeneralSubTab,
+  type SettingsTab,
+} from './lib/settings-route'
 
 const SettingsPane = lazy(() => import('./components/SettingsPane').then((module) => ({ default: module.SettingsPane })))
 
@@ -37,8 +46,26 @@ function viewFromHash(): ProductView {
   return VIEWS.includes(route as ProductView) ? (route as ProductView) : 'agent'
 }
 
-function hashForView(view: ProductView): string {
-  return `#/${view}`
+function hashForView(view: ProductView, settingsTab: SettingsTab, settingsSubTabs: SettingsSubTabs): string {
+  if (view !== 'settings') return `#/${view}`
+  const subTab = settingsTab === 'general'
+    ? settingsSubTabs.general
+    : settingsTab === 'capabilities'
+      ? settingsSubTabs.capabilities
+      : undefined
+  return settingsHash(settingsTab, subTab)
+}
+
+interface SettingsSubTabs {
+  general: GeneralSubTab
+  capabilities: CapabilitySubTab
+}
+
+function settingsSubTabsFromLocation(): SettingsSubTabs {
+  return {
+    general: generalSubTabFromLocation(),
+    capabilities: capabilitySubTabFromLocation(),
+  }
 }
 
 function isFloatOverlayRoute(): boolean {
@@ -78,6 +105,8 @@ export default function App() {
   const [selectedFile, setSelectedFile] = useState<WorkspaceFile | null>(null)
   const [activeDiff, setActiveDiff] = useState<{ relativePath: string; staged: boolean } | null>(null)
   const [view, setView] = useState<ProductView>(viewFromHash)
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>(settingsTabFromLocation)
+  const [settingsSubTabs, setSettingsSubTabs] = useState<SettingsSubTabs>(settingsSubTabsFromLocation)
   const [agentPane, setAgentPane] = useState<AgentPane>('files')
   const [sessionsCollapsed, setSessionsCollapsed] = useState(false)
   const [workspaceCollapsed, setWorkspaceCollapsed] = useState(false)
@@ -364,20 +393,33 @@ export default function App() {
 
   useEffect(() => {
     if (isFloatOverlay) return
-    const target = hashForView(view)
+    const target = hashForView(view, settingsTab, settingsSubTabs)
     if (window.location.hash === target) return
     try {
       window.history.pushState(null, '', target)
     } catch {
       window.location.hash = target
     }
-  }, [isFloatOverlay, view])
+  }, [isFloatOverlay, settingsSubTabs, settingsTab, view])
 
   useEffect(() => {
-    const onPopState = (): void => setView(viewFromHash())
+    const onPopState = (): void => {
+      setView(viewFromHash())
+      setSettingsTab(settingsTabFromLocation())
+      setSettingsSubTabs(settingsSubTabsFromLocation())
+    }
     window.addEventListener('popstate', onPopState)
-    return () => window.removeEventListener('popstate', onPopState)
+    window.addEventListener('hashchange', onPopState)
+    return () => {
+      window.removeEventListener('popstate', onPopState)
+      window.removeEventListener('hashchange', onPopState)
+    }
   }, [])
+
+  const openSettings = (tab?: SettingsTab): void => {
+    if (tab) setSettingsTab(tab)
+    setView('settings')
+  }
 
   const selectTheme = (mode: ThemeMode): void => {
     void window.ndDsh.theme.set(mode).then(setTheme).catch((cause) => notify(errorMessage(cause)))
@@ -579,7 +621,7 @@ export default function App() {
                 {...(workspace?.projectName || workspace?.name ? { workspaceName: workspace.projectName ?? workspace.name } : {})}
                 sessionsCollapsed={sessionsCollapsed}
                 onError={notify}
-                onOpenSettings={() => setView('settings')}
+                onOpenSettings={openSettings}
                 onOpenFile={(path) => void openFile(path)}
                 externalPrompt={externalPrompt}
                 onExternalPromptConsumed={() => setExternalPrompt(null)}
@@ -594,7 +636,7 @@ export default function App() {
                   {...(workspace?.projectName || workspace?.name ? { workspaceName: workspace.projectName ?? workspace.name } : {})}
                   sessionsCollapsed={sessionsCollapsed}
                   onError={notify}
-                  onOpenSettings={() => setView('settings')}
+                onOpenSettings={openSettings}
                   onOpenFile={(path) => void openFile(path)}
                   externalPrompt={externalPrompt}
                   onExternalPromptConsumed={() => setExternalPrompt(null)}
@@ -684,6 +726,12 @@ export default function App() {
               harness={harnessStatus}
               browser={browserState}
               onError={notify}
+              tab={settingsTab}
+              onSelectTab={setSettingsTab}
+              subTab={settingsSubTabs.general}
+              onSelectSubTab={(subTab) => setSettingsSubTabs((current) => ({ ...current, general: subTab }))}
+              capabilitySubTab={settingsSubTabs.capabilities}
+              onSelectCapabilitySubTab={(subTab) => setSettingsSubTabs((current) => ({ ...current, capabilities: subTab }))}
             />
           </Suspense>
         </section>

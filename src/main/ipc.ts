@@ -176,15 +176,24 @@ export function registerIpc(deps: IpcDependencies): () => void {
   // verify-before-enable lifecycle. Both mutations broadcast fresh snapshots
   // so every open surface renders the same provider state.
   const emitCapabilityStatuses = async (operation: Promise<unknown>): Promise<unknown> => {
-    const statuses = await operation
-    if (!deps.window.isDestroyed()) {
-      deps.window.webContents.send(CAPABILITIES_IPC.statusChangedEvent, await deps.capabilities.statuses())
+    try {
+      return await operation
+    } finally {
+      if (!deps.window.isDestroyed()) {
+        deps.window.webContents.send(CAPABILITIES_IPC.statusChangedEvent, await deps.capabilities.statuses())
+      }
     }
-    return statuses
   }
   handle(CAPABILITIES_IPC.providers, () => deps.capabilities.list())
   handle(CAPABILITIES_IPC.assignments, () => deps.capabilities.assignments())
   handle(CAPABILITIES_IPC.statuses, () => deps.capabilities.statuses())
+  handle(CAPABILITIES_IPC.checkSetup, (_event, providerId) =>
+    deps.capabilities.checkSetup(asString(providerId, 'Provider id', 256)))
+  handle(CAPABILITIES_IPC.setup, (_event, providerId, values) =>
+    emitCapabilityStatuses(deps.capabilities.setup(
+      asString(providerId, 'Provider id', 256),
+      asSetupValues(values),
+    )))
   handle(CAPABILITIES_IPC.verify, (_event, providerId) =>
     emitCapabilityStatuses(deps.capabilities.verify(asString(providerId, 'Provider id', 256))))
   handle(CAPABILITIES_IPC.setEnabled, (_event, providerId, enabled) =>
@@ -445,6 +454,19 @@ function asString(value: unknown, label: string, maxLength: number): string {
   if (!value.trim()) throw new Error(`${label} cannot be empty`)
   if (value.length > maxLength) throw new Error(`${label} exceeds ${maxLength.toLocaleString()} characters`)
   return value
+}
+
+function asSetupValues(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Capability setup values must be an object')
+  const result: Record<string, string> = {}
+  const entries = Object.entries(value as Record<string, unknown>)
+  if (entries.length > 32) throw new Error('Capability setup has too many fields')
+  for (const [key, fieldValue] of entries) {
+    if (!/^[a-z][a-z0-9_-]{0,63}$/.test(key)) throw new Error(`Invalid capability setup field: ${key}`)
+    if (typeof fieldValue !== 'string' || fieldValue.length > 4_096) throw new Error(`Invalid capability setup field: ${key}`)
+    result[key] = fieldValue
+  }
+  return result
 }
 
 function asPathList(value: unknown): string[] {

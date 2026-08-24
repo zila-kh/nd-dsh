@@ -32,7 +32,7 @@ export interface DesignFreeformDocumentEntry {
   name: string
 }
 
-export type DesignFreeformStatus = 'unavailable' | 'idle' | 'starting' | 'ready' | 'error'
+export type DesignFreeformStatus = 'unavailable' | 'installing' | 'idle' | 'starting' | 'ready' | 'error'
 
 export interface DesignFreeformState {
   engine: 'nd-pencil'
@@ -82,6 +82,8 @@ export interface DesignDesktopApi {
   startDevPreview(): Promise<DesignPreviewState>
   stopPreview(): Promise<void>
   freeformState(): Promise<DesignFreeformState>
+  freeformInitialize(): Promise<DesignFreeformState>
+  freeformSetup(): Promise<DesignFreeformState>
   freeformSetBounds(bounds: BrowserBounds): Promise<void>
   freeformSetVisible(visible: boolean): Promise<DesignFreeformState>
   freeformOpen(path: string): Promise<DesignFreeformState>
@@ -98,6 +100,8 @@ export const DESIGN_IPC = {
   startDevPreview: 'design:start-dev-preview',
   stopPreview: 'design:stop-preview',
   freeformState: 'design:freeform-state',
+  freeformInitialize: 'design:freeform-initialize',
+  freeformSetup: 'design:freeform-setup',
   freeformSetBounds: 'design:freeform-set-bounds',
   freeformSetVisible: 'design:freeform-set-visible',
   freeformOpen: 'design:freeform-open',

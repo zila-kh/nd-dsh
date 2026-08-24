@@ -1,4 +1,4 @@
-import { clipboard, ipcMain, session, WebContentsView, type BrowserWindow, type IpcMainEvent, type Rectangle } from 'electron'
+import { app, clipboard, ipcMain, session, WebContentsView, type BrowserWindow, type IpcMainEvent, type Rectangle } from 'electron'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { constants as fsConstants, promises as fs } from 'node:fs'
@@ -90,6 +90,7 @@ export class NdPencilController {
   private requestCounter = 0
   private readonly snapshotWaiters = new Map<string, SnapshotWaiter>()
   private saveInFlight: Promise<DesignFreeformState> | undefined
+  private setupInFlight: Promise<DesignFreeformState> | undefined
   private closingDaemon = false
   private readonly pageMessageHandler: (event: IpcMainEvent, payload: unknown) => void
 
@@ -136,8 +137,63 @@ export class NdPencilController {
     this.status = this.available ? 'idle' : 'unavailable'
     this.error = this.available
       ? undefined
-      : 'Bundled ND Pencil runtime is not built. Run `pnpm nd-pencil:build` in a source checkout.'
+      : app.isPackaged
+        ? 'ND Pencil is missing from this installation. Reinstall or repair ND to restore its bundled runtime.'
+        : 'The bundled ND Pencil runtime has not been set up in this source checkout. Select Set up ND Pencil to build it.'
     this.emitState()
+  }
+
+  async reinitialize(): Promise<DesignFreeformState> {
+    if (!this.available) await this.initialize()
+    return this.state()
+  }
+
+  /**
+   * Source checkouts do not track the platform runtime payload. Let a developer
+   * set it up from the product UI without exposing Node or arbitrary commands
+   * to the renderer. Packaged builds must already contain the runtime.
+   */
+  async setup(): Promise<DesignFreeformState> {
+    if (this.available) return this.state()
+    if (this.setupInFlight) return this.setupInFlight
+
+    this.setupInFlight = this.setupRuntime().finally(() => {
+      this.setupInFlight = undefined
+    })
+    return this.setupInFlight
+  }
+
+  private async setupRuntime(): Promise<DesignFreeformState> {
+    if (app.isPackaged) {
+      this.status = 'unavailable'
+      this.error = 'ND Pencil is missing from this installation. Reinstall or repair ND to restore its bundled runtime.'
+      this.emitState()
+      return this.state()
+    }
+
+    const buildScript = join(this.projectRoot, 'scripts', 'build-nd-pencil.mjs')
+    try {
+      await fs.access(buildScript, fsConstants.R_OK)
+    } catch {
+      this.status = 'unavailable'
+      this.error = 'ND Pencil setup is unavailable because this source checkout is incomplete.'
+      this.emitState()
+      return this.state()
+    }
+
+    this.status = 'installing'
+    this.error = 'Setting up the bundled ND Pencil runtime…'
+    this.emitState()
+    try {
+      await runSourceRuntimeSetup(process.execPath, buildScript, this.projectRoot)
+      await this.initialize()
+      if (!this.available) throw new Error('The runtime build completed but did not produce the bundled ND Pencil binary.')
+    } catch (cause) {
+      this.status = 'unavailable'
+      this.error = `ND Pencil setup failed: ${errorMessage(cause)}`
+      this.emitState()
+    }
+    return this.state()
   }
 
   setStateListener(listener: ((state: DesignFreeformState) => void) | undefined): void {
@@ -640,6 +696,33 @@ async function spawnManagedDaemon(binary: string, allowOrigin: string, filePath?
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
     throw cause
   }
+}
+
+function runSourceRuntimeSetup(executable: string, buildScript: string, cwd: string): Promise<void> {
+  return new Promise<void>((resolvePromise, reject) => {
+    const child = spawn(executable, [buildScript], {
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+      // Electron is the current executable in development. This runs the fixed,
+      // checked-in build script as Node; no renderer-provided command is used.
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+    })
+    let output = ''
+    const append = (chunk: string | Buffer): void => {
+      output = `${output}${chunk.toString()}`.slice(-4_000)
+    }
+    child.stdout.on('data', append)
+    child.stderr.on('data', append)
+    child.once('error', reject)
+    child.once('close', (code) => {
+      if (code === 0) resolvePromise()
+      else {
+        const detail = output.trim().split(/\r?\n/).filter(Boolean).at(-1)
+        reject(new Error(detail ?? `runtime build exited with code ${String(code)}`))
+      }
+    })
+  })
 }
 
 function readFirstLine(child: ChildProcessWithoutNullStreams, timeoutMs: number): Promise<string> {

@@ -140,6 +140,17 @@ export function DesignView({ active, workspace, browser, harness, onWorkspaceCha
     }
   }
 
+  const setupFreeformRuntime = async (): Promise<void> => {
+    setBusy('freeform:setup')
+    try {
+      setFreeform(await window.ndDshDesign.freeformSetup())
+    } catch (cause: unknown) {
+      onError(errorMessage(cause))
+    } finally {
+      setBusy(null)
+    }
+  }
+
   const openFreeform = async (path: string): Promise<void> => {
     setBusy(`freeform:${path}`)
     try {
@@ -284,8 +295,8 @@ export function DesignView({ active, workspace, browser, harness, onWorkspaceCha
           <ResizablePanelGroup direction={'horizontal' as const} className="h-full w-full">
             {/* Left Sidebar Panel */}
             {!sidebarCollapsed ? (
-              <ResizablePanel defaultSize={18} minSize={14} maxSize={26} className="min-w-[200px]">
-                <aside className="flex h-full w-full flex-col overflow-y-auto border-r border-border-soft bg-sidebar">
+              <ResizablePanel defaultSize="18%" minSize="200px" maxSize="26%">
+                <aside aria-label="Design workspace" className="flex h-full w-full flex-col overflow-y-auto border-r border-border-soft bg-sidebar">
                   <div className="flex flex-col gap-1 border-b border-border-soft p-3">
                     <small className="text-[10px] font-bold tracking-widest text-primary uppercase">Workspace</small>
                     <strong className="truncate text-sm font-semibold text-strong">
@@ -415,13 +426,13 @@ export function DesignView({ active, workspace, browser, harness, onWorkspaceCha
             {!sidebarCollapsed ? <ResizableHandle withHandle /> : null}
 
             {/* Main Surface Panel */}
-            <ResizablePanel defaultSize={62} minSize={40} className="relative flex min-h-0 min-w-0 flex-col bg-surface-0">
+            <ResizablePanel defaultSize="62%" minSize="40%" className="relative flex min-h-0 min-w-0 flex-col bg-surface-0">
               {workspace?.binding === 'missing' || !workspace ? (
                 <WorkspaceEmpty workspace={workspace} onChoose={chooseWorkspace} />
               ) : (
                 <>
                   {surface === 'live' && (
-                    <BrowserPane active={active} state={browser} onSnapshot={() => undefined} onError={onError} />
+                    <BrowserPane active={active && surface === 'live'} state={browser} onSnapshot={() => undefined} onError={onError} />
                   )}
                   {surface === 'freeform' && (
                     <FreeformSurface
@@ -431,6 +442,7 @@ export function DesignView({ active, workspace, browser, harness, onWorkspaceCha
                       busy={busy}
                       onOpen={openFreeform}
                       onCreate={createFreeform}
+                      onSetupRuntime={setupFreeformRuntime}
                       onSave={saveFreeform}
                       onClose={closeFreeform}
                       onBuild={buildFreeform}
@@ -454,8 +466,8 @@ export function DesignView({ active, workspace, browser, harness, onWorkspaceCha
 
             {/* Right Inspector Panel */}
             {!inspectorCollapsed ? (
-              <ResizablePanel defaultSize={20} minSize={16} maxSize={32} className="min-w-[220px]">
-                <aside className="flex h-full w-full flex-col overflow-y-auto border-l border-border-soft bg-sidebar">
+              <ResizablePanel defaultSize="20%" minSize="220px" maxSize="32%">
+                <aside aria-label="Design inspector" className="flex h-full w-full flex-col overflow-y-auto border-l border-border-soft bg-sidebar">
                   <header className="flex h-9 shrink-0 items-center justify-between border-b border-border-soft px-3">
                     <span className="text-[10px] font-bold tracking-widest text-faint uppercase">
                       {inspectorTitle(surface, selected)}
@@ -530,6 +542,7 @@ function FreeformSurface({
   busy,
   onOpen,
   onCreate,
+  onSetupRuntime,
   onSave,
   onClose,
   onBuild,
@@ -541,6 +554,7 @@ function FreeformSurface({
   busy: string | null
   onOpen(path: string): Promise<void>
   onCreate(): Promise<void>
+  onSetupRuntime(): Promise<void>
   onSave(): Promise<void>
   onClose(): Promise<void>
   onBuild(): Promise<void>
@@ -563,10 +577,11 @@ function FreeformSurface({
   if (state?.available === false) {
     return (
       <SurfaceEmpty
-        title="ND Pencil runtime initialization needed"
+        title="ND Pencil runtime setup needed"
         text={state?.error ?? 'The native ND Pencil Freeform engine is initializing.'}
-        actionLabel="Retry ND Pencil"
-        onAction={onCreate}
+        actionLabel={state?.status === 'installing' ? 'Setting up ND Pencil…' : 'Set up ND Pencil'}
+        actionDisabled={busy === 'freeform:setup' || state?.status === 'installing'}
+        onAction={onSetupRuntime}
       />
     )
   }
@@ -671,8 +686,9 @@ function NdPencilPane({
 
     const updateBounds = (): void => {
       const el = surfaceRef.current
-      if (!el) return
+      if (!el || !active) return
       const rect = el.getBoundingClientRect()
+      if (rect.width === 0 || rect.height === 0) return
       void window.ndDshDesign.freeformSetBounds({
         x: rect.x,
         y: rect.y,
@@ -689,14 +705,14 @@ function NdPencilPane({
     const observer = new ResizeObserver(scheduleUpdate)
     if (surfaceRef.current) observer.observe(surfaceRef.current)
     window.addEventListener('resize', scheduleUpdate)
-    scheduleUpdate()
+    if (active) scheduleUpdate()
 
     return () => {
       cancelAnimationFrame(animationFrame)
       observer.disconnect()
       window.removeEventListener('resize', scheduleUpdate)
     }
-  }, [onError])
+  }, [active, onError])
 
   useEffect(() => {
     void window.ndDshDesign.freeformSetVisible(active).catch((cause: unknown) => onError(errorMessage(cause)))
@@ -1074,11 +1090,13 @@ function SurfaceEmpty({
   title,
   text,
   actionLabel,
+  actionDisabled,
   onAction,
 }: {
   title: string
   text: string
   actionLabel?: string
+  actionDisabled?: boolean
   onAction?(): void
 }) {
   return (
@@ -1086,7 +1104,7 @@ function SurfaceEmpty({
       <strong className="text-base font-bold text-strong">{title}</strong>
       <p className="mt-1 text-xs text-muted-foreground">{text}</p>
       {actionLabel && onAction && (
-        <Button size="sm" className="mt-4" onClick={onAction}>{actionLabel}</Button>
+        <Button size="sm" className="mt-4" disabled={actionDisabled} onClick={onAction}>{actionLabel}</Button>
       )}
     </div>
   )

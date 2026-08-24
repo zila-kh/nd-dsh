@@ -5,6 +5,7 @@ import { DEFAULT_CAPABILITY_PROVIDER } from '../../../shared/capabilities'
 import { ND_HARNESS_ENGINE_ID } from '../../../shared/coding-engines'
 import type { OrganizationPolicyEffect, OrganizationRun, OrganizationSnapshot, OrganizationTask, ProjectRuntimeStatus, TaskPriority } from '../../../shared/organization'
 import { DEFAULT_PROJECT_PORT } from '../../../shared/organization'
+import { Card as UiCard } from './ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 import { cn } from '../lib/utils'
 
@@ -679,15 +680,26 @@ function Row({ left, right }: { left: ReactNode; right?: ReactNode }) {
   )
 }
 
+/**
+ * Dashboard section card. Built on the shared shadcn Card shell; the className
+ * overrides map it back onto ND tokens (sidebar surface, soft border, 9px
+ * radius, no shadow/gap) so every call site keeps its exact look while picking
+ * up data-slot="card" and the primitive's layout contract.
+ */
 function Card({ title, action, wide = false, children }: { title: string; action?: ReactNode; wide?: boolean; children: ReactNode }) {
   return (
-    <section className={cn('overflow-hidden rounded-[9px] border border-border-soft bg-sidebar', wide && 'col-span-full')}>
+    <UiCard
+      className={cn(
+        'gap-0 overflow-hidden rounded-[9px] border-border-soft bg-sidebar py-0 shadow-none',
+        wide && 'col-span-full',
+      )}
+    >
       <header className="flex min-h-10 items-center justify-between border-b border-border-soft px-[11px]">
         <h2 className="m-0 text-[15px] font-semibold">{title}</h2>
         {action}
       </header>
       <div className="px-[11px] py-[9px]">{children}</div>
-    </section>
+    </UiCard>
   )
 }
 
