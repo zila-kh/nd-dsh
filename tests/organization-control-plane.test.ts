@@ -85,6 +85,22 @@ describe('organization control plane', () => {
     expect(decision.reason).toContain('1/1')
   })
 
+  it('does not charge historical recovered runs to a newly-created budget window', async () => {
+    const { control, value } = await fixture()
+    const old = Date.now() - (2 * 24 * 60 * 60 * 1_000)
+    value.runs.push({
+      id: 'historical-run', companyId: 'company-1', projectId: 'project-1', kind: 'pm-plan', status: 'completed',
+      sessionId: 'old-session', startedAt: old, completedAt: old + 5_000,
+    })
+
+    await control.mutate({ type: 'budget.set', companyId: 'company-1', projectId: 'project-1', dailyTurnLimit: 1 })
+    const state = await control.state()
+
+    expect(state.turns.some((turn) => turn.runId === 'historical-run')).toBe(true)
+    expect(state.budgets[0]?.spentTurns).toBe(0)
+    expect((await control.shouldRun('project-1', 'workflow.continue')).route).toBe('ready')
+  })
+
   it('keeps signals separate from tasks and projects them into the manager view', async () => {
     const { control } = await fixture()
     await control.mutate({
