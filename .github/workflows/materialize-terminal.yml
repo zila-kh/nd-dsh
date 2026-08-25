@@ -1,0 +1,49 @@
+name: materialize-terminal-feature
+
+on:
+  push:
+    branches:
+      - feature/session-isolated-terminal
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Enable Corepack
+        run: corepack enable
+      - name: Materialize integration
+        run: node scripts/materialize-terminal-feature.mjs
+      - name: Install dependencies and refresh lockfile
+        run: corepack pnpm install --no-frozen-lockfile
+      - name: Verify repository invariants
+        run: corepack pnpm verify
+      - name: Typecheck
+        run: corepack pnpm typecheck
+      - name: Unit tests
+        run: corepack pnpm test
+      - name: Build desktop
+        run: corepack pnpm build
+      - name: Desktop smoke tests
+        run: xvfb-run --auto-servernum corepack pnpm e2e
+      - name: Commit validated integration
+        shell: bash
+        run: |
+          rm .github/workflows/materialize-terminal.yml scripts/materialize-terminal-feature.mjs
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- package.json pnpm-lock.yaml pnpm-workspace.yaml src/main/index.ts src/preload/index.ts src/renderer/src/global.d.ts src/renderer/src/components/ChatPanel.tsx .github/workflows/materialize-terminal.yml scripts/materialize-terminal-feature.mjs
+          git status --short
+          git commit -m "feat: integrate session-isolated terminal"
+          git push origin HEAD:feature/session-isolated-terminal
