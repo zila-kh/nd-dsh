@@ -5,7 +5,21 @@ import { CAPABILITIES_IPC, type CapabilityAssignmentSnapshot, type CapabilityKin
 import { IPC, type DesktopApi, type ModelProvider } from '../shared/contracts.js'
 import { EXTENSIONS_IPC, type AgentExtensionManifest, type ExtensionsDesktopApi } from '../shared/extensions.js'
 
-const api: DesktopApi & { extensions: ExtensionsDesktopApi } = {
+const extensionsApi: ExtensionsDesktopApi = {
+  list: () => ipcRenderer.invoke(EXTENSIONS_IPC.list),
+  save: (manifest: AgentExtensionManifest) => ipcRenderer.invoke(EXTENSIONS_IPC.save, manifest),
+  remove: (id: string) => ipcRenderer.invoke(EXTENSIONS_IPC.remove, id),
+  resetDemos: () => ipcRenderer.invoke(EXTENSIONS_IPC.resetDemos),
+  preview: (id: string) => ipcRenderer.invoke(EXTENSIONS_IPC.preview, id),
+  runDemo: (id: string, engineId?: string, providerId?: string) => ipcRenderer.invoke(EXTENSIONS_IPC.runDemo, id, engineId, providerId),
+  onChanged: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, extensions: AgentExtensionManifest[]) => listener(extensions)
+    ipcRenderer.on(EXTENSIONS_IPC.changedEvent, handler)
+    return () => ipcRenderer.removeListener(EXTENSIONS_IPC.changedEvent, handler)
+  },
+}
+
+const api: DesktopApi = {
   app: { info: () => ipcRenderer.invoke(IPC.appInfo) },
   capabilities: {
     providers: () => ipcRenderer.invoke(CAPABILITIES_IPC.providers),
@@ -26,19 +40,6 @@ const api: DesktopApi & { extensions: ExtensionsDesktopApi } = {
       const handler = (_event: Electron.IpcRendererEvent, statuses: Parameters<typeof listener>[0]) => listener(statuses)
       ipcRenderer.on(CAPABILITIES_IPC.statusChangedEvent, handler)
       return () => ipcRenderer.removeListener(CAPABILITIES_IPC.statusChangedEvent, handler)
-    },
-  },
-  extensions: {
-    list: () => ipcRenderer.invoke(EXTENSIONS_IPC.list),
-    save: (manifest: AgentExtensionManifest) => ipcRenderer.invoke(EXTENSIONS_IPC.save, manifest),
-    remove: (id: string) => ipcRenderer.invoke(EXTENSIONS_IPC.remove, id),
-    resetDemos: () => ipcRenderer.invoke(EXTENSIONS_IPC.resetDemos),
-    preview: (id: string) => ipcRenderer.invoke(EXTENSIONS_IPC.preview, id),
-    runDemo: (id: string, engineId?: string, providerId?: string) => ipcRenderer.invoke(EXTENSIONS_IPC.runDemo, id, engineId, providerId),
-    onChanged: (listener) => {
-      const handler = (_event: Electron.IpcRendererEvent, extensions: AgentExtensionManifest[]) => listener(extensions)
-      ipcRenderer.on(EXTENSIONS_IPC.changedEvent, handler)
-      return () => ipcRenderer.removeListener(EXTENSIONS_IPC.changedEvent, handler)
     },
   },
   window: {
@@ -206,3 +207,4 @@ const api: DesktopApi & { extensions: ExtensionsDesktopApi } = {
 }
 
 contextBridge.exposeInMainWorld('ndDsh', api)
+contextBridge.exposeInMainWorld('ndDshExtensions', extensionsApi)
