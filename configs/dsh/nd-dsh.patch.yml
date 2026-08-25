@@ -77,6 +77,35 @@
           maxDelayMs: 30000
           maxAttempts: 10
 
+# ── universal ND extensions ───────────────────────────────────────────────────
+
+# One stable MCP bridge projects every enabled ND MCP/plugin extension into the
+# Harness tool surface. The bridge reads the trusted main-process catalog on
+# every tools/list refresh, so enable/disable and custom MCP stdio routes do not
+# require editing the vendored Harness or a user profile. Secret values are
+# resolved from parent environment-variable references only.
+- insert:
+    - id: nd-extensions-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: nd-extensions
+        transport: stdio
+        command: !!js process.execPath
+        args:
+          - !!js process.env.ND_DSH_EXTENSION_MCP_ENTRY ?? ''
+          - mcp
+        env:
+          PATH: !!js process.env.PATH ?? ''
+          ND_EXTENSION_CATALOG: !!js process.env.ND_EXTENSION_CATALOG ?? ''
+          ND_EXTENSION_STATE: !!js process.env.ND_EXTENSION_STATE ?? ''
+        toolCallTimeoutMs: 120000
+        failOnStartupError: true
+        reconnect:
+          enabled: true
+          initialDelayMs: 500
+          maxDelayMs: 30000
+          maxAttempts: 10
+
 # ── session search: durable full-text index inside the harness home ───────────
 
 - id: session-query-sqlite
