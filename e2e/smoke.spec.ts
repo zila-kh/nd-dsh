@@ -45,6 +45,17 @@ test('Company exposes the AI operations control center', async () => {
   const { page } = launched
   await page.getByRole('navigation', { name: 'ND-DSH navigation' }).getByTitle('Company').click()
   await expect(page).toHaveURL(/#\/company$/)
+  await page.evaluate(async () => {
+    const state = await window.ndDshOrganization.state()
+    if (state.companies.length === 0) {
+      await window.ndDshOrganization.mutate({
+        type: 'company.create',
+        name: 'E2E Company',
+        mission: 'Verify the AI company operations surface',
+      })
+    }
+  })
+  await expect(page.getByText('E2E Company', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Operations', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Needs You', exact: true })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Verification', exact: true })).toBeVisible()
