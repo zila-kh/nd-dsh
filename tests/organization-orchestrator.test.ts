@@ -168,7 +168,7 @@ describe('OrganizationOrchestrator', () => {
     expect(state.runs.some((item) => item.kind === 'task-review')).toBe(false)
   })
 
-  it('prevents a second project from taking the shared Harness while work is active', async () => {
+  it('prevents a non-isolated second project from taking shared execution while work is active', async () => {
     const { store, company, project, orchestrator } = await fixture()
     await store.applyPlan(project.id, { goal: { title: 'Goal A', description: 'Goal A' }, milestones: [{ title: 'M1', description: 'M1', tasks: [{ title: 'Task A', description: 'Do A' }] }] })
     const taskA = (await store.state()).tasks.find((item) => item.projectId === project.id)!
@@ -180,7 +180,7 @@ describe('OrganizationOrchestrator', () => {
     state = await store.state()
     const taskB = state.tasks.find((item) => item.projectId === secondProject.id)!
 
-    await expect(orchestrator.runTask(taskB.id)).rejects.toThrow(/another project already has an active/i)
+    await expect(orchestrator.runTask(taskB.id)).rejects.toThrow(/without an isolated Git worktree/i)
   })
 
   it('honors deny policy even for explicit execution', async () => {
