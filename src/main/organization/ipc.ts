@@ -10,6 +10,7 @@ import type { ProjectRuntimeService } from '../workspace/project-runtime.js'
 import type { ProjectWorkspaceCoordinator } from '../workspace/project-workspace-coordinator.js'
 import { OrganizationControlPlane } from './control-plane.js'
 import type { OrganizationOrchestrator } from './orchestrator.js'
+import { materializeOrganizationSignal } from './signal-materializer.js'
 import type { OrganizationStore } from './store.js'
 
 const MUTATIONS = new Set([
@@ -81,7 +82,28 @@ export function registerOrganizationIpc(
   handle(ORGANIZATION_IPC.runNext, (_event, value) => orchestrator.runNext(value === undefined || value === null ? undefined : asId(value, 'Project id')))
 
   handle(ORGANIZATION_CONTROL_IPC.state, () => control.state())
-  handle(ORGANIZATION_CONTROL_IPC.mutate, (_event, value) => control.mutate(asControlMutation(value)))
+  handle(ORGANIZATION_CONTROL_IPC.mutate, async (_event, value) => {
+    const mutation = asControlMutation(value)
+    if (mutation.type === 'signal.triage') {
+      const before = await control.state()
+      const signal = before.signals.find((item) => item.id === mutation.id)
+      if (!signal) throw new Error('Signal not found')
+      await materializeOrganizationSignal(store, signal, mutation.disposition)
+      let next = await control.mutate(mutation)
+      if (mutation.disposition === 'ask-human') {
+        next = await control.mutate({
+          type: 'human-action.add',
+          companyId: signal.companyId,
+          ...(signal.projectId ? { projectId: signal.projectId } : {}),
+          kind: 'action',
+          title: signal.title,
+          question: signal.summary,
+        })
+      }
+      return next
+    }
+    return control.mutate(mutation)
+  })
   handle(ORGANIZATION_CONTROL_IPC.management, (_event, value) => control.management(value === undefined || value === null ? undefined : asId(value, 'Project id')))
   handle(ORGANIZATION_CONTROL_IPC.shouldRun, (_event, projectValue, actionValue, taskValue) => {
     const projectId = projectValue === undefined || projectValue === null ? undefined : asId(projectValue, 'Project id')
