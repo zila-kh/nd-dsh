@@ -5,7 +5,7 @@ import {
   type OrganizationControlAction,
   type OrganizationControlMutation,
 } from '../../shared/organization-control.js'
-import { ORGANIZATION_IPC, type OrganizationMutation, type OrganizationRunReceipt, type OrganizationSnapshot } from '../../shared/organization.js'
+import { ORGANIZATION_IPC, type OrganizationMutation, type OrganizationSnapshot } from '../../shared/organization.js'
 import type { ProjectRuntimeService } from '../workspace/project-runtime.js'
 import type { ProjectWorkspaceCoordinator } from '../workspace/project-workspace-coordinator.js'
 import { OrganizationControlPlane } from './control-plane.js'
@@ -34,6 +34,13 @@ export function registerOrganizationIpc(
   control.setOnChanged((state) => {
     if (!window.isDestroyed()) window.webContents.send(ORGANIZATION_CONTROL_IPC.changed, state)
   })
+
+  // Guard the orchestrator itself instead of only guarding renderer IPC. The
+  // orchestrator calls its public methods for autonomy-3/4 continuation, so
+  // wrapping them here makes later automatic turns obey the same gates,
+  // budgets, leases and evidence ledger as user-started work.
+  const restoreOrchestrator = guardOrchestrator(orchestrator, store, control)
+
   // Organization runs finish on engine event streams, outside renderer IPC.
   // Reconcile independently so evidence, typed results, leases and quotas never
   // depend on a screen being open or a user requesting status.
@@ -60,9 +67,7 @@ export function registerOrganizationIpc(
     const projectId = autopilotProjectId(mutation, state)
     if (projectId) {
       try {
-        await control.assertRunnable(projectId, 'workflow.continue')
-        const receipt = await orchestrator.runNext(projectId, false)
-        if (receipt) await control.noteDispatch(receipt)
+        await orchestrator.runNext(projectId, false)
         return store.state()
       } catch (error) {
         console.warn('Organization autopilot did not start:', error instanceof Error ? error.message : String(error))
@@ -70,30 +75,10 @@ export function registerOrganizationIpc(
     }
     return state
   })
-  handle(ORGANIZATION_IPC.planProject, async (_event, value) => {
-    const projectId = asId(value, 'Project id')
-    await control.assertRunnable(projectId, 'internal.plan')
-    return track(control, await orchestrator.planProject(projectId))
-  })
-  handle(ORGANIZATION_IPC.runTask, async (_event, value) => {
-    const taskId = asId(value, 'Task id')
-    const context = await store.taskContext(taskId)
-    await control.assertRunnable(context.project.id, 'task.execute', taskId)
-    return track(control, await orchestrator.runTask(taskId))
-  })
-  handle(ORGANIZATION_IPC.reviewTask, async (_event, value) => {
-    const taskId = asId(value, 'Task id')
-    const context = await store.taskContext(taskId)
-    await control.assertRunnable(context.project.id, 'task.review', taskId)
-    return track(control, await orchestrator.reviewTask(taskId))
-  })
-  handle(ORGANIZATION_IPC.runNext, async (_event, value) => {
-    const projectId = value === undefined || value === null ? undefined : asId(value, 'Project id')
-    await control.assertRunnable(projectId, 'workflow.continue')
-    const receipt = await orchestrator.runNext(projectId)
-    if (receipt) await control.noteDispatch(receipt)
-    return receipt
-  })
+  handle(ORGANIZATION_IPC.planProject, (_event, value) => orchestrator.planProject(asId(value, 'Project id')))
+  handle(ORGANIZATION_IPC.runTask, (_event, value) => orchestrator.runTask(asId(value, 'Task id')))
+  handle(ORGANIZATION_IPC.reviewTask, (_event, value) => orchestrator.reviewTask(asId(value, 'Task id')))
+  handle(ORGANIZATION_IPC.runNext, (_event, value) => orchestrator.runNext(value === undefined || value === null ? undefined : asId(value, 'Project id')))
 
   handle(ORGANIZATION_CONTROL_IPC.state, () => control.state())
   handle(ORGANIZATION_CONTROL_IPC.mutate, (_event, value) => control.mutate(asControlMutation(value)))
@@ -114,14 +99,58 @@ export function registerOrganizationIpc(
 
   return () => {
     clearInterval(reconcileTimer)
+    restoreOrchestrator()
     control.setOnChanged(undefined)
     for (const channel of channels) ipcMain.removeHandler(channel)
   }
 }
 
-async function track(control: OrganizationControlPlane, receipt: OrganizationRunReceipt): Promise<OrganizationRunReceipt> {
-  await control.noteDispatch(receipt)
-  return receipt
+function guardOrchestrator(
+  orchestrator: OrganizationOrchestrator,
+  store: OrganizationStore,
+  control: OrganizationControlPlane,
+): () => void {
+  const planProject = orchestrator.planProject.bind(orchestrator)
+  const runTask = orchestrator.runTask.bind(orchestrator)
+  const reviewTask = orchestrator.reviewTask.bind(orchestrator)
+  const runNext = orchestrator.runNext.bind(orchestrator)
+
+  orchestrator.planProject = async (projectId: string, explicit = true) => {
+    await control.assertRunnable(projectId, 'internal.plan')
+    const result = await planProject(projectId, explicit)
+    await control.noteDispatch(result)
+    return result
+  }
+  orchestrator.runTask = async (taskId: string, explicit = true) => {
+    const context = await store.taskContext(taskId)
+    await control.assertRunnable(context.project.id, 'task.execute', taskId)
+    const result = await runTask(taskId, explicit)
+    await control.noteDispatch(result)
+    return result
+  }
+  orchestrator.reviewTask = async (taskId: string, explicit = true) => {
+    const context = await store.taskContext(taskId)
+    await control.assertRunnable(context.project.id, 'task.review', taskId)
+    const result = await reviewTask(taskId, explicit)
+    await control.noteDispatch(result)
+    return result
+  }
+  orchestrator.runNext = async (projectId?: string, explicit = true) => {
+    const state = await store.state()
+    const resolvedProjectId = projectId ?? state.activeProjectId
+    if (!resolvedProjectId) throw new Error('No active project')
+    await control.assertRunnable(resolvedProjectId, 'workflow.continue')
+    const result = await runNext(projectId, explicit)
+    if (result) await control.noteDispatch(result)
+    return result
+  }
+
+  return () => {
+    orchestrator.planProject = planProject
+    orchestrator.runTask = runTask
+    orchestrator.reviewTask = reviewTask
+    orchestrator.runNext = runNext
+  }
 }
 
 function autopilotProjectId(mutation: OrganizationMutation, state: OrganizationSnapshot): string | undefined {
