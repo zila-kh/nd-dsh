@@ -67,6 +67,15 @@ export class TaskWorktreeManager {
     return (await git(worktree.root, ['rev-parse', 'HEAD'])).stdout.trim()
   }
 
+  async assertUnchanged(worktree: TaskWorktree, expectedHead: string): Promise<void> {
+    const [status, head] = await Promise.all([
+      git(worktree.root, ['status', '--porcelain=v1', '--untracked-files=all']),
+      git(worktree.root, ['rev-parse', 'HEAD']),
+    ])
+    if (status.stdout.trim()) throw new Error('Reviewer/tooling changed the task worktree after the review checkpoint')
+    if (head.stdout.trim() !== expectedHead) throw new Error('Task worktree HEAD changed after independent review started')
+  }
+
   /**
    * Merge a verified task branch into the project's real checkout. Never
    * auto-resolve conflicts and never merge over human/uncommitted base changes.
