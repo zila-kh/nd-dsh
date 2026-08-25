@@ -9,6 +9,7 @@ import {
   type AgentExtensionManifest,
   type AgentExtensionSurface,
   type ExtensionAdapter,
+  type ExtensionRuntimeSpec,
 } from '../../shared/extensions.js'
 
 interface ExtensionSnapshot {
@@ -17,6 +18,7 @@ interface ExtensionSnapshot {
 }
 
 const ID_PATTERN = /^[a-z0-9][a-z0-9._-]{1,127}$/
+const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 /**
  * Durable ND-owned extension catalog. Built-in demos are seeded on first run,
@@ -176,6 +178,7 @@ function sanitizeManifest(value: AgentExtensionManifest): AgentExtensionManifest
         return [{ providerId: route.providerId.trim().slice(0, 256), enabled: route.enabled === true }]
       }))
     : []
+  const runtime = sanitizeRuntime(value.runtime, surface)
   return {
     id,
     name,
@@ -186,9 +189,35 @@ function sanitizeManifest(value: AgentExtensionManifest): AgentExtensionManifest
     ...(value.builtInDemo === true ? { builtInDemo: true } : {}),
     ...(typeof value.demoPrompt === 'string' && value.demoPrompt.trim() ? { demoPrompt: value.demoPrompt.trim().slice(0, 4_000) } : {}),
     ...(typeof value.instructions === 'string' && value.instructions.trim() ? { instructions: value.instructions.trim().slice(0, 16_000) } : {}),
+    ...(runtime ? { runtime } : {}),
     engineRoutes,
     providerRoutes,
   }
+}
+
+function sanitizeRuntime(value: unknown, surface: AgentExtensionSurface): ExtensionRuntimeSpec | undefined {
+  if (value === undefined || value === null) return undefined
+  if (surface !== 'mcp' && surface !== 'plugin') throw new Error('Executable runtime is supported only for MCP and plugin extensions')
+  if (typeof value !== 'object' || Array.isArray(value)) throw new Error('Extension runtime must be an object')
+  const record = value as Record<string, unknown>
+  if (record.kind !== 'mcp-stdio') throw new Error('Only mcp-stdio extension runtimes are supported')
+  const command = text(record.command, 'MCP command', 1_024)
+  if (!Array.isArray(record.args) || record.args.length > 64) throw new Error('MCP args must be an array with at most 64 entries')
+  const args = record.args.map((item) => {
+    if (typeof item !== 'string' || item.length > 4_096) throw new Error('Each MCP argument must be a string under 4,096 characters')
+    return item
+  })
+  if (!record.env || typeof record.env !== 'object' || Array.isArray(record.env)) throw new Error('MCP env references must be an object')
+  const entries = Object.entries(record.env as Record<string, unknown>)
+  if (entries.length > 64) throw new Error('MCP env reference map has too many entries')
+  const env: Record<string, string> = {}
+  for (const [target, source] of entries) {
+    if (!ENV_NAME_PATTERN.test(target) || typeof source !== 'string' || !ENV_NAME_PATTERN.test(source)) {
+      throw new Error('MCP env references must map environment-variable names to environment-variable names')
+    }
+    env[target] = source
+  }
+  return { kind: 'mcp-stdio', command, args, env }
 }
 
 function dedupeEngineRoutes(routes: Array<{ engineId: string; adapter: ExtensionAdapter }>): Array<{ engineId: string; adapter: ExtensionAdapter }> {
