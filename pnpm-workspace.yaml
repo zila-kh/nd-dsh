@@ -4,6 +4,7 @@ allowBuilds:
   agent-browser: true
   esbuild: true
   electron: true
+  node-pty: true
 
 # DeepSeek Harness intentionally remains its own pinned workspace under
 # vendor/deepseek-harness. Bootstrap installs and builds it with --dir instead

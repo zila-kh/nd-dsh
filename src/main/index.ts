@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { IPC, type DshEventFrame } from '../shared/contracts.js'
 import { DESIGN_IPC } from '../shared/design.js'
 import { ORGANIZATION_IPC } from '../shared/organization.js'
+import { TERMINAL_IPC } from '../shared/terminal.js'
 import { projectRoot } from './app-paths.js'
 import { BrowserController } from './browser/browser-controller.js'
 import { DEFAULT_BROWSER_URL } from './browser/browser-url.js'
@@ -36,6 +37,8 @@ import { ProviderStore } from './providers.js'
 import { QaService } from './qa/qa-service.js'
 import { SessionArchiveStore } from './sessions/session-archive-store.js'
 import { ThemeService } from './theme.js'
+import { registerTerminalIpc } from './terminal/ipc.js'
+import { TerminalManager } from './terminal/terminal-manager.js'
 import { ProjectWorkspaceCoordinator } from './workspace/project-workspace-coordinator.js'
 import { ProjectRuntimeService } from './workspace/project-runtime.js'
 import { WorkspaceRegistry } from './workspace/workspace-registry.js'
@@ -52,6 +55,7 @@ let mainWindow: BrowserWindow | undefined
 let activeHarness: HarnessService | undefined
 let activeCodexEngine: CodexCliEngine | undefined
 let activeNdPencil: NdPencilController | undefined
+let activeTerminalManager: TerminalManager | undefined
 let shutdownStarted = false
 const closingServices = new Set<Promise<void>>()
 
@@ -96,6 +100,16 @@ async function createWindow(cdpPort: number): Promise<void> {
       allowRunningInsecureContent: false,
     },
   })
+
+  const terminalManager = new TerminalManager({
+    storePath: join(userData, 'terminals.json'),
+    workspace,
+    onOutput: (event) => { if (!window.isDestroyed()) window.webContents.send(TERMINAL_IPC.outputEvent, event) },
+    onExit: (event) => { if (!window.isDestroyed()) window.webContents.send(TERMINAL_IPC.exitEvent, event) },
+    onState: (event) => { if (!window.isDestroyed()) window.webContents.send(TERMINAL_IPC.stateEvent, event) },
+  })
+  await terminalManager.initialize()
+  activeTerminalManager = terminalManager
 
   const workspaces = new WorkspaceRegistry(join(userData, 'workspaces.json'))
   await workspaces.ensureActive(workspace.state().root)
@@ -155,6 +169,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   const qa = new QaService()
   qa.setProjectRoot(workspace.state().root)
   const disposeIpc = registerIpc({ window, preloadPath: preload, browser, dshSurface, engines, engineRouter, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, qa, sessionArchive, capabilities })
+  const disposeTerminalIpc = registerTerminalIpc(window, terminalManager)
   const disposeDesignIpc = registerDesignIpc(window, design, ndPencil)
   const disposeOrganizationIpc = registerOrganizationIpc(window, organizationStore, organization, projectWorkspace, projectRuntime)
   mainWindow = window
@@ -311,6 +326,7 @@ async function createWindow(cdpPort: number): Promise<void> {
     ndPencil.setStateListener(undefined)
     disposeOrganizationIpc()
     disposeDesignIpc()
+    disposeTerminalIpc()
     disposeIpc()
     void qa.dispose()
     void projectRuntime.dispose()
@@ -322,6 +338,7 @@ async function createWindow(cdpPort: number): Promise<void> {
     if (mainWindow === window) mainWindow = undefined
     if (activeHarness === harness) activeHarness = undefined
     if (activeCodexEngine === codexEngine) activeCodexEngine = undefined
+    if (activeTerminalManager === terminalManager) { activeTerminalManager = undefined; beginTerminalClose(terminalManager) }
     beginCodexClose(codexEngine)
     beginHarnessClose(harness)
   })
@@ -354,6 +371,11 @@ app.on('before-quit', (event) => {
     activeCodexEngine = undefined
     beginCodexClose(codexEngine)
   }
+  if (activeTerminalManager) {
+    const terminalManager = activeTerminalManager
+    activeTerminalManager = undefined
+    beginTerminalClose(terminalManager)
+  }
   if (activeNdPencil) {
     const ndPencil = activeNdPencil
     activeNdPencil = undefined
@@ -384,6 +406,10 @@ function beginHarnessClose(harness: HarnessService): void {
 
 function beginCodexClose(codexEngine: CodexCliEngine): void {
   trackClose(codexEngine.close().catch((error) => console.error('Failed to close the Codex engine cleanly:', error)))
+}
+
+function beginTerminalClose(terminalManager: TerminalManager): void {
+  trackClose(terminalManager.shutdown().catch((error) => console.error('Failed to close session terminals cleanly:', error)))
 }
 
 function beginNdPencilClose(ndPencil: NdPencilController): void {

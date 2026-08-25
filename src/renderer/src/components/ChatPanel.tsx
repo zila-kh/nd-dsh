@@ -42,6 +42,7 @@ import {
   StopIcon,
 } from './Icons'
 import { cn } from '../lib/utils'
+import { TerminalDock } from './TerminalDock'
 
 interface ChatPanelProps {
   status: HarnessStatus | null
@@ -95,6 +96,7 @@ function fileMentionTag(relativePath: string): string {
 export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, onOpenSettings, onOpenFile, externalPrompt, onExternalPromptConsumed, elementAttachmentVersion }: ChatPanelProps) {
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
+  const [terminalOpen, setTerminalOpen] = useState(false)
   const [threads, setThreads] = useState<Record<string, ThreadEntry[]>>({})
   const [busySessions, setBusySessions] = useState<Set<string>>(new Set())
   const [models, setModels] = useState<SessionModels | null>(null)
@@ -132,6 +134,16 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
 
+  useEffect(() => {
+    const onShortcut = (event: globalThis.KeyboardEvent): void => {
+      if (!(event.ctrlKey || event.metaKey) || event.key !== '`') return
+      event.preventDefault()
+      if (activeSessionId) setTerminalOpen((open) => !open)
+    }
+    window.addEventListener('keydown', onShortcut)
+    return () => window.removeEventListener('keydown', onShortcut)
+  }, [activeSessionId])
+
   const activeSession = useMemo(() => sessions.find((s) => s.sessionId === activeSessionId) ?? null, [sessions, activeSessionId])
   const entries = useMemo(() => threads[activeSessionId ?? ''] ?? [], [threads, activeSessionId])
   const threadContext = useMemo(() => collectThreadContext(entries), [entries])
@@ -139,6 +151,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
   // Non-harness sessions (and drafts of one) hide harness-only composer controls.
   const engineSessionIds = useMemo(() => new Set(engineSessions.map((session) => session.sessionId)), [engineSessions])
   const activeEngineSession = activeSessionId !== null ? engineSessions.find((session) => session.sessionId === activeSessionId) : undefined
+  const terminalCwd = activeSession?.cwd ?? activeEngineSession?.cwd
   const activeEngineId = activeEngineSession
     ? activeEngineSession.engineId
     : activeSessionId === null && draftEngineId !== null
@@ -898,16 +911,27 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
               </strong>
             </div>
           </div>
-          <span
-            className={cn(
-              'inline-block size-2 rounded-full',
-              status?.state === 'ready' && 'bg-primary',
-              (status?.state === 'running' || status?.state === 'starting') && 'animate-pulse-dot bg-info',
-              status?.state === 'error' && 'bg-destructive',
-              !status?.state || status.state === 'stopped' ? 'bg-faint' : '',
-            )}
-            title={status?.error}
-          />
+          <div className="flex shrink-0 items-center gap-1.5">
+            <button
+              type="button"
+              disabled={!activeSessionId}
+              className={cn('flex h-6 items-center gap-1 rounded-md border px-1.5 font-mono text-[9px] transition-colors disabled:opacity-40', terminalOpen ? 'border-primary/25 bg-primary/[0.08] text-primary' : 'border-border-soft text-faint hover:bg-accent hover:text-foreground')}
+              title="Toggle this chat's isolated terminal (Ctrl/Cmd + Backtick)"
+              onClick={() => setTerminalOpen((open) => !open)}
+            >
+              <span>&gt;_</span><span>Terminal</span>
+            </button>
+            <span
+              className={cn(
+                'inline-block size-2 rounded-full',
+                status?.state === 'ready' && 'bg-primary',
+                (status?.state === 'running' || status?.state === 'starting') && 'animate-pulse-dot bg-info',
+                status?.state === 'error' && 'bg-destructive',
+                !status?.state || status.state === 'stopped' ? 'bg-faint' : '',
+              )}
+              title={status?.error}
+            />
+          </div>
         </header>
 
         {!status?.sourceReady ? (
@@ -983,6 +1007,8 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
             </div>
           ) : null}
         </div>
+
+        <TerminalDock open={terminalOpen} sessionId={activeSessionId} {...(terminalCwd ? { cwd: terminalCwd } : {})} onOpenChange={setTerminalOpen} onError={onError} />
 
         <div className="mx-3 my-1.5 flex flex-col rounded-xl border border-border bg-surface-1 px-2.5 py-2 shadow-[0_4px_16px_rgba(0,0,0,0.18)]" ref={menuRef}>
           {elementChips.length > 0 ? (

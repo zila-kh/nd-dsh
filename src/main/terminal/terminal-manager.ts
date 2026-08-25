@@ -6,7 +6,7 @@ import process from 'node:process'
 import type { TerminalCreateInput, TerminalExitEvent, TerminalOutputEvent, TerminalPaneLayout, TerminalSessionState, TerminalSnapshot, TerminalStateEvent } from '../../shared/terminal.js'
 import type { WorkspaceService } from '../workspace/workspace-service.js'
 
-const require = createRequire(import.meta.url)
+const nodeRequire = createRequire(import.meta.url)
 const MAX_BUFFER = 512 * 1024
 const MAX_INPUT = 64 * 1024
 const RESTORE_MARKER = '\r\n\x1b[2m[ND] Restored terminal after desktop restart; the previous shell process ended with the app.\x1b[0m\r\n'
@@ -270,14 +270,14 @@ export class TerminalManager {
 }
 
 function defaultSpawn(file: string, args: string[], options: PtySpawnOptions): PtyProcessLike {
-  ensureSpawnHelper(); const pty = require('node-pty') as typeof import('node-pty'); return pty.spawn(file, args, options)
+  ensureSpawnHelper(); const pty = nodeRequire('node-pty') as typeof import('node-pty'); return pty.spawn(file, args, options)
 }
 function ensureSpawnHelper(): void {
   if (process.platform === 'win32') return
   try {
-    const resolved = require.resolve('node-pty/lib/unixTerminal.js').replace(/[/\\]lib[/\\]unixTerminal\.js$/, '')
+    const resolved = nodeRequire.resolve('node-pty/lib/unixTerminal.js').replace(/[/\\]lib[/\\]unixTerminal\.js$/, '')
     for (const path of [join(resolved, 'build/Release/spawn-helper'), join(resolved, 'build/Debug/spawn-helper')]) {
-      try { const stat = require('node:fs').statSync(path); if ((stat.mode & 0o111) === 0) require('node:fs').chmodSync(path, stat.mode | 0o755); return } catch { /* try next */ }
+      try { const stat = nodeRequire('node:fs').statSync(path); if ((stat.mode & 0o111) === 0) nodeRequire('node:fs').chmodSync(path, stat.mode | 0o755); return } catch { /* try next */ }
     }
   } catch { /* node-pty will surface the real spawn failure */ }
 }
