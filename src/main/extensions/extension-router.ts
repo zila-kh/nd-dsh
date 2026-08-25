@@ -25,6 +25,9 @@ export class ExtensionRouter {
   async preview(extensionId: string): Promise<ExtensionRoutePreview> {
     const extension = await this.store.get(extensionId)
     if (!extension) throw new Error(`Unknown extension: ${extensionId}`)
+    // Compatibility preview answers "how would this route if enabled?"; the
+    // extension's actual enabled flag is still returned to the UI separately.
+    const previewExtension = { ...extension, enabled: true }
     const engines = this.engines.list()
     const providers = this.providers.list().filter((provider) => provider.enabled)
     const routes: ExtensionRoutePreview['routes'] = []
@@ -33,12 +36,12 @@ export class ExtensionRouter {
       // ND Harness we show one row per enabled provider so provider scope is
       // visible and testable in the same matrix.
       if (!engine.capabilities.modelProviderRouting || providers.length === 0) {
-        const route = resolveExtensionRoute(extension, engine)
+        const route = resolveExtensionRoute(previewExtension, engine)
         routes.push({ ...route, engineName: engine.name })
         continue
       }
       for (const provider of providers) {
-        const route = resolveExtensionRoute(extension, engine, provider)
+        const route = resolveExtensionRoute(previewExtension, engine, provider)
         routes.push({ ...route, engineName: engine.name, providerName: provider.name })
       }
     }
