@@ -41,6 +41,19 @@ test('primary surfaces switch without renderer errors', async () => {
   expect(rendererErrors).toEqual([])
 })
 
+test('Company exposes the AI operations control center', async () => {
+  const { page } = launched
+  await page.getByRole('navigation', { name: 'ND-DSH navigation' }).getByTitle('Company').click()
+  await expect(page).toHaveURL(/#\/company$/)
+  await page.getByRole('button', { name: 'Operations', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Needs You', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Verification', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Signal Inbox', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'AI Employee Performance', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Company Workspace', exact: true }).click()
+  expect(rendererErrors).toEqual([])
+})
+
 test('Settings sub-tabs update their addressable route', async () => {
   const { page } = launched
   const navigation = page.getByRole('navigation', { name: 'ND-DSH navigation' })
