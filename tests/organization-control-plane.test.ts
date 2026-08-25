@@ -28,7 +28,28 @@ async function fixture() {
   const value = organization()
   const store = {
     state: async () => structuredClone(value),
-    taskContext: async () => { throw new Error('not used in this fixture') },
+    taskContext: async (taskId: string) => ({
+      company: value.companies[0]!,
+      project: value.projects[0]!,
+      task: {
+        id: taskId,
+        companyId: 'company-1',
+        projectId: 'project-1',
+        title: 'Fixture task',
+        description: 'Synthetic control-plane fixture task',
+        status: 'review',
+        priority: 'medium',
+        acceptanceCriteria: [],
+        dependsOn: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+      role: undefined,
+      agent: undefined,
+      skills: [],
+      memory: [],
+      policies: [],
+    }),
   }
   return { root, value, control: new OrganizationControlPlane(join(root, 'control.json'), store as never) }
 }
