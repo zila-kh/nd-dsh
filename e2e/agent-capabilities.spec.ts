@@ -35,7 +35,7 @@ test('all seven agent capability surfaces ship an executable Counter demo', asyn
   ] as const
 
   for (const [surface, demoName] of surfaces) {
-    await page.getByRole('button', { name: surface, exact: true }).click()
+    await page.getByRole('button', { name: new RegExp(`^${surface}\\b`) }).click()
     await page.getByRole('button', { name: new RegExp(demoName) }).click()
     await expect(page.getByText('Counter route smoke test', { exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'Run demo', exact: true }).click()
@@ -47,7 +47,7 @@ test('all seven agent capability surfaces ship an executable Counter demo', asyn
 
 test('custom extension settings persist through the trusted desktop bridge', async () => {
   const { page } = launched
-  await page.getByRole('button', { name: 'Plugins', exact: true }).click()
+  await page.getByRole('button', { name: /^Plugins\b/ }).click()
   await page.getByRole('button', { name: 'Add Plugin', exact: true }).click()
   await expect(page.getByText('Custom', { exact: true }).last()).toBeVisible()
 
@@ -62,11 +62,11 @@ test('custom extension settings persist through the trusted desktop bridge', asy
   await enabled.check()
   await expect(enabled).toBeChecked()
 
-  // Navigate away and back so the renderer must read the persisted catalog,
-  // not merely keep the edited React object alive.
+  // Navigate away and back so ExtensionSettings remounts and reloads the
+  // catalog through the trusted main-process bridge instead of React state.
   await page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab', { name: 'General', exact: true }).click()
   await page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab', { name: 'Agent capabilities', exact: true }).click()
-  await page.getByRole('button', { name: 'Plugins', exact: true }).click()
+  await page.getByRole('button', { name: /^Plugins\b/ }).click()
   await expect(page.getByText('E2E Routed Plugin', { exact: true })).toBeVisible()
   expect(rendererErrors).toEqual([])
 })
