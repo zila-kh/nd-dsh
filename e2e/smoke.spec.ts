@@ -41,7 +41,7 @@ test('primary surfaces switch without renderer errors', async () => {
   expect(rendererErrors).toEqual([])
 })
 
-test('Company exposes the AI operations control center', async () => {
+test('Company exposes operations and long-horizon strategy controls', async () => {
   const { page } = launched
   await page.getByRole('navigation', { name: 'ND-DSH navigation' }).getByTitle('Company').click()
   await expect(page).toHaveURL(/#\/company$/)
@@ -66,6 +66,15 @@ test('Company exposes the AI operations control center', async () => {
   await expect(page.getByRole('heading', { name: 'Verification', exact: true })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Signal Inbox', exact: true })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'AI Employee Performance', exact: true })).toBeVisible()
+
+  await page.getByRole('button', { name: 'Strategy', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Release Readiness', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Strategic Anchors', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Company Brain', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Scheduled Company Work', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Human Review Feed', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Action Audit', exact: true })).toBeVisible()
+
   await page.getByRole('button', { name: 'Company Workspace', exact: true }).click()
   expect(rendererErrors).toEqual([])
 })
