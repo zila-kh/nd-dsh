@@ -11,8 +11,8 @@ afterEach(async () => { await Promise.all(dirs.splice(0).map((path) => rm(path, 
 class FakePty implements PtyProcessLike {
   writes: string[] = []
   killed = false
-  private data?: (value: string) => void
-  private exit?: (value: { exitCode: number; signal?: number }) => void
+  private data: ((value: string) => void) | undefined = undefined
+  private exit: ((value: { exitCode: number; signal?: number }) => void) | undefined = undefined
   constructor(readonly pid: number) {}
   write(data: string): void { this.writes.push(data) }
   resize(): void {}
