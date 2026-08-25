@@ -317,17 +317,12 @@ function explicitAdapterSupported(
 function toolTransportHint(extension: AgentExtensionManifest, adapter: Exclude<ExtensionAdapter, 'auto'>): string | undefined {
   if (!hasExecutableToolRuntime(extension)) return undefined
   if (adapter === 'mcp') {
-    if (extension.builtInDemo) return 'Use the counter_get, counter_add, and counter_reset MCP tools exposed by the nd-extensions server.'
-    return `Use the MCP tools prefixed with ext_${toolSafeId(extension.id)}__ that ND exposes for this extension.`
+    return `Use mcp__nd-extensions__nd_extension_list with extensionId=${JSON.stringify(extension.id)} to discover the routed tool names, then mcp__nd-extensions__nd_extension_call with that extensionId, toolName, and arguments. The stable ND MCP gateway enforces the live extension catalog on every call.`
   }
   if (adapter === 'nd-proxy') {
     return `Use the ND extension proxy through the shell: "$ND_EXTENSION_NODE" "$ND_EXTENSION_PROXY" list ${JSON.stringify(extension.id)} to discover tools, then "$ND_EXTENSION_NODE" "$ND_EXTENSION_PROXY" call ${JSON.stringify(extension.id)} <tool-name> '<json-arguments>'.`
   }
   return undefined
-}
-
-function toolSafeId(value: string): string {
-  return value.replace(/[^a-zA-Z0-9_]/g, '_')
 }
 
 function isHarnessEngine(engineId: string): boolean {
