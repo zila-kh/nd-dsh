@@ -43,7 +43,7 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
 
   useEffect(() => {
     let mounted = true
-    void Promise.all([window.ndDsh.extensions.list(), window.ndDsh.engines.list(), window.ndDsh.providers.list()])
+    void Promise.all([window.ndDshExtensions.list(), window.ndDsh.engines.list(), window.ndDsh.providers.list()])
       .then(([extensionItems, engineItems, providerItems]) => {
         if (!mounted) return
         setExtensions(extensionItems)
@@ -54,7 +54,7 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
       })
       .catch((cause) => onError(errorMessage(cause)))
       .finally(() => { if (mounted) setBusy(null) })
-    const offExtensions = window.ndDsh.extensions.onChanged((items) => { if (mounted) setExtensions(items) })
+    const offExtensions = window.ndDshExtensions.onChanged((items) => { if (mounted) setExtensions(items) })
     const offProviders = window.ndDsh.providers.onChanged((items) => { if (mounted) setProviders(items) })
     return () => {
       mounted = false
@@ -84,7 +84,7 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
     if (busy) return
     setBusy(`${label}-${next.id}`)
     try {
-      const items = await window.ndDsh.extensions.save(next)
+      const items = await window.ndDshExtensions.save(next)
       setExtensions(items)
     } catch (cause) {
       onError(errorMessage(cause))
@@ -127,7 +127,7 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
     if (busy) return
     setBusy('reset')
     try {
-      const items = await window.ndDsh.extensions.resetDemos()
+      const items = await window.ndDshExtensions.resetDemos()
       setExtensions(items)
       setSurface('plugin')
       setSelectedId('demo-counter-plugin')
@@ -155,7 +155,7 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
     }
     setBusy('add')
     try {
-      setExtensions(await window.ndDsh.extensions.save(manifest))
+      setExtensions(await window.ndDshExtensions.save(manifest))
       setSelectedId(id)
     } catch (cause) {
       onError(errorMessage(cause))
@@ -168,7 +168,7 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
     if (!selected || selected.builtInDemo || busy) return
     setBusy(`delete-${selected.id}`)
     try {
-      const items = await window.ndDsh.extensions.remove(selected.id)
+      const items = await window.ndDshExtensions.remove(selected.id)
       setExtensions(items)
       const next = items.find((item) => item.surface === surface)
       setSelectedId(next?.id ?? '')
@@ -194,7 +194,7 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
     if (!selected?.builtInDemo || busy) return
     setBusy(`demo-${selected.id}`)
     try {
-      setDemoResult(await window.ndDsh.extensions.runDemo(
+      setDemoResult(await window.ndDshExtensions.runDemo(
         selected.id,
         demoEngineId || undefined,
         demoProviderId || undefined,
@@ -353,7 +353,9 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
             <SettingsSection title="Coding engine routes">
               <div className="space-y-1.5">
                 {engines.map((engine) => {
-                  const route = resolveExtensionRoute(selected, engine)
+                  // Compatibility should stay visible even while the extension
+                  // itself is disabled; enablement is displayed separately.
+                  const route = resolveExtensionRoute({ ...selected, enabled: true }, engine)
                   const configured = selected.engineRoutes.find((item) => item.engineId === engine.id)?.adapter ?? 'auto'
                   return (
                     <SettingsRow key={engine.id}>
