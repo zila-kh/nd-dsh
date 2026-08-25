@@ -46,7 +46,7 @@ export function registerOrganizationIpc(
   // Reconcile independently so evidence, typed results, leases and quotas never
   // depend on a screen being open or a user requesting status.
   const reconcileTimer = setInterval(() => {
-    void control.state().catch((error) => console.warn('Organization control reconciliation failed:', error instanceof Error ? error.message : String(error)))
+    void reconcileControlState(store, control).catch((error) => console.warn('Organization control reconciliation failed:', error instanceof Error ? error.message : String(error)))
   }, 1_500)
   reconcileTimer.unref()
 
@@ -161,6 +161,7 @@ function guardOrchestrator(
     const state = await store.state()
     const resolvedProjectId = projectId ?? state.activeProjectId
     if (!resolvedProjectId) throw new Error('No active project')
+    await assertProjectCompletionEvidence(store, control, resolvedProjectId)
     await control.assertRunnable(resolvedProjectId, 'workflow.continue')
     const result = await runNext(projectId, explicit)
     if (result) await control.noteDispatch(result)
@@ -172,6 +173,43 @@ function guardOrchestrator(
     orchestrator.runTask = runTask
     orchestrator.reviewTask = reviewTask
     orchestrator.runNext = runNext
+  }
+}
+
+async function reconcileControlState(store: OrganizationStore, control: OrganizationControlPlane): Promise<void> {
+  await control.state()
+  const organization = await store.state()
+  for (const project of organization.projects) {
+    await assertProjectCompletionEvidence(store, control, project.id, false)
+  }
+}
+
+/**
+ * A task that reached `completed` through a reviewer is not allowed to unlock
+ * successor work when its exact worktree receipt is stale or unavailable.
+ * Pre-existing completed tasks without a control receipt are left untouched so
+ * upgrading ND does not retroactively invalidate old project history.
+ */
+async function assertProjectCompletionEvidence(
+  store: OrganizationStore,
+  control: OrganizationControlPlane,
+  projectId: string,
+  throwOnFailure = true,
+): Promise<void> {
+  const [organization, controlState] = await Promise.all([store.state(), control.state()])
+  for (const task of organization.tasks.filter((item) => item.projectId === projectId && item.status === 'completed')) {
+    const receipt = controlState.evidence.find((item) => item.taskId === task.id)
+    if (!receipt || receipt.status === 'verified') continue
+    if (receipt.status === 'pending_review') {
+      const verified = await control.verifyEvidence(task.id)
+      if (verified?.status === 'verified') continue
+    }
+    const current = (await control.state()).evidence.find((item) => item.taskId === task.id)
+    if (!current || current.status === 'verified') continue
+    await store.mutate({ type: 'task.update', id: task.id, patch: { status: 'blocked' } })
+    if (throwOnFailure) {
+      throw new Error(`Task ${task.title} cannot advance: independent-review evidence is ${current.status}. Re-review the exact current workspace.`)
+    }
   }
 }
 
