@@ -1,7 +1,9 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, screen, shell, type IpcMainInvokeEvent } from 'electron'
+import { join } from 'node:path'
 import { CAPABILITIES_IPC, type CapabilityKind, type CapabilityProviderStatus, type CapabilitySubjectType } from '../shared/capabilities.js'
 import type { BrowserBounds, DshSurface, HarnessRunOptions, InspectScope, ModelProvider, QaSuiteId, ThemeMode } from '../shared/contracts.js'
 import { IPC } from '../shared/contracts.js'
+import { EXTENSIONS_IPC } from '../shared/extensions.js'
 import { projectRoot } from './app-paths.js'
 import { capturePrimaryDisplay, captureSelfWindow } from './capture/app-capture.js'
 import { describePick, ExternalElementStage, formatExternalElementContext, pickElementInExternalApp, RecentPickStore, type ExternalPick } from './capture/external-inspect.js'
@@ -10,6 +12,10 @@ import type { CapabilityRegistry } from './capabilities/capability-registry.js'
 import type { DshSurfaceController } from './dsh/dsh-surface.js'
 import type { CodingEngineRegistry } from './engines/coding-engine-registry.js'
 import type { EngineSessionRouter } from './engines/engine-session-router.js'
+import { ExtensionDemoService } from './extensions/extension-demo-service.js'
+import { registerExtensionIpc } from './extensions/ipc.js'
+import { ExtensionRouter } from './extensions/extension-router.js'
+import { ExtensionStore } from './extensions/extension-store.js'
 import type { GitService } from './git/git-service.js'
 import type { HarnessService } from './harness/harness-service.js'
 import type { ProviderStore } from './providers.js'
@@ -81,6 +87,18 @@ export function registerIpc(deps: IpcDependencies): () => void {
     })
     channels.push(channel)
   }
+
+  // Universal extension control plane: durable manifests, compatibility
+  // previews, executable counter demos, and run-time prompt decoration all
+  // share one store/router instance for the lifetime of this desktop window.
+  const extensionStore = new ExtensionStore(join(app.getPath('userData'), 'agent-extensions.json'))
+  const extensionRouter = new ExtensionRouter(extensionStore, deps.engines, deps.providers)
+  const extensionDemos = new ExtensionDemoService(extensionStore, deps.engines, deps.providers)
+  deps.engineRouter.setExtensionRouter(extensionRouter)
+  const disposeExtensionIpc = registerExtensionIpc(deps.window, extensionStore, extensionRouter, extensionDemos)
+  extensionStore.setOnChanged((extensions) => {
+    if (!deps.window.isDestroyed()) deps.window.webContents.send(EXTENSIONS_IPC.changedEvent, extensions)
+  })
 
   let floatWindow: BrowserWindow | null = null
 
@@ -423,6 +441,8 @@ export function registerIpc(deps: IpcDependencies): () => void {
   handle(IPC.qaStop, () => deps.qa.stop())
 
   return () => {
+    extensionStore.setOnChanged(undefined)
+    disposeExtensionIpc()
     for (const channel of channels) ipcMain.removeHandler(channel)
   }
 }
@@ -596,9 +616,15 @@ function asRunOptions(value: unknown): HarnessRunOptions {
   if (sessionId !== undefined && (typeof sessionId !== 'string' || !sessionId.trim() || sessionId.length > 128)) throw new Error('sessionId must be a short non-empty string')
   const engineId = record.engineId
   if (engineId !== undefined && (typeof engineId !== 'string' || !engineId.trim() || engineId.length > 64)) throw new Error('engineId must be a short non-empty string')
+  const provider = record.provider
+  if (provider !== undefined && (typeof provider !== 'string' || !provider.trim() || provider.length > 256)) throw new Error('provider must be a short non-empty string')
+  const model = record.model
+  if (model !== undefined && (typeof model !== 'string' || !model.trim() || model.length > 256)) throw new Error('model must be a short non-empty string')
   return {
     ...(typeof sessionId === 'string' ? { sessionId: sessionId.trim() } : {}),
     ...(typeof engineId === 'string' ? { engineId: engineId.trim() } : {}),
+    ...(typeof provider === 'string' ? { provider: provider.trim() } : {}),
+    ...(typeof model === 'string' ? { model: model.trim() } : {}),
   }
 }
 
