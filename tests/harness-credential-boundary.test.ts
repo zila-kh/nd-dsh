@@ -23,7 +23,7 @@ describe('pinned Harness credential boundary', () => {
 
   it('keeps ND-generated provider secret variable names inside that scrub shape', async () => {
     const source = await readFile(join(process.cwd(), 'src/main/provider-runtime.ts'), 'utf8')
-    expect(source).toContain("env.DEEPSEEK_API_KEY = apiKey")
-    expect(source).toContain("return `ND_DSH_LLM_KEY_${hash.slice(0, 12).toUpperCase()}`")
+    expect(source).toContain('environment.DEEPSEEK_API_KEY = apiKey')
+    expect(source).toContain('return `ND_DSH_LLM_KEY_${digest}`')
   })
 })
