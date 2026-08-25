@@ -1,7 +1,14 @@
-import { ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
-import { ORGANIZATION_IPC, type OrganizationMutation, type OrganizationSnapshot } from '../../shared/organization.js'
+import { app, ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
+import { join } from 'node:path'
+import {
+  ORGANIZATION_CONTROL_IPC,
+  type OrganizationControlAction,
+  type OrganizationControlMutation,
+} from '../../shared/organization-control.js'
+import { ORGANIZATION_IPC, type OrganizationMutation, type OrganizationRunReceipt, type OrganizationSnapshot } from '../../shared/organization.js'
 import type { ProjectRuntimeService } from '../workspace/project-runtime.js'
 import type { ProjectWorkspaceCoordinator } from '../workspace/project-workspace-coordinator.js'
+import { OrganizationControlPlane } from './control-plane.js'
 import type { OrganizationOrchestrator } from './orchestrator.js'
 import type { OrganizationStore } from './store.js'
 
@@ -10,6 +17,10 @@ const MUTATIONS = new Set([
   'team.create', 'role.create', 'agent.create', 'skill.create', 'workflow.create', 'goal.create', 'task.create',
   'task.update', 'memory.add', 'policy.set',
 ])
+const CONTROL_MUTATIONS = new Set([
+  'human-action.add', 'human-action.resolve', 'signal.add', 'signal.triage', 'budget.set', 'feedback.add',
+])
+const CONTROL_ACTIONS = new Set<OrganizationControlAction>(['internal.plan', 'task.execute', 'task.review', 'workflow.continue'])
 
 export function registerOrganizationIpc(
   window: BrowserWindow,
@@ -19,6 +30,11 @@ export function registerOrganizationIpc(
   projectRuntime?: ProjectRuntimeService,
 ): () => void {
   const channels: string[] = []
+  const control = new OrganizationControlPlane(join(app.getPath('userData'), 'organization-control.json'), store)
+  control.setOnChanged((state) => {
+    if (!window.isDestroyed()) window.webContents.send(ORGANIZATION_CONTROL_IPC.changed, state)
+  })
+
   const handle = (channel: string, listener: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown | Promise<unknown>): void => {
     ipcMain.removeHandler(channel)
     ipcMain.handle(channel, (event, ...args) => {
@@ -37,7 +53,9 @@ export function registerOrganizationIpc(
     const projectId = autopilotProjectId(mutation, state)
     if (projectId) {
       try {
-        await orchestrator.runNext(projectId, false)
+        await control.assertRunnable(projectId, 'workflow.continue')
+        const receipt = await orchestrator.runNext(projectId, false)
+        if (receipt) await control.noteDispatch(receipt)
         return store.state()
       } catch (error) {
         console.warn('Organization autopilot did not start:', error instanceof Error ? error.message : String(error))
@@ -45,10 +63,40 @@ export function registerOrganizationIpc(
     }
     return state
   })
-  handle(ORGANIZATION_IPC.planProject, (_event, value) => orchestrator.planProject(asId(value, 'Project id')))
-  handle(ORGANIZATION_IPC.runTask, (_event, value) => orchestrator.runTask(asId(value, 'Task id')))
-  handle(ORGANIZATION_IPC.reviewTask, (_event, value) => orchestrator.reviewTask(asId(value, 'Task id')))
-  handle(ORGANIZATION_IPC.runNext, (_event, value) => orchestrator.runNext(value === undefined || value === null ? undefined : asId(value, 'Project id')))
+  handle(ORGANIZATION_IPC.planProject, async (_event, value) => {
+    const projectId = asId(value, 'Project id')
+    await control.assertRunnable(projectId, 'internal.plan')
+    return track(control, await orchestrator.planProject(projectId))
+  })
+  handle(ORGANIZATION_IPC.runTask, async (_event, value) => {
+    const taskId = asId(value, 'Task id')
+    const context = await store.taskContext(taskId)
+    await control.assertRunnable(context.project.id, 'task.execute', taskId)
+    return track(control, await orchestrator.runTask(taskId))
+  })
+  handle(ORGANIZATION_IPC.reviewTask, async (_event, value) => {
+    const taskId = asId(value, 'Task id')
+    const context = await store.taskContext(taskId)
+    await control.assertRunnable(context.project.id, 'task.review', taskId)
+    return track(control, await orchestrator.reviewTask(taskId))
+  })
+  handle(ORGANIZATION_IPC.runNext, async (_event, value) => {
+    const projectId = value === undefined || value === null ? undefined : asId(value, 'Project id')
+    await control.assertRunnable(projectId, 'workflow.continue')
+    const receipt = await orchestrator.runNext(projectId)
+    if (receipt) await control.noteDispatch(receipt)
+    return receipt
+  })
+
+  handle(ORGANIZATION_CONTROL_IPC.state, () => control.state())
+  handle(ORGANIZATION_CONTROL_IPC.mutate, (_event, value) => control.mutate(asControlMutation(value)))
+  handle(ORGANIZATION_CONTROL_IPC.management, (_event, value) => control.management(value === undefined || value === null ? undefined : asId(value, 'Project id')))
+  handle(ORGANIZATION_CONTROL_IPC.shouldRun, (_event, projectValue, actionValue, taskValue) => {
+    const projectId = projectValue === undefined || projectValue === null ? undefined : asId(projectValue, 'Project id')
+    const taskId = taskValue === undefined || taskValue === null ? undefined : asId(taskValue, 'Task id')
+    return control.shouldRun(projectId, asControlAction(actionValue), taskId)
+  })
+  handle(ORGANIZATION_CONTROL_IPC.verifyEvidence, (_event, value) => control.verifyEvidence(asId(value, 'Task id')))
 
   // Project dev-server lifecycle: validate → start → health → open browser.
   if (projectRuntime) {
@@ -57,7 +105,15 @@ export function registerOrganizationIpc(
     handle(ORGANIZATION_IPC.runtimeStop, (_event, value) => projectRuntime.stop(asId(value, 'Project id')))
   }
 
-  return () => { for (const channel of channels) ipcMain.removeHandler(channel) }
+  return () => {
+    control.setOnChanged(undefined)
+    for (const channel of channels) ipcMain.removeHandler(channel)
+  }
+}
+
+async function track(control: OrganizationControlPlane, receipt: OrganizationRunReceipt): Promise<OrganizationRunReceipt> {
+  await control.noteDispatch(receipt)
+  return receipt
 }
 
 function autopilotProjectId(mutation: OrganizationMutation, state: OrganizationSnapshot): string | undefined {
@@ -91,6 +147,18 @@ function asMutation(value: unknown): OrganizationMutation {
   const type = (value as Record<string, unknown>).type
   if (typeof type !== 'string' || !MUTATIONS.has(type)) throw new Error('Unsupported organization mutation')
   return value as OrganizationMutation
+}
+
+function asControlMutation(value: unknown): OrganizationControlMutation {
+  if (!value || typeof value !== 'object') throw new Error('Organization control mutation must be an object')
+  const type = (value as Record<string, unknown>).type
+  if (typeof type !== 'string' || !CONTROL_MUTATIONS.has(type)) throw new Error('Unsupported organization control mutation')
+  return value as OrganizationControlMutation
+}
+
+function asControlAction(value: unknown): OrganizationControlAction {
+  if (typeof value !== 'string' || !CONTROL_ACTIONS.has(value as OrganizationControlAction)) throw new Error('Unsupported organization control action')
+  return value as OrganizationControlAction
 }
 
 function asId(value: unknown, label: string): string {
