@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
 import process from 'node:process'
 import {
   AGENT_EXTENSION_SURFACES,
@@ -11,6 +11,7 @@ import {
   type ExtensionAdapter,
   type ExtensionRuntimeSpec,
 } from '../../shared/extensions.js'
+import { projectRoot } from '../app-paths.js'
 
 interface ExtensionSnapshot {
   version: 1
@@ -32,7 +33,17 @@ export class ExtensionStore {
   private value: ExtensionSnapshot = { version: 1, extensions: cloneBuiltinExtensionDemos() }
   private onChanged: ((extensions: AgentExtensionManifest[]) => void) | undefined
 
-  constructor(private readonly filePath: string) {}
+  constructor(private readonly filePath: string) {
+    // Both execution engines inherit these stable references. The catalog
+    // contains no secret values; custom MCP env config stores only parent-env
+    // variable names and resolves their values inside the child at execution.
+    const runtimeEntry = join(projectRoot(), 'scripts', 'nd-extension-runtime.mjs')
+    process.env.ND_EXTENSION_NODE = process.execPath
+    process.env.ND_EXTENSION_PROXY = runtimeEntry
+    process.env.ND_EXTENSION_CATALOG = filePath
+    process.env.ND_EXTENSION_STATE = join(dirname(filePath), 'agent-extension-state.json')
+    process.env.ND_DSH_EXTENSION_MCP_ENTRY = runtimeEntry
+  }
 
   setOnChanged(listener: ((extensions: AgentExtensionManifest[]) => void) | undefined): void {
     this.onChanged = listener
