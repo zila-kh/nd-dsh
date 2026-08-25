@@ -24,6 +24,7 @@
     "src/shared/**/*.ts",
     "scripts/**/*.mjs",
     "src/renderer/src/lib/model-selection.ts",
+    "src/renderer/src/lib/runtime-notices.ts",
     "src/renderer/src/lib/settings-route.ts",
     "tests/**/*.ts",
     "e2e/**/*.ts"

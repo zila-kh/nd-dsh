@@ -43,6 +43,7 @@ const api: DesktopApi = {
     setApiKey: (providerId, apiKey) => ipcRenderer.invoke(IPC.providersSetApiKey, providerId, apiKey),
     clearApiKey: (providerId) => ipcRenderer.invoke(IPC.providersClearApiKey, providerId),
     ping: (providerId, force) => ipcRenderer.invoke(IPC.providersPing, providerId, force),
+    testCompletion: (providerId) => ipcRenderer.invoke(IPC.providersTestCompletion, providerId),
     onChanged: (listener) => {
       const handler = (_event: Electron.IpcRendererEvent, providers: ModelProvider[]) => listener(providers)
       ipcRenderer.on(IPC.providersChangedEvent, handler)

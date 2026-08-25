@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node
 import { dirname, join } from 'node:path'
 import type { ModelProvider, ProviderModel, ProviderPingResult } from '../shared/contracts.js'
 import { buildProviderRuntime, DIRECT_DEEPSEEK_ROUTE, type ProviderRuntimeConfig } from './provider-runtime.js'
-import { pingProvider } from './provider-ping.js'
+import { pingProvider, probeProviderCompletion } from './provider-ping.js'
 
 const PROVIDERS_FILE = 'providers.json'
 const PROVIDER_SECRETS_FILE = 'provider-secrets.json'
@@ -184,6 +184,30 @@ export class ProviderStore {
 
   runtimeConfig(): ProviderRuntimeConfig {
     return buildProviderRuntime(this.providers)
+  }
+
+  /**
+   * Real generation probe against the provider's first configured model. The
+   * /models ping cannot see the completion path, so this is the honest
+   * "will sessions work" check. Never cached: every press is a fresh probe.
+   */
+  async testCompletion(providerId: string): Promise<ProviderPingResult> {
+    const requested = providerId.trim()
+    const id = requested === DIRECT_DEEPSEEK_ROUTE ? 'deepseek' : requested
+    const provider = this.providers.find((item) => item.id === id)
+    if (!provider) throw new Error('Provider not found')
+    const model = provider.models.find((item) => item.id.trim())?.id.trim()
+    if (!model) throw new Error(`Provider ${provider.name || id} has no configured model to test`)
+    const outcome = await probeProviderCompletion({ baseUrl: provider.baseUrl, apiKey: provider.apiKey, model })
+    return {
+      providerId: id,
+      state: outcome.state,
+      ...(outcome.latencyMs !== undefined ? { latencyMs: outcome.latencyMs } : {}),
+      ...(outcome.status !== undefined ? { status: outcome.status } : {}),
+      hasApiKey: Boolean(provider.apiKey.trim()),
+      at: Date.now(),
+      ...(outcome.detail ? { detail: outcome.detail } : {}),
+    }
   }
 
   /** Trusted main-process summary used by runtime status computation. */

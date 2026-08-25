@@ -16,6 +16,11 @@ export interface AgentBrowserStatus {
 
 const COMMAND_TIMEOUT_MS = 120_000
 const MAX_CAPTURE_CHARS = 2_000_000
+const BIND_RETRY_DELAY_MS = 2_500
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
 
 export class AgentBrowserClient {
   readonly cdpPort: number
@@ -76,13 +81,27 @@ export class AgentBrowserClient {
       // A brand-new pinned session may create a fresh tab before a target is
       // selected. Bind once without strict pinning, then turn strict pinning on
       // for every subsequent CLI and MCP command.
-      await this.run(['tab', targetId], ['--no-pin-tab'])
-      await this.run(['get', 'url'], ['--pin-tab'])
+      //
+      // A cold daemon's first CDP attach can fail or stall against the visible
+      // pane; one transparent retry keeps that off the agent's tool path
+      // instead of surfacing as an unavailable browser mid-session.
+      try {
+        await this.bindPinnedTab(targetId)
+      } catch {
+        this.statusValue = { state: 'binding' }
+        await sleep(BIND_RETRY_DELAY_MS)
+        await this.bindPinnedTab(targetId)
+      }
       this.statusValue = { state: 'ready' }
     } catch (error) {
       this.recordFailure(error)
       throw error
     }
+  }
+
+  private async bindPinnedTab(targetId: string): Promise<void> {
+    await this.run(['tab', targetId], ['--no-pin-tab'])
+    await this.run(['get', 'url'], ['--pin-tab'])
   }
 
   async snapshot(): Promise<unknown> {

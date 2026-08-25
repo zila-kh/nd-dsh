@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifyPingStatus, pingProvider, providerPingUrl } from '../src/main/provider-ping.js'
+import { classifyCompletionStatus, classifyPingStatus, pingProvider, providerCompletionUrl, probeProviderCompletion, providerPingUrl } from '../src/main/provider-ping.js'
 
 function fakeFetch(status: number, delayMs = 0): typeof fetch {
   return (async () => {
@@ -66,5 +66,70 @@ describe('pingProvider', () => {
     })
     expect(outcome).toEqual({ state: 'unreachable' })
     expect(called).toBe(false)
+  })
+})
+
+describe('providerCompletionUrl', () => {
+  it('appends the chat completions path and strips trailing slashes', () => {
+    expect(providerCompletionUrl('https://openrouter.ai/api/v1')).toBe('https://openrouter.ai/api/v1/chat/completions')
+    expect(providerCompletionUrl('http://127.0.0.1:20128/v1/')).toBe('http://127.0.0.1:20128/v1/chat/completions')
+  })
+})
+
+describe('classifyCompletionStatus', () => {
+  it('treats a 200 without an error envelope as ok', () => {
+    expect(classifyCompletionStatus(200, false)).toBe('ok')
+  })
+
+  it('treats a 200 carrying an error envelope as unreachable', () => {
+    expect(classifyCompletionStatus(200, true)).toBe('unreachable')
+  })
+
+  it('marks credential rejections and upstream statuses', () => {
+    expect(classifyCompletionStatus(401, false)).toBe('auth')
+    expect(classifyCompletionStatus(403, false)).toBe('auth')
+    expect(classifyCompletionStatus(502, false)).toBe('unreachable')
+  })
+})
+
+function fakeJsonFetch(status: number, body: unknown): typeof fetch {
+  return (async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch
+}
+
+describe('probeProviderCompletion', () => {
+  const target = { baseUrl: 'https://openrouter.ai/api/v1', apiKey: 'sk-test', model: 'stealth/ox-alpha' }
+
+  it('reports ok for a real generated choice', async () => {
+    const outcome = await probeProviderCompletion(target, {
+      fetchImpl: fakeJsonFetch(200, { choices: [{ message: { role: 'assistant', content: 'OK.' } }] }),
+      now: () => 5,
+    })
+    expect(outcome.state).toBe('ok')
+    expect(outcome.status).toBe(200)
+    expect(outcome.detail).toBeUndefined()
+  })
+
+  it('surfaces the provider error message when a 200 hides an upstream failure', async () => {
+    const outcome = await probeProviderCompletion(target, {
+      fetchImpl: fakeJsonFetch(200, { error: { message: 'Provider returned error', code: 502 } }),
+      now: () => 5,
+    })
+    expect(outcome.state).toBe('unreachable')
+    expect(outcome.detail).toBe('Provider returned error')
+  })
+
+  it('classifies auth rejections and keeps the provider message as detail', async () => {
+    const outcome = await probeProviderCompletion(target, {
+      fetchImpl: fakeJsonFetch(401, { error: { message: 'Invalid key' } }),
+      now: () => 5,
+    })
+    expect(outcome.state).toBe('auth')
+    expect(outcome.detail).toBe('Invalid key')
+  })
+
+  it('fails closed on transport errors', async () => {
+    const failing = (async () => { throw new Error('boom') }) as unknown as typeof fetch
+    const outcome = await probeProviderCompletion(target, { fetchImpl: failing, now: () => 5 })
+    expect(outcome.state).toBe('unreachable')
   })
 })

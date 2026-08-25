@@ -174,7 +174,21 @@ export class HarnessService {
 
   /** Whitelisted gateway call for read-oriented UI needs (sessions, models, presets…). */
   async gatewayRpc(method: string, payload?: unknown): Promise<GatewayRpcResult> {
-    const started = await this.ensureStarted()
+    let started = await this.ensureStarted()
+    // Provider edits must reach open model pickers without waiting for the
+    // next prompt. Restarting mid-turn would kill it, so the fresh catalog
+    // only applies while the runtime is idle; running sessions refresh on
+    // their next prompt through run()'s revision check.
+    if (
+      method === 'session.models'
+      && started === this.gateway
+      && this.providerRevisionAtStart !== this.providers.revision()
+      && this.statusValue.state !== 'running'
+      && this.statusValue.state !== 'starting'
+    ) {
+      await this.close()
+      started = await this.ensureStarted()
+    }
     const { result } = await this.rpcWithRecovery(started, method, payload)
     if (method === 'session.history') return sanitizeHistoryResult(result)
     if (method === 'session.list') return this.annotateArchivedSessions(result)

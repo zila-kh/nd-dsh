@@ -428,6 +428,8 @@ export interface ProviderPingResult {
   status?: number
   hasApiKey: boolean
   at: number
+  /** First line of a provider-reported failure detail (completion probes only). */
+  detail?: string
 }
 
 /**
@@ -551,6 +553,7 @@ export interface DesktopApi {
     setApiKey(providerId: string, apiKey: string): Promise<ModelProvider[]>
     clearApiKey(providerId: string): Promise<ModelProvider[]>
     ping(providerId: string, force?: boolean): Promise<ProviderPingResult>
+    testCompletion(providerId: string): Promise<ProviderPingResult>
     onChanged(listener: (providers: ModelProvider[]) => void): () => void
   }
   engines: {
@@ -719,6 +722,7 @@ export const IPC = {
   providersSetApiKey: 'providers:set-api-key',
   providersClearApiKey: 'providers:clear-api-key',
   providersPing: 'providers:ping',
+  providersTestCompletion: 'providers:test-completion',
   enginesList: 'engines:list',
   enginesAssignments: 'engines:assignments',
   enginesAssign: 'engines:assign',

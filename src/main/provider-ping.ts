@@ -72,3 +72,72 @@ export async function pingProvider(
     clearTimeout(timer)
   }
 }
+
+export interface ProviderCompletionOutcome extends ProviderPingOutcome {
+  /** First line of any provider-reported failure detail, truncated for UI use. */
+  detail?: string
+}
+
+/**
+ * Real generation probe. The /models reachability check cannot see the
+ * completion path: gateways like OpenRouter answer catalog GETs for everyone
+ * while every actual chat/completions call fails upstream. This sends a tiny
+ * non-streaming completion with the stored credential so the reported state
+ * reflects what sessions will experience.
+ */
+export function providerCompletionUrl(baseUrl: string): string {
+  return `${baseUrl.trim().replace(/\/+$/, '')}/chat/completions`
+}
+
+export function classifyCompletionStatus(status: number, bodyHasError: boolean): ProviderPingState {
+  if (status === 401 || status === 403) return 'auth'
+  if (status >= 200 && status < 300) return bodyHasError ? 'unreachable' : 'ok'
+  return 'unreachable'
+}
+
+export async function probeProviderCompletion(
+  target: ProviderPingTarget & { model: string },
+  options: ProviderPingOptions = {},
+): Promise<ProviderCompletionOutcome> {
+  if (!target.baseUrl.trim() || !target.model.trim()) return { state: 'unreachable' }
+  const url = providerCompletionUrl(target.baseUrl)
+  const fetchImpl = options.fetchImpl ?? fetch
+  const now = options.now ?? Date.now
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 20_000)
+  const started = now()
+  try {
+    const response = await fetchImpl(url, {
+      method: 'POST',
+      redirect: 'error',
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(target.apiKey?.trim() ? { Authorization: `Bearer ${target.apiKey.trim()}` } : {}),
+      },
+      body: JSON.stringify({
+        model: target.model.trim(),
+        messages: [{ role: 'user', content: 'Reply with OK.' }],
+        max_tokens: 16,
+        stream: false,
+      }),
+    })
+    const text = await response.text()
+    let parsed: { choices?: unknown; error?: { message?: unknown } } = {}
+    try { parsed = JSON.parse(text) as typeof parsed } catch { /* HTML or empty bodies stay unparsed */ }
+    const detail = typeof parsed.error?.message === 'string' && parsed.error.message.trim()
+      ? parsed.error.message.trim().slice(0, 200)
+      : undefined
+    return {
+      state: classifyCompletionStatus(response.status, parsed.error !== undefined),
+      latencyMs: now() - started,
+      status: response.status,
+      probedUrl: url,
+      ...(detail ? { detail } : {}),
+    }
+  } catch {
+    return { state: 'unreachable', probedUrl: url }
+  } finally {
+    clearTimeout(timer)
+  }
+}

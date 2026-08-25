@@ -7,11 +7,22 @@ import { UiInspector } from './ui-inspector.js'
 
 const BROWSER_PARTITION = 'persist:nd-dsh-browser'
 
+export interface BrowserControllerOptions {
+  /**
+   * ND-DSH's own renderer origin (dev server or packaged shell). Loading it
+   * into the pane renders the control plane without its trusted preload, which
+   * looks like a broken simulated fixture — so every navigation funnel refuses
+   * it, matching the project-runtime self-host guard.
+   */
+  reservedOrigin?: () => string | undefined
+}
+
 export class BrowserController {
   private readonly view: WebContentsView
   private readonly agentBrowser: AgentBrowserClient
   private readonly inspector: UiInspector
   private readonly annotator: UiAnnotator
+  private readonly reservedOrigin: (() => string | undefined) | undefined
   private annotationImage: UiAnnotationImage | undefined
   private stateValue: BrowserState
   private onStateChanged?: (state: BrowserState) => void
@@ -22,7 +33,9 @@ export class BrowserController {
     private readonly window: BrowserWindow,
     cdpPort: number,
     projectRoot: string,
+    options: BrowserControllerOptions = {},
   ) {
+    this.reservedOrigin = options.reservedOrigin
     const browserSession = session.fromPartition(BROWSER_PARTITION)
     browserSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
     browserSession.setPermissionCheckHandler(() => false)
@@ -145,6 +158,7 @@ export class BrowserController {
 
   async navigate(input: string): Promise<BrowserState> {
     const url = normalizeBrowserUrl(input)
+    this.assertNotSelfHosted(url)
     await this.view.webContents.loadURL(url)
     return this.state()
   }
@@ -264,6 +278,15 @@ export class BrowserController {
       }
     }
     if (!this.view.webContents.isDestroyed()) this.view.webContents.close()
+  }
+
+  private assertNotSelfHosted(url: string): void {
+    const reserved = this.reservedOrigin?.()
+    if (!reserved) return
+    let origin: string
+    try { origin = new URL(url).origin } catch { return }
+    if (origin !== reserved) return
+    throw new Error(`Refusing to open ${origin} in the built-in browser: that is ND-DSH's own control-plane surface. Point the browser at the app under development instead.`)
   }
 
   private installListeners(): void {

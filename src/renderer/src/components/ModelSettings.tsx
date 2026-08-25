@@ -54,6 +54,8 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
   const [contextDraft, setContextDraft] = useState('')
   const [testing, setTesting] = useState(false)
   const [pingResult, setPingResult] = useState<ProviderPingResult | null>(null)
+  const [testingCompletion, setTestingCompletion] = useState(false)
+  const [completionResult, setCompletionResult] = useState<ProviderPingResult | null>(null)
   // Per-model ping state: modelId → 'testing' | ProviderPingResult
   const [modelPings, setModelPings] = useState<Record<string, 'testing' | ProviderPingResult>>({})
 
@@ -209,6 +211,22 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
     }
   }
 
+  // Generation probe: a tiny real chat completion with the stored credential.
+  // Reachability alone cannot see upstream failures that only hit the
+  // completion path (the exact failure mode behind opaque session errors).
+  const testCompletion = async (): Promise<void> => {
+    if (!selected || testingCompletion) return
+    setTestingCompletion(true)
+    setCompletionResult(null)
+    try {
+      setCompletionResult(await window.ndDsh.providers.testCompletion(selected.id))
+    } catch (cause) {
+      onError(errorMessage(cause))
+    } finally {
+      setTestingCompletion(false)
+    }
+  }
+
   /** Probe the provider endpoint on behalf of a specific model row. */
   const testModel = async (modelId: string): Promise<void> => {
     if (!selected || modelPings[modelId] === 'testing') return
@@ -227,9 +245,26 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
   }
 
   const pingLabel = (ping: ProviderPingResult): string => {
-    if (ping.state === 'ok') return `Online · ${ping.latencyMs ?? '?'}ms${ping.status !== undefined ? ` · HTTP ${ping.status}` : ''}`
+    if (ping.state === 'ok') {
+      // Public /models endpoints answer 200 without any credential, so "ok"
+      // alone says nothing about whether sessions can authenticate.
+      if (!ping.hasApiKey) return `Reachable · HTTP ${ping.status ?? '?'} · no stored credential`
+      return `Online · ${ping.latencyMs ?? '?'}ms${ping.status !== undefined ? ` · HTTP ${ping.status}` : ''}`
+    }
     if (ping.state === 'auth') return `Reachable · credential rejected${ping.status !== undefined ? ` · HTTP ${ping.status}` : ''}`
     return 'No answer · timeout or network error'
+  }
+
+  const completionLabel = (ping: ProviderPingResult): string => {
+    if (ping.state === 'ok') return `Generation OK · ${ping.latencyMs ?? '?'}ms`
+    if (ping.state === 'auth') return `Generation failed · credential rejected${ping.status !== undefined ? ` · HTTP ${ping.status}` : ''}`
+    const detail = ping.detail ? ` · ${ping.detail}` : ''
+    return `Generation failed${ping.status !== undefined ? ` · HTTP ${ping.status}` : ''}${detail || ' · no answer'}`
+  }
+
+  const pingColor = (ping: ProviderPingResult): string => {
+    if (ping.state === 'ok') return ping.hasApiKey ? 'text-green-400' : 'text-amber-500'
+    return PING_RESULT_COLORS[ping.state]
   }
 
   return (
@@ -289,7 +324,9 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
                 <span className={pillBadge(selected.enabled)}>{selected.enabled ? 'Enabled' : 'Disabled'}</span>
                 <button type="button" className={scopeButton} onClick={() => updateSelected({ enabled: !selected.enabled })}>{selected.enabled ? 'Disable' : 'Enable'}</button>
                 <button type="button" className={scopeButton} disabled={testing} onClick={() => void testConnection()}>{testing ? 'Testing…' : 'Test connection'}</button>
-                {pingResult ? <span className={cn('shrink-0 text-[10px] font-semibold', PING_RESULT_COLORS[pingResult.state])}>{pingLabel(pingResult)}</span> : null}
+                {pingResult ? <span className={cn('shrink-0 text-[10px] font-semibold', pingColor(pingResult))}>{pingLabel(pingResult)}</span> : null}
+                <button type="button" className={scopeButton} disabled={testingCompletion || !selected.models.some((model) => model.id.trim())} title="Send a tiny real completion with the stored credential" onClick={() => void testCompletion()}>{testingCompletion ? 'Generating…' : 'Test completion'}</button>
+                {completionResult ? <span className={cn('shrink-0 text-[10px] font-semibold', PING_RESULT_COLORS[completionResult.state])} title={completionResult.detail}>{completionLabel(completionResult)}</span> : null}
                 <button className={cn(miniIconButton, 'hover:text-destructive')} title="Delete provider" aria-label="Delete provider" onClick={() => removeProvider(selected.id)}><TrashIcon /></button>
               </div>
             </header>
@@ -379,17 +416,20 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
                         <span
                           className={cn(
                             'mr-1 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold',
-                            pingRes.state === 'ok' && 'bg-green-500/15 text-green-400',
+                            pingRes.state === 'ok' && pingRes.hasApiKey && 'bg-green-500/15 text-green-400',
+                            pingRes.state === 'ok' && !pingRes.hasApiKey && 'bg-amber-500/15 text-amber-400',
                             pingRes.state === 'auth' && 'bg-amber-500/15 text-amber-400',
                             pingRes.state === 'unreachable' && 'bg-red-500/15 text-red-400',
                           )}
                           title={pingLabel(pingRes)}
                         >
-                          {pingRes.state === 'ok'
+                          {pingRes.state === 'ok' && pingRes.hasApiKey
                             ? `✓ ${pingRes.latencyMs ?? '?'}ms`
-                            : pingRes.state === 'auth'
-                              ? '✗ Auth'
-                              : '✗ Offline'}
+                            : pingRes.state === 'ok'
+                              ? '⚠ No key'
+                              : pingRes.state === 'auth'
+                                ? '✗ Auth'
+                                : '✗ Offline'}
                         </span>
                       ) : null}
                       {editingContextModelId === model.id ? (

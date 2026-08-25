@@ -403,6 +403,7 @@ export function registerIpc(deps: IpcDependencies): () => void {
   )))
   handle(IPC.providersClearApiKey, (_event, providerId) => emitProvidersChanged(deps.providers.clearApiKey(asString(providerId, 'Provider id', 256))))
   handle(IPC.providersPing, (_event, providerId, force) => deps.providers.ping(asString(providerId, 'Provider id', 256), Boolean(force)))
+  handle(IPC.providersTestCompletion, (_event, providerId) => deps.providers.testCompletion(asString(providerId, 'Provider id', 256)))
 
   handle(IPC.gitState, () => deps.git.current)
   handle(IPC.gitRefresh, () => runGit(() => deps.git.refresh()))

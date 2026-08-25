@@ -373,6 +373,7 @@ const desktopApi: DesktopApi = {
     setApiKey: async (providerId) => (providers = providers.map((provider) => provider.id === providerId ? { ...provider, hasApiKey: true, apiKey: '' } : provider)),
     clearApiKey: async (providerId) => (providers = providers.map((provider) => provider.id === providerId ? { ...provider, hasApiKey: false, apiKey: '' } : provider)),
     ping: async (providerId) => ({ providerId, state: 'ok', latencyMs: 84, status: 200, hasApiKey: Boolean(providers.find((provider) => provider.id === providerId)?.hasApiKey), at: Date.now() }),
+    testCompletion: async (providerId) => ({ providerId, state: 'ok', latencyMs: 640, status: 200, hasApiKey: Boolean(providers.find((provider) => provider.id === providerId)?.hasApiKey), at: Date.now() }),
     onChanged: () => () => {},
   },
   engines: {
