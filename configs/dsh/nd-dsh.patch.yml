@@ -116,7 +116,7 @@
           AGENT_BROWSER_CONFIG: !!js process.env.ND_DSH_AGENT_BROWSER_CONFIG ?? ''
           AGENT_BROWSER_SESSION: !!js process.env.ND_DSH_AGENT_BROWSER_SESSION ?? ''
         toolCallTimeoutMs: 120000
-        failOnStartupError: true
+        failOnStartupError: false
         reconnect:
           enabled: true
           initialDelayMs: 500

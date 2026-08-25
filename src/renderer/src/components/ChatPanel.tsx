@@ -33,6 +33,7 @@ import {
   FolderIcon,
   MoreHorizontalIcon,
   PlusIcon,
+  RotateIcon,
   SearchIcon,
   SettingsIcon,
   ShieldIcon,
@@ -553,7 +554,8 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
       }
     }
     if (frame.kind === 'agent-error' && frame.message) {
-      appendNotice(sessionId, describeAgentError(frame.message, currentRoute()), 'error')
+      const lastUserText = findLastUserPrompt(sessionId)
+      appendNotice(sessionId, describeAgentError(frame.message, currentRoute()), 'error', lastUserText)
     }
   }
 
@@ -565,12 +567,23 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
     return { provider: group?.name ?? current.provider, model: current.model }
   }
 
-  function appendNotice(sessionId: string | undefined, text: string, tone: 'info' | 'error' = 'info'): void {
+  function appendNotice(sessionId: string | undefined, text: string, tone: 'info' | 'error' = 'info', retryPrompt?: string): void {
     if (!sessionId) return
     setThreads((current) => ({
       ...current,
-      [sessionId]: [...(current[sessionId] ?? []), { kind: 'notice', id: crypto.randomUUID(), text, tone }],
+      [sessionId]: [...(current[sessionId] ?? []), { kind: 'notice', id: crypto.randomUUID(), text, tone, ...(retryPrompt ? { retryPrompt } : {}) }],
     }))
+  }
+
+  function findLastUserPrompt(sessionId: string | undefined): string | undefined {
+    if (!sessionId) return undefined
+    const items = threads[sessionId]
+    if (!items) return undefined
+    for (let i = items.length - 1; i >= 0; i--) {
+      const item = items[i]!
+      if (item.kind === 'user') return item.text
+    }
+    return undefined
   }
 
   useEffect(() => {
@@ -625,6 +638,23 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
   const stop = async (): Promise<void> => {
     try {
       await window.ndDsh.harness.stop()
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
+
+  const retry = async (retryPrompt: string): Promise<void> => {
+    if (busy || !retryPrompt.trim()) return
+    const options = activeSessionId ? { sessionId: activeSessionId } : undefined
+    try {
+      const result = await window.ndDsh.harness.run(retryPrompt, options)
+      setActiveSessionId(result.sessionId)
+      void refreshElementChips()
+      setThreads((current) => ({
+        ...current,
+        [result.sessionId]: [...(current[result.sessionId] ?? []), { kind: 'user', id: crypto.randomUUID(), text: retryPrompt }],
+      }))
+      if (!sessions.some((s) => s.sessionId === result.sessionId)) void refreshSessions()
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : String(cause))
     }
@@ -931,6 +961,8 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
                 <ThreadEntryView
                   entry={group.entry}
                   onAnswerApproval={answerApproval}
+                  onRetry={retry}
+                  onSwitchModel={() => { setModelMenuOpen(true); setModelMenuPane('root') }}
                   {...(onOpenFile ? { onOpenFile } : {})}
                 />
               )}
@@ -1548,9 +1580,11 @@ interface ThreadEntryViewProps {
   entry: ThreadEntry
   onAnswerApproval?(entry: Extract<ThreadEntry, { kind: 'approval' }>, outcome: 'allowed-once' | 'rejected'): void
   onOpenFile?(path: string): void
+  onRetry?(prompt: string): void
+  onSwitchModel?(): void
 }
 
-function ThreadEntryView({ entry, onAnswerApproval, onOpenFile }: ThreadEntryViewProps) {
+function ThreadEntryView({ entry, onAnswerApproval, onOpenFile, onRetry, onSwitchModel }: ThreadEntryViewProps) {
   switch (entry.kind) {
     case 'user':
       return (
@@ -1584,6 +1618,27 @@ function ThreadEntryView({ entry, onAnswerApproval, onOpenFile }: ThreadEntryVie
         >
           <div className="mb-1 text-[9px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/70">Runtime</div>
           <div className={cn('whitespace-pre-wrap [overflow-wrap:anywhere] text-[11px]/[1.55]', entry.tone === 'error' ? 'text-destructive' : 'text-soft')}>{entry.text}</div>
+          {entry.tone === 'error' && entry.retryPrompt && onRetry ? (
+            <div className="mt-2 flex items-center gap-2">
+              <button
+                type="button"
+                className="inline-flex items-center gap-1.5 rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-1 text-[11px] font-medium text-destructive transition-colors hover:bg-destructive/20 active:bg-destructive/25"
+                onClick={() => onRetry(entry.retryPrompt!)}
+              >
+                <RotateIcon className="size-3" />
+                Retry
+              </button>
+              {onSwitchModel ? (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  onClick={onSwitchModel}
+                >
+                  Switch Model
+                </button>
+              ) : null}
+            </div>
+          ) : null}
         </article>
       )
     case 'tool':
