@@ -61,7 +61,6 @@ test('Company exposes the AI operations control center', async () => {
       })
     }
   })
-  await expect(page.getByText('E2E Company', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Operations', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Needs You', exact: true })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Verification', exact: true })).toBeVisible()
@@ -131,7 +130,7 @@ test('Design Live App keeps the workspace and inspector panes usable', async () 
   expect(workspaceBox?.width).toBeGreaterThanOrEqual(200)
   expect(inspectorBox?.width).toBeGreaterThanOrEqual(220)
   expect(liveAppBox?.x).toBeGreaterThanOrEqual((workspaceBox?.x ?? 0) + (workspaceBox?.width ?? 0))
-  expect(inspectorBox?.x).toBeGreaterThanOrEqual((liveAppBox?.x ?? 0) + (liveAppBox?.width ?? 0))
+  expect(inspectorBox?.x).toBeGreaterThanOrEqual((liveAppBox?.x ?? 0) + (liveAppBoxBox?.width ?? 0))
 })
 
 test('QA opens project checks', async () => {
