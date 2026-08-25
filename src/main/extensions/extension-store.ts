@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { promises as fs } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { existsSync, promises as fs } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
+import { fileURLToPath } from 'node:url'
 import {
   AGENT_EXTENSION_SURFACES,
   EXTENSION_ADAPTERS,
@@ -19,6 +20,7 @@ interface ExtensionSnapshot {
 
 const ID_PATTERN = /^[a-z0-9][a-z0-9._-]{1,127}$/
 const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/
+const currentDirectory = dirname(fileURLToPath(import.meta.url))
 
 /**
  * Durable ND-owned extension catalog. Built-in demos are seeded on first run,
@@ -32,12 +34,12 @@ export class ExtensionStore {
   private value: ExtensionSnapshot = { version: 1, extensions: cloneBuiltinExtensionDemos() }
   private onChanged: ((extensions: AgentExtensionManifest[]) => void) | undefined
 
-  constructor(private readonly filePath: string, runtimeRoot = process.env.ND_DSH_PROJECT_ROOT?.trim() || process.cwd()) {
+  constructor(private readonly filePath: string, runtimeRoot = defaultRuntimeRoot()) {
     // Both execution engines inherit these stable references. The catalog
     // contains no secret values; custom MCP env config stores only parent-env
     // variable names and resolves their values inside the child at execution.
-    // The Electron shell passes its resolved project root explicitly; the
-    // default keeps this persistence class runnable in ordinary Node tests.
+    // This module deliberately resolves the project root without importing
+    // Electron so the durable store remains usable in ordinary Node tests.
     const proxyEntry = join(runtimeRoot, 'scripts', 'nd-extension-runtime.mjs')
     const mcpEntry = join(runtimeRoot, 'scripts', 'nd-extension-mcp.mjs')
     process.env.ND_EXTENSION_NODE = process.execPath
@@ -151,6 +153,15 @@ export class ExtensionStore {
     this.saveChain = write
     return write
   }
+}
+
+function defaultRuntimeRoot(): string {
+  const candidates = [
+    process.env.ND_DSH_PROJECT_ROOT?.trim(),
+    resolve(currentDirectory, '../../..'),
+    process.cwd(),
+  ].filter((value): value is string => Boolean(value))
+  return candidates.find((root) => existsSync(join(root, 'package.json'))) ?? process.cwd()
 }
 
 function mergeBuiltinDemos(loaded: AgentExtensionManifest[]): AgentExtensionManifest[] {
