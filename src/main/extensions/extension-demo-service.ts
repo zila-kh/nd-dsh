@@ -110,9 +110,13 @@ export class ExtensionDemoService {
 
   private pickEngine(engineId?: string) {
     const engines = this.engines.list()
-    const engine = engineId ? engines.find((item) => item.id === engineId) : engines.find((item) => item.available) ?? engines[0]
-    if (!engine) throw new Error('No coding engines are registered')
-    if (engineId && !engine) throw new Error(`Unknown coding engine: ${engineId}`)
-    return engine
+    if (engineId) {
+      const selected = engines.find((item) => item.id === engineId)
+      if (!selected) throw new Error(`Unknown coding engine: ${engineId}`)
+      return selected
+    }
+    const selected = engines.find((item) => item.available) ?? engines[0]
+    if (!selected) throw new Error('No coding engines are registered')
+    return selected
   }
 }
