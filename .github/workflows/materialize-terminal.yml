@@ -36,6 +36,8 @@ jobs:
       - name: Build desktop
         run: corepack pnpm build
       - name: Desktop smoke tests
+        env:
+          DEBUG: pw:browser*
         run: xvfb-run --auto-servernum corepack pnpm e2e
       - name: Commit validated integration
         shell: bash
