@@ -37,12 +37,13 @@ export class ExtensionStore {
     // Both execution engines inherit these stable references. The catalog
     // contains no secret values; custom MCP env config stores only parent-env
     // variable names and resolves their values inside the child at execution.
-    const runtimeEntry = join(projectRoot(), 'scripts', 'nd-extension-runtime.mjs')
+    const proxyEntry = join(projectRoot(), 'scripts', 'nd-extension-runtime.mjs')
+    const mcpEntry = join(projectRoot(), 'scripts', 'nd-extension-mcp.mjs')
     process.env.ND_EXTENSION_NODE = process.execPath
-    process.env.ND_EXTENSION_PROXY = runtimeEntry
+    process.env.ND_EXTENSION_PROXY = proxyEntry
     process.env.ND_EXTENSION_CATALOG = filePath
     process.env.ND_EXTENSION_STATE = join(dirname(filePath), 'agent-extension-state.json')
-    process.env.ND_DSH_EXTENSION_MCP_ENTRY = runtimeEntry
+    process.env.ND_DSH_EXTENSION_MCP_ENTRY = mcpEntry
   }
 
   setOnChanged(listener: ((extensions: AgentExtensionManifest[]) => void) | undefined): void {
