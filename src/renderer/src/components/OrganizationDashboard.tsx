@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
+import type { WorkspaceState } from '../../../shared/contracts'
 import type { OrganizationSnapshot } from '../../../shared/organization'
 import { OrganizationControlCenter } from './OrganizationControlCenter'
 import { OrganizationDashboard as OrganizationDashboardLegacy } from './OrganizationDashboardLegacy'
 
 interface Props {
+  workspace: WorkspaceState | null
+  onOpenDeepSeek(): void
   onError(message: string): void
-  onOpenSession?(sessionId: string): void
 }
 
 type CompanyView = 'workspace' | 'operations'
@@ -66,7 +68,7 @@ export function OrganizationDashboard(props: Props) {
           <div className="h-full overflow-auto p-[14px]">
             <OrganizationControlCenter
               companyId={company.id}
-              projectId={project?.id}
+              {...(project ? { projectId: project.id } : {})}
               agents={agents}
               onError={props.onError}
             />
