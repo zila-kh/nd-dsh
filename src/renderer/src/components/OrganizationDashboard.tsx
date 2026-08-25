@@ -3,6 +3,7 @@ import type { WorkspaceState } from '../../../shared/contracts'
 import type { OrganizationSnapshot } from '../../../shared/organization'
 import { OrganizationControlCenter } from './OrganizationControlCenter'
 import { OrganizationDashboard as OrganizationDashboardLegacy } from './OrganizationDashboardLegacy'
+import { OrganizationStrategyCenter } from './OrganizationStrategyCenter'
 
 interface Props {
   workspace: WorkspaceState | null
@@ -10,7 +11,7 @@ interface Props {
   onError(message: string): void
 }
 
-type CompanyView = 'workspace' | 'operations'
+type CompanyView = 'workspace' | 'operations' | 'strategy'
 
 export function OrganizationDashboard(props: Props) {
   const [view, setView] = useState<CompanyView>('workspace')
@@ -44,20 +45,9 @@ export function OrganizationDashboard(props: Props) {
           <span className="block truncate text-[10px] text-faint">{project?.name ?? 'Company-wide'} · software delivery operating system</span>
         </div>
         <div className="flex items-center rounded-md border border-border-strong bg-secondary p-0.5">
-          <button
-            type="button"
-            className={viewButton(view === 'workspace')}
-            onClick={() => setView('workspace')}
-          >
-            Company Workspace
-          </button>
-          <button
-            type="button"
-            className={viewButton(view === 'operations')}
-            onClick={() => setView('operations')}
-          >
-            Operations
-          </button>
+          <button type="button" className={viewButton(view === 'workspace')} onClick={() => setView('workspace')}>Company Workspace</button>
+          <button type="button" className={viewButton(view === 'operations')} onClick={() => setView('operations')}>Operations</button>
+          <button type="button" className={viewButton(view === 'strategy')} onClick={() => setView('strategy')}>Strategy</button>
         </div>
       </div>
 
@@ -66,16 +56,25 @@ export function OrganizationDashboard(props: Props) {
           <OrganizationDashboardLegacy {...props} />
         ) : company ? (
           <div className="h-full overflow-auto p-[14px]">
-            <OrganizationControlCenter
-              companyId={company.id}
-              {...(project ? { projectId: project.id } : {})}
-              agents={agents}
-              onError={props.onError}
-            />
+            {view === 'operations' ? (
+              <OrganizationControlCenter
+                companyId={company.id}
+                {...(project ? { projectId: project.id } : {})}
+                agents={agents}
+                onError={props.onError}
+              />
+            ) : (
+              <OrganizationStrategyCenter
+                companyId={company.id}
+                {...(project ? { projectId: project.id } : {})}
+                agents={agents}
+                onError={props.onError}
+              />
+            )}
           </div>
         ) : (
           <div className="grid h-full place-items-center p-6 text-center text-sm text-muted-foreground">
-            Create a company first, then use Operations to manage gates, signals, verification, budgets and AI employee performance.
+            Create a company first, then use Operations and Strategy to manage verified autonomous delivery.
           </div>
         )}
       </div>

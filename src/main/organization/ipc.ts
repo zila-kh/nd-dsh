@@ -6,11 +6,16 @@ import {
   type OrganizationControlMutation,
 } from '../../shared/organization-control.js'
 import { ORGANIZATION_IPC, type OrganizationMutation, type OrganizationSnapshot } from '../../shared/organization.js'
+import {
+  ORGANIZATION_STRATEGY_IPC,
+  type OrganizationStrategyMutation,
+} from '../../shared/organization-strategy.js'
 import type { ProjectRuntimeService } from '../workspace/project-runtime.js'
 import type { ProjectWorkspaceCoordinator } from '../workspace/project-workspace-coordinator.js'
 import { OrganizationControlPlane } from './control-plane.js'
 import type { OrganizationOrchestrator } from './orchestrator.js'
 import { materializeOrganizationSignal } from './signal-materializer.js'
+import { OrganizationStrategyPlane } from './strategy-plane.js'
 import type { OrganizationStore } from './store.js'
 
 const MUTATIONS = new Set([
@@ -20,6 +25,9 @@ const MUTATIONS = new Set([
 ])
 const CONTROL_MUTATIONS = new Set([
   'human-action.add', 'human-action.resolve', 'signal.add', 'signal.triage', 'budget.set', 'feedback.add',
+])
+const STRATEGY_MUTATIONS = new Set([
+  'anchor.add', 'anchor.update', 'knowledge.add', 'knowledge.update', 'schedule.add', 'schedule.update', 'action.record',
 ])
 const CONTROL_ACTIONS = new Set<OrganizationControlAction>(['internal.plan', 'task.execute', 'task.review', 'workflow.continue'])
 
@@ -32,8 +40,12 @@ export function registerOrganizationIpc(
 ): () => void {
   const channels: string[] = []
   const control = new OrganizationControlPlane(join(app.getPath('userData'), 'organization-control.json'), store)
+  const strategy = new OrganizationStrategyPlane(join(app.getPath('userData'), 'organization-strategy.json'), store)
   control.setOnChanged((state) => {
     if (!window.isDestroyed()) window.webContents.send(ORGANIZATION_CONTROL_IPC.changed, state)
+  })
+  strategy.setOnChanged((state) => {
+    if (!window.isDestroyed()) window.webContents.send(ORGANIZATION_STRATEGY_IPC.changed, state)
   })
 
   // Guard the orchestrator itself instead of only guarding renderer IPC. The
@@ -49,6 +61,19 @@ export function registerOrganizationIpc(
     void reconcileControlState(store, control).catch((error) => console.warn('Organization control reconciliation failed:', error instanceof Error ? error.message : String(error)))
   }, 1_500)
   reconcileTimer.unref()
+
+  // Recurring company intent is only a wake-up mechanism. Every due tick still
+  // passes through OrganizationControlPlane.shouldRun() and the guarded
+  // orchestrator, so a timer never becomes an independent authority source.
+  let scheduleBusy = false
+  const scheduleTimer = setInterval(() => {
+    if (scheduleBusy) return
+    scheduleBusy = true
+    void runDueSchedules(strategy, control, orchestrator)
+      .catch((error) => console.warn('Organization scheduled work failed:', error instanceof Error ? error.message : String(error)))
+      .finally(() => { scheduleBusy = false })
+  }, 15_000)
+  scheduleTimer.unref()
 
   const handle = (channel: string, listener: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown | Promise<unknown>): void => {
     ipcMain.removeHandler(channel)
@@ -99,6 +124,18 @@ export function registerOrganizationIpc(
           title: signal.title,
           question: signal.summary,
         })
+      } else if (mutation.disposition === 'objective') {
+        await strategy.mutate({
+          type: 'anchor.add', companyId: signal.companyId,
+          ...(signal.projectId ? { projectId: signal.projectId } : {}),
+          title: signal.title, outcome: signal.summary, priority: 'high', sourceSignalId: signal.id,
+        })
+      } else if (mutation.disposition === 'evidence') {
+        await strategy.mutate({
+          type: 'knowledge.add', companyId: signal.companyId,
+          ...(signal.projectId ? { projectId: signal.projectId } : {}),
+          kind: 'feedback', title: signal.title, content: signal.summary, source: 'evidence', sourceRef: `signal:${signal.id}`,
+        })
       }
       return next
     }
@@ -112,6 +149,13 @@ export function registerOrganizationIpc(
   })
   handle(ORGANIZATION_CONTROL_IPC.verifyEvidence, (_event, value) => control.verifyEvidence(asId(value, 'Task id')))
 
+  handle(ORGANIZATION_STRATEGY_IPC.state, () => strategy.state())
+  handle(ORGANIZATION_STRATEGY_IPC.mutate, (_event, value) => strategy.mutate(asStrategyMutation(value)))
+  handle(ORGANIZATION_STRATEGY_IPC.projection, async (_event, value) => {
+    const projectId = value === undefined || value === null ? undefined : asId(value, 'Project id')
+    return strategy.projection(projectId, await control.state())
+  })
+
   // Project dev-server lifecycle: validate → start → health → open browser.
   if (projectRuntime) {
     handle(ORGANIZATION_IPC.runtimeState, (_event, value) => projectRuntime.status(asId(value, 'Project id')))
@@ -121,9 +165,50 @@ export function registerOrganizationIpc(
 
   return () => {
     clearInterval(reconcileTimer)
+    clearInterval(scheduleTimer)
     restoreOrchestrator()
     control.setOnChanged(undefined)
+    strategy.setOnChanged(undefined)
     for (const channel of channels) ipcMain.removeHandler(channel)
+  }
+}
+
+async function runDueSchedules(
+  strategy: OrganizationStrategyPlane,
+  control: OrganizationControlPlane,
+  orchestrator: OrganizationOrchestrator,
+): Promise<void> {
+  for (const candidate of await strategy.dueSchedules()) {
+    const schedule = await strategy.beginSchedule(candidate.id)
+    if (!schedule) continue
+    try {
+      const decision = await control.shouldRun(schedule.projectId, 'workflow.continue')
+      if (decision.route !== 'ready') {
+        await strategy.finishSchedule(schedule.id, 'skipped', decision.reason)
+        await strategy.mutate({
+          type: 'action.record', companyId: schedule.companyId, projectId: schedule.projectId,
+          action: 'workflow.continue', target: `schedule:${schedule.id}`, scope: schedule.projectId,
+          risk: 'low', externality: 'internal', destructiveLevel: 'none', decision: 'deny', reason: decision.reason,
+        })
+        continue
+      }
+      const receipt = await orchestrator.runNext(schedule.projectId, false)
+      const detail = receipt ? `Dispatched ${receipt.kind} run ${receipt.runId}.` : 'No runnable work was available.'
+      await strategy.finishSchedule(schedule.id, 'success', detail)
+      await strategy.mutate({
+        type: 'action.record', companyId: schedule.companyId, projectId: schedule.projectId,
+        action: 'workflow.continue', target: `schedule:${schedule.id}`, scope: schedule.projectId,
+        risk: 'low', externality: 'internal', destructiveLevel: 'none', decision: 'allow', reason: 'Scheduled company continuation passed current ND control gates.', result: detail,
+      })
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      await strategy.finishSchedule(schedule.id, 'failed', detail)
+      await strategy.mutate({
+        type: 'action.record', companyId: schedule.companyId, projectId: schedule.projectId,
+        action: 'workflow.continue', target: `schedule:${schedule.id}`, scope: schedule.projectId,
+        risk: 'low', externality: 'internal', destructiveLevel: 'none', decision: 'deny', reason: 'Scheduled continuation failed closed.', result: detail,
+      })
+    }
   }
 }
 
@@ -251,6 +336,13 @@ function asControlMutation(value: unknown): OrganizationControlMutation {
   const type = (value as Record<string, unknown>).type
   if (typeof type !== 'string' || !CONTROL_MUTATIONS.has(type)) throw new Error('Unsupported organization control mutation')
   return value as OrganizationControlMutation
+}
+
+function asStrategyMutation(value: unknown): OrganizationStrategyMutation {
+  if (!value || typeof value !== 'object') throw new Error('Organization strategy mutation must be an object')
+  const type = (value as Record<string, unknown>).type
+  if (typeof type !== 'string' || !STRATEGY_MUTATIONS.has(type)) throw new Error('Unsupported organization strategy mutation')
+  return value as OrganizationStrategyMutation
 }
 
 function asControlAction(value: unknown): OrganizationControlAction {

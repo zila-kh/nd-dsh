@@ -5,6 +5,11 @@ import {
   type OrganizationControlSnapshot,
 } from '../shared/organization-control.js'
 import { ORGANIZATION_IPC, type OrganizationDesktopApi, type ProjectRuntimeStatus } from '../shared/organization.js'
+import {
+  ORGANIZATION_STRATEGY_IPC,
+  type OrganizationStrategyDesktopApi,
+  type OrganizationStrategySnapshot,
+} from '../shared/organization-strategy.js'
 
 const api: OrganizationDesktopApi = {
   state: () => ipcRenderer.invoke(ORGANIZATION_IPC.state),
@@ -41,5 +46,17 @@ const controlApi: OrganizationControlDesktopApi = {
   },
 }
 
+const strategyApi: OrganizationStrategyDesktopApi = {
+  state: () => ipcRenderer.invoke(ORGANIZATION_STRATEGY_IPC.state),
+  mutate: (mutation) => ipcRenderer.invoke(ORGANIZATION_STRATEGY_IPC.mutate, mutation),
+  projection: (projectId) => ipcRenderer.invoke(ORGANIZATION_STRATEGY_IPC.projection, projectId),
+  onChanged: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: OrganizationStrategySnapshot) => listener(state)
+    ipcRenderer.on(ORGANIZATION_STRATEGY_IPC.changed, handler)
+    return () => ipcRenderer.removeListener(ORGANIZATION_STRATEGY_IPC.changed, handler)
+  },
+}
+
 contextBridge.exposeInMainWorld('ndDshOrganization', api)
 contextBridge.exposeInMainWorld('ndDshControl', controlApi)
+contextBridge.exposeInMainWorld('ndDshStrategy', strategyApi)
