@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { CodingEngineDescriptor, ModelProvider } from '../src/shared/contracts.js'
-import { AGENT_EXTENSION_SURFACES, cloneBuiltinExtensionDemos, resolveExtensionRoute } from '../src/shared/extensions.js'
+import {
+  AGENT_EXTENSION_SURFACES,
+  appendExtensionContext,
+  cloneBuiltinExtensionDemos,
+  resolveExtensionRoute,
+} from '../src/shared/extensions.js'
 
 const harness: CodingEngineDescriptor = {
   id: 'nd-harness',
@@ -40,31 +45,39 @@ const deepseek: ModelProvider = {
   models: [],
 }
 
+function enabledDemo(surface: (typeof AGENT_EXTENSION_SURFACES)[number]) {
+  const extension = cloneBuiltinExtensionDemos().find((item) => item.surface === surface)!
+  extension.enabled = true
+  return extension
+}
+
 describe('universal extension router', () => {
-  it('ships a pre-built demo for every agent extension surface', () => {
+  it('ships a disabled pre-built demo for every agent extension surface', () => {
     const demos = cloneBuiltinExtensionDemos()
     for (const surface of AGENT_EXTENSION_SURFACES) {
       const demo = demos.find((item) => item.surface === surface)
       expect(demo, `missing ${surface} demo`).toBeDefined()
       expect(demo?.builtInDemo).toBe(true)
+      expect(demo?.enabled).toBe(false)
       expect(demo?.demoPrompt?.length).toBeGreaterThan(10)
+      expect(demo?.instructions?.length).toBeGreaterThan(20)
     }
   })
 
   it('uses native MCP on harness and ND proxy on an engine without MCP', () => {
-    const extension = cloneBuiltinExtensionDemos().find((item) => item.surface === 'mcp')!
+    const extension = enabledDemo('mcp')
     expect(resolveExtensionRoute(extension, harness).adapter).toBe('mcp')
     expect(resolveExtensionRoute(extension, codex).adapter).toBe('nd-proxy')
   })
 
   it('routes skills natively when possible and through a bridge otherwise', () => {
-    const extension = cloneBuiltinExtensionDemos().find((item) => item.surface === 'skill')!
+    const extension = enabledDemo('skill')
     expect(resolveExtensionRoute(extension, harness).adapter).toBe('native')
     expect(resolveExtensionRoute(extension, codex).adapter).toBe('skill-bridge')
   })
 
   it('respects explicit engine overrides', () => {
-    const extension = cloneBuiltinExtensionDemos().find((item) => item.surface === 'hook')!
+    const extension = enabledDemo('hook')
     extension.engineRoutes = [{ engineId: 'codex-cli', adapter: 'disabled' }]
     const route = resolveExtensionRoute(extension, codex)
     expect(route.supported).toBe(false)
@@ -72,10 +85,24 @@ describe('universal extension router', () => {
   })
 
   it('can scope prompt/context delivery to model providers separately from engine routing', () => {
-    const extension = cloneBuiltinExtensionDemos().find((item) => item.surface === 'memory')!
+    const extension = enabledDemo('memory')
     extension.providerRoutes = [{ providerId: deepseek.id, enabled: false }]
     const route = resolveExtensionRoute(extension, harness, deepseek)
     expect(route.supported).toBe(false)
     expect(route.reason).toMatch(/provider/i)
+  })
+
+  it('appends trusted runtime context only for supported enabled bindings', () => {
+    const enabled = enabledDemo('command')
+    const disabled = enabledDemo('hook')
+    disabled.enabled = false
+    const prompt = appendExtensionContext('Build the counter.', [
+      { extension: enabled, route: resolveExtensionRoute(enabled, codex) },
+      { extension: disabled, route: resolveExtensionRoute(disabled, codex) },
+    ])
+    expect(prompt).toContain('<nd-extension-context>')
+    expect(prompt).toContain('Counter Command Demo')
+    expect(prompt).not.toContain('Counter Hook Demo')
+    expect(prompt).toContain('prompt-injection')
   })
 })
