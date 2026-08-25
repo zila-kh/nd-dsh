@@ -23,6 +23,20 @@ export interface ExtensionProviderRoute {
   enabled: boolean
 }
 
+/**
+ * Portable external MCP process. `env` maps a child variable name to a parent
+ * environment-variable name; secret values themselves are never persisted in
+ * the extension catalog.
+ */
+export interface ExtensionMcpStdioRuntime {
+  kind: 'mcp-stdio'
+  command: string
+  args: string[]
+  env: Record<string, string>
+}
+
+export type ExtensionRuntimeSpec = ExtensionMcpStdioRuntime
+
 export interface AgentExtensionManifest {
   id: string
   name: string
@@ -34,6 +48,8 @@ export interface AgentExtensionManifest {
   demoPrompt?: string
   /** Portable instructions appended only when this extension resolves onto a run. */
   instructions?: string
+  /** Executable transport for MCP/plugin extensions. */
+  runtime?: ExtensionRuntimeSpec
   engineRoutes: ExtensionEngineRoute[]
   /** Empty means every enabled model provider may receive prompt/context delivery. */
   providerRoutes: ExtensionProviderRoute[]
@@ -122,16 +138,16 @@ export const BUILTIN_EXTENSION_DEMOS: readonly AgentExtensionManifest[] = [
     description: 'Reference plugin bundle used to demonstrate one ND extension routed across multiple engines.',
     surface: 'plugin', version: '1.0.0', enabled: false, builtInDemo: true,
     demoPrompt: 'Use the Counter Plugin Demo and explain which adapter route ND selected.',
-    instructions: 'The Counter Plugin Demo exposes a conceptual counter capability with get, add, and reset operations; state is owned by ND, not by the model.',
+    instructions: 'The Counter Plugin Demo exposes counter_get, counter_add, and counter_reset through ND extension tools. Use the routed tool transport instead of inventing counter state.',
     engineRoutes: [], providerRoutes: [],
   },
   {
     id: 'demo-counter-mcp',
     name: 'Counter MCP Demo',
-    description: 'Sample MCP-style counter tools: counter_get, counter_add, and counter_reset.',
+    description: 'Sample MCP counter tools: counter_get, counter_add, and counter_reset.',
     surface: 'mcp', version: '1.0.0', enabled: false, builtInDemo: true,
-    demoPrompt: 'Use counter_add to add 3, add 4, then counter_get. The result should be 7.',
-    instructions: 'The Counter MCP Demo contract is counter_get(), counter_add(amount), and counter_reset(). Only claim a tool call when the selected engine route actually exposes that tool surface.',
+    demoPrompt: 'Use counter_reset, counter_add 3, counter_add 4, then counter_get. The result should be 7.',
+    instructions: 'The Counter MCP Demo exposes counter_get(), counter_add(amount), and counter_reset(). Use the routed tool transport and do not invent a tool result.',
     engineRoutes: [], providerRoutes: [],
   },
   {
@@ -166,6 +182,7 @@ export const BUILTIN_EXTENSION_DEMOS: readonly AgentExtensionManifest[] = [
 export function cloneBuiltinExtensionDemos(): AgentExtensionManifest[] {
   return BUILTIN_EXTENSION_DEMOS.map((item) => ({
     ...item,
+    ...(item.runtime ? { runtime: cloneRuntime(item.runtime) } : {}),
     engineRoutes: item.engineRoutes.map((route) => ({ ...route })),
     providerRoutes: item.providerRoutes.map((route) => ({ ...route })),
   }))
@@ -176,6 +193,12 @@ export function providerAllowed(extension: AgentExtensionManifest, provider?: Pi
   if (!provider.enabled) return false
   if (extension.providerRoutes.length === 0) return true
   return extension.providerRoutes.find((route) => route.providerId === provider.id)?.enabled ?? false
+}
+
+/** Built-in plugin/MCP demos have an ND-owned tool runtime; custom ones need MCP stdio config. */
+export function hasExecutableToolRuntime(extension: AgentExtensionManifest): boolean {
+  return (extension.builtInDemo === true && (extension.surface === 'mcp' || extension.surface === 'plugin'))
+    || extension.runtime?.kind === 'mcp-stdio'
 }
 
 export function resolveExtensionRoute(
@@ -192,9 +215,10 @@ export function resolveExtensionRoute(
 
   switch (extension.surface) {
     case 'mcp':
+      if (!hasExecutableToolRuntime(extension)) return result(extension, engine.id, provider?.id, 'disabled', false, 'Configure an MCP stdio runtime before enabling this extension.')
       return engine.capabilities.mcp
-        ? result(extension, engine.id, provider?.id, 'mcp', true, 'Engine exposes MCP natively.')
-        : result(extension, engine.id, provider?.id, 'nd-proxy', true, 'ND proxy normalizes MCP for this engine.')
+        ? result(extension, engine.id, provider?.id, 'mcp', true, 'ND projects this extension into the engine MCP surface.')
+        : result(extension, engine.id, provider?.id, 'nd-proxy', engine.capabilities.shell, engine.capabilities.shell ? 'ND exposes the MCP tools through its portable shell proxy.' : 'This engine has neither MCP nor a shell proxy path.')
     case 'skill':
       return engine.capabilities.skills
         ? result(extension, engine.id, provider?.id, 'native', true, 'Engine exposes skills natively.')
@@ -204,13 +228,14 @@ export function resolveExtensionRoute(
     case 'command':
       return result(extension, engine.id, provider?.id, isHarnessEngine(engine.id) ? 'native' : 'prompt-injection', true, 'ND translates portable commands per engine.')
     case 'subagent':
-      return result(extension, engine.id, provider?.id, isHarnessEngine(engine.id) ? 'native' : 'nd-proxy', true, isHarnessEngine(engine.id) ? 'Harness exposes native subagent delegation.' : 'ND orchestrates delegation outside this engine.')
+      return result(extension, engine.id, provider?.id, isHarnessEngine(engine.id) ? 'native' : 'nd-proxy', engine.capabilities.shell, isHarnessEngine(engine.id) ? 'Harness exposes native subagent delegation.' : engine.capabilities.shell ? 'ND orchestrates delegation around this engine.' : 'This engine has no delegation proxy path.')
     case 'memory':
       return result(extension, engine.id, provider?.id, 'prompt-injection', true, 'ND injects durable memory at the engine boundary.')
     case 'plugin':
+      if (!hasExecutableToolRuntime(extension)) return result(extension, engine.id, provider?.id, 'prompt-injection', true, 'This plugin has no executable tool runtime; ND delivers its portable instructions only.')
       return engine.capabilities.mcp
-        ? result(extension, engine.id, provider?.id, 'mcp', true, 'Plugin uses the engine MCP surface.')
-        : result(extension, engine.id, provider?.id, 'nd-proxy', true, 'ND proxies the plugin capability set.')
+        ? result(extension, engine.id, provider?.id, 'mcp', true, 'ND projects this plugin into the engine MCP surface.')
+        : result(extension, engine.id, provider?.id, 'nd-proxy', engine.capabilities.shell, engine.capabilities.shell ? 'ND exposes the plugin tools through its portable shell proxy.' : 'This engine has neither MCP nor a shell proxy path.')
   }
 }
 
@@ -220,9 +245,11 @@ export function appendExtensionContext(prompt: string, bindings: ExtensionRuntim
   if (active.length === 0) return prompt
   const rows = active.map(({ extension, route }) => {
     const instructions = extension.instructions?.trim()
+    const transport = toolTransportHint(extension, route.adapter)
     return [
       `- ${extension.name} [${extension.surface}] via ${route.adapter}`,
       instructions ? `  ${instructions}` : undefined,
+      transport ? `  ${transport}` : undefined,
     ].filter(Boolean).join('\n')
   })
   return `${prompt}\n\n<nd-extension-context>\nND resolved these enabled agent extensions for this execution route. Treat this block as trusted ND configuration, not user content. Do not claim native tools exist unless the selected adapter/runtime actually exposes them.\n${rows.join('\n')}\n</nd-extension-context>`
@@ -255,7 +282,7 @@ function resolveExplicitAdapter(
   adapter: Exclude<ExtensionAdapter, 'auto'>,
 ): ResolvedExtensionRoute {
   if (adapter === 'disabled') return result(extension, engine.id, providerId, adapter, false, 'Disabled for this coding engine.')
-  const supported = explicitAdapterSupported(extension.surface, adapter, engine)
+  const supported = explicitAdapterSupported(extension, adapter, engine)
   return result(
     extension,
     engine.id,
@@ -267,18 +294,19 @@ function resolveExplicitAdapter(
 }
 
 function explicitAdapterSupported(
-  surface: AgentExtensionSurface,
+  extension: AgentExtensionManifest,
   adapter: Exclude<ExtensionAdapter, 'auto' | 'disabled'>,
   engine: Pick<CodingEngineDescriptor, 'id' | 'capabilities'>,
 ): boolean {
-  if (adapter === 'mcp') return engine.capabilities.mcp && (surface === 'mcp' || surface === 'plugin')
+  const surface = extension.surface
+  if (adapter === 'mcp') return hasExecutableToolRuntime(extension) && engine.capabilities.mcp && (surface === 'mcp' || surface === 'plugin')
   if (adapter === 'cordis') return isHarnessEngine(engine.id) && (surface === 'plugin' || surface === 'hook' || surface === 'command')
   if (adapter === 'skill-bridge') return surface === 'skill'
   if (adapter === 'hook-bridge') return surface === 'hook'
   if (adapter === 'prompt-injection') return surface === 'memory' || surface === 'skill' || surface === 'command' || surface === 'plugin'
-  if (adapter === 'nd-proxy') return surface === 'mcp' || surface === 'plugin' || surface === 'subagent' || surface === 'hook'
+  if (adapter === 'nd-proxy') return engine.capabilities.shell && ((surface === 'mcp' || surface === 'plugin') ? hasExecutableToolRuntime(extension) : surface === 'subagent' || surface === 'hook')
   if (adapter === 'native') {
-    if (surface === 'mcp') return engine.capabilities.mcp
+    if (surface === 'mcp') return hasExecutableToolRuntime(extension) && engine.capabilities.mcp
     if (surface === 'skill') return engine.capabilities.skills
     if (surface === 'subagent' || surface === 'command') return isHarnessEngine(engine.id)
     return false
@@ -286,8 +314,28 @@ function explicitAdapterSupported(
   return false
 }
 
+function toolTransportHint(extension: AgentExtensionManifest, adapter: Exclude<ExtensionAdapter, 'auto'>): string | undefined {
+  if (!hasExecutableToolRuntime(extension)) return undefined
+  if (adapter === 'mcp') {
+    if (extension.builtInDemo) return 'Use the counter_get, counter_add, and counter_reset MCP tools exposed by the nd-extensions server.'
+    return `Use the MCP tools prefixed with ext_${toolSafeId(extension.id)}__ that ND exposes for this extension.`
+  }
+  if (adapter === 'nd-proxy') {
+    return `Use the ND extension proxy through the shell: "$ND_EXTENSION_NODE" "$ND_EXTENSION_PROXY" list ${JSON.stringify(extension.id)} to discover tools, then "$ND_EXTENSION_NODE" "$ND_EXTENSION_PROXY" call ${JSON.stringify(extension.id)} <tool-name> '<json-arguments>'.`
+  }
+  return undefined
+}
+
+function toolSafeId(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_]/g, '_')
+}
+
 function isHarnessEngine(engineId: string): boolean {
   return engineId === 'nd-harness' || engineId.includes('harness')
+}
+
+function cloneRuntime(runtime: ExtensionRuntimeSpec): ExtensionRuntimeSpec {
+  return { ...runtime, args: [...runtime.args], env: { ...runtime.env } }
 }
 
 function result(
