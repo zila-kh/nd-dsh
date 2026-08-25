@@ -25,18 +25,27 @@ export async function launchApp(): Promise<LaunchedApp> {
 }
 
 /**
- * Graceful quit with a bounded fallback: if the app's shutdown path wedges,
- * force-kill so a hung teardown stalls the suite for seconds, not minutes.
+ * Graceful quit with a bounded fallback. Capture the child-process handle
+ * before `app.close()` starts: Playwright tears down its Electron wrapper as
+ * part of close, so asking `app.process()` from a later timer can dereference
+ * an already-disposed channel even though the OS process is still exiting.
  */
 export async function closeApp({ app }: LaunchedApp): Promise<void> {
+  const child = app.process()
   await new Promise<void>((resolve) => {
-    const fallback = setTimeout(() => {
-      void app.process().kill('SIGKILL')
+    let settled = false
+    const finish = (): void => {
+      if (settled) return
+      settled = true
       resolve()
+    }
+    const fallback = setTimeout(() => {
+      if (child.exitCode === null && !child.killed) child.kill('SIGKILL')
+      finish()
     }, 20_000)
     void app.close().finally(() => {
       clearTimeout(fallback)
-      resolve()
+      finish()
     })
   })
 }
