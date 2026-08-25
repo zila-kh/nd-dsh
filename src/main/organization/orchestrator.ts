@@ -21,6 +21,7 @@ interface ReviewWorktreeCheckpoint {
 }
 
 const MAX_AUTOPILOT_EXECUTION_ATTEMPTS = 3
+const MAX_AUTOPILOT_PARALLEL_FILL = 16
 
 /**
  * Gateway session events and host lifecycle events arrive on two separate
@@ -34,10 +35,8 @@ const STRUCTURED_RESULT_GRACE_MS = 2_500
 
 type WorkflowKind = 'plan' | 'execute' | 'review'
 
-/** The execution-relevant slice of an engine descriptor. */
 type TaskEngine = Pick<CodingEngineDescriptor, 'id' | 'name' | 'workerInstructions'>
 
-/** Fallback guidance when a descriptor carries none (kept neutral and ND-owned). */
 const DEFAULT_WORKER_INSTRUCTIONS = '\nExecution engine: ND Harness. Work directly in the project workspace using the available ND tools.\n'
 
 export class OrganizationOrchestrator {
@@ -46,6 +45,7 @@ export class OrganizationOrchestrator {
   private structuredInFlight = new Set<string>()
   private autoAdvance = new Map<string, string>()
   private reviewWorktrees = new Map<string, ReviewWorktreeCheckpoint>()
+  private parallelFillProjects = new Set<string>()
   private readonly taskWorktrees = new TaskWorktreeManager()
 
   constructor(
@@ -54,13 +54,7 @@ export class OrganizationOrchestrator {
     private readonly workspace: WorkspaceService,
     private readonly engines?: Pick<CodingEngineRegistry, 'assignedEngine' | 'assertAvailable'>,
     private readonly engineRuns?: Pick<EngineSessionRouter, 'createSession' | 'run'>,
-    /** Optional project dev-server runtime; checked (and opened when healthy) before workers execute. */
     private readonly projectRuntime?: { check(projectId: string): Promise<unknown> },
-    /**
-     * Optional pluggable-capability registry. Before execution it fails closed
-     * when an agent's assigned engine/memory/context provider is unavailable,
-     * so misconfiguration surfaces as a visible, retryable run error.
-     */
     private readonly capabilities?: { assertUsableForAgent(agent?: { id?: string; roleId?: string; teamId?: string }): Promise<void> },
   ) {}
 
@@ -81,8 +75,6 @@ export class OrganizationOrchestrator {
     try {
       await this.harness.run(pmPrompt(context), { sessionId, ...modelOpts })
     } catch (cause) {
-      // A failed dispatch must release the run lock, or every later Run/plan
-      // click dies on "another organization run is already active".
       await this.store.completeRun(run.id, undefined, errorMessage(cause)).catch(() => undefined)
       throw cause
     }
@@ -98,19 +90,22 @@ export class OrganizationOrchestrator {
     const taskWorktree = await this.taskWorktrees.ensure(context.project.workspacePath, context.task.id)
     const prompt = workerPrompt(context, engine, taskWorktree)
     const modelOpts = this.resolveAgentModel(context.agent, context.role)
-    await this.assertNoActiveRun(context.project.id)
+    await this.assertTaskRunSlot(context.task.id, context.project.id, context.agent?.id, Boolean(taskWorktree))
     if (!taskWorktree) await this.prepareWorkspace(context.project.workspacePath)
     await this.warmProjectTarget(context.project.id)
     await this.capabilities?.assertUsableForAgent(context.agent)
-    // Engine routing is transport-level only: the session is created on the
-    // assigned engine through the router, and completion arrives as the same
-    // shared event frames every engine emits. Git-backed project tasks get a
-    // deterministic isolated cwd; non-Git/dirty workspaces retain the legacy
-    // serialized project-workspace behavior.
     const target = this.engineRuns
       ? await this.engineRuns.createSession(engine.id, taskWorktree?.root)
       : { engineId: ND_HARNESS_ENGINE_ID, sessionId: await this.createHarnessSession(taskWorktree?.root) }
-    const run = await this.store.beginRun('task-execution', context.company.id, context.project.id, target.sessionId, context.task.id, context.task.goalId)
+    const run = await this.store.beginRun(
+      'task-execution',
+      context.company.id,
+      context.project.id,
+      target.sessionId,
+      context.task.id,
+      context.task.goalId,
+      taskWorktree ? { parallelTask: true } : {},
+    )
     try {
       await this.store.markExecution(context.task.id, target.sessionId)
       if (this.engineRuns) await this.engineRuns.run(prompt, { sessionId: target.sessionId, ...modelOpts })
@@ -135,19 +130,26 @@ export class OrganizationOrchestrator {
     })
     const reviewerRole = reviewerAgent ? projectCtx.roles.find((r) => r.id === reviewerAgent.roleId) : projectCtx.roles.find((r) => r.name.toLowerCase().includes('reviewer'))
     const modelOpts = this.resolveAgentModel(reviewerAgent, reviewerRole)
-    await this.assertNoActiveRun(context.project.id)
     const taskWorktree = await this.taskWorktrees.existing(context.project.workspacePath, context.task.id)
+    await this.assertTaskRunSlot(context.task.id, context.project.id, reviewerAgent?.id, Boolean(taskWorktree))
     if (!taskWorktree) await this.prepareWorkspace(context.project.workspacePath)
     const reviewHead = taskWorktree ? await this.taskWorktrees.checkpoint(taskWorktree, context.task.title) : undefined
     const sessionId = await this.createHarnessSession(taskWorktree?.root)
-    const run = await this.store.beginRun('task-review', context.company.id, context.project.id, sessionId, context.task.id, context.task.goalId)
+    const run = await this.store.beginRun(
+      'task-review',
+      context.company.id,
+      context.project.id,
+      sessionId,
+      context.task.id,
+      context.task.goalId,
+      taskWorktree ? { parallelTask: true } : {},
+    )
     if (taskWorktree && reviewHead) this.reviewWorktrees.set(sessionId, { worktree: taskWorktree, head: reviewHead })
     await this.store.markReviewStarted(taskId, sessionId)
     try {
       await this.harness.run(reviewPrompt(context.task, context, taskWorktree), { sessionId, ...modelOpts })
     } catch (cause) {
       await this.store.completeRun(run.id, undefined, errorMessage(cause)).catch(() => undefined)
-      // Release the review session so the Review action stays retryable.
       await this.store.clearReviewSession(taskId).catch(() => undefined)
       this.reviewWorktrees.delete(sessionId)
       throw cause
@@ -165,10 +167,11 @@ export class OrganizationOrchestrator {
     if (!company) throw new Error('Company not found')
     if (!explicit && company.autonomyLevel < 3) return null
 
-    const active = state.runs.find((item) => item.status === 'running')
-    if (active) {
-      if (active.projectId === id) return receipt(active)
-      if (explicit) throw new Error(`Another project already has an active ${active.kind} run in session ${active.sessionId}`)
+    const running = state.runs.filter((item) => item.status === 'running')
+    const globalRun = running.find((item) => item.kind === 'pm-plan' || !item.taskId)
+    if (globalRun) {
+      if (globalRun.projectId === id) return receipt(globalRun)
+      if (explicit) throw new Error(`Another project already has an active ${globalRun.kind} run in session ${globalRun.sessionId}`)
       return null
     }
 
@@ -181,7 +184,13 @@ export class OrganizationOrchestrator {
     }
 
     const ready = await this.store.nextReadyTask(id)
-    if (ready && workflow.has('execute')) return this.runTask(ready.id, explicit)
+    if (ready && workflow.has('execute')) {
+      const first = await this.runTask(ready.id, explicit)
+      if (company.autonomyLevel >= 4) await this.fillParallelReadyTasks(id)
+      return first
+    }
+
+    if (running.length > 0) return receipt(running[0]!)
 
     const hasGoals = state.goals.some((goal) => goal.projectId === id)
     if (!hasGoals && workflow.has('plan')) {
@@ -219,9 +228,7 @@ export class OrganizationOrchestrator {
       await this.store.completeRun(run.id, this.finalText.get(sessionId), frame.message ?? 'Agent error')
       if (run.taskId) await this.failTask(run.taskId, frame.message ?? 'Agent error')
       this.cleanupSession(sessionId)
-      if (run.kind !== 'pm-plan') {
-        await this.continueProject(run.projectId)
-      }
+      if (run.kind !== 'pm-plan') await this.continueProject(run.projectId)
       return
     }
 
@@ -258,10 +265,6 @@ export class OrganizationOrchestrator {
     if (run && this.structuredHandled.has(sessionId)) {
       await this.store.completeRun(run.id, this.finalText.get(sessionId))
     } else if (run && (run.kind === 'pm-plan' || run.kind === 'task-review')) {
-      // The completion status may beat the final assistant/message across the
-      // two gateway sockets. Wait out the grace period; if the structured
-      // result lands in the meantime it is applied normally and the run
-      // completes successfully instead of failing as "missing".
       await new Promise((resolve) => setTimeout(resolve, STRUCTURED_RESULT_GRACE_MS))
       const reopened = await this.store.runBySession(sessionId)
       if (!reopened) {
@@ -288,8 +291,6 @@ export class OrganizationOrchestrator {
     const plan = extractTaggedJson<ProjectPlanInput>(text, 'nd-dsh-plan')
     if (!plan) return
     validatePlan(plan)
-    // Duplicate delivery across the two gateway sockets must not create the
-    // plan twice; claim the session synchronously before any await.
     if (this.structuredInFlight.has(sessionId)) return
     this.structuredInFlight.add(sessionId)
     try {
@@ -305,8 +306,6 @@ export class OrganizationOrchestrator {
     const review = extractTaggedJson<ReviewVerdict>(text, 'nd-dsh-review')
     if (!review) return
     if ((review.verdict !== 'pass' && review.verdict !== 'fail') || typeof review.summary !== 'string' || !review.summary.trim()) throw new Error('Invalid ND-DSH review result')
-    // Duplicate delivery across the two gateway sockets must not complete the
-    // review twice; claim the session synchronously before any await.
     if (this.structuredInFlight.has(sessionId)) return
     this.structuredInFlight.add(sessionId)
     try {
@@ -355,6 +354,31 @@ export class OrganizationOrchestrator {
     }
   }
 
+  private async fillParallelReadyTasks(projectId: string): Promise<void> {
+    if (this.parallelFillProjects.has(projectId)) return
+    this.parallelFillProjects.add(projectId)
+    try {
+      for (let index = 0; index < MAX_AUTOPILOT_PARALLEL_FILL; index += 1) {
+        const state = await this.store.state()
+        const project = state.projects.find((item) => item.id === projectId)
+        const company = project ? state.companies.find((item) => item.id === project.companyId) : undefined
+        if (!project || company?.autonomyLevel !== 4) return
+        const ready = await this.store.nextReadyTask(projectId)
+        if (!ready) return
+        try {
+          await this.runTask(ready.id, false)
+        } catch (error) {
+          const message = errorMessage(error)
+          if (/capacity|active|busy|isolated|worktree|leased/i.test(message)) return
+          console.warn('Parallel autopilot fill paused:', message)
+          return
+        }
+      }
+    } finally {
+      this.parallelFillProjects.delete(projectId)
+    }
+  }
+
   private resolveAgentModel(agent?: OrganizationAgent, role?: OrganizationRole): { provider?: string; model?: string } {
     const provider = agent?.providerId ?? role?.providerId
     const model = agent?.modelId ?? role?.modelId
@@ -376,11 +400,32 @@ export class OrganizationOrchestrator {
     throw new Error(`Another project already has an active ${active.kind} run in session ${active.sessionId}`)
   }
 
+  private async assertTaskRunSlot(taskId: string, projectId: string, actorId: string | undefined, isolated: boolean): Promise<void> {
+    const state = await this.store.state()
+    const active = state.runs.filter((item) => item.status === 'running')
+    if (active.length === 0) return
+    if (!isolated) throw new Error('Task cannot run beside another organization run without an isolated Git worktree')
+    const global = active.find((item) => item.kind === 'pm-plan' || !item.taskId)
+    if (global) throw new Error(`Global ${global.kind} run is active in session ${global.sessionId}`)
+    const sameTask = active.find((item) => item.taskId === taskId)
+    if (sameTask) throw new Error(`Task already has an active ${sameTask.kind} run in session ${sameTask.sessionId}`)
+    if (actorId) {
+      const actor = state.agents.find((item) => item.id === actorId)
+      if (actor && (actor.status === 'working' || actor.status === 'reviewing')) throw new Error(`AI employee ${actor.name} is already busy with another task`)
+    }
+    for (const run of active) {
+      if (!run.taskId) throw new Error('Non-task organization work cannot overlap task execution')
+      const context = await this.store.taskContext(run.taskId)
+      const worktree = await this.taskWorktrees.existing(context.project.workspacePath, run.taskId)
+      if (!worktree) throw new Error(`Active task ${run.taskId} is not isolated in a Git worktree`)
+    }
+    const project = state.projects.find((item) => item.id === projectId)
+    if (!project) throw new Error('Project not found')
+  }
+
   private async resolveTaskEngine(agentId: string | undefined): Promise<TaskEngine> {
     if (!this.engines) return { id: ND_HARNESS_ENGINE_ID, name: 'ND Harness' }
     const engineId = await this.engines.assignedEngine(agentId)
-    // Catalog availability is the only gate; the registry owns which engines
-    // may run, and each descriptor owns its own execution guidance.
     const descriptor = this.engines.assertAvailable(engineId)
     return {
       id: descriptor.id,
@@ -429,11 +474,6 @@ export class OrganizationOrchestrator {
     return sessionId
   }
 
-  /**
-   * Validate → health-check the project target before a worker runs, opening
-   * the browser on success (the runtime service fires that callback). A dev
-   * server that will not start is reported but never blocks code execution.
-   */
   private async warmProjectTarget(projectId: string): Promise<void> {
     if (!this.projectRuntime) return
     try {
