@@ -11,7 +11,6 @@ import {
   type ExtensionAdapter,
   type ExtensionRuntimeSpec,
 } from '../../shared/extensions.js'
-import { projectRoot } from '../app-paths.js'
 
 interface ExtensionSnapshot {
   version: 1
@@ -33,12 +32,14 @@ export class ExtensionStore {
   private value: ExtensionSnapshot = { version: 1, extensions: cloneBuiltinExtensionDemos() }
   private onChanged: ((extensions: AgentExtensionManifest[]) => void) | undefined
 
-  constructor(private readonly filePath: string) {
+  constructor(private readonly filePath: string, runtimeRoot = process.env.ND_DSH_PROJECT_ROOT?.trim() || process.cwd()) {
     // Both execution engines inherit these stable references. The catalog
     // contains no secret values; custom MCP env config stores only parent-env
     // variable names and resolves their values inside the child at execution.
-    const proxyEntry = join(projectRoot(), 'scripts', 'nd-extension-runtime.mjs')
-    const mcpEntry = join(projectRoot(), 'scripts', 'nd-extension-mcp.mjs')
+    // The Electron shell passes its resolved project root explicitly; the
+    // default keeps this persistence class runnable in ordinary Node tests.
+    const proxyEntry = join(runtimeRoot, 'scripts', 'nd-extension-runtime.mjs')
+    const mcpEntry = join(runtimeRoot, 'scripts', 'nd-extension-mcp.mjs')
     process.env.ND_EXTENSION_NODE = process.execPath
     process.env.ND_EXTENSION_PROXY = proxyEntry
     process.env.ND_EXTENSION_CATALOG = filePath
