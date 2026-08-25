@@ -1,0 +1,6 @@
+{
+  "title": "Counter demo value",
+  "content": "The ND Counter demo value is 7.",
+  "tags": ["demo", "counter", "memory"],
+  "expectedRecall": 7
+}
