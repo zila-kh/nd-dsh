@@ -6,6 +6,7 @@ import type { EngineSessionRouter } from '../engines/engine-session-router.js'
 import type { HarnessService } from '../harness/harness-service.js'
 import type { WorkspaceService } from '../workspace/workspace-service.js'
 import type { OrganizationStore } from './store.js'
+import { TaskWorktreeManager, type TaskWorktree } from './task-worktree.js'
 
 interface ReviewVerdict {
   verdict: 'pass' | 'fail'
@@ -14,7 +15,13 @@ interface ReviewVerdict {
   memory?: Array<{ title: string; content: string; tags?: string[] }>
 }
 
+interface ReviewWorktreeCheckpoint {
+  worktree: TaskWorktree
+  head: string
+}
+
 const MAX_AUTOPILOT_EXECUTION_ATTEMPTS = 3
+const MAX_AUTOPILOT_PARALLEL_FILL = 16
 
 /**
  * Gateway session events and host lifecycle events arrive on two separate
@@ -28,10 +35,8 @@ const STRUCTURED_RESULT_GRACE_MS = 2_500
 
 type WorkflowKind = 'plan' | 'execute' | 'review'
 
-/** The execution-relevant slice of an engine descriptor. */
 type TaskEngine = Pick<CodingEngineDescriptor, 'id' | 'name' | 'workerInstructions'>
 
-/** Fallback guidance when a descriptor carries none (kept neutral and ND-owned). */
 const DEFAULT_WORKER_INSTRUCTIONS = '\nExecution engine: ND Harness. Work directly in the project workspace using the available ND tools.\n'
 
 export class OrganizationOrchestrator {
@@ -39,6 +44,9 @@ export class OrganizationOrchestrator {
   private structuredHandled = new Set<string>()
   private structuredInFlight = new Set<string>()
   private autoAdvance = new Map<string, string>()
+  private reviewWorktrees = new Map<string, ReviewWorktreeCheckpoint>()
+  private parallelFillProjects = new Set<string>()
+  private readonly taskWorktrees = new TaskWorktreeManager()
 
   constructor(
     private readonly store: OrganizationStore,
@@ -46,13 +54,7 @@ export class OrganizationOrchestrator {
     private readonly workspace: WorkspaceService,
     private readonly engines?: Pick<CodingEngineRegistry, 'assignedEngine' | 'assertAvailable'>,
     private readonly engineRuns?: Pick<EngineSessionRouter, 'createSession' | 'run'>,
-    /** Optional project dev-server runtime; checked (and opened when healthy) before workers execute. */
     private readonly projectRuntime?: { check(projectId: string): Promise<unknown> },
-    /**
-     * Optional pluggable-capability registry. Before execution it fails closed
-     * when an agent's assigned engine/memory/context provider is unavailable,
-     * so misconfiguration surfaces as a visible, retryable run error.
-     */
     private readonly capabilities?: { assertUsableForAgent(agent?: { id?: string; roleId?: string; teamId?: string }): Promise<void> },
   ) {}
 
@@ -73,8 +75,6 @@ export class OrganizationOrchestrator {
     try {
       await this.harness.run(pmPrompt(context), { sessionId, ...modelOpts })
     } catch (cause) {
-      // A failed dispatch must release the run lock, or every later Run/plan
-      // click dies on "another organization run is already active".
       await this.store.completeRun(run.id, undefined, errorMessage(cause)).catch(() => undefined)
       throw cause
     }
@@ -87,19 +87,25 @@ export class OrganizationOrchestrator {
     if (!explicit && context.company.autonomyLevel < 3) throw new Error('Autonomy level 3+ is required for automatic execution')
     if (context.task.status !== 'ready' && context.task.status !== 'blocked') throw new Error(`Task is ${context.task.status}; only ready or blocked tasks can run`)
     const engine = await this.resolveTaskEngine(context.agent?.id)
-    const prompt = workerPrompt(context, engine)
+    const taskWorktree = await this.taskWorktrees.ensure(context.project.workspacePath, context.task.id)
+    const prompt = workerPrompt(context, engine, taskWorktree)
     const modelOpts = this.resolveAgentModel(context.agent, context.role)
-    await this.assertNoActiveRun(context.project.id)
-    await this.prepareWorkspace(context.project.workspacePath)
+    await this.assertTaskRunSlot(context.task.id, context.project.id, context.agent?.id, Boolean(taskWorktree))
+    if (!taskWorktree) await this.prepareWorkspace(context.project.workspacePath)
     await this.warmProjectTarget(context.project.id)
     await this.capabilities?.assertUsableForAgent(context.agent)
-    // Engine routing is transport-level only: the session is created on the
-    // assigned engine through the router, and completion arrives as the same
-    // shared event frames every engine emits.
     const target = this.engineRuns
-      ? await this.engineRuns.createSession(engine.id)
-      : { engineId: ND_HARNESS_ENGINE_ID, sessionId: await this.harness.createSession() }
-    const run = await this.store.beginRun('task-execution', context.company.id, context.project.id, target.sessionId, context.task.id, context.task.goalId)
+      ? await this.engineRuns.createSession(engine.id, taskWorktree?.root)
+      : { engineId: ND_HARNESS_ENGINE_ID, sessionId: await this.createHarnessSession(taskWorktree?.root) }
+    const run = await this.store.beginRun(
+      'task-execution',
+      context.company.id,
+      context.project.id,
+      target.sessionId,
+      context.task.id,
+      context.task.goalId,
+      taskWorktree ? { parallelTask: true } : {},
+    )
     try {
       await this.store.markExecution(context.task.id, target.sessionId)
       if (this.engineRuns) await this.engineRuns.run(prompt, { sessionId: target.sessionId, ...modelOpts })
@@ -124,17 +130,28 @@ export class OrganizationOrchestrator {
     })
     const reviewerRole = reviewerAgent ? projectCtx.roles.find((r) => r.id === reviewerAgent.roleId) : projectCtx.roles.find((r) => r.name.toLowerCase().includes('reviewer'))
     const modelOpts = this.resolveAgentModel(reviewerAgent, reviewerRole)
-    await this.assertNoActiveRun(context.project.id)
-    await this.prepareWorkspace(context.project.workspacePath)
-    const sessionId = await this.harness.createSession()
-    const run = await this.store.beginRun('task-review', context.company.id, context.project.id, sessionId, context.task.id, context.task.goalId)
+    const taskWorktree = await this.taskWorktrees.existing(context.project.workspacePath, context.task.id)
+    await this.assertTaskRunSlot(context.task.id, context.project.id, reviewerAgent?.id, Boolean(taskWorktree))
+    if (!taskWorktree) await this.prepareWorkspace(context.project.workspacePath)
+    const reviewHead = taskWorktree ? await this.taskWorktrees.checkpoint(taskWorktree, context.task.title) : undefined
+    const sessionId = await this.createHarnessSession(taskWorktree?.root)
+    const run = await this.store.beginRun(
+      'task-review',
+      context.company.id,
+      context.project.id,
+      sessionId,
+      context.task.id,
+      context.task.goalId,
+      taskWorktree ? { parallelTask: true } : {},
+    )
+    if (taskWorktree && reviewHead) this.reviewWorktrees.set(sessionId, { worktree: taskWorktree, head: reviewHead })
     await this.store.markReviewStarted(taskId, sessionId)
     try {
-      await this.harness.run(reviewPrompt(context.task, context), { sessionId, ...modelOpts })
+      await this.harness.run(reviewPrompt(context.task, context, taskWorktree), { sessionId, ...modelOpts })
     } catch (cause) {
       await this.store.completeRun(run.id, undefined, errorMessage(cause)).catch(() => undefined)
-      // Release the review session so the Review action stays retryable.
       await this.store.clearReviewSession(taskId).catch(() => undefined)
+      this.reviewWorktrees.delete(sessionId)
       throw cause
     }
     return receipt(run)
@@ -150,10 +167,11 @@ export class OrganizationOrchestrator {
     if (!company) throw new Error('Company not found')
     if (!explicit && company.autonomyLevel < 3) return null
 
-    const active = state.runs.find((item) => item.status === 'running')
-    if (active) {
-      if (active.projectId === id) return receipt(active)
-      if (explicit) throw new Error(`Another project already has an active ${active.kind} run in session ${active.sessionId}`)
+    const running = state.runs.filter((item) => item.status === 'running')
+    const globalRun = running.find((item) => item.kind === 'pm-plan' || !item.taskId)
+    if (globalRun) {
+      if (globalRun.projectId === id) return receipt(globalRun)
+      if (explicit) throw new Error(`Another project already has an active ${globalRun.kind} run in session ${globalRun.sessionId}`)
       return null
     }
 
@@ -166,7 +184,13 @@ export class OrganizationOrchestrator {
     }
 
     const ready = await this.store.nextReadyTask(id)
-    if (ready && workflow.has('execute')) return this.runTask(ready.id, explicit)
+    if (ready && workflow.has('execute')) {
+      const first = await this.runTask(ready.id, explicit)
+      if (company.autonomyLevel >= 4) await this.fillParallelReadyTasks(id)
+      return first
+    }
+
+    if (running.length > 0) return receipt(running[0]!)
 
     const hasGoals = state.goals.some((goal) => goal.projectId === id)
     if (!hasGoals && workflow.has('plan')) {
@@ -204,9 +228,7 @@ export class OrganizationOrchestrator {
       await this.store.completeRun(run.id, this.finalText.get(sessionId), frame.message ?? 'Agent error')
       if (run.taskId) await this.failTask(run.taskId, frame.message ?? 'Agent error')
       this.cleanupSession(sessionId)
-      if (run.kind !== 'pm-plan') {
-        await this.continueProject(run.projectId)
-      }
+      if (run.kind !== 'pm-plan') await this.continueProject(run.projectId)
       return
     }
 
@@ -221,10 +243,20 @@ export class OrganizationOrchestrator {
 
     if (run?.kind === 'task-execution' && run.taskId) {
       const output = this.finalText.get(sessionId) ?? 'Worker session finished.'
-      await this.store.completeRun(run.id, output)
-      const workflow = await this.workflowKinds(run.projectId)
-      if (workflow.has('review')) await this.store.markForReview(run.taskId, output)
-      else await this.store.completeWithoutReview(run.taskId, output)
+      try {
+        const context = await this.store.taskContext(run.taskId)
+        const worktree = await this.taskWorktrees.existing(context.project.workspacePath, run.taskId)
+        if (worktree) await this.taskWorktrees.checkpoint(worktree, context.task.title)
+        const workflow = await this.workflowKinds(run.projectId)
+        if (!workflow.has('review') && worktree) await this.taskWorktrees.integrate(context.project.workspacePath, run.taskId)
+        await this.store.completeRun(run.id, output)
+        if (workflow.has('review')) await this.store.markForReview(run.taskId, output)
+        else await this.store.completeWithoutReview(run.taskId, output)
+      } catch (cause) {
+        const message = errorMessage(cause)
+        await this.store.completeRun(run.id, output, message).catch(() => undefined)
+        await this.failTask(run.taskId, message)
+      }
       this.cleanupSession(sessionId)
       await this.continueProject(run.projectId)
       return
@@ -233,10 +265,6 @@ export class OrganizationOrchestrator {
     if (run && this.structuredHandled.has(sessionId)) {
       await this.store.completeRun(run.id, this.finalText.get(sessionId))
     } else if (run && (run.kind === 'pm-plan' || run.kind === 'task-review')) {
-      // The completion status may beat the final assistant/message across the
-      // two gateway sockets. Wait out the grace period; if the structured
-      // result lands in the meantime it is applied normally and the run
-      // completes successfully instead of failing as "missing".
       await new Promise((resolve) => setTimeout(resolve, STRUCTURED_RESULT_GRACE_MS))
       const reopened = await this.store.runBySession(sessionId)
       if (!reopened) {
@@ -263,8 +291,6 @@ export class OrganizationOrchestrator {
     const plan = extractTaggedJson<ProjectPlanInput>(text, 'nd-dsh-plan')
     if (!plan) return
     validatePlan(plan)
-    // Duplicate delivery across the two gateway sockets must not create the
-    // plan twice; claim the session synchronously before any await.
     if (this.structuredInFlight.has(sessionId)) return
     this.structuredInFlight.add(sessionId)
     try {
@@ -280,20 +306,31 @@ export class OrganizationOrchestrator {
     const review = extractTaggedJson<ReviewVerdict>(text, 'nd-dsh-review')
     if (!review) return
     if ((review.verdict !== 'pass' && review.verdict !== 'fail') || typeof review.summary !== 'string' || !review.summary.trim()) throw new Error('Invalid ND-DSH review result')
-    // Duplicate delivery across the two gateway sockets must not complete the
-    // review twice; claim the session synchronously before any await.
     if (this.structuredInFlight.has(sessionId)) return
     this.structuredInFlight.add(sessionId)
     try {
       const issueText = review.issues?.length ? `\nIssues: ${review.issues.join('; ')}` : ''
-      const summary = `${review.summary}${issueText}`
+      let summary = `${review.summary}${issueText}`
       const context = await this.store.taskContext(taskId)
+      let passed = review.verdict === 'pass'
+      if (passed) {
+        const checkpoint = this.reviewWorktrees.get(sessionId)
+        if (checkpoint) {
+          try {
+            await this.taskWorktrees.assertUnchanged(checkpoint.worktree, checkpoint.head)
+            await this.taskWorktrees.integrate(context.project.workspacePath, taskId)
+          } catch (cause) {
+            passed = false
+            summary = `${summary}\nIntegration/evidence gate: ${errorMessage(cause)}`
+          }
+        }
+      }
       const executionAttempts = await this.store.executionAttemptCount(taskId)
-      const automaticRework = review.verdict === 'fail'
+      const automaticRework = !passed
         && context.company.autonomyLevel >= 4
         && executionAttempts < MAX_AUTOPILOT_EXECUTION_ATTEMPTS
 
-      await this.store.completeReview(taskId, review.verdict === 'pass', summary, review.memory ?? [])
+      await this.store.completeReview(taskId, passed, summary, review.memory ?? [])
       if (automaticRework) await this.store.queueRework(taskId, summary)
     } finally {
       this.structuredInFlight.delete(sessionId)
@@ -314,6 +351,31 @@ export class OrganizationOrchestrator {
       await this.runNext(projectId, false)
     } catch (error) {
       console.warn('Organization autopilot paused:', error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  private async fillParallelReadyTasks(projectId: string): Promise<void> {
+    if (this.parallelFillProjects.has(projectId)) return
+    this.parallelFillProjects.add(projectId)
+    try {
+      for (let index = 0; index < MAX_AUTOPILOT_PARALLEL_FILL; index += 1) {
+        const state = await this.store.state()
+        const project = state.projects.find((item) => item.id === projectId)
+        const company = project ? state.companies.find((item) => item.id === project.companyId) : undefined
+        if (!project || company?.autonomyLevel !== 4) return
+        const ready = await this.store.nextReadyTask(projectId)
+        if (!ready) return
+        try {
+          await this.runTask(ready.id, false)
+        } catch (error) {
+          const message = errorMessage(error)
+          if (/capacity|active|busy|isolated|worktree|leased/i.test(message)) return
+          console.warn('Parallel autopilot fill paused:', message)
+          return
+        }
+      }
+    } finally {
+      this.parallelFillProjects.delete(projectId)
     }
   }
 
@@ -338,11 +400,32 @@ export class OrganizationOrchestrator {
     throw new Error(`Another project already has an active ${active.kind} run in session ${active.sessionId}`)
   }
 
+  private async assertTaskRunSlot(taskId: string, projectId: string, actorId: string | undefined, isolated: boolean): Promise<void> {
+    const state = await this.store.state()
+    const active = state.runs.filter((item) => item.status === 'running')
+    if (active.length === 0) return
+    if (!isolated) throw new Error('Task cannot run beside another organization run without an isolated Git worktree')
+    const global = active.find((item) => item.kind === 'pm-plan' || !item.taskId)
+    if (global) throw new Error(`Global ${global.kind} run is active in session ${global.sessionId}`)
+    const sameTask = active.find((item) => item.taskId === taskId)
+    if (sameTask) throw new Error(`Task already has an active ${sameTask.kind} run in session ${sameTask.sessionId}`)
+    if (actorId) {
+      const actor = state.agents.find((item) => item.id === actorId)
+      if (actor && (actor.status === 'working' || actor.status === 'reviewing')) throw new Error(`AI employee ${actor.name} is already busy with another task`)
+    }
+    for (const run of active) {
+      if (!run.taskId) throw new Error('Non-task organization work cannot overlap task execution')
+      const context = await this.store.taskContext(run.taskId)
+      const worktree = await this.taskWorktrees.existing(context.project.workspacePath, run.taskId)
+      if (!worktree) throw new Error(`Active task ${run.taskId} is not isolated in a Git worktree`)
+    }
+    const project = state.projects.find((item) => item.id === projectId)
+    if (!project) throw new Error('Project not found')
+  }
+
   private async resolveTaskEngine(agentId: string | undefined): Promise<TaskEngine> {
     if (!this.engines) return { id: ND_HARNESS_ENGINE_ID, name: 'ND Harness' }
     const engineId = await this.engines.assignedEngine(agentId)
-    // Catalog availability is the only gate; the registry owns which engines
-    // may run, and each descriptor owns its own execution guidance.
     const descriptor = this.engines.assertAvailable(engineId)
     return {
       id: descriptor.id,
@@ -368,6 +451,7 @@ export class OrganizationOrchestrator {
     this.structuredHandled.delete(sessionId)
     this.structuredInFlight.delete(sessionId)
     this.autoAdvance.delete(sessionId)
+    this.reviewWorktrees.delete(sessionId)
   }
 
   private assertPolicy(effect: 'allow' | 'ask' | 'deny', explicit: boolean, label: string): void {
@@ -381,11 +465,15 @@ export class OrganizationOrchestrator {
     await this.workspace.setRoot(workspacePath)
   }
 
-  /**
-   * Validate → health-check the project target before a worker runs, opening
-   * the browser on success (the runtime service fires that callback). A dev
-   * server that will not start is reported but never blocks code execution.
-   */
+  private async createHarnessSession(cwd?: string): Promise<string> {
+    if (!cwd) return this.harness.createSession()
+    const result = await this.harness.gatewayRpc('session.create', { cwd })
+    if (!result.ok) throw new Error(result.error?.message ?? 'Harness session.create failed')
+    const sessionId = (result.value as { sessionId?: unknown } | undefined)?.sessionId
+    if (typeof sessionId !== 'string' || !sessionId) throw new Error('Harness session.create returned no session id')
+    return sessionId
+  }
+
   private async warmProjectTarget(projectId: string): Promise<void> {
     if (!this.projectRuntime) return
     try {
@@ -402,16 +490,22 @@ function pmPrompt(context: Awaited<ReturnType<OrganizationStore['projectContext'
   return `You are the AI Product Manager for ${context.company.name}.\nMission: ${context.company.mission}\nProject: ${context.project.name}\nObjective: ${context.project.objective}\n\nCreate a practical delivery plan. Respect company/project isolation. Use the existing teams and roles when assigning work. Return concise reasoning, then exactly one JSON object between <nd-dsh-plan> and </nd-dsh-plan>.\n\nSchema:\n<nd-dsh-plan>{"goal":{"title":"...","description":"..."},"milestones":[{"title":"...","description":"...","tasks":[{"title":"...","description":"...","priority":"medium","acceptanceCriteria":["..."],"dependsOn":["earlier task title"],"role":"Software Engineer"}]}],"memory":[{"title":"...","content":"...","tags":["plan"]}]}</nd-dsh-plan>\n\nAvailable roles:\n${roles}\nAvailable teams:\n${teams}\nKnown memory:\n${context.memory.map((item) => `- ${item.title}: ${item.content}`).join('\n') || '- none'}\nPolicies:\n${context.policies.map((item) => `- ${item.action}: ${item.effect}`).join('\n')}`
 }
 
-function workerPrompt(context: Awaited<ReturnType<OrganizationStore['taskContext']>>, engine: TaskEngine): string {
+function workerPrompt(context: Awaited<ReturnType<OrganizationStore['taskContext']>>, engine: TaskEngine, worktree?: TaskWorktree): string {
   const reviewFeedback = context.task.reviewSummary
     ? `\nPrevious independent review feedback:\n${context.task.reviewSummary}\nResolve every relevant issue before declaring the task complete.\n`
     : ''
   const engineInstructions = engine.workerInstructions ?? DEFAULT_WORKER_INSTRUCTIONS
-  return `You are ${context.agent?.name ?? 'an AI worker'} acting as ${context.role?.name ?? 'Software Engineer'} inside company ${context.company.name}.\nCompany mission: ${context.company.mission}\nProject: ${context.project.name}\nObjective: ${context.project.objective}\nTask: ${context.task.title}\nDescription: ${context.task.description}\nAcceptance criteria:\n${context.task.acceptanceCriteria.map((item) => `- ${item}`).join('\n')}${reviewFeedback}\nResponsibilities: ${context.role?.responsibility ?? 'Complete the assigned work.'}\nRole instructions: ${context.role?.systemPrompt ?? 'Execute carefully and verify the result.'}\nRelevant skills:\n${context.skills.map((item) => `- ${item.name}: ${item.instructions}`).join('\n')}\nRelevant memory:\n${context.memory.map((item) => `- ${item.title}: ${item.content}`).join('\n') || '- none'}\nPolicies:\n${context.policies.map((item) => `- ${item.action}: ${item.effect}`).join('\n')}${engineInstructions}\nInspect before editing, run meaningful validation, and finish with a concise result summary for the independent reviewer.`
+  const isolation = worktree
+    ? `\nND task isolation: this session is already rooted at the dedicated worktree ${worktree.root}. Stay on branch ${worktree.branch}; do not switch worktrees/branches, push, merge into the project branch, or modify the base checkout. ND will checkpoint and integrate only after verification.\n`
+    : ''
+  return `You are ${context.agent?.name ?? 'an AI worker'} acting as ${context.role?.name ?? 'Software Engineer'} inside company ${context.company.name}.\nCompany mission: ${context.company.mission}\nProject: ${context.project.name}\nObjective: ${context.project.objective}\nTask: ${context.task.title}\nDescription: ${context.task.description}\nAcceptance criteria:\n${context.task.acceptanceCriteria.map((item) => `- ${item}`).join('\n')}${reviewFeedback}\nResponsibilities: ${context.role?.responsibility ?? 'Complete the assigned work.'}\nRole instructions: ${context.role?.systemPrompt ?? 'Execute carefully and verify the result.'}\nRelevant skills:\n${context.skills.map((item) => `- ${item.name}: ${item.instructions}`).join('\n')}\nRelevant memory:\n${context.memory.map((item) => `- ${item.title}: ${item.content}`).join('\n') || '- none'}\nPolicies:\n${context.policies.map((item) => `- ${item.action}: ${item.effect}`).join('\n')}${engineInstructions}${isolation}\nInspect before editing, run meaningful validation, and finish with a concise result summary for the independent reviewer.`
 }
 
-function reviewPrompt(task: OrganizationTask, context: Awaited<ReturnType<OrganizationStore['taskContext']>>): string {
-  return `You are an independent reviewer for ${context.company.name}. Do not assume the worker succeeded. Inspect the actual workspace and verify the task against acceptance criteria.\nProject: ${context.project.name}\nTask: ${task.title}\nDescription: ${task.description}\nAcceptance criteria:\n${task.acceptanceCriteria.map((item) => `- ${item}`).join('\n')}\nWorker summary:\n${task.resultSummary ?? 'No summary provided.'}\n\nRun relevant tests/checks. Then return exactly one JSON object between <nd-dsh-review> and </nd-dsh-review>:\n<nd-dsh-review>{"verdict":"pass|fail","summary":"evidence-based review","issues":["..."],"memory":[{"title":"lesson","content":"durable lesson","tags":["review"]}]}</nd-dsh-review>`
+function reviewPrompt(task: OrganizationTask, context: Awaited<ReturnType<OrganizationStore['taskContext']>>, worktree?: TaskWorktree): string {
+  const isolation = worktree
+    ? `\nReview the isolated task branch ${worktree.branch} in the current worktree. Do not edit, commit, switch branches, merge, or push; a PASS is valid only while the exact checkpoint stays unchanged.\n`
+    : ''
+  return `You are an independent reviewer for ${context.company.name}. Do not assume the worker succeeded. Inspect the actual workspace and verify the task against acceptance criteria.\nProject: ${context.project.name}\nTask: ${task.title}\nDescription: ${task.description}\nAcceptance criteria:\n${task.acceptanceCriteria.map((item) => `- ${item}`).join('\n')}\nWorker summary:\n${task.resultSummary ?? 'No summary provided.'}${isolation}\n\nRun relevant tests/checks. Then return exactly one JSON object between <nd-dsh-review> and </nd-dsh-review>:\n<nd-dsh-review>{"verdict":"pass|fail","summary":"evidence-based review","issues":["..."],"memory":[{"title":"lesson","content":"durable lesson","tags":["review"]}]}</nd-dsh-review>`
 }
 
 function receipt(run: OrganizationRun): OrganizationRunReceipt {
