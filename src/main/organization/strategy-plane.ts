@@ -5,6 +5,7 @@ import type { OrganizationControlSnapshot } from '../../shared/organization-cont
 import type { OrganizationSnapshot } from '../../shared/organization.js'
 import {
   releaseReadinessFrom,
+  type CompanyScheduleOutcome,
   type OrganizationActionAuditReceipt,
   type OrganizationCompanyKnowledge,
   type OrganizationCompanySchedule,
@@ -113,7 +114,7 @@ export class OrganizationStrategyPlane {
     return clone(item)
   }
 
-  async finishSchedule(id: string, outcome: OrganizationCompanySchedule['lastOutcome'], detail: string): Promise<void> {
+  async finishSchedule(id: string, outcome: CompanyScheduleOutcome, detail: string): Promise<void> {
     await this.load()
     const item = this.value.schedules.find((row) => row.id === id)
     if (!item) return
