@@ -7,7 +7,8 @@ import type { OrganizationStrategyDesktopApi } from '../../shared/organization-s
 
 declare global {
   interface Window {
-    ndDsh: DesktopApi & { extensions: ExtensionsDesktopApi }
+    ndDsh: DesktopApi
+    ndDshExtensions: ExtensionsDesktopApi
     ndDshDesign: DesignDesktopApi
     ndDshOrganization: OrganizationDesktopApi
     ndDshControl: OrganizationControlDesktopApi
