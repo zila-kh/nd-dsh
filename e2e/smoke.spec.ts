@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import type { TerminalDesktopApi } from '../src/shared/terminal.js'
 import { closeApp, launchApp, type LaunchedApp } from './fixtures.js'
 
 test.describe.configure({ mode: 'serial' })
@@ -25,6 +26,41 @@ test('product shell boots with the full navigation', async () => {
   for (const label of ['Company', 'Agent', 'Design', 'QA', 'Settings']) {
     await expect(navigation.getByTitle(label)).toBeVisible()
   }
+})
+
+test('dedicated terminal runs a real PTY command through the sandboxed bridge', async () => {
+  const { page } = launched
+  const result = await page.evaluate(async () => {
+    const api = (globalThis as typeof globalThis & { ndDshTerminal: TerminalDesktopApi }).ndDshTerminal
+    const sessionId = `terminal-e2e-${Date.now()}`
+    const marker = 'ND_TERMINAL_E2E_OK'
+    const created = await api.create({ sessionId, title: 'E2E terminal' })
+    const terminal = created.terminals[0]
+    if (!terminal) throw new Error('Terminal was not created')
+    try {
+      const streamed = await new Promise<string>((resolve, reject) => {
+        let output = ''
+        const timeout = setTimeout(() => { off(); reject(new Error('Timed out waiting for PTY output')) }, 15_000)
+        const off = api.onOutput((event) => {
+          if (event.sessionId !== sessionId || event.terminalId !== terminal.id) return
+          output += event.data
+          if (output.includes(marker)) { clearTimeout(timeout); off(); resolve(output) }
+        })
+        void api.write(sessionId, terminal.id, `node -e "console.log(Buffer.from('TkRfVEVSTUlOQUxfRTJFX09L','base64').toString())"\r`).catch((error) => { clearTimeout(timeout); off(); reject(error) })
+      })
+      const latest = await api.state(sessionId)
+      const snapshot = latest.terminals.find((item) => item.id === terminal.id)
+      if (!snapshot) throw new Error('Terminal disappeared after command execution')
+      return { streamed, buffer: snapshot.buffer, status: snapshot.status, shell: snapshot.shell }
+    } finally {
+      await api.close(sessionId, terminal.id).catch(() => undefined)
+    }
+  })
+  expect(result.streamed).toContain('ND_TERMINAL_E2E_OK')
+  expect(result.buffer).toContain('ND_TERMINAL_E2E_OK')
+  expect(result.status).toBe('running')
+  expect(result.shell.length).toBeGreaterThan(0)
+  expect(rendererErrors).toEqual([])
 })
 
 test('primary surfaces switch without renderer errors', async () => {

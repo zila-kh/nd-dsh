@@ -52,10 +52,20 @@ export class TerminalManager {
     try {
       const parsed = JSON.parse(await fs.readFile(this.options.storePath, 'utf8')) as StoreFile
       if (parsed.version === 1 && Array.isArray(parsed.sessions)) {
-        for (const session of parsed.sessions) this.sessions.set(session.sessionId, normalizeSession(session))
+        for (const session of parsed.sessions) {
+          const normalized = normalizeSession(session)
+          normalized.sessionId = asId(normalized.sessionId, 'Session id')
+          const terminalIds = new Set(normalized.terminals.map((terminal) => asId(terminal.id, 'Terminal id')))
+          validateLayout(normalized.layout, terminalIds)
+          this.normalize(normalized)
+          this.sessions.set(normalized.sessionId, normalized)
+        }
       }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error
+      this.sessions.clear()
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.warn('Ignoring unreadable terminal state; terminals will start fresh:', error instanceof Error ? error.message : String(error))
+      }
     }
     this.initialized = true
   }

@@ -15,6 +15,7 @@ interface Props {
 }
 const HEIGHT_KEY = 'nd-dsh:terminal-height'
 const MIN_HEIGHT = 150, MAX_HEIGHT = 520, DEFAULT_HEIGHT = 250
+type LayoutBranch = 'first' | 'second'
 
 export function TerminalDock({ open, sessionId, cwd, onOpenChange, onError }: Props) {
   const [state, setState] = useState<TerminalSessionState | null>(null)
@@ -75,6 +76,12 @@ export function TerminalDock({ open, sessionId, cwd, onOpenChange, onError }: Pr
     await apply(window.ndDshTerminal.setLayout(sessionId, layout, newPane, created.activeTerminalId))
   }, [apply, createTerminal, cwd, sessionId, state])
 
+  const persistSplitRatio = useCallback((path: readonly LayoutBranch[], ratio: number) => {
+    if (!sessionId || !state?.layout) return
+    const layout = updateSplitRatio(state.layout, path, ratio)
+    void apply(window.ndDshTerminal.setLayout(sessionId, layout, state.activePaneId, state.activeTerminalId))
+  }, [apply, sessionId, state])
+
   const active = state?.terminals.find((terminal) => terminal.id === state.activeTerminalId)
   const byId = useMemo(() => new Map(state?.terminals.map((terminal) => [terminal.id, terminal]) ?? []), [state?.terminals])
   if (!open) return null
@@ -98,14 +105,30 @@ export function TerminalDock({ open, sessionId, cwd, onOpenChange, onError }: Pr
       </div>
     </div>
     <div className="h-[calc(100%-32px)] min-h-0 overflow-hidden">
-      {loading && !state ? <div className="grid h-full place-items-center text-[10px] text-faint">Starting terminal…</div> : !sessionId ? <div className="grid h-full place-items-center text-[10px] text-faint">Select a chat to open its isolated terminal.</div> : state?.layout ? <Layout layout={state.layout} sessionId={sessionId} byId={byId} activePaneId={state.activePaneId} activate={(paneId, terminalId) => { if (state.activePaneId !== paneId || state.activeTerminalId !== terminalId) void apply(window.ndDshTerminal.setLayout(sessionId, state.layout, paneId, terminalId)) }} onError={fail} /> : <div className="grid h-full place-items-center"><button className="rounded border border-border-strong px-3 py-1.5 text-[11px]" onClick={() => void createTerminal()}>New terminal</button></div>}
+      {loading && !state ? <div className="grid h-full place-items-center text-[10px] text-faint">Starting terminal…</div> : !sessionId ? <div className="grid h-full place-items-center text-[10px] text-faint">Select a chat to open its isolated terminal.</div> : state?.layout ? <Layout layout={state.layout} sessionId={sessionId} byId={byId} activePaneId={state.activePaneId} activate={(paneId, terminalId) => { if (state.activePaneId !== paneId || state.activeTerminalId !== terminalId) void apply(window.ndDshTerminal.setLayout(sessionId, state.layout, paneId, terminalId)) }} persistRatio={persistSplitRatio} path={[]} onError={fail} /> : <div className="grid h-full place-items-center"><button className="rounded border border-border-strong px-3 py-1.5 text-[11px]" onClick={() => void createTerminal()}>New terminal</button></div>}
     </div>
   </section>
 }
 
-function Layout({ layout, sessionId, byId, activePaneId, activate, onError }: { layout: TerminalPaneLayout; sessionId: string; byId: ReadonlyMap<string, TerminalSnapshot>; activePaneId: string | null; activate(pane: string, terminal: string): void; onError(cause: unknown): void }) {
-  if (layout.type === 'leaf') { const snapshot = byId.get(layout.terminalId); return snapshot ? <Surface sessionId={sessionId} snapshot={snapshot} active={activePaneId === layout.paneId} focus={() => activate(layout.paneId, layout.terminalId)} onError={onError} /> : null }
-  return <Group orientation={layout.direction} className="h-full w-full"><Panel className="min-h-0 min-w-0 overflow-hidden"><Layout layout={layout.first} sessionId={sessionId} byId={byId} activePaneId={activePaneId} activate={activate} onError={onError} /></Panel><Separator className={cn('shrink-0 touch-none bg-border-strong hover:bg-primary', layout.direction === 'horizontal' ? 'w-px cursor-col-resize' : 'h-px cursor-row-resize')} /><Panel className="min-h-0 min-w-0 overflow-hidden"><Layout layout={layout.second} sessionId={sessionId} byId={byId} activePaneId={activePaneId} activate={activate} onError={onError} /></Panel></Group>
+function Layout({ layout, sessionId, byId, activePaneId, activate, persistRatio, path, onError }: { layout: TerminalPaneLayout; sessionId: string; byId: ReadonlyMap<string, TerminalSnapshot>; activePaneId: string | null; activate(pane: string, terminal: string): void; persistRatio(path: readonly LayoutBranch[], ratio: number): void; path: readonly LayoutBranch[]; onError(cause: unknown): void }) {
+  if (layout.type === 'leaf') {
+    const snapshot = byId.get(layout.terminalId)
+    return snapshot ? <Surface sessionId={sessionId} snapshot={snapshot} active={activePaneId === layout.paneId} focus={() => activate(layout.paneId, layout.terminalId)} onError={onError} /> : null
+  }
+  const ratio = layout.ratio ?? 0.5
+  return <Group
+    orientation={layout.direction}
+    className="h-full w-full"
+    defaultLayout={{ first: ratio * 100, second: (1 - ratio) * 100 }}
+    onLayoutChanged={(next, meta) => {
+      const first = next.first
+      if (meta.isUserInteraction && typeof first === 'number') persistRatio(path, Math.max(0.1, Math.min(0.9, first / 100)))
+    }}
+  >
+    <Panel id="first" minSize="10%" className="min-h-0 min-w-0 overflow-hidden"><Layout layout={layout.first} sessionId={sessionId} byId={byId} activePaneId={activePaneId} activate={activate} persistRatio={persistRatio} path={[...path, 'first']} onError={onError} /></Panel>
+    <Separator className={cn('shrink-0 touch-none bg-border-strong hover:bg-primary', layout.direction === 'horizontal' ? 'w-px cursor-col-resize' : 'h-px cursor-row-resize')} />
+    <Panel id="second" minSize="10%" className="min-h-0 min-w-0 overflow-hidden"><Layout layout={layout.second} sessionId={sessionId} byId={byId} activePaneId={activePaneId} activate={activate} persistRatio={persistRatio} path={[...path, 'second']} onError={onError} /></Panel>
+  </Group>
 }
 
 function Surface({ sessionId, snapshot, active, focus, onError }: { sessionId: string; snapshot: TerminalSnapshot; active: boolean; focus(): void; onError(cause: unknown): void }) {
@@ -129,6 +152,14 @@ function paneForTerminal(layout: TerminalPaneLayout | null, terminalId: string):
 function firstPane(layout: TerminalPaneLayout | null): string | null { return !layout ? null : layout.type === 'leaf' ? layout.paneId : firstPane(layout.first) }
 function replacePane(layout: TerminalPaneLayout | null, paneId: string, terminalId: string): TerminalPaneLayout | null { if (!layout) return null; if (layout.type === 'leaf') return layout.paneId === paneId ? { ...layout, terminalId } : layout; return { ...layout, first: replacePane(layout.first, paneId, terminalId) ?? layout.first, second: replacePane(layout.second, paneId, terminalId) ?? layout.second } }
 function splitPane(layout: TerminalPaneLayout | null, paneId: string, leaf: Extract<TerminalPaneLayout, { type: 'leaf' }>, direction: TerminalSplitDirection): TerminalPaneLayout | null { if (!layout) return leaf; if (layout.type === 'leaf') return layout.paneId === paneId ? { type: 'split', direction, first: layout, second: leaf, ratio: 0.5 } : layout; return { ...layout, first: splitPane(layout.first, paneId, leaf, direction) ?? layout.first, second: splitPane(layout.second, paneId, leaf, direction) ?? layout.second } }
+function updateSplitRatio(layout: TerminalPaneLayout, path: readonly LayoutBranch[], ratio: number): TerminalPaneLayout {
+  if (layout.type === 'leaf') return layout
+  if (path.length === 0) return { ...layout, ratio }
+  const [branch, ...rest] = path
+  return branch === 'first'
+    ? { ...layout, first: updateSplitRatio(layout.first, rest, ratio) }
+    : { ...layout, second: updateSplitRatio(layout.second, rest, ratio) }
+}
 function clampHeight(value: number): number { return Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, Math.round(value))) }
 function startDrag(event: ReactPointerEvent<HTMLDivElement>, ref: React.MutableRefObject<{ y: number; height: number } | null>, height: number): void { ref.current = { y: event.clientY, height }; event.currentTarget.setPointerCapture(event.pointerId) }
 function moveDrag(event: ReactPointerEvent<HTMLDivElement>, ref: React.MutableRefObject<{ y: number; height: number } | null>, setHeight: (value: number) => void): void { if (ref.current) setHeight(clampHeight(ref.current.height + ref.current.y - event.clientY)) }

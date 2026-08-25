@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -61,6 +61,31 @@ describe('TerminalManager', () => {
     expect((await manager.setLayout('chat-a', layout, 'right', secondId)).layout).toEqual(layout)
     const invalid: TerminalPaneLayout = { type: 'split', direction: 'vertical', first: { type: 'leaf', paneId: 'one', terminalId: firstId }, second: { type: 'leaf', paneId: 'two', terminalId: firstId } }
     await expect(manager.setLayout('chat-a', invalid, 'one', firstId)).rejects.toThrow(/more than one pane/)
+    await manager.shutdown()
+  })
+
+  it('persists split ratios across desktop restart', async () => {
+    const { root, manager } = await setup()
+    const first = await manager.create({ sessionId: 'chat-a' }); const firstId = first.terminals[0]!.id
+    const second = await manager.create({ sessionId: 'chat-a' }); const secondId = second.terminals.find((item) => item.id !== firstId)!.id
+    const layout: TerminalPaneLayout = { type: 'split', direction: 'horizontal', first: { type: 'leaf', paneId: 'left', terminalId: firstId }, second: { type: 'leaf', paneId: 'right', terminalId: secondId }, ratio: 0.3 }
+    await manager.setLayout('chat-a', layout, 'left', firstId)
+    await manager.shutdown()
+
+    const restored = new TerminalManager({ storePath: join(root, 'terminals.json'), workspace: { state: () => ({ root, name: 'fixture' }) }, spawn: () => new FakePty(4000) })
+    await restored.initialize(); const state = await restored.state('chat-a')
+    if (state.layout?.type !== 'split') throw new Error('Expected restored split layout')
+    expect(state.layout.ratio).toBeCloseTo(0.3)
+    await restored.shutdown()
+  })
+
+  it('ignores malformed persisted terminal state instead of blocking startup', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nd-terminal-corrupt-')); dirs.push(root)
+    const storePath = join(root, 'terminals.json')
+    await writeFile(storePath, JSON.stringify({ version: 1, sessions: [{ sessionId: 'chat-a', terminals: null, layout: null, activePaneId: null, activeTerminalId: null }] }), 'utf8')
+    const manager = new TerminalManager({ storePath, workspace: { state: () => ({ root, name: 'fixture' }) }, spawn: () => new FakePty(5000) })
+    await expect(manager.initialize()).resolves.toBeUndefined()
+    expect((await manager.state('chat-a')).terminals).toEqual([])
     await manager.shutdown()
   })
 })
