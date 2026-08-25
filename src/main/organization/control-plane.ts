@@ -18,10 +18,12 @@ import type {
 } from '../../shared/organization-control.js'
 import type { OrganizationRun, OrganizationRunKind, OrganizationRunReceipt, OrganizationSnapshot } from '../../shared/organization.js'
 import type { OrganizationStore } from './store.js'
+import { taskEvidenceWorkspace } from './task-worktree.js'
 import { captureWorkspaceEvidence } from './worktree-evidence.js'
 
 const DAY_MS = 24 * 60 * 60 * 1_000
 const DEFAULT_LEASE_MS = 30 * 60 * 1_000
+const DEFAULT_MAX_PARALLEL_WORKERS = 1
 const EMPTY: OrganizationControlSnapshot = {
   version: 1,
   turns: [],
@@ -107,6 +109,18 @@ export class OrganizationControlPlane {
       }
     }
 
+    if (taskId && (action === 'task.execute' || action === 'task.review')) {
+      const maxParallelWorkers = budget?.maxParallelWorkers ?? DEFAULT_MAX_PARALLEL_WORKERS
+      const runningTaskTurns = organization.runs.filter((item) => item.status === 'running' && item.taskId && item.taskId !== taskId).length
+      if (runningTaskTurns >= maxParallelWorkers) {
+        return {
+          route: 'wait', action, companyId: company.id, projectId: project.id, taskId,
+          reason: `Parallel worker capacity reached (${runningTaskTurns}/${maxParallelWorkers}).`,
+          humanActionIds: [], ...(budget ? { budgetId: budget.id } : {}), checkedAt: Date.now(),
+        }
+      }
+    }
+
     if (taskId) {
       const lease = this.value.leases.find((item) => item.taskId === taskId && item.status === 'active' && item.expiresAt > Date.now())
       if (lease) {
@@ -161,16 +175,17 @@ export class OrganizationControlPlane {
     const latest = this.value.evidence.find((item) => item.taskId === taskId && item.status === 'pending_review')
     if (!latest) return null
     const context = await this.store.taskContext(taskId)
-    const current = await captureWorkspaceEvidence(context.project.workspacePath)
+    const workspace = await taskEvidenceWorkspace(context.project.workspacePath, taskId)
+    const current = await captureWorkspaceEvidence(workspace)
     latest.status = !latest.exact || !current.exact
       ? 'failed'
       : current.fingerprint === latest.fingerprint ? 'verified' : 'stale'
     if (latest.status !== 'verified') latest.invalidatedAt = Date.now()
     latest.reviewSummary = latest.status === 'verified'
-      ? 'Exact worktree fingerprint still matches the review receipt.'
+      ? 'Exact task-worktree fingerprint still matches the review receipt.'
       : latest.status === 'stale'
-        ? 'Workspace changed after the review evidence was captured; re-review is required.'
-        : 'Exact Git worktree evidence was unavailable; completion cannot be strongly verified.'
+        ? 'Task worktree changed after the review evidence was captured; re-review is required.'
+        : 'Exact Git task-worktree evidence was unavailable; completion cannot be strongly verified.'
     await this.save()
     return clone(latest)
   }
@@ -302,7 +317,8 @@ export class OrganizationControlPlane {
 
   private async ensureEvidence(taskId: string): Promise<boolean> {
     const context = await this.store.taskContext(taskId)
-    const capture = await captureWorkspaceEvidence(context.project.workspacePath)
+    const workspace = await taskEvidenceWorkspace(context.project.workspacePath, taskId)
+    const capture = await captureWorkspaceEvidence(workspace)
     const existing = this.value.evidence.find((item) => item.taskId === taskId && item.status === 'pending_review' && item.fingerprint === capture.fingerprint)
     if (existing) return false
     this.value.evidence.unshift({
@@ -321,7 +337,7 @@ export class OrganizationControlPlane {
     const task = organization.tasks.find((item) => item.id === run.taskId)
     this.value.leases.unshift({
       id: randomUUID(), companyId: run.companyId, projectId: run.projectId, taskId: run.taskId,
-      ownerId: run.sessionId, writeScopes: ['workspace/**'], status: 'active', version: 1,
+      ownerId: run.sessionId, writeScopes: [`task:${run.taskId}:workspace/**`], status: 'active', version: 1,
       acquiredAt: Date.now(), expiresAt: Date.now() + DEFAULT_LEASE_MS,
     })
     return Boolean(task)
