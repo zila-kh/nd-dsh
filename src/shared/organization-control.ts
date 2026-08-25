@@ -73,7 +73,7 @@ export interface OrganizationSignal {
   title: string
   summary: string
   status: SignalStatus
-  disposition?: SignalDisposition
+  disposition?: SignalDisposition | undefined
   confidence?: number
   createdAt: number
   updatedAt: number
