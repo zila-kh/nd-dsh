@@ -3,16 +3,14 @@ import type { CodingEngineDescriptor, ModelProvider } from '../../../shared/cont
 import {
   AGENT_EXTENSION_SURFACES,
   EXTENSION_ADAPTERS,
-  cloneBuiltinExtensionDemos,
   resolveExtensionRoute,
   type AgentExtensionManifest,
   type AgentExtensionSurface,
   type ExtensionAdapter,
+  type ExtensionDemoResult,
 } from '../../../shared/extensions'
 import { cn } from '../lib/utils'
 import { SettingsButton, SettingsRow, SettingsSection, StatusChip, rowDesc, rowPathText, rowStack, rowTitle } from './settings-primitives'
-
-const STORAGE_KEY = 'nd-dsh.agent-extensions.v1'
 
 const SURFACE_LABEL: Record<AgentExtensionSurface, string> = {
   memory: 'Memory',
@@ -24,74 +22,188 @@ const SURFACE_LABEL: Record<AgentExtensionSurface, string> = {
   hook: 'Hooks',
 }
 
-function loadExtensions(): AgentExtensionManifest[] {
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY)
-    if (!raw) return cloneBuiltinExtensionDemos()
-    const parsed = JSON.parse(raw) as AgentExtensionManifest[]
-    return Array.isArray(parsed) && parsed.length ? parsed : cloneBuiltinExtensionDemos()
-  } catch {
-    return cloneBuiltinExtensionDemos()
-  }
+interface DetailDraft {
+  name: string
+  description: string
+  version: string
+  instructions: string
 }
 
 export function ExtensionSettings({ onError }: { onError(message: string): void }) {
-  const [extensions, setExtensions] = useState<AgentExtensionManifest[]>(loadExtensions)
+  const [extensions, setExtensions] = useState<AgentExtensionManifest[]>([])
   const [engines, setEngines] = useState<CodingEngineDescriptor[]>([])
   const [providers, setProviders] = useState<ModelProvider[]>([])
   const [surface, setSurface] = useState<AgentExtensionSurface>('plugin')
   const [selectedId, setSelectedId] = useState<string>('demo-counter-plugin')
+  const [busy, setBusy] = useState<string | null>('load')
+  const [demoEngineId, setDemoEngineId] = useState('')
+  const [demoProviderId, setDemoProviderId] = useState('')
+  const [demoResult, setDemoResult] = useState<ExtensionDemoResult | null>(null)
+  const [detailDraft, setDetailDraft] = useState<DetailDraft | null>(null)
 
   useEffect(() => {
     let mounted = true
-    void Promise.all([window.ndDsh.engines.list(), window.ndDsh.providers.list()])
-      .then(([engineItems, providerItems]) => {
+    void Promise.all([window.ndDsh.extensions.list(), window.ndDsh.engines.list(), window.ndDsh.providers.list()])
+      .then(([extensionItems, engineItems, providerItems]) => {
         if (!mounted) return
+        setExtensions(extensionItems)
         setEngines(engineItems)
         setProviders(providerItems)
+        setDemoEngineId(engineItems.find((item) => item.available)?.id ?? engineItems[0]?.id ?? '')
+        setDemoProviderId(providerItems.find((item) => item.enabled)?.id ?? '')
       })
-      .catch((cause) => onError(cause instanceof Error ? cause.message : String(cause)))
-    return () => { mounted = false }
+      .catch((cause) => onError(errorMessage(cause)))
+      .finally(() => { if (mounted) setBusy(null) })
+    const offExtensions = window.ndDsh.extensions.onChanged((items) => { if (mounted) setExtensions(items) })
+    const offProviders = window.ndDsh.providers.onChanged((items) => { if (mounted) setProviders(items) })
+    return () => {
+      mounted = false
+      offExtensions()
+      offProviders()
+    }
   }, [onError])
-
-  useEffect(() => {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(extensions))
-  }, [extensions])
 
   const visible = useMemo(() => extensions.filter((item) => item.surface === surface), [extensions, surface])
   const selected = extensions.find((item) => item.id === selectedId) ?? visible[0]
 
-  const mutate = (id: string, change: (item: AgentExtensionManifest) => AgentExtensionManifest): void => {
-    setExtensions((items) => items.map((item) => item.id === id ? change(item) : item))
+  useEffect(() => {
+    if (!selected) {
+      setDetailDraft(null)
+      return
+    }
+    setDetailDraft({
+      name: selected.name,
+      description: selected.description,
+      version: selected.version,
+      instructions: selected.instructions ?? '',
+    })
+    setDemoResult(null)
+  }, [selected?.id])
+
+  const persist = async (next: AgentExtensionManifest, label = 'save'): Promise<void> => {
+    if (busy) return
+    setBusy(`${label}-${next.id}`)
+    try {
+      const items = await window.ndDsh.extensions.save(next)
+      setExtensions(items)
+    } catch (cause) {
+      onError(errorMessage(cause))
+    } finally {
+      setBusy(null)
+    }
   }
 
   const setEngineRoute = (extension: AgentExtensionManifest, engineId: string, adapter: ExtensionAdapter): void => {
-    mutate(extension.id, (item) => ({
-      ...item,
+    void persist({
+      ...extension,
       engineRoutes: [
-        ...item.engineRoutes.filter((route) => route.engineId !== engineId),
+        ...extension.engineRoutes.filter((route) => route.engineId !== engineId),
         ...(adapter === 'auto' ? [] : [{ engineId, adapter }]),
       ],
-    }))
+    }, 'route')
   }
 
   const toggleProvider = (extension: AgentExtensionManifest, providerId: string, enabled: boolean): void => {
-    mutate(extension.id, (item) => {
-      const current = new Map(item.providerRoutes.map((route) => [route.providerId, route.enabled]))
-      current.set(providerId, enabled)
-      return { ...item, providerRoutes: [...current.entries()].map(([id, value]) => ({ providerId: id, enabled: value })) }
-    })
+    const current = new Map<string, boolean>()
+    if (extension.providerRoutes.length === 0) {
+      // Moving away from Allow all must preserve every other provider's
+      // current enabled state rather than accidentally denying the rest.
+      for (const provider of providers) current.set(provider.id, provider.enabled)
+    } else {
+      for (const route of extension.providerRoutes) current.set(route.providerId, route.enabled)
+    }
+    current.set(providerId, enabled)
+    void persist({
+      ...extension,
+      providerRoutes: [...current.entries()].map(([id, value]) => ({ providerId: id, enabled: value })),
+    }, 'provider')
   }
 
   const allowAllProviders = (extension: AgentExtensionManifest): void => {
-    mutate(extension.id, (item) => ({ ...item, providerRoutes: [] }))
+    void persist({ ...extension, providerRoutes: [] }, 'provider')
   }
 
-  const reset = (): void => {
-    const demos = cloneBuiltinExtensionDemos()
-    setExtensions(demos)
-    setSurface('plugin')
-    setSelectedId('demo-counter-plugin')
+  const reset = async (): Promise<void> => {
+    if (busy) return
+    setBusy('reset')
+    try {
+      const items = await window.ndDsh.extensions.resetDemos()
+      setExtensions(items)
+      setSurface('plugin')
+      setSelectedId('demo-counter-plugin')
+      setDemoResult(null)
+    } catch (cause) {
+      onError(errorMessage(cause))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const addExtension = async (): Promise<void> => {
+    if (busy) return
+    const id = `custom-${surface}-${Date.now().toString(36)}`
+    const manifest: AgentExtensionManifest = {
+      id,
+      name: `New ${SURFACE_LABEL[surface].replace(/s$/, '')}`,
+      description: `Custom ${SURFACE_LABEL[surface].toLowerCase()} extension managed by ND.`,
+      surface,
+      version: '1.0.0',
+      enabled: false,
+      instructions: '',
+      engineRoutes: [],
+      providerRoutes: [],
+    }
+    setBusy('add')
+    try {
+      setExtensions(await window.ndDsh.extensions.save(manifest))
+      setSelectedId(id)
+    } catch (cause) {
+      onError(errorMessage(cause))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const deleteSelected = async (): Promise<void> => {
+    if (!selected || selected.builtInDemo || busy) return
+    setBusy(`delete-${selected.id}`)
+    try {
+      const items = await window.ndDsh.extensions.remove(selected.id)
+      setExtensions(items)
+      const next = items.find((item) => item.surface === surface)
+      setSelectedId(next?.id ?? '')
+    } catch (cause) {
+      onError(errorMessage(cause))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const saveDetails = (): void => {
+    if (!selected || !detailDraft) return
+    void persist({
+      ...selected,
+      name: detailDraft.name,
+      description: detailDraft.description,
+      version: detailDraft.version,
+      instructions: detailDraft.instructions,
+    }, 'details')
+  }
+
+  const runDemo = async (): Promise<void> => {
+    if (!selected?.builtInDemo || busy) return
+    setBusy(`demo-${selected.id}`)
+    try {
+      setDemoResult(await window.ndDsh.extensions.runDemo(
+        selected.id,
+        demoEngineId || undefined,
+        demoProviderId || undefined,
+      ))
+    } catch (cause) {
+      onError(errorMessage(cause))
+    } finally {
+      setBusy(null)
+    }
   }
 
   return (
@@ -99,7 +211,7 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
       <aside className="min-h-0 overflow-auto border-r border-border-soft bg-secondary/20 px-3 py-4">
         <div className="mb-3 px-1">
           <strong className="block text-xs text-strong">Agent capabilities</strong>
-          <span className="mt-1 block text-[10px] leading-4 text-faint">One ND extension definition, routed to every coding engine and model provider.</span>
+          <span className="mt-1 block text-[10px] leading-4 text-faint">Configure once in ND. The compatibility router maps each capability onto ND Harness, delegated Codex, direct Codex, and future engines.</span>
         </div>
         <div className="space-y-1">
           {AGENT_EXTENSION_SURFACES.map((item) => {
@@ -111,7 +223,7 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
                 onClick={() => {
                   setSurface(item)
                   const first = extensions.find((extension) => extension.surface === item)
-                  if (first) setSelectedId(first.id)
+                  setSelectedId(first?.id ?? '')
                 }}
               >
                 <span>{SURFACE_LABEL[item]}</span>
@@ -120,14 +232,16 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
             )
           })}
         </div>
-        <div className="mt-4 border-t border-border-soft pt-3">
-          <SettingsButton onClick={reset}>Reset demo pack</SettingsButton>
+        <div className="mt-4 space-y-2 border-t border-border-soft pt-3">
+          <SettingsButton disabled={Boolean(busy)} onClick={() => void addExtension()}>Add {SURFACE_LABEL[surface].replace(/s$/, '')}</SettingsButton>
+          <SettingsButton disabled={Boolean(busy)} onClick={() => void reset()}>Reset demo pack</SettingsButton>
         </div>
       </aside>
 
       <main className="min-h-0 overflow-auto px-[26px] pb-[42px] pt-4">
         <SettingsSection title={SURFACE_LABEL[surface]}>
           <div className="space-y-1.5">
+            {busy === 'load' ? <SettingsRow><span className={rowDesc}>Loading extension catalog…</span></SettingsRow> : null}
             {visible.map((extension) => (
               <button
                 key={extension.id}
@@ -138,7 +252,8 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
                   <div>
                     <div className="flex items-center gap-2">
                       <strong className="text-xs text-strong">{extension.name}</strong>
-                      {extension.builtInDemo ? <StatusChip good>Demo</StatusChip> : null}
+                      {extension.builtInDemo ? <StatusChip good>Demo</StatusChip> : <StatusChip>Custom</StatusChip>}
+                      <StatusChip good={extension.enabled} warn={!extension.enabled}>{extension.enabled ? 'Enabled' : 'Off'}</StatusChip>
                     </div>
                     <p className="mt-1 text-[10px] leading-4 text-faint">{extension.description}</p>
                   </div>
@@ -146,6 +261,7 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
                 </div>
               </button>
             ))}
+            {!busy && visible.length === 0 ? <SettingsRow><span className={rowDesc}>No extensions on this surface yet.</span></SettingsRow> : null}
           </div>
         </SettingsSection>
 
@@ -156,26 +272,83 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
                 <div className={rowStack}>
                   <strong className={rowTitle}>{selected.name}</strong>
                   <span className={rowDesc}>{selected.description}</span>
+                  <code className={rowPathText}>{selected.id}</code>
                 </div>
-                <label className="flex items-center gap-2 text-[10px] text-soft">
-                  <input
-                    type="checkbox"
-                    checked={selected.enabled}
-                    onChange={(event) => mutate(selected.id, (item) => ({ ...item, enabled: event.target.checked }))}
-                  />
-                  Enabled
-                </label>
+                <div className="flex items-center gap-2">
+                  {!selected.builtInDemo ? <SettingsButton disabled={Boolean(busy)} onClick={() => void deleteSelected()}>Delete</SettingsButton> : null}
+                  <label className="flex items-center gap-2 text-[10px] text-soft">
+                    <input
+                      type="checkbox"
+                      checked={selected.enabled}
+                      disabled={Boolean(busy)}
+                      onChange={(event) => void persist({ ...selected, enabled: event.target.checked }, 'enabled')}
+                    />
+                    Enabled for real runs
+                  </label>
+                </div>
               </SettingsRow>
+
+              {!selected.builtInDemo && detailDraft ? (
+                <SettingsRow>
+                  <div className="grid min-w-0 flex-1 grid-cols-2 gap-2">
+                    <input className="h-8 rounded-md border border-border bg-background px-2 text-[10px] text-soft" value={detailDraft.name} onChange={(event) => setDetailDraft({ ...detailDraft, name: event.target.value })} placeholder="Name" />
+                    <input className="h-8 rounded-md border border-border bg-background px-2 text-[10px] text-soft" value={detailDraft.version} onChange={(event) => setDetailDraft({ ...detailDraft, version: event.target.value })} placeholder="1.0.0" />
+                    <input className="col-span-2 h-8 rounded-md border border-border bg-background px-2 text-[10px] text-soft" value={detailDraft.description} onChange={(event) => setDetailDraft({ ...detailDraft, description: event.target.value })} placeholder="Description" />
+                    <textarea className="col-span-2 min-h-20 rounded-md border border-border bg-background px-2 py-2 text-[10px] leading-4 text-soft" value={detailDraft.instructions} onChange={(event) => setDetailDraft({ ...detailDraft, instructions: event.target.value })} placeholder="Portable instructions delivered when this extension route is active." />
+                  </div>
+                  <SettingsButton disabled={Boolean(busy)} onClick={saveDetails}>Save details</SettingsButton>
+                </SettingsRow>
+              ) : selected.instructions ? (
+                <SettingsRow>
+                  <div className={rowStack}>
+                    <strong className={rowTitle}>Portable runtime instructions</strong>
+                    <span className={rowDesc}>{selected.instructions}</span>
+                  </div>
+                </SettingsRow>
+              ) : null}
+
               {selected.demoPrompt ? (
                 <SettingsRow>
                   <div className={rowStack}>
-                    <strong className={rowTitle}>Pre-built demo</strong>
-                    <span className={rowDesc}>Ready-to-run sample for manual QA.</span>
+                    <strong className={rowTitle}>Pre-built demo prompt</strong>
+                    <span className={rowDesc}>The demo runner is deterministic and account-free; enable this extension only when you want its instructions in real agent runs.</span>
                     <code className={rowPathText}>{selected.demoPrompt}</code>
                   </div>
                 </SettingsRow>
               ) : null}
             </SettingsSection>
+
+            {selected.builtInDemo ? (
+              <SettingsSection title="Run demo">
+                <SettingsRow>
+                  <div className={rowStack}>
+                    <strong className={rowTitle}>Counter route smoke test</strong>
+                    <span className={rowDesc}>Exercises this surface through the same compatibility resolver used by real runs. It does not require provider credentials.</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <select className="h-7 rounded-md border border-border bg-background px-2 text-[10px] text-soft" value={demoEngineId} onChange={(event) => setDemoEngineId(event.target.value)}>
+                      {engines.map((engine) => <option key={engine.id} value={engine.id}>{engine.name}{engine.available ? '' : ' (unavailable)'}</option>)}
+                    </select>
+                    <select className="h-7 rounded-md border border-border bg-background px-2 text-[10px] text-soft" value={demoProviderId} onChange={(event) => setDemoProviderId(event.target.value)}>
+                      <option value="">Engine-native provider</option>
+                      {providers.filter((provider) => provider.enabled).map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}
+                    </select>
+                    <SettingsButton disabled={Boolean(busy) || !demoEngineId} onClick={() => void runDemo()}>Run demo</SettingsButton>
+                  </div>
+                </SettingsRow>
+                {demoResult ? (
+                  <SettingsRow>
+                    <div className={rowStack}>
+                      <div className="flex items-center gap-2">
+                        <strong className={rowTitle}>{demoResult.summary}</strong>
+                        <StatusChip good={demoResult.supported} warn={!demoResult.supported}>{demoResult.adapter}</StatusChip>
+                      </div>
+                      {demoResult.steps.map((step, index) => <code key={`${index}-${step}`} className={rowPathText}>{index + 1}. {step}</code>)}
+                    </div>
+                  </SettingsRow>
+                ) : null}
+              </SettingsSection>
+            ) : null}
 
             <SettingsSection title="Coding engine routes">
               <div className="space-y-1.5">
@@ -194,6 +367,7 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
                         <select
                           className="h-7 rounded-md border border-border bg-background px-2 text-[10px] text-soft"
                           value={configured}
+                          disabled={Boolean(busy)}
                           onChange={(event) => setEngineRoute(selected, engine.id, event.target.value as ExtensionAdapter)}
                         >
                           {EXTENSION_ADAPTERS.map((adapter) => <option key={adapter} value={adapter}>{adapter}</option>)}
@@ -210,9 +384,9 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
               <SettingsRow>
                 <div className={rowStack}>
                   <strong className={rowTitle}>Provider routing</strong>
-                  <span className={rowDesc}>Engine routing controls execution. Provider scope controls whether prompt/context delivery may reach DeepSeek, OpenAI, Anthropic, Gemini, local, or any future model route.</span>
+                  <span className={rowDesc}>Engine routing controls execution. Provider scope independently controls whether portable prompt/context delivery may reach DeepSeek, OpenAI, Anthropic, Gemini, local, or future model routes.</span>
                 </div>
-                <SettingsButton onClick={() => allowAllProviders(selected)}>Allow all</SettingsButton>
+                <SettingsButton disabled={Boolean(busy)} onClick={() => allowAllProviders(selected)}>Allow all</SettingsButton>
               </SettingsRow>
               <div className="space-y-1.5">
                 {providers.map((provider) => {
@@ -225,7 +399,7 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
                         <span className={rowPathText}>{provider.id}</span>
                       </div>
                       <label className="flex items-center gap-2 text-[10px] text-soft">
-                        <input type="checkbox" checked={checked} disabled={!provider.enabled} onChange={(event) => toggleProvider(selected, provider.id, event.target.checked)} />
+                        <input type="checkbox" checked={checked} disabled={!provider.enabled || Boolean(busy)} onChange={(event) => toggleProvider(selected, provider.id, event.target.checked)} />
                         {provider.enabled ? 'Allowed' : 'Provider disabled'}
                       </label>
                     </SettingsRow>
@@ -238,4 +412,8 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
       </main>
     </div>
   )
+}
+
+function errorMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause)
 }
