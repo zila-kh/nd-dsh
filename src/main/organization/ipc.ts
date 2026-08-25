@@ -9,6 +9,7 @@ import { ORGANIZATION_IPC, type OrganizationMutation, type OrganizationSnapshot 
 import {
   ORGANIZATION_STRATEGY_IPC,
   type OrganizationStrategyMutation,
+  type OrganizationStrategySnapshot,
 } from '../../shared/organization-strategy.js'
 import type { ProjectRuntimeService } from '../workspace/project-runtime.js'
 import type { ProjectWorkspaceCoordinator } from '../workspace/project-workspace-coordinator.js'
@@ -125,17 +126,19 @@ export function registerOrganizationIpc(
           question: signal.summary,
         })
       } else if (mutation.disposition === 'objective') {
-        await strategy.mutate({
+        const strategyState = await strategy.mutate({
           type: 'anchor.add', companyId: signal.companyId,
           ...(signal.projectId ? { projectId: signal.projectId } : {}),
           title: signal.title, outcome: signal.summary, priority: 'high', sourceSignalId: signal.id,
         })
+        await projectLatestStrategyMemory(store, strategyState, 'anchor', strategyState.anchors[0]?.id)
       } else if (mutation.disposition === 'evidence') {
-        await strategy.mutate({
+        const strategyState = await strategy.mutate({
           type: 'knowledge.add', companyId: signal.companyId,
           ...(signal.projectId ? { projectId: signal.projectId } : {}),
           kind: 'feedback', title: signal.title, content: signal.summary, source: 'evidence', sourceRef: `signal:${signal.id}`,
         })
+        await projectLatestStrategyMemory(store, strategyState, 'knowledge', strategyState.knowledge[0]?.id)
       }
       return next
     }
@@ -150,7 +153,15 @@ export function registerOrganizationIpc(
   handle(ORGANIZATION_CONTROL_IPC.verifyEvidence, (_event, value) => control.verifyEvidence(asId(value, 'Task id')))
 
   handle(ORGANIZATION_STRATEGY_IPC.state, () => strategy.state())
-  handle(ORGANIZATION_STRATEGY_IPC.mutate, (_event, value) => strategy.mutate(asStrategyMutation(value)))
+  handle(ORGANIZATION_STRATEGY_IPC.mutate, async (_event, value) => {
+    const mutation = asStrategyMutation(value)
+    const next = await strategy.mutate(mutation)
+    if (mutation.type === 'anchor.add') await projectLatestStrategyMemory(store, next, 'anchor', next.anchors[0]?.id)
+    if (mutation.type === 'anchor.update') await projectLatestStrategyMemory(store, next, 'anchor', mutation.id)
+    if (mutation.type === 'knowledge.add') await projectLatestStrategyMemory(store, next, 'knowledge', next.knowledge[0]?.id)
+    if (mutation.type === 'knowledge.update') await projectLatestStrategyMemory(store, next, 'knowledge', mutation.id)
+    return next
+  })
   handle(ORGANIZATION_STRATEGY_IPC.projection, async (_event, value) => {
     const projectId = value === undefined || value === null ? undefined : asId(value, 'Project id')
     return strategy.projection(projectId, await control.state())
@@ -171,6 +182,36 @@ export function registerOrganizationIpc(
     strategy.setOnChanged(undefined)
     for (const channel of channels) ipcMain.removeHandler(channel)
   }
+}
+
+async function projectLatestStrategyMemory(
+  store: OrganizationStore,
+  strategy: OrganizationStrategySnapshot,
+  kind: 'anchor' | 'knowledge',
+  id: string | undefined,
+): Promise<void> {
+  if (!id) return
+  if (kind === 'anchor') {
+    const item = strategy.anchors.find((entry) => entry.id === id)
+    if (!item) return
+    await store.mutate({
+      type: 'memory.add', companyId: item.companyId,
+      ...(item.projectId ? { projectId: item.projectId } : {}),
+      title: `Strategic Anchor · ${item.title}`,
+      content: `[${item.status.toUpperCase()} | ${item.priority}] ${item.outcome}${item.successCriteria.length ? `\nSuccess criteria: ${item.successCriteria.join('; ')}` : ''}`,
+      tags: ['strategy', 'strategic-anchor', item.status, item.priority],
+    })
+    return
+  }
+  const item = strategy.knowledge.find((entry) => entry.id === id)
+  if (!item) return
+  await store.mutate({
+    type: 'memory.add', companyId: item.companyId,
+    ...(item.projectId ? { projectId: item.projectId } : {}),
+    title: `Company Brain · ${item.kind} · ${item.title}`,
+    content: `[${item.status.toUpperCase()} | ${item.confidence} | ${item.source}] ${item.content}${item.supersedesId ? `\nSupersedes strategy knowledge ${item.supersedesId}.` : ''}`,
+    tags: ['company-brain', item.kind, item.status, ...item.tags].slice(0, 50),
+  })
 }
 
 async function runDueSchedules(
