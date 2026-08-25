@@ -1,0 +1,17 @@
+{
+  "id": "counter-plugin-demo-fixture",
+  "name": "Counter Plugin Demo Fixture",
+  "surface": "plugin",
+  "operations": [
+    "counter_get",
+    "counter_add",
+    "counter_reset"
+  ],
+  "smoke": [
+    "counter_reset() = 0",
+    "counter_add(3) = 3",
+    "counter_add(4) = 7",
+    "counter_get() = 7"
+  ],
+  "transport": "Use the ND stable MCP gateway when the selected engine exposes MCP; otherwise use the per-engine ND shell proxy."
+}
