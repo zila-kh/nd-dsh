@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { CodingEngineDescriptor, ModelProvider } from '../src/shared/contracts.js'
+import type { AgentExtensionManifest } from '../src/shared/extensions.js'
 import { ExtensionDemoService } from '../src/main/extensions/extension-demo-service.js'
 import { ExtensionRouter } from '../src/main/extensions/extension-router.js'
 import { ExtensionStore } from '../src/main/extensions/extension-store.js'
@@ -45,6 +46,21 @@ async function fixture() {
   }
 }
 
+function customMcp(): AgentExtensionManifest {
+  return {
+    id: 'custom-tools',
+    name: 'Custom Tools',
+    description: 'Custom MCP test',
+    surface: 'mcp',
+    version: '1.0.0',
+    enabled: true,
+    instructions: 'Use the routed custom tool transport.',
+    runtime: { kind: 'mcp-stdio', command: 'node', args: ['server.mjs'], env: {} },
+    engineRoutes: [],
+    providerRoutes: [],
+  }
+}
+
 describe('ExtensionRouter runtime', () => {
   it('previews provider-neutral harness routes separately from engine-native Codex', async () => {
     const { router } = await fixture()
@@ -61,6 +77,48 @@ describe('ExtensionRouter runtime', () => {
     expect(prompt).toContain('Ship the task.')
     expect(prompt).toContain('Counter Memory Demo')
     expect(prompt).toContain('<nd-extension-context>')
+  })
+
+  it('injects the stable native MCP gateway instructions for Harness tool extensions', async () => {
+    const { store, router } = await fixture()
+    const extension = (await store.list()).find((item) => item.id === 'demo-counter-mcp')!
+    await store.save({ ...extension, enabled: true })
+    const prompt = await router.decoratePrompt('Exercise the tools.', 'nd-harness', 'deepseek-official')
+    expect(prompt).toContain('mcp__nd-extensions__nd_extension_list')
+    expect(prompt).toContain('mcp__nd-extensions__nd_extension_call')
+    expect(prompt).toContain('demo-counter-mcp')
+  })
+
+  it('injects the portable shell proxy instructions for direct Codex tool extensions', async () => {
+    const { store, router } = await fixture()
+    const extension = (await store.list()).find((item) => item.id === 'demo-counter-mcp')!
+    await store.save({ ...extension, enabled: true })
+    const prompt = await router.decoratePrompt('Exercise the tools.', 'codex-cli')
+    expect(prompt).toContain('$ND_EXTENSION_NODE')
+    expect(prompt).toContain('$ND_EXTENSION_PROXY')
+    expect(prompt).toContain('demo-counter-mcp')
+  })
+
+  it('routes custom executable MCP transports through native MCP or ND proxy', async () => {
+    const { store, router } = await fixture()
+    await store.save(customMcp())
+    const harnessPreview = await router.preview('custom-tools')
+    const harnessRoute = harnessPreview.routes.find((route) => route.engineId === 'nd-harness' && route.providerId === 'deepseek-official')
+    const codexRoute = harnessPreview.routes.find((route) => route.engineId === 'codex-cli')
+    expect(harnessRoute?.adapter).toBe('mcp')
+    expect(harnessRoute?.supported).toBe(true)
+    expect(codexRoute?.adapter).toBe('nd-proxy')
+    expect(codexRoute?.supported).toBe(true)
+  })
+
+  it('does not claim an MCP extension is supported before its executable runtime exists', async () => {
+    const { store, router } = await fixture()
+    const extension = customMcp()
+    delete extension.runtime
+    await store.save(extension)
+    const preview = await router.preview(extension.id)
+    expect(preview.routes.every((route) => route.supported === false)).toBe(true)
+    expect(preview.routes[0]?.reason).toMatch(/configure an MCP stdio runtime/i)
   })
 
   it('runs every built-in counter demo through the same route resolver', async () => {
