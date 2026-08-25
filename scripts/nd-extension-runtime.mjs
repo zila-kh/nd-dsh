@@ -1,16 +1,15 @@
 #!/usr/bin/env node
 /**
- * ND universal extension transport.
+ * Portable ND extension proxy.
  *
  * Modes:
- *   mcp                         expose every enabled MCP/plugin extension to ND Harness
- *   list <extension-id>         list one extension's portable tools (shell fallback)
- *   call <extension-id> <tool> [json-args]
+ *   list <extension-id>
+ *   call <extension-id> <tool-name> [json-args]
  *
- * Custom MCP processes come from agent-extensions.json. Environment config is
- * reference-only: persisted values name parent variables; secret values never
- * enter the extension catalog. Built-in Counter MCP/Plugin demos are handled
- * directly here so they work without an external account or package install.
+ * ND Harness reaches this proxy through scripts/nd-extension-mcp.mjs. Engines
+ * without MCP can invoke the same list/call interface through their shell.
+ * Every invocation re-reads the durable catalog so enable/disable and route
+ * changes are enforced without a runtime restart.
  */
 
 import { spawn } from 'node:child_process'
@@ -21,8 +20,13 @@ import { createInterface } from 'node:readline'
 const CATALOG_PATH = process.env.ND_EXTENSION_CATALOG?.trim() ?? ''
 const STATE_PATH = process.env.ND_EXTENSION_STATE?.trim() ?? ''
 const REQUEST_TIMEOUT_MS = 30_000
-const CACHE_MS = 5_000
 const COUNTER_EXTENSION_IDS = new Set(['demo-counter-mcp', 'demo-counter-plugin'])
+const SAFE_INHERITED_ENV = [
+  'PATH', 'Path', 'PATHEXT',
+  'SystemRoot', 'SYSTEMROOT', 'ComSpec', 'COMSPEC',
+  'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA',
+  'TEMP', 'TMP', 'TMPDIR', 'SHELL', 'LANG', 'LC_ALL', 'TERM',
+]
 
 const COUNTER_TOOLS = [
   {
@@ -46,26 +50,26 @@ const COUNTER_TOOLS = [
   },
 ]
 
-let toolsCache = { at: 0, tools: [], routes: new Map() }
-
 async function readCatalog() {
-  if (!CATALOG_PATH) return []
+  if (!CATALOG_PATH) throw new Error('ND_EXTENSION_CATALOG is not configured')
   try {
     const parsed = JSON.parse(await fs.readFile(CATALOG_PATH, 'utf8'))
-    return parsed?.version === 1 && Array.isArray(parsed.extensions) ? parsed.extensions : []
+    if (parsed?.version !== 1 || !Array.isArray(parsed.extensions)) throw new Error('extension catalog has an unsupported schema')
+    return parsed.extensions
   } catch (error) {
-    if (error?.code !== 'ENOENT') console.error(`[nd-extensions] catalog read failed: ${error instanceof Error ? error.message : String(error)}`)
-    return []
+    if (error?.code === 'ENOENT') return []
+    throw error
   }
 }
 
-function isEnabledToolExtension(extension) {
-  if (!extension || extension.enabled !== true) return false
+function enabledToolExtension(extension, extensionId) {
+  if (!extension || extension.id !== extensionId) return false
+  if (extension.enabled !== true) return false
   if (extension.surface !== 'mcp' && extension.surface !== 'plugin') return false
-  const harnessRoute = Array.isArray(extension.engineRoutes)
-    ? extension.engineRoutes.find((route) => route?.engineId === 'nd-harness')
+  const route = Array.isArray(extension.engineRoutes)
+    ? extension.engineRoutes.find((item) => item?.engineId === 'codex-cli' || item?.engineId === 'nd-harness')
     : undefined
-  return harnessRoute?.adapter !== 'disabled'
+  return route?.adapter !== 'disabled'
 }
 
 function isMcpRuntime(extension) {
@@ -75,64 +79,18 @@ function isMcpRuntime(extension) {
     && Array.isArray(extension.runtime.args)
     && extension.runtime.env
     && typeof extension.runtime.env === 'object'
+    && !Array.isArray(extension.runtime.env)
 }
 
-function safeId(value) {
-  return String(value).replace(/[^a-zA-Z0-9_]/g, '_')
-}
-
-async function discoverTools(force = false) {
-  if (!force && Date.now() - toolsCache.at < CACHE_MS) return toolsCache
-  const extensions = (await readCatalog()).filter(isEnabledToolExtension)
-  const tools = []
-  const routes = new Map()
-  if (extensions.some((extension) => COUNTER_EXTENSION_IDS.has(extension.id))) {
-    tools.push(...COUNTER_TOOLS)
-    for (const tool of COUNTER_TOOLS) routes.set(tool.name, { kind: 'counter', tool: tool.name })
-  }
-
-  for (const extension of extensions) {
-    if (!isMcpRuntime(extension)) continue
-    try {
-      const remoteTools = await withMcpRuntime(extension, (client) => client.request('tools/list', {}))
-      for (const tool of Array.isArray(remoteTools?.tools) ? remoteTools.tools : []) {
-        if (!tool || typeof tool.name !== 'string' || !tool.name.trim()) continue
-        const exposedName = `ext_${safeId(extension.id)}__${safeId(tool.name)}`
-        tools.push({
-          name: exposedName,
-          description: `[${extension.name ?? extension.id}] ${typeof tool.description === 'string' ? tool.description : tool.name}`.slice(0, 2_000),
-          inputSchema: validSchema(tool.inputSchema),
-        })
-        routes.set(exposedName, { kind: 'external', extension, tool: tool.name })
-      }
-    } catch (error) {
-      console.error(`[nd-extensions] ${extension.id} tool discovery failed: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  }
-
-  toolsCache = { at: Date.now(), tools, routes }
-  return toolsCache
-}
-
-function validSchema(value) {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value
-    : { type: 'object', properties: {} }
-}
-
-async function dispatchTool(name, args) {
-  const discovered = await discoverTools()
-  let route = discovered.routes.get(name)
-  if (!route) route = (await discoverTools(true)).routes.get(name)
-  if (!route) throw new Error(`unknown or disabled extension tool: ${name}`)
-  if (route.kind === 'counter') return counterCall(route.tool, args)
-  return withMcpRuntime(route.extension, (client) => client.request('tools/call', { name: route.tool, arguments: objectArgs(args) }))
+async function requireExtension(extensionId) {
+  const extension = (await readCatalog()).find((item) => item?.id === extensionId)
+  if (!extension) throw new Error(`unknown extension: ${extensionId}`)
+  if (!enabledToolExtension(extension, extensionId)) throw new Error(`extension is disabled, routed off, or is not a tool extension: ${extensionId}`)
+  return extension
 }
 
 async function listOne(extensionId) {
-  const extension = (await readCatalog()).find((item) => item?.id === extensionId)
-  if (!extension) throw new Error(`unknown extension: ${extensionId}`)
-  if (!isEnabledToolExtension(extension)) throw new Error(`extension is disabled or is not a tool extension: ${extensionId}`)
+  const extension = await requireExtension(extensionId)
   if (COUNTER_EXTENSION_IDS.has(extensionId)) return COUNTER_TOOLS
   if (!isMcpRuntime(extension)) throw new Error(`extension has no MCP stdio runtime: ${extensionId}`)
   const result = await withMcpRuntime(extension, (client) => client.request('tools/list', {}))
@@ -140,9 +98,7 @@ async function listOne(extensionId) {
 }
 
 async function callOne(extensionId, tool, args) {
-  const extension = (await readCatalog()).find((item) => item?.id === extensionId)
-  if (!extension) throw new Error(`unknown extension: ${extensionId}`)
-  if (!isEnabledToolExtension(extension)) throw new Error(`extension is disabled or is not a tool extension: ${extensionId}`)
+  const extension = await requireExtension(extensionId)
   if (COUNTER_EXTENSION_IDS.has(extensionId)) return counterCall(tool, args)
   if (!isMcpRuntime(extension)) throw new Error(`extension has no MCP stdio runtime: ${extensionId}`)
   return withMcpRuntime(extension, (client) => client.request('tools/call', { name: tool, arguments: objectArgs(args) }))
@@ -155,7 +111,7 @@ function objectArgs(value) {
 async function counterCall(tool, args) {
   if (tool === 'counter_get') return { content: [{ type: 'text', text: String(await readCounter()) }] }
   if (tool === 'counter_reset') {
-    await writeCounter(0)
+    await updateCounter(() => 0)
     return { content: [{ type: 'text', text: '0' }] }
   }
   if (tool === 'counter_add') {
@@ -170,10 +126,6 @@ async function counterCall(tool, args) {
 async function readCounter() {
   const state = await readState()
   return Number.isFinite(state.counter) ? state.counter : 0
-}
-
-async function writeCounter(value) {
-  return updateCounter(() => value)
 }
 
 async function updateCounter(update) {
@@ -231,12 +183,19 @@ class JsonLineMcpClient {
     lines.on('line', (line) => this.onLine(line))
     child.stderr.setEncoding('utf8')
     child.stderr.on('data', (chunk) => process.stderr.write(`[nd-extension:${label}] ${chunk}`))
+    child.once('error', (error) => this.fail(error))
     child.once('exit', (code, signal) => {
-      this.closed = true
-      const error = new Error(`${label} MCP process exited (${signal ?? String(code ?? 'unknown')})`)
-      for (const pending of this.pending.values()) pending.reject(error)
-      this.pending.clear()
+      if (!this.closed) this.fail(new Error(`${label} MCP process exited (${signal ?? String(code ?? 'unknown')})`))
     })
+  }
+
+  fail(error) {
+    this.closed = true
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer)
+      pending.reject(error)
+    }
+    this.pending.clear()
   }
 
   onLine(line) {
@@ -270,6 +229,8 @@ class JsonLineMcpClient {
 
   close() {
     this.closed = true
+    for (const pending of this.pending.values()) clearTimeout(pending.timer)
+    this.pending.clear()
     try { this.child.stdin.end() } catch { /* gone */ }
     if (this.child.exitCode === null && this.child.signalCode === null) {
       try { this.child.kill() } catch { /* gone */ }
@@ -278,17 +239,11 @@ class JsonLineMcpClient {
 }
 
 async function withMcpRuntime(extension, run) {
-  const runtime = extension.runtime
   if (!isMcpRuntime(extension)) throw new Error(`${extension.id} has no MCP stdio runtime`)
-  const env = { ...process.env }
-  for (const [target, source] of Object.entries(runtime.env)) {
-    const value = process.env[source]
-    if (value !== undefined) env[target] = value
-    else delete env[target]
-  }
+  const runtime = extension.runtime
   const child = spawn(runtime.command, runtime.args, {
     stdio: ['pipe', 'pipe', 'pipe'],
-    env,
+    env: childEnvironment(runtime.env),
     cwd: process.cwd(),
     windowsHide: true,
   })
@@ -306,65 +261,18 @@ async function withMcpRuntime(extension, run) {
   }
 }
 
-function writeMessage(message) {
-  process.stdout.write(`${JSON.stringify(message)}\n`)
-}
-
-async function handleMcpMessage(message) {
-  if (message.method === 'initialize') {
-    writeMessage({
-      jsonrpc: '2.0', id: message.id,
-      result: {
-        protocolVersion: message.params?.protocolVersion ?? '2024-11-05',
-        capabilities: { tools: { listChanged: true } },
-        serverInfo: { name: 'nd-extensions', version: '1.0.0' },
-      },
-    })
-    return
+function childEnvironment(references) {
+  const env = {}
+  for (const key of SAFE_INHERITED_ENV) {
+    const value = process.env[key]
+    if (value !== undefined) env[key] = value
   }
-  if (message.method === 'notifications/initialized') return
-  if (message.method === 'ping') {
-    writeMessage({ jsonrpc: '2.0', id: message.id, result: {} })
-    return
+  for (const [target, source] of Object.entries(references)) {
+    const value = process.env[source]
+    if (value === undefined) throw new Error(`required environment variable is missing: ${source}`)
+    env[target] = value
   }
-  if (message.method === 'tools/list') {
-    const { tools } = await discoverTools(true)
-    writeMessage({ jsonrpc: '2.0', id: message.id, result: { tools } })
-    return
-  }
-  if (message.method === 'tools/call') {
-    try {
-      const result = await dispatchTool(message.params?.name, message.params?.arguments)
-      writeMessage({ jsonrpc: '2.0', id: message.id, result })
-    } catch (error) {
-      writeMessage({
-        jsonrpc: '2.0', id: message.id,
-        result: { isError: true, content: [{ type: 'text', text: `error: ${error instanceof Error ? error.message : String(error)}` }] },
-      })
-    }
-    return
-  }
-  if (message.id !== undefined) writeMessage({ jsonrpc: '2.0', id: message.id, error: { code: -32601, message: `method not found: ${message.method}` } })
-}
-
-function runMcpServer() {
-  let buffer = ''
-  process.stdin.setEncoding('utf8')
-  process.stdin.on('data', (chunk) => {
-    buffer += chunk
-    let newline
-    while ((newline = buffer.indexOf('\n')) >= 0) {
-      const line = buffer.slice(0, newline).trim()
-      buffer = buffer.slice(newline + 1)
-      if (!line) continue
-      let message
-      try { message = JSON.parse(line) } catch { continue }
-      void handleMcpMessage(message).catch((error) => {
-        if (message.id !== undefined) writeMessage({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: error instanceof Error ? error.message : String(error) } })
-      })
-    }
-  })
-  process.stdin.on('end', () => process.exit(0))
+  return env
 }
 
 function parseJsonArgs(raw) {
@@ -377,10 +285,6 @@ function parseJsonArgs(raw) {
 
 async function main() {
   const [mode, extensionId, toolName, rawArgs] = process.argv.slice(2)
-  if (mode === 'mcp') {
-    runMcpServer()
-    return
-  }
   if (mode === 'list') {
     if (!extensionId) throw new Error('usage: nd-extension-runtime.mjs list <extension-id>')
     process.stdout.write(`${JSON.stringify(await listOne(extensionId), null, 2)}\n`)
@@ -391,7 +295,7 @@ async function main() {
     process.stdout.write(`${JSON.stringify(await callOne(extensionId, toolName, parseJsonArgs(rawArgs)), null, 2)}\n`)
     return
   }
-  throw new Error('usage: nd-extension-runtime.mjs <mcp|list|call> ...')
+  throw new Error('usage: nd-extension-runtime.mjs <list|call> ...')
 }
 
 void main().catch((error) => {
