@@ -64,22 +64,27 @@ describe('universal extension router', () => {
     }
   })
 
-  it('uses native MCP on harness and ND proxy on an engine without MCP', () => {
+  it('uses native MCP gateway on harness and ND proxy on an engine without MCP', () => {
     const extension = enabledDemo('mcp')
     expect(resolveExtensionRoute(extension, harness).adapter).toBe('mcp')
     expect(resolveExtensionRoute(extension, codex).adapter).toBe('nd-proxy')
   })
 
-  it('routes skills natively when possible and through a bridge otherwise', () => {
+  it('routes portable skills through the implemented skill bridge on every engine', () => {
     const extension = enabledDemo('skill')
-    expect(resolveExtensionRoute(extension, harness).adapter).toBe('native')
+    expect(resolveExtensionRoute(extension, harness).adapter).toBe('skill-bridge')
     expect(resolveExtensionRoute(extension, codex).adapter).toBe('skill-bridge')
   })
 
-  it('routes non-harness subagent extensions through ND orchestration', () => {
+  it('uses native Harness delegation but only portable policy on direct Codex', () => {
     const extension = enabledDemo('subagent')
     expect(resolveExtensionRoute(extension, harness).adapter).toBe('native')
-    expect(resolveExtensionRoute(extension, codex).adapter).toBe('nd-proxy')
+    expect(resolveExtensionRoute(extension, codex).adapter).toBe('prompt-injection')
+  })
+
+  it('translates commands and hooks through portable routes instead of claiming unmounted native plugins', () => {
+    expect(resolveExtensionRoute(enabledDemo('command'), harness).adapter).toBe('prompt-injection')
+    expect(resolveExtensionRoute(enabledDemo('hook'), harness).adapter).toBe('hook-bridge')
   })
 
   it('respects explicit engine disable overrides', () => {
@@ -97,6 +102,12 @@ describe('universal extension router', () => {
     expect(route.supported).toBe(false)
     expect(route.adapter).toBe('mcp')
     expect(route.reason).toMatch(/cannot deliver/i)
+  })
+
+  it('keeps reserved Cordis adapter choices off until a real Cordis projector exists', () => {
+    const extension = enabledDemo('hook')
+    extension.engineRoutes = [{ engineId: 'nd-harness', adapter: 'cordis' }]
+    expect(resolveExtensionRoute(extension, harness).supported).toBe(false)
   })
 
   it('can scope prompt/context delivery to model providers separately from engine routing', () => {
