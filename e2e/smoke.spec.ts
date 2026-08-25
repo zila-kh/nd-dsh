@@ -46,9 +46,15 @@ test('Company exposes the AI operations control center', async () => {
   await page.getByRole('navigation', { name: 'ND-DSH navigation' }).getByTitle('Company').click()
   await expect(page).toHaveURL(/#\/company$/)
   await page.evaluate(async () => {
-    const state = await window.ndDshOrganization.state()
+    const api = (globalThis as typeof globalThis & {
+      ndDshOrganization: {
+        state(): Promise<{ companies: Array<{ id: string }> }>
+        mutate(value: { type: 'company.create'; name: string; mission: string }): Promise<unknown>
+      }
+    }).ndDshOrganization
+    const state = await api.state()
     if (state.companies.length === 0) {
-      await window.ndDshOrganization.mutate({
+      await api.mutate({
         type: 'company.create',
         name: 'E2E Company',
         mission: 'Verify the AI company operations surface',
