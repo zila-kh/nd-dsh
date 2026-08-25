@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { WorkspaceEntry, WorkspaceState } from '../../../shared/contracts'
 import { FOLDER_ACCENT, fileAccent } from '../lib/file-accents'
-import { ChevronDownIcon, ChevronRightIcon, FileIcon, FilesIcon, FolderIcon, GitIcon, SearchIcon } from './Icons'
+import { ChevronDownIcon, ChevronRightIcon, FileIcon, FilesIcon, FolderIcon, GitIcon, RotateIcon, SearchIcon } from './Icons'
 import { SourceControlPanel } from './SourceControlPanel'
 import { cn } from '../lib/utils'
 
@@ -15,6 +15,9 @@ interface ExplorerProps {
 }
 
 type ExplorerTab = 'files' | 'search' | 'git'
+
+/** Agent runs create files outside React; the root listing follows along. */
+const ROOT_REFRESH_INTERVAL_MS = 4_000
 
 const tabButtonClasses = (active: boolean): string =>
   cn(
@@ -33,14 +36,28 @@ export function Explorer({ workspace, selectedPath, onWorkspaceChanged, onOpenFi
     try {
       setRootEntries(await window.ndDsh.workspace.list('.'))
       setError(undefined)
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
+    } catch {
+      // Transient failures (a mid-switch workspace) keep the last good listing.
     }
   }, [])
 
   useEffect(() => {
     if (workspace) void refresh()
   }, [refresh, workspace?.root])
+
+  useEffect(() => {
+    if (!workspace) return
+    const onFocus = (): void => { void refresh() }
+    const timer = setInterval(() => {
+      if (document.visibilityState !== 'visible') return
+      void refresh()
+    }, ROOT_REFRESH_INTERVAL_MS)
+    window.addEventListener('focus', onFocus)
+    return () => {
+      clearInterval(timer)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [refresh, workspace])
 
   const pickWorkspace = async (): Promise<void> => {
     const next = await window.ndDsh.workspace.pick()
@@ -68,14 +85,24 @@ export function Explorer({ workspace, selectedPath, onWorkspaceChanged, onOpenFi
 
       {activeTab === 'files' && (
         <>
-          <button
-            className="flex h-7 min-w-0 items-center gap-[5px] border-y border-border-soft px-2 text-left text-[10px] font-semibold tracking-[0.05em] text-soft [&_svg]:size-3 [&_svg]:shrink-0"
-            onClick={() => void pickWorkspace()}
-            title={workspace?.root ?? 'Open workspace'}
-          >
-            <ChevronDownIcon />
-            <span className="truncate">{workspace?.name?.toUpperCase() ?? 'NO WORKSPACE'}</span>
-          </button>
+          <div className="flex h-7 items-stretch border-y border-border-soft">
+            <button
+              className="flex min-w-0 flex-1 items-center gap-[5px] px-2 text-left text-[10px] font-semibold tracking-[0.05em] text-soft [&_svg]:size-3 [&_svg]:shrink-0"
+              onClick={() => void pickWorkspace()}
+              title={workspace?.root ?? 'Open workspace'}
+            >
+              <ChevronDownIcon />
+              <span className="min-w-0 truncate">{workspace?.name?.toUpperCase() ?? 'NO WORKSPACE'}</span>
+            </button>
+            <button
+              aria-label="Refresh files"
+              title="Refresh files"
+              className="grid w-6 shrink-0 place-items-center border-l border-border-soft text-faint transition-colors hover:bg-accent/50 hover:text-foreground [&_svg]:size-3"
+              onClick={() => void refresh()}
+            >
+              <RotateIcon />
+            </button>
+          </div>
           <div className="min-h-0 flex-1 overflow-auto py-[3px] pb-2.5">
             {error ? <div className="p-3 text-[10px]/[1.45] text-destructive">{error}</div> : null}
             {rootEntries.map((entry) => (

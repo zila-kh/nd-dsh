@@ -100,7 +100,13 @@ async function createWindow(cdpPort: number): Promise<void> {
   const workspaces = new WorkspaceRegistry(join(userData, 'workspaces.json'))
   await workspaces.ensureActive(workspace.state().root)
 
-  const browser = new BrowserController(window, cdpPort, projectRoot())
+  // The window's own origin is reserved: neither the project runtime nor a
+  // browser-pane navigation may load ND's renderer into ND's browser view.
+  const reservedOrigin = (): string | undefined => {
+    try { return window.isDestroyed() ? undefined : new URL(window.webContents.getURL()).origin } catch { return undefined }
+  }
+
+  const browser = new BrowserController(window, cdpPort, projectRoot(), { reservedOrigin })
   const dshSurface = new DshSurfaceController(window)
   const externalElements = new ExternalElementStage()
   const recentPicks = new RecentPickStore()
@@ -133,9 +139,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   const projectRuntime = new ProjectRuntimeService({
     store: organizationStore,
     spawnProcess: spawn,
-    reservedOrigin: () => {
-      try { return window.isDestroyed() ? undefined : new URL(window.webContents.getURL()).origin } catch { return undefined }
-    },
+    reservedOrigin,
     onTargetReady: (_projectId, url) => {
       void browser.navigate(url).catch((error) => {
         console.warn(`Browser could not open the project target ${url}:`, error instanceof Error ? error.message : String(error))

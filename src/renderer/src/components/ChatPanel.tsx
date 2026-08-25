@@ -18,6 +18,7 @@ import type { AskQuestion, ThreadEntry, TodoItem } from '../lib/types'
 import { FOLDER_ACCENT, SKILL_ACCENT, fileExtensionOf, fileAccent } from '../lib/file-accents'
 import { applyMention, detectMentionTrigger } from '../../../shared/mentions'
 import { resolveModelSelectionDisplay, type ModelCatalogState } from '../lib/model-selection'
+import { describeAgentError, type AgentErrorRoute } from '../lib/runtime-notices'
 import {
   ArchiveIcon,
   ArrowUpIcon,
@@ -552,8 +553,16 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
       }
     }
     if (frame.kind === 'agent-error' && frame.message) {
-      appendNotice(sessionId, frame.message, 'error')
+      appendNotice(sessionId, describeAgentError(frame.message, currentRoute()), 'error')
     }
+  }
+
+  /** The route this session is pinned to, so failure notices can name it. */
+  function currentRoute(): AgentErrorRoute | null {
+    const current = models?.current
+    if (!current) return null
+    const group = (models?.groups ?? []).find((item) => item.id === current.provider)
+    return { provider: group?.name ?? current.provider, model: current.model }
   }
 
   function appendNotice(sessionId: string | undefined, text: string, tone: 'info' | 'error' = 'info'): void {
@@ -2002,7 +2011,10 @@ function toolPath(args: unknown): string | undefined {
 
 function pingTitle(ping: ProviderPingResult): string {
   if (ping.state === 'ok') {
-    return `Server reachable — ${ping.latencyMs ?? '?'}ms round trip${ping.status !== undefined ? ` (HTTP ${ping.status})` : ''}`
+    if (!ping.hasApiKey) {
+      return `Server reachable but sessions cannot authenticate — no stored credential${ping.status !== undefined ? ` (HTTP ${ping.status})` : ''}. Save a key in Model settings.`
+    }
+    return `Server reachable with the stored credential — ${ping.latencyMs ?? '?'}ms round trip${ping.status !== undefined ? ` (HTTP ${ping.status})` : ''}`
   }
   if (ping.state === 'auth') {
     return `Server reachable but the stored credential was rejected${ping.status !== undefined ? ` (HTTP ${ping.status})` : ''}`
@@ -2020,10 +2032,14 @@ function ProviderPingIndicator({ ping }: { ping: PingEntry | undefined }) {
       </span>
     )
   }
+  const missingCredential = ping.state === 'ok' && !ping.hasApiKey
   return (
     <span className="inline-flex items-center gap-1" title={pingTitle(ping)}>
-      <PingDot state={ping.state} />
-      {ping.state === 'ok' && ping.latencyMs !== undefined ? <span className="font-mono text-[9px] text-faint">{ping.latencyMs}ms</span> : null}
+      {missingCredential
+        ? <span className="inline-block size-[7px] shrink-0 rounded-full bg-amber-500 shadow-[0_0_6px_rgba(245,158,11,0.55)]" />
+        : <PingDot state={ping.state} />}
+      {!missingCredential && ping.state === 'ok' && ping.latencyMs !== undefined ? <span className="font-mono text-[9px] text-faint">{ping.latencyMs}ms</span> : null}
+      {missingCredential ? <span className="text-[9px] font-semibold text-amber-500">no key</span> : null}
     </span>
   )
 }
