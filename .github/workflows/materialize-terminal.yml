@@ -24,7 +24,9 @@ jobs:
       - name: Enable Corepack
         run: corepack enable
       - name: Materialize integration
-        run: node scripts/materialize-terminal-feature.mjs
+        run: |
+          node scripts/materialize-terminal-feature.mjs
+          node scripts/fix-terminal-bundle.mjs
       - name: Install dependencies and refresh lockfile
         run: corepack pnpm install --no-frozen-lockfile
       - name: Verify repository invariants
@@ -42,10 +44,10 @@ jobs:
       - name: Commit validated integration
         shell: bash
         run: |
-          rm .github/workflows/materialize-terminal.yml scripts/materialize-terminal-feature.mjs
+          rm .github/workflows/materialize-terminal.yml scripts/materialize-terminal-feature.mjs scripts/fix-terminal-bundle.mjs
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- package.json pnpm-lock.yaml pnpm-workspace.yaml src/main/index.ts src/preload/index.ts src/renderer/src/global.d.ts src/renderer/src/components/ChatPanel.tsx .github/workflows/materialize-terminal.yml scripts/materialize-terminal-feature.mjs
+          git add -- package.json pnpm-lock.yaml pnpm-workspace.yaml src/main/index.ts src/main/terminal/terminal-manager.ts src/preload/index.ts src/renderer/src/global.d.ts src/renderer/src/components/ChatPanel.tsx .github/workflows/materialize-terminal.yml scripts/materialize-terminal-feature.mjs scripts/fix-terminal-bundle.mjs
           git status --short
           git commit -m "feat: integrate session-isolated terminal"
           git push origin HEAD:feature/session-isolated-terminal
