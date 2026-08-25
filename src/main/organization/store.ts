@@ -173,11 +173,38 @@ export class OrganizationStore {
     return this.value.runs.filter((item) => item.taskId === taskId && item.kind === 'task-execution').length
   }
 
-  async beginRun(kind: OrganizationRunKind, companyId: string, projectId: string, sessionId: string, taskId?: string, goalId?: string): Promise<OrganizationRun> {
+  async beginRun(
+    kind: OrganizationRunKind,
+    companyId: string,
+    projectId: string,
+    sessionId: string,
+    taskId?: string,
+    goalId?: string,
+    options: { parallelTask?: boolean } = {},
+  ): Promise<OrganizationRun> {
     await this.load()
     this.company(companyId); this.project(projectId)
-    const active = this.value.runs.find((item) => item.status === 'running')
-    if (active) throw new Error(`Another organization run is already active in session ${active.sessionId}`)
+    if (taskId) {
+      const task = this.task(taskId)
+      if (task.companyId !== companyId || task.projectId !== projectId) throw new Error('Organization run task crosses company/project boundary')
+    }
+
+    const active = this.value.runs.filter((item) => item.status === 'running')
+    if (!options.parallelTask) {
+      const blocking = active[0]
+      if (blocking) throw new Error(`Another organization run is already active in session ${blocking.sessionId}`)
+    } else {
+      if ((kind !== 'task-execution' && kind !== 'task-review') || !taskId) {
+        throw new Error('Parallel organization runs are limited to isolated task execution/review')
+      }
+      const sameSession = active.find((item) => item.sessionId === sessionId)
+      if (sameSession) throw new Error(`Session ${sessionId} already owns an active organization run`)
+      const global = active.find((item) => item.kind === 'pm-plan' || !item.taskId)
+      if (global) throw new Error(`Global organization run ${global.kind} is active in session ${global.sessionId}`)
+      const sameTask = active.find((item) => item.taskId === taskId)
+      if (sameTask) throw new Error(`Task already has an active ${sameTask.kind} run in session ${sameTask.sessionId}`)
+    }
+
     const run: OrganizationRun = { id: randomUUID(), companyId, projectId, kind, status: 'running', sessionId, ...(taskId ? { taskId } : {}), ...(goalId ? { goalId } : {}), startedAt: Date.now() }
     this.value.runs.unshift(run)
     this.activity(companyId, projectId, `run.${kind}`, `${kind} started in session ${short(sessionId)}.`)
