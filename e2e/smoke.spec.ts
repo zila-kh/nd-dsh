@@ -130,7 +130,7 @@ test('Design Live App keeps the workspace and inspector panes usable', async () 
   expect(workspaceBox?.width).toBeGreaterThanOrEqual(200)
   expect(inspectorBox?.width).toBeGreaterThanOrEqual(220)
   expect(liveAppBox?.x).toBeGreaterThanOrEqual((workspaceBox?.x ?? 0) + (workspaceBox?.width ?? 0))
-  expect(inspectorBox?.x).toBeGreaterThanOrEqual((liveAppBox?.x ?? 0) + (liveAppBoxBox?.width ?? 0))
+  expect(inspectorBox?.x).toBeGreaterThanOrEqual((liveAppBox?.x ?? 0) + (liveAppBox?.width ?? 0))
 })
 
 test('QA opens project checks', async () => {
