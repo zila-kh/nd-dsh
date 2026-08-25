@@ -36,12 +36,24 @@ export class EngineSessionRouter {
     return this.harness.run(prompt, options)
   }
 
-  /** Create a session on the engine named by a catalog descriptor id. */
-  async createSession(engineId: string): Promise<{ sessionId: string; engineId: string }> {
+  /**
+   * Create a session on the engine named by a catalog descriptor id. An
+   * explicit cwd is the portable isolation seam used by organization task
+   * worktrees; interactive chat keeps the active workspace default.
+   */
+  async createSession(engineId: string, cwd?: string): Promise<{ sessionId: string; engineId: string }> {
+    const targetCwd = cwd ?? this.workspace.state().root
     if (engineId === CODEX_CLI_ENGINE_ID) {
-      return { engineId, sessionId: (await this.codex.createSession({ cwd: this.workspace.state().root })).sessionId }
+      return { engineId, sessionId: (await this.codex.createSession({ cwd: targetCwd })).sessionId }
     }
-    return { engineId: ND_HARNESS_ENGINE_ID, sessionId: await this.harness.createSession() }
+    if (cwd === undefined) {
+      return { engineId: ND_HARNESS_ENGINE_ID, sessionId: await this.harness.createSession() }
+    }
+    const result = await this.harness.gatewayRpc('session.create', { cwd: targetCwd })
+    if (!result.ok) throw new Error(result.error?.message ?? 'Harness session.create failed')
+    const sessionId = (result.value as { sessionId?: unknown } | undefined)?.sessionId
+    if (typeof sessionId !== 'string' || !sessionId) throw new Error('Harness session.create returned no session id')
+    return { engineId: ND_HARNESS_ENGINE_ID, sessionId }
   }
 
   /** Cancel pending turns on every engine; each keeps its runtime available. */
