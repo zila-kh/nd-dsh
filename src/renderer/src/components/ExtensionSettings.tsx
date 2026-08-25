@@ -27,6 +27,9 @@ interface DetailDraft {
   description: string
   version: string
   instructions: string
+  runtimeCommand: string
+  runtimeArgs: string
+  runtimeEnvRefs: string
 }
 
 export function ExtensionSettings({ onError }: { onError(message: string): void }) {
@@ -76,6 +79,11 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
       description: selected.description,
       version: selected.version,
       instructions: selected.instructions ?? '',
+      runtimeCommand: selected.runtime?.kind === 'mcp-stdio' ? selected.runtime.command : '',
+      runtimeArgs: selected.runtime?.kind === 'mcp-stdio' ? selected.runtime.args.join('\n') : '',
+      runtimeEnvRefs: selected.runtime?.kind === 'mcp-stdio'
+        ? Object.entries(selected.runtime.env).map(([target, source]) => `${target}=${source}`).join('\n')
+        : '',
     })
     setDemoResult(null)
   }, [selected?.id])
@@ -181,13 +189,21 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
 
   const saveDetails = (): void => {
     if (!selected || !detailDraft) return
-    void persist({
-      ...selected,
-      name: detailDraft.name,
-      description: detailDraft.description,
-      version: detailDraft.version,
-      instructions: detailDraft.instructions,
-    }, 'details')
+    try {
+      const runtime = selected.surface === 'mcp' || selected.surface === 'plugin'
+        ? parseRuntime(detailDraft)
+        : undefined
+      void persist({
+        ...selected,
+        name: detailDraft.name,
+        description: detailDraft.description,
+        version: detailDraft.version,
+        instructions: detailDraft.instructions,
+        ...(runtime ? { runtime } : { runtime: undefined }),
+      }, 'details')
+    } catch (cause) {
+      onError(errorMessage(cause))
+    }
   }
 
   const runDemo = async (): Promise<void> => {
@@ -289,15 +305,30 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
               </SettingsRow>
 
               {!selected.builtInDemo && detailDraft ? (
-                <SettingsRow>
-                  <div className="grid min-w-0 flex-1 grid-cols-2 gap-2">
-                    <input className="h-8 rounded-md border border-border bg-background px-2 text-[10px] text-soft" value={detailDraft.name} onChange={(event) => setDetailDraft({ ...detailDraft, name: event.target.value })} placeholder="Name" />
-                    <input className="h-8 rounded-md border border-border bg-background px-2 text-[10px] text-soft" value={detailDraft.version} onChange={(event) => setDetailDraft({ ...detailDraft, version: event.target.value })} placeholder="1.0.0" />
-                    <input className="col-span-2 h-8 rounded-md border border-border bg-background px-2 text-[10px] text-soft" value={detailDraft.description} onChange={(event) => setDetailDraft({ ...detailDraft, description: event.target.value })} placeholder="Description" />
-                    <textarea className="col-span-2 min-h-20 rounded-md border border-border bg-background px-2 py-2 text-[10px] leading-4 text-soft" value={detailDraft.instructions} onChange={(event) => setDetailDraft({ ...detailDraft, instructions: event.target.value })} placeholder="Portable instructions delivered when this extension route is active." />
-                  </div>
-                  <SettingsButton disabled={Boolean(busy)} onClick={saveDetails}>Save details</SettingsButton>
-                </SettingsRow>
+                <>
+                  <SettingsRow>
+                    <div className="grid min-w-0 flex-1 grid-cols-2 gap-2">
+                      <input className="h-8 rounded-md border border-border bg-background px-2 text-[10px] text-soft" value={detailDraft.name} onChange={(event) => setDetailDraft({ ...detailDraft, name: event.target.value })} placeholder="Name" />
+                      <input className="h-8 rounded-md border border-border bg-background px-2 text-[10px] text-soft" value={detailDraft.version} onChange={(event) => setDetailDraft({ ...detailDraft, version: event.target.value })} placeholder="1.0.0" />
+                      <input className="col-span-2 h-8 rounded-md border border-border bg-background px-2 text-[10px] text-soft" value={detailDraft.description} onChange={(event) => setDetailDraft({ ...detailDraft, description: event.target.value })} placeholder="Description" />
+                      <textarea className="col-span-2 min-h-20 rounded-md border border-border bg-background px-2 py-2 text-[10px] leading-4 text-soft" value={detailDraft.instructions} onChange={(event) => setDetailDraft({ ...detailDraft, instructions: event.target.value })} placeholder="Portable instructions delivered when this extension route is active." />
+                    </div>
+                    <SettingsButton disabled={Boolean(busy)} onClick={saveDetails}>Save details</SettingsButton>
+                  </SettingsRow>
+                  {selected.surface === 'mcp' || selected.surface === 'plugin' ? (
+                    <SettingsRow>
+                      <div className="grid min-w-0 flex-1 grid-cols-2 gap-2">
+                        <div className="col-span-2">
+                          <strong className={rowTitle}>MCP stdio transport</strong>
+                          <p className={rowDesc}>Optional executable transport. ND stores command/arguments and environment-variable names only; secret values remain in the parent environment.</p>
+                        </div>
+                        <input className="col-span-2 h-8 rounded-md border border-border bg-background px-2 font-mono text-[10px] text-soft" value={detailDraft.runtimeCommand} onChange={(event) => setDetailDraft({ ...detailDraft, runtimeCommand: event.target.value })} placeholder="MCP command, e.g. npx" />
+                        <textarea className="min-h-24 rounded-md border border-border bg-background px-2 py-2 font-mono text-[10px] leading-4 text-soft" value={detailDraft.runtimeArgs} onChange={(event) => setDetailDraft({ ...detailDraft, runtimeArgs: event.target.value })} placeholder={'One argument per line\n-y\n@modelcontextprotocol/server-filesystem\n/workspace'} />
+                        <textarea className="min-h-24 rounded-md border border-border bg-background px-2 py-2 font-mono text-[10px] leading-4 text-soft" value={detailDraft.runtimeEnvRefs} onChange={(event) => setDetailDraft({ ...detailDraft, runtimeEnvRefs: event.target.value })} placeholder={'Environment references\nGITHUB_TOKEN=GITHUB_TOKEN'} />
+                      </div>
+                    </SettingsRow>
+                  ) : null}
+                </>
               ) : selected.instructions ? (
                 <SettingsRow>
                   <div className={rowStack}>
@@ -414,6 +445,24 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
       </main>
     </div>
   )
+}
+
+function parseRuntime(draft: DetailDraft): AgentExtensionManifest['runtime'] {
+  const command = draft.runtimeCommand.trim()
+  if (!command) return undefined
+  const args = draft.runtimeArgs.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)
+  const env: Record<string, string> = {}
+  for (const raw of draft.runtimeEnvRefs.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)) {
+    const separator = raw.indexOf('=')
+    if (separator <= 0 || separator === raw.length - 1) throw new Error(`Invalid environment reference: ${raw}`)
+    const target = raw.slice(0, separator).trim()
+    const source = raw.slice(separator + 1).trim()
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(target) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(source)) {
+      throw new Error(`Environment references must use VARIABLE=SOURCE_VARIABLE: ${raw}`)
+    }
+    env[target] = source
+  }
+  return { kind: 'mcp-stdio', command, args, env }
 }
 
 function errorMessage(cause: unknown): string {
