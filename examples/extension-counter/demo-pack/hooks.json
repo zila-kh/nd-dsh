@@ -1,0 +1,14 @@
+{
+  "name": "Counter lifecycle demo",
+  "events": {
+    "preRun": {
+      "action": "record-counter",
+      "expected": "finite number"
+    },
+    "postRun": {
+      "action": "verify-counter",
+      "expected": 7
+    }
+  },
+  "notes": "Portable lifecycle policy fixture. ND routes this as hook-bridge context; it does not imply a dynamically mounted vendor-native hook package."
+}
