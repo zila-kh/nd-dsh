@@ -80,9 +80,9 @@
 # ── universal ND extensions ───────────────────────────────────────────────────
 
 # One stable MCP bridge projects every enabled ND MCP/plugin extension into the
-# Harness tool surface. The bridge reads the trusted main-process catalog on
-# every tools/list refresh, so enable/disable and custom MCP stdio routes do not
-# require editing the vendored Harness or a user profile. Secret values are
+# Harness tool surface. Its two generic tools delegate to the portable proxy,
+# which reads the trusted catalog on every call, so extension changes do not
+# require editing or restarting the vendored Harness. Secret values are
 # resolved from parent environment-variable references only.
 - insert:
     - id: nd-extensions-mcp
@@ -93,9 +93,10 @@
         command: !!js process.execPath
         args:
           - !!js process.env.ND_DSH_EXTENSION_MCP_ENTRY ?? ''
-          - mcp
         env:
           PATH: !!js process.env.PATH ?? ''
+          ND_EXTENSION_NODE: !!js process.env.ND_EXTENSION_NODE ?? process.execPath
+          ND_EXTENSION_PROXY: !!js process.env.ND_EXTENSION_PROXY ?? ''
           ND_EXTENSION_CATALOG: !!js process.env.ND_EXTENSION_CATALOG ?? ''
           ND_EXTENSION_STATE: !!js process.env.ND_EXTENSION_STATE ?? ''
         toolCallTimeoutMs: 120000
