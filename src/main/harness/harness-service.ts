@@ -335,6 +335,11 @@ export class HarnessService {
     this.stopping = false
     await this.browser.ensureAgentReady()
 
+    // The MCP server reads AGENT_BROWSER_CONFIG at startup; the file must
+    // exist before the child spawns or the server starts with no pinned
+    // session and the agent sees "No active sessions yet" on its first call.
+    await this.browser.assertAgentConfigReady()
+
     const cliBin = harnessCliBinPath()
     const patchPath = dshPatchPath()
     const presetsDir = presetSourceDir()

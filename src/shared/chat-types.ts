@@ -21,7 +21,7 @@ export type ThreadEntry =
   | { kind: 'todo'; id: string; items: TodoItem[] }
   | { kind: 'approval'; id: string; sessionId: string; approvalId: string; toolName: string; reason?: string; rpcId: string; resolved?: 'allowed-once' | 'rejected' }
   | { kind: 'question'; id: string; sessionId: string; questions: AskQuestion[]; rpcId: string; resolved?: boolean }
-  | { kind: 'notice'; id: string; text: string; tone?: 'info' | 'error' }
+  | { kind: 'notice'; id: string; text: string; tone?: 'info' | 'error'; retryPrompt?: string }
 
 export interface SessionThread {
   summary: SessionSummary

@@ -136,6 +136,17 @@ export class BrowserController {
     return this.agentBrowser.environment()
   }
 
+  /**
+   * Called by the harness just before it spawns the runtime child process.
+   * The browser MCP server reads AGENT_BROWSER_CONFIG at startup, so the
+   * config file must already exist on disk — otherwise the server starts
+   * with no pinned session and the agent sees "No active sessions yet" on
+   * its first tool call.
+   */
+  assertAgentConfigReady(): void {
+    this.agentBrowser.assertConfigReady()
+  }
+
   async setBounds(bounds: BrowserBounds): Promise<void> {
     const safe: Rectangle = {
       x: Math.max(0, Math.round(bounds.x)),

@@ -17,6 +17,7 @@ export interface AgentBrowserStatus {
 const COMMAND_TIMEOUT_MS = 120_000
 const MAX_CAPTURE_CHARS = 2_000_000
 const BIND_RETRY_DELAY_MS = 2_500
+const SMOKE_TEST_TIMEOUT_MS = 15_000
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -52,6 +53,20 @@ export class AgentBrowserClient {
     this.statusValue = {
       state: 'unavailable',
       error: error instanceof Error ? error.message : String(error),
+    }
+  }
+
+  /**
+   * Throws if the config file has not been written yet. Called by the harness
+   * immediately before spawning the runtime child so the browser MCP server
+   * always starts with a pinned session already on disk.
+   */
+  assertConfigReady(): void {
+    if (!existsSync(this.configPath)) {
+      throw new Error(
+        `agent-browser config has not been written to ${this.configPath}. ` +
+        'The browser pane must finish binding before the runtime can start.',
+      )
     }
   }
 
@@ -92,6 +107,15 @@ export class AgentBrowserClient {
         await sleep(BIND_RETRY_DELAY_MS)
         await this.bindPinnedTab(targetId)
       }
+      // Verify the config file landed and the session is reachable before
+      // declaring success. A failed smoke-test is logged but does not mark the
+      // browser unavailable — the MCP server will recover on the agent's first
+      // real tool call once the daemon finishes attaching.
+      try {
+        await this.smokeTest()
+      } catch (smokeError) {
+        console.warn('[agent-browser] post-bind smoke test failed:', smokeError instanceof Error ? smokeError.message : String(smokeError))
+      }
       this.statusValue = { state: 'ready' }
     } catch (error) {
       this.recordFailure(error)
@@ -102,6 +126,25 @@ export class AgentBrowserClient {
   private async bindPinnedTab(targetId: string): Promise<void> {
     await this.run(['tab', targetId], ['--no-pin-tab'])
     await this.run(['get', 'url'], ['--pin-tab'])
+  }
+
+  /**
+   * Shallow health probe run after a successful bind. Calls a depth-1
+   * interactive snapshot with a short timeout so binding failures surface
+   * immediately rather than on the agent's first real tool call.
+   *
+   * A probe failure is non-fatal: the session is already pinned, so the MCP
+   * server will recover on its first real command. The error is surfaced to
+   * the caller for logging only.
+   */
+  async smokeTest(): Promise<void> {
+    if (!existsSync(this.configPath)) {
+      throw new Error(
+        `agent-browser config was not written to ${this.configPath} after bind. ` +
+        'The MCP server will start without a pinned session.',
+      )
+    }
+    await this.run(['snapshot', '-i', '-d', '1'], ['--pin-tab'], SMOKE_TEST_TIMEOUT_MS)
   }
 
   async snapshot(): Promise<unknown> {
@@ -130,7 +173,7 @@ export class AgentBrowserClient {
     return join(projectRoot, 'node_modules', '.bin', executable)
   }
 
-  private async run(command: string[], globalArguments: string[] = []): Promise<RunResult> {
+  private async run(command: string[], globalArguments: string[] = [], timeoutMs = COMMAND_TIMEOUT_MS): Promise<RunResult> {
     if (this.binary.includes(sep) && !existsSync(this.binary)) {
       throw new Error(`agent-browser is not installed at ${this.binary}. Run pnpm install.`)
     }
@@ -152,8 +195,8 @@ export class AgentBrowserClient {
       let stderr = ''
       const timer = setTimeout(() => {
         child.kill('SIGTERM')
-        reject(new Error(`agent-browser command timed out after ${COMMAND_TIMEOUT_MS}ms`))
-      }, COMMAND_TIMEOUT_MS)
+        reject(new Error(`agent-browser command timed out after ${timeoutMs}ms`))
+      }, timeoutMs)
       timer.unref()
 
       child.stdout.setEncoding('utf8')
