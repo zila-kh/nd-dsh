@@ -76,12 +76,27 @@ describe('universal extension router', () => {
     expect(resolveExtensionRoute(extension, codex).adapter).toBe('skill-bridge')
   })
 
-  it('respects explicit engine overrides', () => {
+  it('routes non-harness subagent extensions through ND orchestration', () => {
+    const extension = enabledDemo('subagent')
+    expect(resolveExtensionRoute(extension, harness).adapter).toBe('native')
+    expect(resolveExtensionRoute(extension, codex).adapter).toBe('nd-proxy')
+  })
+
+  it('respects explicit engine disable overrides', () => {
     const extension = enabledDemo('hook')
     extension.engineRoutes = [{ engineId: 'codex-cli', adapter: 'disabled' }]
     const route = resolveExtensionRoute(extension, codex)
     expect(route.supported).toBe(false)
     expect(route.adapter).toBe('disabled')
+  })
+
+  it('marks impossible explicit transport overrides unsupported instead of pretending they work', () => {
+    const extension = enabledDemo('mcp')
+    extension.engineRoutes = [{ engineId: 'codex-cli', adapter: 'mcp' }]
+    const route = resolveExtensionRoute(extension, codex)
+    expect(route.supported).toBe(false)
+    expect(route.adapter).toBe('mcp')
+    expect(route.reason).toMatch(/cannot deliver/i)
   })
 
   it('can scope prompt/context delivery to model providers separately from engine routing', () => {
