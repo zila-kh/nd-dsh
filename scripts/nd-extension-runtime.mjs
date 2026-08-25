@@ -3,13 +3,13 @@
  * Portable ND extension proxy.
  *
  * Modes:
- *   list <extension-id>
- *   call <extension-id> <tool-name> [json-args]
+ *   list <extension-id> <engine-id>
+ *   call <extension-id> <tool-name> <json-args> <engine-id>
  *
  * ND Harness reaches this proxy through scripts/nd-extension-mcp.mjs. Engines
  * without MCP can invoke the same list/call interface through their shell.
- * Every invocation re-reads the durable catalog so enable/disable and route
- * changes are enforced without a runtime restart.
+ * Every invocation re-reads the durable catalog so enable/disable and per-
+ * engine route changes are enforced without a runtime restart.
  */
 
 import { spawn } from 'node:child_process'
@@ -21,6 +21,7 @@ const CATALOG_PATH = process.env.ND_EXTENSION_CATALOG?.trim() ?? ''
 const STATE_PATH = process.env.ND_EXTENSION_STATE?.trim() ?? ''
 const REQUEST_TIMEOUT_MS = 30_000
 const COUNTER_EXTENSION_IDS = new Set(['demo-counter-mcp', 'demo-counter-plugin'])
+const ENGINE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/
 const SAFE_INHERITED_ENV = [
   'PATH', 'Path', 'PATHEXT',
   'SystemRoot', 'SYSTEMROOT', 'ComSpec', 'COMSPEC',
@@ -62,14 +63,26 @@ async function readCatalog() {
   }
 }
 
-function enabledToolExtension(extension, extensionId) {
-  if (!extension || extension.id !== extensionId) return false
-  if (extension.enabled !== true) return false
-  if (extension.surface !== 'mcp' && extension.surface !== 'plugin') return false
+function engineId(value) {
+  if (typeof value !== 'string' || !ENGINE_ID_PATTERN.test(value.trim())) throw new Error('a valid engine id is required')
+  return value.trim()
+}
+
+function toolRouteAllowed(extension, targetEngineId) {
   const route = Array.isArray(extension.engineRoutes)
-    ? extension.engineRoutes.find((item) => item?.engineId === 'codex-cli' || item?.engineId === 'nd-harness')
+    ? extension.engineRoutes.find((item) => item?.engineId === targetEngineId)
     : undefined
-  return route?.adapter !== 'disabled'
+  const adapter = route?.adapter ?? 'auto'
+  return adapter === 'auto' || adapter === 'mcp' || adapter === 'nd-proxy' || adapter === 'native'
+}
+
+async function requireExtension(extensionId, targetEngineId) {
+  const extension = (await readCatalog()).find((item) => item?.id === extensionId)
+  if (!extension) throw new Error(`unknown extension: ${extensionId}`)
+  if (extension.enabled !== true) throw new Error(`extension is disabled: ${extensionId}`)
+  if (extension.surface !== 'mcp' && extension.surface !== 'plugin') throw new Error(`extension is not a tool extension: ${extensionId}`)
+  if (!toolRouteAllowed(extension, targetEngineId)) throw new Error(`extension tool transport is disabled for engine ${targetEngineId}: ${extensionId}`)
+  return extension
 }
 
 function isMcpRuntime(extension) {
@@ -82,23 +95,16 @@ function isMcpRuntime(extension) {
     && !Array.isArray(extension.runtime.env)
 }
 
-async function requireExtension(extensionId) {
-  const extension = (await readCatalog()).find((item) => item?.id === extensionId)
-  if (!extension) throw new Error(`unknown extension: ${extensionId}`)
-  if (!enabledToolExtension(extension, extensionId)) throw new Error(`extension is disabled, routed off, or is not a tool extension: ${extensionId}`)
-  return extension
-}
-
-async function listOne(extensionId) {
-  const extension = await requireExtension(extensionId)
+async function listOne(extensionId, targetEngineId) {
+  const extension = await requireExtension(extensionId, targetEngineId)
   if (COUNTER_EXTENSION_IDS.has(extensionId)) return COUNTER_TOOLS
   if (!isMcpRuntime(extension)) throw new Error(`extension has no MCP stdio runtime: ${extensionId}`)
   const result = await withMcpRuntime(extension, (client) => client.request('tools/list', {}))
   return Array.isArray(result?.tools) ? result.tools : []
 }
 
-async function callOne(extensionId, tool, args) {
-  const extension = await requireExtension(extensionId)
+async function callOne(extensionId, targetEngineId, tool, args) {
+  const extension = await requireExtension(extensionId, targetEngineId)
   if (COUNTER_EXTENSION_IDS.has(extensionId)) return counterCall(tool, args)
   if (!isMcpRuntime(extension)) throw new Error(`extension has no MCP stdio runtime: ${extensionId}`)
   return withMcpRuntime(extension, (client) => client.request('tools/call', { name: tool, arguments: objectArgs(args) }))
@@ -284,15 +290,17 @@ function parseJsonArgs(raw) {
 }
 
 async function main() {
-  const [mode, extensionId, toolName, rawArgs] = process.argv.slice(2)
+  const [mode, extensionId, toolName, rawArgs, trailingEngineId] = process.argv.slice(2)
   if (mode === 'list') {
-    if (!extensionId) throw new Error('usage: nd-extension-runtime.mjs list <extension-id>')
-    process.stdout.write(`${JSON.stringify(await listOne(extensionId), null, 2)}\n`)
+    const targetEngineId = engineId(toolName)
+    if (!extensionId) throw new Error('usage: nd-extension-runtime.mjs list <extension-id> <engine-id>')
+    process.stdout.write(`${JSON.stringify(await listOne(extensionId, targetEngineId), null, 2)}\n`)
     return
   }
   if (mode === 'call') {
-    if (!extensionId || !toolName) throw new Error('usage: nd-extension-runtime.mjs call <extension-id> <tool-name> [json-args]')
-    process.stdout.write(`${JSON.stringify(await callOne(extensionId, toolName, parseJsonArgs(rawArgs)), null, 2)}\n`)
+    if (!extensionId || !toolName) throw new Error('usage: nd-extension-runtime.mjs call <extension-id> <tool-name> <json-args> <engine-id>')
+    const targetEngineId = engineId(trailingEngineId)
+    process.stdout.write(`${JSON.stringify(await callOne(extensionId, targetEngineId, toolName, parseJsonArgs(rawArgs)), null, 2)}\n`)
     return
   }
   throw new Error('usage: nd-extension-runtime.mjs <list|call> ...')
