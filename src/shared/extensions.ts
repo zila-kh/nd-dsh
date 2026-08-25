@@ -188,10 +188,7 @@ export function resolveExtensionRoute(
   if (!providerAllowed(extension, provider)) return result(extension, engine.id, provider?.id, 'disabled', false, 'Model provider is outside this extension route.')
 
   const configured = extension.engineRoutes.find((route) => route.engineId === engine.id)?.adapter ?? 'auto'
-  if (configured !== 'auto') {
-    if (configured === 'disabled') return result(extension, engine.id, provider?.id, 'disabled', false, 'Disabled for this coding engine.')
-    return result(extension, engine.id, provider?.id, configured, true, 'Explicit engine route.')
-  }
+  if (configured !== 'auto') return resolveExplicitAdapter(extension, engine, provider?.id, configured)
 
   switch (extension.surface) {
     case 'mcp':
@@ -203,11 +200,11 @@ export function resolveExtensionRoute(
         ? result(extension, engine.id, provider?.id, 'native', true, 'Engine exposes skills natively.')
         : result(extension, engine.id, provider?.id, 'skill-bridge', true, 'ND translates the skill into engine context.')
     case 'hook':
-      return result(extension, engine.id, provider?.id, engine.id.includes('harness') ? 'cordis' : 'hook-bridge', true, 'ND normalizes lifecycle hooks.')
+      return result(extension, engine.id, provider?.id, isHarnessEngine(engine.id) ? 'cordis' : 'hook-bridge', true, 'ND normalizes lifecycle hooks.')
     case 'command':
-      return result(extension, engine.id, provider?.id, engine.id.includes('harness') ? 'native' : 'prompt-injection', true, 'ND translates portable commands per engine.')
+      return result(extension, engine.id, provider?.id, isHarnessEngine(engine.id) ? 'native' : 'prompt-injection', true, 'ND translates portable commands per engine.')
     case 'subagent':
-      return result(extension, engine.id, provider?.id, 'native', true, 'Delegation is routed through the selected coding engine.')
+      return result(extension, engine.id, provider?.id, isHarnessEngine(engine.id) ? 'native' : 'nd-proxy', true, isHarnessEngine(engine.id) ? 'Harness exposes native subagent delegation.' : 'ND orchestrates delegation outside this engine.')
     case 'memory':
       return result(extension, engine.id, provider?.id, 'prompt-injection', true, 'ND injects durable memory at the engine boundary.')
     case 'plugin':
@@ -249,6 +246,48 @@ export interface ExtensionsDesktopApi {
   preview(id: string): Promise<ExtensionRoutePreview>
   runDemo(id: string, engineId?: string, providerId?: string): Promise<ExtensionDemoResult>
   onChanged(listener: (extensions: AgentExtensionManifest[]) => void): () => void
+}
+
+function resolveExplicitAdapter(
+  extension: AgentExtensionManifest,
+  engine: Pick<CodingEngineDescriptor, 'id' | 'capabilities'>,
+  providerId: string | undefined,
+  adapter: Exclude<ExtensionAdapter, 'auto'>,
+): ResolvedExtensionRoute {
+  if (adapter === 'disabled') return result(extension, engine.id, providerId, adapter, false, 'Disabled for this coding engine.')
+  const supported = explicitAdapterSupported(extension.surface, adapter, engine)
+  return result(
+    extension,
+    engine.id,
+    providerId,
+    adapter,
+    supported,
+    supported ? 'Explicit engine route.' : `${adapter} cannot deliver ${extension.surface} on this coding engine.`,
+  )
+}
+
+function explicitAdapterSupported(
+  surface: AgentExtensionSurface,
+  adapter: Exclude<ExtensionAdapter, 'auto' | 'disabled'>,
+  engine: Pick<CodingEngineDescriptor, 'id' | 'capabilities'>,
+): boolean {
+  if (adapter === 'mcp') return engine.capabilities.mcp && (surface === 'mcp' || surface === 'plugin')
+  if (adapter === 'cordis') return isHarnessEngine(engine.id) && (surface === 'plugin' || surface === 'hook' || surface === 'command')
+  if (adapter === 'skill-bridge') return surface === 'skill'
+  if (adapter === 'hook-bridge') return surface === 'hook'
+  if (adapter === 'prompt-injection') return surface === 'memory' || surface === 'skill' || surface === 'command' || surface === 'plugin'
+  if (adapter === 'nd-proxy') return surface === 'mcp' || surface === 'plugin' || surface === 'subagent' || surface === 'hook'
+  if (adapter === 'native') {
+    if (surface === 'mcp') return engine.capabilities.mcp
+    if (surface === 'skill') return engine.capabilities.skills
+    if (surface === 'subagent' || surface === 'command') return isHarnessEngine(engine.id)
+    return false
+  }
+  return false
+}
+
+function isHarnessEngine(engineId: string): boolean {
+  return engineId === 'nd-harness' || engineId.includes('harness')
 }
 
 function result(
