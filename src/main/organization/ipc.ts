@@ -34,6 +34,13 @@ export function registerOrganizationIpc(
   control.setOnChanged((state) => {
     if (!window.isDestroyed()) window.webContents.send(ORGANIZATION_CONTROL_IPC.changed, state)
   })
+  // Organization runs finish on engine event streams, outside renderer IPC.
+  // Reconcile independently so evidence, typed results, leases and quotas never
+  // depend on a screen being open or a user requesting status.
+  const reconcileTimer = setInterval(() => {
+    void control.state().catch((error) => console.warn('Organization control reconciliation failed:', error instanceof Error ? error.message : String(error)))
+  }, 1_500)
+  reconcileTimer.unref()
 
   const handle = (channel: string, listener: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown | Promise<unknown>): void => {
     ipcMain.removeHandler(channel)
@@ -106,6 +113,7 @@ export function registerOrganizationIpc(
   }
 
   return () => {
+    clearInterval(reconcileTimer)
     control.setOnChanged(undefined)
     for (const channel of channels) ipcMain.removeHandler(channel)
   }
