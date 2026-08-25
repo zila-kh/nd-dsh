@@ -95,15 +95,26 @@ async function runProxy(args) {
 async function dispatch(name, args) {
   if (name === 'nd_extension_list') {
     const extensionId = cleanId(args?.extensionId, 'extensionId')
-    return runProxy(['list', extensionId])
+    return { mode: 'list', value: await runProxy(['list', extensionId]) }
   }
   if (name === 'nd_extension_call') {
     const extensionId = cleanId(args?.extensionId, 'extensionId')
     const toolName = cleanTool(args?.toolName)
     const input = args?.arguments && typeof args.arguments === 'object' && !Array.isArray(args.arguments) ? args.arguments : {}
-    return runProxy(['call', extensionId, toolName, JSON.stringify(input)])
+    return { mode: 'call', value: await runProxy(['call', extensionId, toolName, JSON.stringify(input)]) }
   }
   throw new Error(`unknown tool: ${name}`)
+}
+
+function normalizeCallResult(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value) && Array.isArray(value.content)) {
+    return {
+      content: value.content,
+      ...(value.isError === true ? { isError: true } : {}),
+      ...(value.structuredContent && typeof value.structuredContent === 'object' ? { structuredContent: value.structuredContent } : {}),
+    }
+  }
+  return { content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }] }
 }
 
 async function handleMessage(message) {
@@ -130,12 +141,11 @@ async function handleMessage(message) {
   }
   if (message.method === 'tools/call') {
     try {
-      const value = await dispatch(message.params?.name, message.params?.arguments)
-      writeMessage({
-        jsonrpc: '2.0',
-        id: message.id,
-        result: { content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }] },
-      })
+      const dispatched = await dispatch(message.params?.name, message.params?.arguments)
+      const result = dispatched.mode === 'call'
+        ? normalizeCallResult(dispatched.value)
+        : { content: [{ type: 'text', text: JSON.stringify(dispatched.value, null, 2) }] }
+      writeMessage({ jsonrpc: '2.0', id: message.id, result })
     } catch (error) {
       writeMessage({
         jsonrpc: '2.0',
