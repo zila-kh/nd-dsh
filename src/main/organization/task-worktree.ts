@@ -20,10 +20,15 @@ export class TaskWorktreeManager {
    * created only from a clean base workspace so the branch cannot silently omit
    * local human changes. Existing task branches/worktrees remain recoverable
    * after restart even when the base later becomes dirty.
+   *
+   * A truly empty project directory is safe to bootstrap as a local Git repo.
+   * This gives brand-new "idea -> app" projects a stable HEAD and exact review
+   * evidence before the first worker writes source. Non-empty non-Git folders
+   * are never initialized implicitly.
    */
   async ensure(projectWorkspace: string | undefined, taskId: string): Promise<TaskWorktree | undefined> {
     if (!projectWorkspace) return undefined
-    const repoRoot = await repositoryRoot(projectWorkspace).catch(() => undefined)
+    const repoRoot = await repositoryRoot(projectWorkspace).catch(() => bootstrapEmptyRepository(projectWorkspace))
     if (!repoRoot) return undefined
     const descriptor = describe(repoRoot, taskId)
     if (await isAttachedWorktree(descriptor.root)) return descriptor
@@ -143,6 +148,23 @@ function safeTaskKey(taskId: string): string {
 
 async function repositoryRoot(cwd: string): Promise<string> {
   return resolve((await git(resolve(cwd), ['rev-parse', '--show-toplevel'])).stdout.trim())
+}
+
+async function bootstrapEmptyRepository(cwd: string): Promise<string | undefined> {
+  const root = resolve(cwd)
+  try {
+    const entries = await fs.readdir(root)
+    if (entries.length !== 0) return undefined
+    await git(root, ['init'])
+    await git(root, [
+      '-c', 'user.name=ND-DSH',
+      '-c', 'user.email=nd-dsh@local',
+      'commit', '--allow-empty', '-m', 'nd-dsh: initialize project workspace',
+    ])
+    return repositoryRoot(root)
+  } catch {
+    return undefined
+  }
 }
 
 async function isAttachedWorktree(path: string): Promise<boolean> {
