@@ -162,7 +162,7 @@ export class OrganizationControlPlane {
         startedAt: run.startedAt, checkedAt: Date.now(),
       }
       this.value.turns.unshift(record)
-      this.consumeBudget(run.companyId, run.projectId)
+      this.consumeBudget(run.companyId, run.projectId, run.startedAt)
       changed = true
     }
     if (run.kind === 'task-execution' && run.taskId) changed = this.ensureLease(run, organization) || changed
@@ -280,7 +280,7 @@ export class OrganizationControlPlane {
           startedAt: run.startedAt, checkedAt: run.startedAt,
         }
         this.value.turns.push(turn)
-        this.consumeBudget(run.companyId, run.projectId)
+        this.consumeBudget(run.companyId, run.projectId, run.startedAt)
         changed = true
       }
       if (run.status !== 'running' && !turn.result) {
@@ -369,12 +369,13 @@ export class OrganizationControlPlane {
       ?? this.value.budgets.find((item) => item.companyId === companyId && !item.projectId)
   }
 
-  private consumeBudget(companyId: string, projectId: string): void {
+  private consumeBudget(companyId: string, projectId: string, startedAt = Date.now()): void {
     const budget = this.effectiveBudget(companyId, projectId)
     if (!budget) return
     if (Date.now() - budget.windowStartedAt >= DAY_MS) {
       budget.windowStartedAt = Date.now(); budget.spentTurns = 0; budget.spentCostUsd = 0
     }
+    if (startedAt < budget.windowStartedAt) return
     budget.spentTurns += 1
     budget.updatedAt = Date.now()
   }
