@@ -98,7 +98,9 @@
 # Host-plane row on purpose: every preset joins it, so the visible pane stays
 # available to standard, code, and cordis sessions alike. The MCP process
 # attaches to the exact CDP target the desktop pinned, through the same
-# AGENT_BROWSER_* config/session the pane itself uses.
+# AGENT_BROWSER_* config/session the pane itself uses. This browser is part of
+# the trusted development surface, so a missing MCP is a startup error rather
+# than a silently degraded agent environment.
 - insert:
     - id: browser-mcp
       name: '@deepseek-ai/dsh-mcp-client'
@@ -116,7 +118,7 @@
           AGENT_BROWSER_CONFIG: !!js process.env.ND_DSH_AGENT_BROWSER_CONFIG ?? ''
           AGENT_BROWSER_SESSION: !!js process.env.ND_DSH_AGENT_BROWSER_SESSION ?? ''
         toolCallTimeoutMs: 120000
-        failOnStartupError: false
+        failOnStartupError: true
         reconnect:
           enabled: true
           initialDelayMs: 500
