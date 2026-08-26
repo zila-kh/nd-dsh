@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Bot, Brain, GitBranch, Plus, Puzzle, RefreshCw, Search, Server, Sparkles, Terminal } from 'lucide-react'
 import type { CodingEngineDescriptor, ModelProvider } from '../../../shared/contracts'
 import {
-  AGENT_EXTENSION_SURFACES,
   EXTENSION_ADAPTERS,
   resolveExtensionRoute,
   type AgentExtensionManifest,
@@ -12,6 +12,8 @@ import {
 import { cn } from '../lib/utils'
 import { SettingsButton, SettingsRow, SettingsSection, StatusChip, rowDesc, rowPathText, rowStack, rowTitle } from './settings-primitives'
 
+const SURFACE_ORDER: readonly AgentExtensionSurface[] = ['plugin', 'mcp', 'skill', 'command', 'hook', 'subagent', 'memory']
+
 const SURFACE_LABEL: Record<AgentExtensionSurface, string> = {
   memory: 'Memory',
   subagent: 'Subagents',
@@ -21,6 +23,26 @@ const SURFACE_LABEL: Record<AgentExtensionSurface, string> = {
   command: 'Commands',
   hook: 'Hooks',
 }
+
+const SURFACE_TAB_LABEL: Record<AgentExtensionSurface, string> = {
+  memory: 'Memory',
+  subagent: 'Subagents',
+  plugin: 'Plugins',
+  mcp: 'MCP',
+  skill: 'Skills',
+  command: 'Commands',
+  hook: 'Hooks',
+}
+
+const SURFACE_ICON = {
+  plugin: Puzzle,
+  mcp: Server,
+  skill: Sparkles,
+  command: Terminal,
+  hook: GitBranch,
+  subagent: Bot,
+  memory: Brain,
+} satisfies Record<AgentExtensionSurface, typeof Puzzle>
 
 interface DetailDraft {
   name: string
@@ -39,6 +61,7 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
   const [surface, setSurface] = useState<AgentExtensionSurface>('plugin')
   const [selectedId, setSelectedId] = useState<string>('demo-counter-plugin')
   const [busy, setBusy] = useState<string | null>('load')
+  const [query, setQuery] = useState('')
   const [demoEngineId, setDemoEngineId] = useState('')
   const [demoProviderId, setDemoProviderId] = useState('')
   const [demoResult, setDemoResult] = useState<ExtensionDemoResult | null>(null)
@@ -66,8 +89,15 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
     }
   }, [onError])
 
-  const visible = useMemo(() => extensions.filter((item) => item.surface === surface), [extensions, surface])
-  const selected = extensions.find((item) => item.id === selectedId) ?? visible[0]
+  const surfaceItems = useMemo(() => extensions.filter((item) => item.surface === surface), [extensions, surface])
+  const normalizedQuery = query.trim().toLowerCase()
+  const visible = useMemo(() => surfaceItems.filter((item) => {
+    if (!normalizedQuery) return true
+    return `${item.name}\n${item.description}\n${item.id}`.toLowerCase().includes(normalizedQuery)
+  }), [normalizedQuery, surfaceItems])
+  const installed = visible.filter((item) => !item.builtInDemo)
+  const builtIn = visible.filter((item) => item.builtInDemo)
+  const selected = extensions.find((item) => item.id === selectedId) ?? surfaceItems[0]
 
   useEffect(() => {
     if (!selected) {
@@ -101,6 +131,31 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
     }
   }
 
+  const refresh = async (): Promise<void> => {
+    if (busy) return
+    setBusy('refresh')
+    try {
+      const [extensionItems, engineItems, providerItems] = await Promise.all([
+        window.ndDshExtensions.list(),
+        window.ndDsh.engines.list(),
+        window.ndDsh.providers.list(),
+      ])
+      setExtensions(extensionItems)
+      setEngines(engineItems)
+      setProviders(providerItems)
+      if (!engineItems.some((item) => item.id === demoEngineId)) {
+        setDemoEngineId(engineItems.find((item) => item.available)?.id ?? engineItems[0]?.id ?? '')
+      }
+      if (demoProviderId && !providerItems.some((item) => item.id === demoProviderId && item.enabled)) {
+        setDemoProviderId(providerItems.find((item) => item.enabled)?.id ?? '')
+      }
+    } catch (cause) {
+      onError(errorMessage(cause))
+    } finally {
+      setBusy(null)
+    }
+  }
+
   const setEngineRoute = (extension: AgentExtensionManifest, engineId: string, adapter: ExtensionAdapter): void => {
     void persist({
       ...extension,
@@ -114,8 +169,6 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
   const toggleProvider = (extension: AgentExtensionManifest, providerId: string, enabled: boolean): void => {
     const current = new Map<string, boolean>()
     if (extension.providerRoutes.length === 0) {
-      // Moving away from Allow all must preserve every other provider's
-      // current enabled state rather than accidentally denying the rest.
       for (const provider of providers) current.set(provider.id, provider.enabled)
     } else {
       for (const route of extension.providerRoutes) current.set(route.providerId, route.enabled)
@@ -139,6 +192,7 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
       setExtensions(items)
       setSurface('plugin')
       setSelectedId('demo-counter-plugin')
+      setQuery('')
       setDemoResult(null)
     } catch (cause) {
       onError(errorMessage(cause))
@@ -152,7 +206,7 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
     const id = `custom-${surface}-${Date.now().toString(36)}`
     const manifest: AgentExtensionManifest = {
       id,
-      name: `New ${SURFACE_LABEL[surface].replace(/s$/, '')}`,
+      name: `New ${singularSurface(surface)}`,
       description: `Custom ${SURFACE_LABEL[surface].toLowerCase()} extension managed by ND.`,
       surface,
       version: '1.0.0',
@@ -164,6 +218,7 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
     setBusy('add')
     try {
       setExtensions(await window.ndDshExtensions.save(manifest))
+      setQuery('')
       setSelectedId(id)
     } catch (cause) {
       onError(errorMessage(cause))
@@ -222,85 +277,176 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
     }
   }
 
-  return (
-    <div className="grid min-h-0 grid-cols-[220px_minmax(0,1fr)] overflow-hidden">
-      <aside className="min-h-0 overflow-auto border-r border-border-soft bg-secondary/20 px-3 py-4">
-        <div className="mb-3 px-1">
-          <strong className="block text-xs text-strong">Agent capabilities</strong>
-          <span className="mt-1 block text-[10px] leading-4 text-faint">Configure once in ND. The compatibility router maps each capability onto ND Harness, delegated Codex, direct Codex, and future engines.</span>
-        </div>
-        <div className="space-y-1">
-          {AGENT_EXTENSION_SURFACES.map((item) => {
-            const count = extensions.filter((extension) => extension.surface === item).length
-            return (
-              <button
-                key={item}
-                className={cn('flex w-full items-center justify-between rounded-md px-2.5 py-2 text-left text-xs', surface === item ? 'bg-primary/10 text-primary' : 'text-soft hover:bg-accent')}
-                onClick={() => {
-                  setSurface(item)
-                  const first = extensions.find((extension) => extension.surface === item)
-                  setSelectedId(first?.id ?? '')
-                }}
-              >
-                <span>{SURFACE_LABEL[item]}</span>
-                <span className="text-[9px] text-faint">{count}</span>
-              </button>
-            )
-          })}
-        </div>
-        <div className="mt-4 space-y-2 border-t border-border-soft pt-3">
-          <SettingsButton disabled={Boolean(busy)} onClick={() => void addExtension()}>Add {SURFACE_LABEL[surface].replace(/s$/, '')}</SettingsButton>
-          <SettingsButton disabled={Boolean(busy)} onClick={() => void reset()}>Reset demo pack</SettingsButton>
-        </div>
-      </aside>
+  const selectSurface = (nextSurface: AgentExtensionSurface): void => {
+    setSurface(nextSurface)
+    setQuery('')
+    const first = extensions.find((extension) => extension.surface === nextSurface)
+    setSelectedId(first?.id ?? '')
+  }
 
-      <main className="min-h-0 overflow-auto px-[26px] pb-[42px] pt-4">
-        <SettingsSection title={SURFACE_LABEL[surface]}>
-          <div className="space-y-1.5">
-            {busy === 'load' ? <SettingsRow><span className={rowDesc}>Loading extension catalog…</span></SettingsRow> : null}
-            {visible.map((extension) => (
-              <button
-                key={extension.id}
-                className={cn('w-full rounded-lg border p-3 text-left transition-colors', selected?.id === extension.id ? 'border-primary/40 bg-primary/[0.04]' : 'border-border-soft bg-secondary/15 hover:bg-accent/50')}
-                onClick={() => setSelectedId(extension.id)}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <strong className="text-xs text-strong">{extension.name}</strong>
-                      {extension.builtInDemo ? <StatusChip good>Demo</StatusChip> : <StatusChip>Custom</StatusChip>}
-                      <StatusChip good={extension.enabled} warn={!extension.enabled}>{extension.enabled ? 'Enabled' : 'Off'}</StatusChip>
-                    </div>
-                    <p className="mt-1 text-[10px] leading-4 text-faint">{extension.description}</p>
-                  </div>
-                  <span className="text-[9px] text-faint">v{extension.version}</span>
-                </div>
-              </button>
-            ))}
-            {!busy && visible.length === 0 ? <SettingsRow><span className={rowDesc}>No extensions on this surface yet.</span></SettingsRow> : null}
+  const SurfaceIcon = SURFACE_ICON[surface]
+
+  return (
+    <main className="min-h-0 overflow-auto px-[26px] pb-[56px] pt-5">
+      <div className="mx-auto w-full max-w-[1040px]">
+        <header className="mb-7">
+          <h2 className="m-0 text-[26px] font-semibold tracking-[-0.02em] text-strong">Plugins</h2>
+          <p className="mt-1.5 max-w-[720px] text-[11px] leading-5 text-faint">
+            Install capabilities once in ND, then route them across ND Harness, Codex, and future coding engines without rebuilding your company setup.
+          </p>
+        </header>
+
+        <div className="mb-7 flex flex-wrap items-center justify-between gap-4">
+          <nav aria-label="Plugin capability types" className="flex min-w-0 flex-wrap items-center gap-1">
+            {SURFACE_ORDER.map((item) => {
+              const count = extensions.filter((extension) => extension.surface === item).length
+              return (
+                <button
+                  key={item}
+                  type="button"
+                  aria-label={SURFACE_LABEL[item]}
+                  aria-pressed={surface === item}
+                  className={cn(
+                    'inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-[11px] font-medium transition-colors',
+                    surface === item
+                      ? 'bg-secondary text-strong'
+                      : 'text-faint hover:bg-secondary/60 hover:text-soft',
+                  )}
+                  onClick={() => selectSurface(item)}
+                >
+                  <span>{SURFACE_TAB_LABEL[item]}</span>
+                  <span className="text-[9px] text-faint">{count}</span>
+                </button>
+              )
+            })}
+          </nav>
+
+          <div className="flex items-center gap-2">
+            <label className="relative block">
+              <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-faint" aria-hidden="true" />
+              <input
+                aria-label="Search plugins"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder={`Search ${SURFACE_TAB_LABEL[surface].toLowerCase()}...`}
+                className="h-9 w-[256px] rounded-xl border border-border bg-background pl-9 pr-3 text-[11px] text-soft outline-none transition-colors placeholder:text-faint focus:border-border-strong"
+              />
+            </label>
+            <button
+              type="button"
+              aria-label="Refresh plugin catalog"
+              title="Refresh"
+              disabled={Boolean(busy)}
+              className="grid size-9 place-items-center rounded-xl border border-border bg-background text-soft transition-colors hover:bg-accent disabled:opacity-50"
+              onClick={() => void refresh()}
+            >
+              <RefreshCw className={cn('size-3.5', busy === 'refresh' && 'animate-spin')} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              aria-label={`Add ${singularSurface(surface)}`}
+              disabled={Boolean(busy)}
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-strong px-3 text-[11px] font-semibold text-background transition-opacity hover:opacity-90 disabled:opacity-50"
+              onClick={() => void addExtension()}
+            >
+              <Plus className="size-3.5" aria-hidden="true" />
+              New
+            </button>
           </div>
-        </SettingsSection>
+        </div>
+
+        <CatalogSection title="Installed" count={installed.length}>
+          {busy === 'load' ? (
+            <div className="rounded-xl border border-border-soft px-5 py-8 text-center text-[11px] text-faint">Loading plugin catalog…</div>
+          ) : installed.length > 0 ? (
+            <div className="overflow-hidden rounded-xl border border-border-soft bg-background">
+              {installed.map((extension, index) => (
+                <ExtensionCatalogRow
+                  key={extension.id}
+                  extension={extension}
+                  selected={selected?.id === extension.id}
+                  busy={Boolean(busy)}
+                  icon={SurfaceIcon}
+                  last={index === installed.length - 1}
+                  onSelect={() => setSelectedId(extension.id)}
+                  onToggle={(enabled) => void persist({ ...extension, enabled }, 'enabled')}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-xl border border-dashed border-border px-6 py-11 text-center">
+              <SurfaceIcon className="mx-auto size-6 text-faint" aria-hidden="true" />
+              <strong className="mt-3 block text-[12px] font-semibold text-strong">No {SURFACE_TAB_LABEL[surface].toLowerCase()} installed</strong>
+              <p className="mx-auto mt-1 max-w-[460px] text-[10px] leading-5 text-faint">
+                {normalizedQuery
+                  ? 'No installed capability matches this search.'
+                  : 'Create a custom capability or use an ND built-in below. Plugins can bundle MCP tools, skills, commands, hooks, and portable instructions.'}
+              </p>
+              {!normalizedQuery ? (
+                <button
+                  type="button"
+                  className="mt-3 inline-flex h-8 items-center rounded-lg bg-strong px-3 text-[10px] font-semibold text-background"
+                  onClick={() => {
+                    const firstBuiltIn = surfaceItems.find((item) => item.builtInDemo)
+                    if (firstBuiltIn) setSelectedId(firstBuiltIn.id)
+                    document.getElementById('nd-built-in-extensions')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                  }}
+                >
+                  Browse built-ins
+                </button>
+              ) : null}
+            </div>
+          )}
+        </CatalogSection>
+
+        <div id="nd-built-in-extensions">
+          <CatalogSection title="Built-in" count={builtIn.length} className="mt-8">
+            {builtIn.length > 0 ? (
+              <div className="overflow-hidden rounded-xl border border-border-soft bg-background">
+                {builtIn.map((extension, index) => (
+                  <ExtensionCatalogRow
+                    key={extension.id}
+                    extension={extension}
+                    selected={selected?.id === extension.id}
+                    busy={Boolean(busy)}
+                    icon={SurfaceIcon}
+                    last={index === builtIn.length - 1}
+                    onSelect={() => setSelectedId(extension.id)}
+                    onToggle={(enabled) => void persist({ ...extension, enabled }, 'enabled')}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-xl border border-border-soft px-5 py-8 text-center text-[10px] text-faint">
+                {normalizedQuery ? 'No built-in capability matches this search.' : 'No built-in capability is registered for this surface.'}
+              </div>
+            )}
+          </CatalogSection>
+        </div>
 
         {selected ? (
-          <>
+          <div className="mt-9 border-t border-border-soft pt-2">
             <SettingsSection title="Configuration">
               <SettingsRow>
                 <div className={rowStack}>
-                  <strong className={rowTitle}>{selected.name}</strong>
+                  <div className="flex items-center gap-2">
+                    <strong className={rowTitle}>{selected.name}</strong>
+                    {selected.builtInDemo ? <StatusChip good>Built-in</StatusChip> : <StatusChip>Custom</StatusChip>}
+                  </div>
                   <span className={rowDesc}>{selected.description}</span>
                   <code className={rowPathText}>{selected.id}</code>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-3">
                   {!selected.builtInDemo ? <SettingsButton disabled={Boolean(busy)} onClick={() => void deleteSelected()}>Delete</SettingsButton> : null}
-                  <label className="flex items-center gap-2 text-[10px] text-soft">
-                    <input
-                      type="checkbox"
+                  <div className="flex items-center gap-2 text-[10px] text-soft">
+                    <ToggleSwitch
+                      label="Enabled for real runs"
                       checked={selected.enabled}
                       disabled={Boolean(busy)}
-                      onChange={(event) => void persist({ ...selected, enabled: event.target.checked }, 'enabled')}
+                      onChange={(enabled) => void persist({ ...selected, enabled }, 'enabled')}
                     />
-                    Enabled for real runs
-                  </label>
+                    <span>Enabled for real runs</span>
+                  </div>
                 </div>
               </SettingsRow>
 
@@ -384,8 +530,6 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
             <SettingsSection title="Coding engine routes">
               <div className="space-y-1.5">
                 {engines.map((engine) => {
-                  // Compatibility should stay visible even while the extension
-                  // itself is disabled; enablement is displayed separately.
                   const route = resolveExtensionRoute({ ...selected, enabled: true }, engine)
                   const configured = selected.engineRoutes.find((item) => item.engineId === engine.id)?.adapter ?? 'auto'
                   return (
@@ -440,11 +584,93 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
                 })}
               </div>
             </SettingsSection>
-          </>
+
+            <div className="mt-5 flex justify-end">
+              <SettingsButton disabled={Boolean(busy)} onClick={() => void reset()}>Reset demo pack</SettingsButton>
+            </div>
+          </div>
         ) : null}
-      </main>
+      </div>
+    </main>
+  )
+}
+
+function CatalogSection({ title, count, className, children }: { title: string; count: number; className?: string; children: React.ReactNode }) {
+  return (
+    <section className={className}>
+      <div className="mb-3 flex items-center gap-1.5">
+        <h3 className="m-0 text-[12px] font-semibold text-strong">{title}</h3>
+        <span className="text-[9px] text-faint">{count}</span>
+      </div>
+      {children}
+    </section>
+  )
+}
+
+function ExtensionCatalogRow({
+  extension,
+  selected,
+  busy,
+  icon: Icon,
+  last,
+  onSelect,
+  onToggle,
+}: {
+  extension: AgentExtensionManifest
+  selected: boolean
+  busy: boolean
+  icon: typeof Puzzle
+  last: boolean
+  onSelect(): void
+  onToggle(enabled: boolean): void
+}) {
+  return (
+    <div className={cn('flex min-h-[64px] items-center gap-3 px-4 transition-colors', !last && 'border-b border-border-soft', selected && 'bg-secondary/45')}>
+      <button type="button" className="flex min-w-0 flex-1 items-center gap-3 py-3 text-left" onClick={onSelect}>
+        <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-secondary text-soft">
+          <Icon className="size-4" aria-hidden="true" />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-2">
+            <strong className="truncate text-[12px] font-medium text-strong">{extension.name}</strong>
+            <span className="text-[9px] text-faint">v{extension.version}</span>
+          </span>
+          <span className="mt-0.5 block truncate text-[10px] text-faint">{extension.description}</span>
+        </span>
+      </button>
+      <ToggleSwitch
+        label={`Toggle ${extension.name}`}
+        checked={extension.enabled}
+        disabled={busy}
+        onChange={onToggle}
+      />
     </div>
   )
+}
+
+function ToggleSwitch({ label, checked, disabled, onChange }: { label: string; checked: boolean; disabled?: boolean; onChange(checked: boolean): void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-label={label}
+      aria-checked={checked}
+      disabled={disabled}
+      className={cn(
+        'relative h-[20px] w-[34px] shrink-0 rounded-full border transition-colors disabled:opacity-50',
+        checked ? 'border-primary bg-primary' : 'border-border-strong bg-secondary',
+      )}
+      onClick={() => onChange(!checked)}
+    >
+      <span className={cn('absolute top-[2px] size-[14px] rounded-full bg-background shadow-sm transition-[left]', checked ? 'left-[16px]' : 'left-[2px]')} />
+    </button>
+  )
+}
+
+function singularSurface(surface: AgentExtensionSurface): string {
+  if (surface === 'mcp') return 'MCP Server'
+  if (surface === 'memory') return 'Memory'
+  return SURFACE_LABEL[surface].replace(/s$/, '')
 }
 
 function parseRuntime(draft: DetailDraft): AgentExtensionManifest['runtime'] {
