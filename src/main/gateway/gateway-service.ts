@@ -23,7 +23,7 @@ export class NdGatewayService {
   private onChanged: ((state: NdGatewayState) => void) | undefined
 
   constructor(
-    private readonly providers: ProviderStore,
+    private readonly providers: () => ProviderStore,
     private readonly tokenSaver: TokenSaverService,
   ) {}
 
@@ -41,9 +41,6 @@ export class NdGatewayService {
         id: 'chatgpt',
         name: 'ChatGPT Desktop',
         detected: chatgptDetected,
-        // The official ChatGPT desktop client does not expose a supported
-        // custom model base-URL setting. ND deliberately refuses TLS/DNS
-        // interception, certificate installation, or credential scraping.
         supported: false,
         connected: false,
         mode: this.binding?.mode ?? 'nd-enhanced',
@@ -59,12 +56,9 @@ export class NdGatewayService {
     if (input.appId !== 'chatgpt') throw new Error('Unsupported external app')
     const providerId = input.providerId.trim()
     if (!providerId) throw new Error('Choose a model provider first')
-    const provider = this.providers.list().find((item) => item.id === providerId)
+    const provider = this.providers().list().find((item) => item.id === providerId)
     if (!provider) throw new Error('Selected model provider was not found')
     if (!provider.hasApiKey) throw new Error(`Add the ${provider.name} API key in ND before connecting an external app`)
-
-    // Keep this fail-closed until ChatGPT exposes a supported endpoint or app
-    // connector that ND can configure without machine-level interception.
     throw new Error('ChatGPT Desktop does not currently support a custom LLM base URL. ND will not weaken your machine security to force the connection.')
   }
 
@@ -75,12 +69,11 @@ export class NdGatewayService {
   }
 
   /**
-   * Internal seam for future zero-click app connectors. A connector receives
-   * only this ND-local credential; real provider credentials never leave the
-   * trusted main process.
+   * Internal seam for a supported zero-click app connector. The connector gets
+   * only an ND-local credential; real provider credentials stay in trusted main.
    */
   async prepareLocalBinding(appId: NdGatewayAppId, mode: NdGatewayMode, providerId: string): Promise<{ endpoint: string; token: string }> {
-    const provider = this.providers.list().find((item) => item.id === providerId)
+    const provider = this.providers().list().find((item) => item.id === providerId)
     if (!provider?.hasApiKey) throw new Error('A provider API key is required before starting ND Gateway')
     this.binding = { appId, mode, providerId, token: `nd_local_${randomBytes(32).toString('base64url')}` }
     await this.start()
@@ -130,7 +123,7 @@ export class NdGatewayService {
       const raw = await readBody(request)
       const body = JSON.parse(raw) as unknown
       const optimized = binding.mode === 'llm-only' ? body : optimizePayload(body, this.tokenSaver)
-      const upstream = resolveUpstream(this.providers, binding.providerId, request.url)
+      const upstream = resolveUpstream(this.providers(), binding.providerId, request.url)
       const result = await fetch(upstream.url, {
         method: 'POST',
         headers: {
@@ -142,9 +135,12 @@ export class NdGatewayService {
       })
       response.statusCode = result.status
       response.setHeader('content-type', result.headers.get('content-type') ?? 'application/json')
-      response.end(Buffer.from(await result.arrayBuffer()))
+      if (!result.body) return response.end()
+      for await (const chunk of result.body) response.write(Buffer.from(chunk))
+      response.end()
     } catch (error) {
-      json(response, 502, { error: { message: error instanceof Error ? error.message : String(error) } })
+      if (!response.headersSent) json(response, 502, { error: { message: error instanceof Error ? error.message : String(error) } })
+      else response.end()
     }
   }
 
