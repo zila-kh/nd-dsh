@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import { ND_GATEWAY_IPC, type NdGatewayDesktopApi, type NdGatewayState } from '../shared/gateway.js'
 import { TERMINAL_IPC, type TerminalDesktopApi, type TerminalExitEvent, type TerminalOutputEvent, type TerminalStateEvent } from '../shared/terminal.js'
 import { TOKEN_SAVER_IPC, type TokenSaverDesktopApi, type TokenSaverState } from '../shared/token-saver.js'
 
@@ -44,5 +45,17 @@ const tokenSaverApi: TokenSaverDesktopApi = {
   },
 }
 
+const gatewayApi: NdGatewayDesktopApi = {
+  state: () => ipcRenderer.invoke(ND_GATEWAY_IPC.state),
+  connect: (input) => ipcRenderer.invoke(ND_GATEWAY_IPC.connect, input),
+  disconnect: (appId) => ipcRenderer.invoke(ND_GATEWAY_IPC.disconnect, appId),
+  onChanged: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, value: NdGatewayState) => listener(value)
+    ipcRenderer.on(ND_GATEWAY_IPC.changedEvent, handler)
+    return () => ipcRenderer.removeListener(ND_GATEWAY_IPC.changedEvent, handler)
+  },
+}
+
 contextBridge.exposeInMainWorld('ndDshTerminal', api)
 contextBridge.exposeInMainWorld('ndDshTokenSaver', tokenSaverApi)
+contextBridge.exposeInMainWorld('ndDshGateway', gatewayApi)
