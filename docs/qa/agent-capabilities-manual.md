@@ -4,33 +4,36 @@ Branch: `feat/universal-extension-router`
 
 Use this after launching the desktop build. The goal is to verify the product behavior users see, not only the internal resolver.
 
-## 1. Surface smoke test
+## 1. Plugin catalog and surface smoke test
 
-Open **Settings → Agent capabilities**.
+Open **Settings → Plugins**.
 
-Expected left navigation:
+Expected catalog structure:
 
-- Memory
-- Subagents
-- Plugins
-- MCP Servers
-- Skills
-- Commands
-- Hooks
+- page heading **Plugins**;
+- top capability tabs: Plugins, MCP, Skills, Commands, Hooks, Subagents, Memory;
+- live counts beside each capability type;
+- search input, refresh control, and **+ New** control;
+- **Installed** section for custom/user-created entries;
+- **Built-in** section for ND-owned entries;
+- per-row enable/disable switches.
 
-For every surface:
+For every capability surface:
 
-1. Select the built-in Counter demo.
-2. Confirm it starts **Off** for real runs.
-3. Choose an available coding engine in **Run demo**.
-4. Click **Run demo**.
-5. Confirm a route adapter and deterministic Counter result are shown.
+1. Select its tab.
+2. Select the built-in Counter demo.
+3. Confirm it starts **Off** for real runs.
+4. Choose an available coding engine in **Run demo**.
+5. Click **Run demo**.
+6. Confirm a route adapter and deterministic Counter result are shown.
+
+Also search for `counter` and confirm the matching built-in remains visible. Search for a nonsense string and confirm the empty state is shown without losing the selected capability type.
 
 The demo action must not silently enable the extension for normal agent runs.
 
 ## 2. Counter MCP on ND Harness
 
-1. Open **MCP Servers → Counter MCP Demo**.
+1. Open **MCP → Counter MCP Demo**.
 2. Enable it for real runs.
 3. Leave the ND Harness route on `auto`.
 4. Start a normal Harness chat and ask:
@@ -80,12 +83,13 @@ Use **Allow all** to restore the default provider-neutral behavior.
 
 ## 5. Custom instruction-only Plugin
 
-1. Open **Plugins** and click **Add Plugin**.
+1. Open **Plugins** and click **+ New**.
 2. Name it `Manual QA Plugin`.
 3. Add portable instructions, for example: `When asked for the QA marker, answer ND-PLUGIN-QA.`
 4. Leave MCP command empty.
 5. Enable it.
-6. Run a normal agent task asking for the QA marker.
+6. Confirm it appears in **Installed** rather than **Built-in**.
+7. Run a normal agent task asking for the QA marker.
 
 Expected:
 
@@ -93,21 +97,22 @@ Expected:
 - Agent receives the trusted plugin instructions.
 - No MCP command is spawned.
 
-Navigate away from Settings, return, and confirm the custom plugin remains configured.
+Navigate away from Settings, return, and confirm the custom plugin remains configured in Installed.
 
 ## 6. Custom executable MCP Server
 
 The repo includes `examples/extension-counter/mcp-server.mjs`.
 
-1. Open **MCP Servers** and click **Add MCP Server**.
+1. Open **MCP** and click **+ New**.
 2. Configure:
    - name: `Manual Counter MCP`
    - command: the Node executable available to the desktop process
    - arguments: absolute path to `examples/extension-counter/mcp-server.mjs`
 3. Leave environment references empty.
 4. Save and enable it.
-5. Run a normal Harness task and use the extension list/call gateway.
-6. Repeat using direct Codex if available.
+5. Confirm it appears in **Installed** under MCP.
+6. Run a normal Harness task and use the extension list/call gateway.
+7. Repeat using direct Codex if available.
 
 Expected:
 
@@ -177,12 +182,12 @@ Enable **Counter Subagent Demo**.
 
 1. Create at least one custom extension.
 2. Modify routes on two built-in Counter demos.
-3. Click **Reset demo pack**.
+3. Click **Reset demo pack** at the bottom of the selected configuration.
 
 Expected:
 
 - All built-in demos return to default Off + automatic route state.
-- Custom extensions remain.
+- Custom extensions remain in Installed.
 - Custom extension configuration is not replaced by demo reset.
 
 ## 12. Restart persistence
@@ -199,7 +204,8 @@ Expected: all saved choices survive the restart from trusted main-process persis
 A beta pass requires:
 
 - no renderer crash;
-- all seven surfaces visible;
+- all seven capability surfaces visible in the Plugins catalog;
+- search, Installed, Built-in, refresh, + New, and row toggles work;
 - all seven Counter demos executable from the UI;
 - real Harness MCP gateway route works for enabled MCP/plugin tools;
 - direct Codex portable proxy route works when Codex is available;
