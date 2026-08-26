@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { capabilitySubTabFromLocation, generalSubTabFromLocation, settingsHash, settingsTabFromLocation } from '../src/renderer/src/lib/settings-route.js'
 
 describe('settings route', () => {
-  it('builds an addressable model settings tab', () => {
+  it('builds addressable model and extension settings tabs', () => {
     expect(settingsHash('models')).toBe('#/settings?tab=model')
+    expect(settingsHash('extensions')).toBe('#/settings?tab=extensions')
     expect(settingsHash('general', 'workspace')).toBe('#/settings?tab=general&subtab=workspace')
     expect(settingsHash('capabilities', 'memory')).toBe('#/settings?tab=capabilities&subtab=memory')
   })
@@ -11,6 +12,7 @@ describe('settings route', () => {
   it('reads settings tabs from the hash query', () => {
     expect(settingsTabFromLocation({ hash: '#/settings?tab=model', search: '' })).toBe('models')
     expect(settingsTabFromLocation({ hash: '#/settings?tab=capabilities', search: '' })).toBe('capabilities')
+    expect(settingsTabFromLocation({ hash: '#/settings?tab=extensions', search: '' })).toBe('extensions')
     expect(settingsTabFromLocation({ hash: '#/settings?tab=workspace', search: '' })).toBe('general')
   })
 
@@ -31,6 +33,8 @@ describe('settings route', () => {
 
   it('accepts plural aliases and a regular query string', () => {
     expect(settingsTabFromLocation({ hash: '#/settings?tab=models', search: '' })).toBe('models')
+    expect(settingsTabFromLocation({ hash: '#/settings?tab=plugins', search: '' })).toBe('extensions')
+    expect(settingsTabFromLocation({ hash: '#/settings?tab=plugin', search: '' })).toBe('extensions')
     expect(settingsTabFromLocation({ hash: '#/settings', search: '?tab=engine' })).toBe('engines')
   })
 

@@ -4,6 +4,7 @@ import { MonitorIcon, MoonIcon, SunIcon } from './Icons'
 import { BridgePill } from './bridge-pill'
 import { CapabilitySettings } from './CapabilitySettings'
 import { EngineSettings } from './EngineSettings'
+import { ExtensionSettings } from './ExtensionSettings'
 import { ModelSettings } from './ModelSettings'
 import { PresetSettings } from './PresetSettings'
 import {
@@ -46,6 +47,7 @@ const TABS: { id: SettingsTab; label: string }[] = [
   { id: 'appearance', label: 'Appearance' },
   { id: 'models', label: 'Models' },
   { id: 'capabilities', label: 'Capabilities' },
+  { id: 'extensions', label: 'Plugins' },
   { id: 'engines', label: 'Coding engines' },
   { id: 'presets', label: 'Agent presets' },
 ]
@@ -162,6 +164,8 @@ export function SettingsPane({
             {...(capabilitySubTab !== undefined ? { subTab: capabilitySubTab } : {})}
             {...(onSelectCapabilitySubTab !== undefined ? { onSelectSubTab: onSelectCapabilitySubTab } : {})}
           />
+        ) : tab === 'extensions' ? (
+          <ExtensionSettings onError={onError} />
         ) : tab === 'engines' ? (
           <EngineSettings onError={onError} />
         ) : tab === 'presets' ? (

@@ -61,15 +61,18 @@ async function boot(): Promise<void> {
   if (
     import.meta.env.DEV
     && (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname === '[::1]')
-    && (typeof window.ndDsh === 'undefined' || typeof window.ndDshOrganization === 'undefined')
+    && (typeof window.ndDsh === 'undefined' || typeof window.ndDshOrganization === 'undefined' || typeof window.ndDshExtensions === 'undefined')
   ) {
-    // Vite serves this module only from its development source graph. The
-    // ignored runtime URL keeps preview fixtures out of production bundles.
+    // Vite serves these modules only from its development source graph. The
+    // ignored runtime URLs keep preview fixtures out of production bundles.
     const previewModuleUrl = '/src/ui-preview.ts'
     const { installDevelopmentUiPreview } = await import(/* @vite-ignore */ previewModuleUrl) as typeof import('./ui-preview')
     installDevelopmentUiPreview()
+    const extensionPreviewModuleUrl = '/src/ui-preview-extensions.ts'
+    const { installDevelopmentExtensionPreview } = await import(/* @vite-ignore */ extensionPreviewModuleUrl) as typeof import('./ui-preview-extensions')
+    installDevelopmentExtensionPreview()
   }
-  if (typeof window.ndDsh === 'undefined' || typeof window.ndDshOrganization === 'undefined') {
+  if (typeof window.ndDsh === 'undefined' || typeof window.ndDshOrganization === 'undefined' || typeof window.ndDshExtensions === 'undefined') {
     root.render(<RuntimeUnavailable />)
     return
   }
