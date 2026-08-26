@@ -77,7 +77,11 @@ export class RtkManager {
       // absolute executable path, so external Codex works with zero PATH edits.
       this.writeManagedCodexGuide(binary)
       backup.enabled = true
-      for (const entry of backup.entries) entry.managedHash = hashFile(entry.path)
+      for (const entry of backup.entries) {
+        const managedHash = hashFile(entry.path)
+        if (managedHash) entry.managedHash = managedHash
+        else delete entry.managedHash
+      }
       this.writeBackup(backup)
     } catch (error) {
       this.restoreCodexBackup(backup)
