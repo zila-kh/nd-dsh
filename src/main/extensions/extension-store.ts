@@ -132,11 +132,11 @@ export class ExtensionStore {
   }
 
   private async persistAndEmit(): Promise<void> {
-    await this.save()
+    await this.saveToDisk()
     this.onChanged?.(await this.list())
   }
 
-  private async save(): Promise<void> {
+  private async saveToDisk(): Promise<void> {
     const snapshot = structuredClone(this.value)
     const serialized = `${JSON.stringify(snapshot, null, 2)}\n`
     const write = this.saveChain.catch(() => undefined).then(async () => {
