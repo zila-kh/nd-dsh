@@ -32,6 +32,13 @@ describe('ND Gateway', () => {
     expect(await authorized.json()).toEqual({ ok: true })
   })
 
+  it('requires a real app connector for Full ND mode', async () => {
+    const service = new NdGatewayService(() => provider(true), tokenSaver())
+    closers.push(() => service.close())
+    await expect(service.prepareLocalBinding('chatgpt', 'full-nd', 'deepseek')).rejects.toThrow(/supported ND app connector/i)
+    expect(service.state().running).toBe(false)
+  })
+
   it('does not pretend ChatGPT Desktop supports a custom model endpoint', () => {
     const service = new NdGatewayService(() => provider(true), tokenSaver())
     closers.push(() => service.close())
