@@ -220,15 +220,15 @@ export function resolveExtensionRoute(
         ? result(extension, engine.id, provider?.id, 'mcp', true, 'ND projects this extension into the engine MCP surface.')
         : result(extension, engine.id, provider?.id, 'nd-proxy', engine.capabilities.shell, engine.capabilities.shell ? 'ND exposes the MCP tools through its portable shell proxy.' : 'This engine has neither MCP nor a shell proxy path.')
     case 'skill':
-      return engine.capabilities.skills
-        ? result(extension, engine.id, provider?.id, 'native', true, 'Engine exposes skills natively.')
-        : result(extension, engine.id, provider?.id, 'skill-bridge', true, 'ND translates the skill into engine context.')
+      return result(extension, engine.id, provider?.id, 'skill-bridge', true, 'ND delivers the portable skill contract through trusted engine context.')
     case 'hook':
-      return result(extension, engine.id, provider?.id, isHarnessEngine(engine.id) ? 'cordis' : 'hook-bridge', true, 'ND normalizes lifecycle hooks.')
+      return result(extension, engine.id, provider?.id, 'hook-bridge', true, 'ND delivers portable lifecycle hook policy through trusted engine context.')
     case 'command':
-      return result(extension, engine.id, provider?.id, isHarnessEngine(engine.id) ? 'native' : 'prompt-injection', true, 'ND translates portable commands per engine.')
+      return result(extension, engine.id, provider?.id, 'prompt-injection', true, 'ND translates portable commands through trusted engine context.')
     case 'subagent':
-      return result(extension, engine.id, provider?.id, isHarnessEngine(engine.id) ? 'native' : 'nd-proxy', engine.capabilities.shell, isHarnessEngine(engine.id) ? 'Harness exposes native subagent delegation.' : engine.capabilities.shell ? 'ND orchestrates delegation around this engine.' : 'This engine has no delegation proxy path.')
+      return isHarnessEngine(engine.id)
+        ? result(extension, engine.id, provider?.id, 'native', true, 'Harness exposes native subagent delegation.')
+        : result(extension, engine.id, provider?.id, 'prompt-injection', true, 'ND preserves portable delegation policy without claiming a native subagent API.')
     case 'memory':
       return result(extension, engine.id, provider?.id, 'prompt-injection', true, 'ND injects durable memory at the engine boundary.')
     case 'plugin':
@@ -245,7 +245,7 @@ export function appendExtensionContext(prompt: string, bindings: ExtensionRuntim
   if (active.length === 0) return prompt
   const rows = active.map(({ extension, route }) => {
     const instructions = extension.instructions?.trim()
-    const transport = toolTransportHint(extension, route.adapter)
+    const transport = toolTransportHint(extension, route.adapter, route.engineId)
     return [
       `- ${extension.name} [${extension.surface}] via ${route.adapter}`,
       instructions ? `  ${instructions}` : undefined,
@@ -300,27 +300,33 @@ function explicitAdapterSupported(
 ): boolean {
   const surface = extension.surface
   if (adapter === 'mcp') return hasExecutableToolRuntime(extension) && engine.capabilities.mcp && (surface === 'mcp' || surface === 'plugin')
-  if (adapter === 'cordis') return isHarnessEngine(engine.id) && (surface === 'plugin' || surface === 'hook' || surface === 'command')
+  // Cordis is reserved in the manifest vocabulary, but ND has no generic
+  // dynamic projector yet. Keep it fail-closed rather than pretending a
+  // product extension was mounted into the Harness plugin graph.
+  if (adapter === 'cordis') return false
   if (adapter === 'skill-bridge') return surface === 'skill'
   if (adapter === 'hook-bridge') return surface === 'hook'
-  if (adapter === 'prompt-injection') return surface === 'memory' || surface === 'skill' || surface === 'command' || surface === 'plugin'
-  if (adapter === 'nd-proxy') return engine.capabilities.shell && ((surface === 'mcp' || surface === 'plugin') ? hasExecutableToolRuntime(extension) : surface === 'subagent' || surface === 'hook')
+  if (adapter === 'prompt-injection') return surface === 'memory' || surface === 'skill' || surface === 'command' || surface === 'plugin' || surface === 'subagent'
+  if (adapter === 'nd-proxy') return engine.capabilities.shell && (surface === 'mcp' || surface === 'plugin') && hasExecutableToolRuntime(extension)
   if (adapter === 'native') {
     if (surface === 'mcp') return hasExecutableToolRuntime(extension) && engine.capabilities.mcp
-    if (surface === 'skill') return engine.capabilities.skills
-    if (surface === 'subagent' || surface === 'command') return isHarnessEngine(engine.id)
+    if (surface === 'subagent') return isHarnessEngine(engine.id)
     return false
   }
   return false
 }
 
-function toolTransportHint(extension: AgentExtensionManifest, adapter: Exclude<ExtensionAdapter, 'auto'>): string | undefined {
+function toolTransportHint(
+  extension: AgentExtensionManifest,
+  adapter: Exclude<ExtensionAdapter, 'auto'>,
+  engineId: string,
+): string | undefined {
   if (!hasExecutableToolRuntime(extension)) return undefined
   if (adapter === 'mcp') {
     return `Use mcp__nd-extensions__nd_extension_list with extensionId=${JSON.stringify(extension.id)} to discover the routed tool names, then mcp__nd-extensions__nd_extension_call with that extensionId, toolName, and arguments. The stable ND MCP gateway enforces the live extension catalog on every call.`
   }
   if (adapter === 'nd-proxy') {
-    return `Use the ND extension proxy through the shell: "$ND_EXTENSION_NODE" "$ND_EXTENSION_PROXY" list ${JSON.stringify(extension.id)} to discover tools, then "$ND_EXTENSION_NODE" "$ND_EXTENSION_PROXY" call ${JSON.stringify(extension.id)} <tool-name> '<json-arguments>'.`
+    return `Use the ND extension proxy through the shell: "$ND_EXTENSION_NODE" "$ND_EXTENSION_PROXY" list ${JSON.stringify(extension.id)} ${JSON.stringify(engineId)} to discover tools, then "$ND_EXTENSION_NODE" "$ND_EXTENSION_PROXY" call ${JSON.stringify(extension.id)} <tool-name> '<json-arguments>' ${JSON.stringify(engineId)}.`
   }
   return undefined
 }
