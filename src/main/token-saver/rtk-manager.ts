@@ -65,11 +65,18 @@ export class RtkManager {
       supported: asset !== undefined,
       installed,
       ...(installed ? { version: RTK_VERSION } : {}),
-      codexManaged: backup?.enabled === true,
+      // A backup marker alone is not enough to call the integration healthy.
+      // Older beta builds had no install manifest, and a helper may have been
+      // removed or modified since enablement. Reporting unmanaged here makes
+      // TokenSaverService.initialize() repair the opted-in integration through
+      // enableCodex(), which re-verifies/reinstalls before executing anything.
+      codexManaged: backup?.enabled === true && installed,
       detail: asset
         ? installed
           ? `External helper ${RTK_VERSION} is managed and integrity-checked by ND.`
-          : 'External helper installs automatically when an external app is enabled.'
+          : backup?.enabled
+            ? 'External helper integrity needs repair; ND will reinstall the pinned verified copy automatically.'
+            : 'External helper installs automatically when an external app is enabled.'
         : 'External app optimization is not available for this operating system/CPU yet.',
     }
   }
