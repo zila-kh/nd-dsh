@@ -64,7 +64,7 @@ const EMPTY_INSTALLER: TokenSaverInstallerState = {
 export class TokenSaverService {
   private settingsValue = defaultTokenSaverSettings()
   private countersValue = emptyTokenSaverCounters()
-  private onChanged?: (state: TokenSaverState) => void
+  private onChanged: ((state: TokenSaverState) => void) | undefined
   private readonly recoveryDir: string
 
   constructor(
