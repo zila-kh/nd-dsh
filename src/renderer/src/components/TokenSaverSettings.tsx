@@ -178,7 +178,7 @@ export function TokenSaverSettings({ onError }: TokenSaverSettingsProps) {
           <SettingsRow>
             <div className={rowStack}>
               <strong className={rowTitle}>Savings</strong>
-              <span className={rowDesc}>Estimated from content ND avoided sending. Raw prompt content is never stored in these counters.</span>
+              <span className={rowDesc}>These counters show ND-local avoided content. Harness history/tool-result compaction follows the same switch but is not estimated into this number yet.</span>
               {demoNotice ? <span className={rowPathText}>{demoNotice}</span> : null}
             </div>
             <div className="flex shrink-0 items-center gap-2">

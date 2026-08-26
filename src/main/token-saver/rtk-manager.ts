@@ -1,6 +1,6 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import process from 'node:process'
@@ -14,6 +14,14 @@ interface RtkAsset {
   name: string
   sha256: string
   archive: 'tar.gz' | 'zip'
+}
+
+interface RtkInstallManifest {
+  version: 1
+  rtkVersion: string
+  asset: string
+  archiveSha256: string
+  binarySha256: string
 }
 
 interface ConfigBackupEntry {
@@ -33,23 +41,25 @@ interface CodexBackupState {
  * App-owned installer for the optional external-app optimizer.
  *
  * ND downloads a pinned RTK release directly from the upstream GitHub release,
- * validates the published SHA-256 digest, disables RTK telemetry, and invokes
- * its idempotent global Codex setup/uninstall commands. The user never needs a shell.
+ * validates the published SHA-256 digest, disables RTK telemetry, and manages
+ * the Codex integration surface itself. The user never needs a shell.
  */
 export class RtkManager {
   private readonly installDir: string
   private readonly downloadDir: string
   private readonly backupPath: string
+  private readonly manifestPath: string
 
   constructor(private readonly rootDir: string) {
     this.installDir = join(rootDir, 'rtk', `v${RTK_VERSION}`)
     this.downloadDir = join(rootDir, 'downloads')
     this.backupPath = join(rootDir, 'backups', 'codex.json')
+    this.manifestPath = join(this.installDir, 'nd-install.json')
   }
 
   state(): TokenSaverInstallerState {
     const asset = platformAsset()
-    const installed = existsSync(this.binaryPath())
+    const installed = asset ? this.hasValidInstall(asset) : false
     const backup = this.readBackup()
     return {
       supported: asset !== undefined,
@@ -58,7 +68,7 @@ export class RtkManager {
       codexManaged: backup?.enabled === true,
       detail: asset
         ? installed
-          ? `External helper ${RTK_VERSION} is managed by ND.`
+          ? `External helper ${RTK_VERSION} is managed and integrity-checked by ND.`
           : 'External helper installs automatically when an external app is enabled.'
         : 'External app optimization is not available for this operating system/CPU yet.',
     }
@@ -69,8 +79,8 @@ export class RtkManager {
     let backup = this.readBackup()
     if (!backup?.enabled) backup = this.captureCodexBackup()
     try {
-      // RTK's Codex mode manages ~/.codex/AGENTS.md + RTK.md. It is already
-      // non-interactive; --auto-patch is intentionally invalid for --codex.
+      // RTK's Codex mode creates the initial global AGENTS.md/RTK.md wiring.
+      // --auto-patch is intentionally invalid for --codex.
       await this.runRtk(binary, ['init', '-g', '--codex'])
       // External Codex will not inherit ND's private install directory in PATH.
       // Replace RTK.md with an ND-owned guide that points Codex at the verified
@@ -92,27 +102,26 @@ export class RtkManager {
   async disableCodex(): Promise<void> {
     const backup = this.readBackup()
     if (!backup?.enabled) return
-    let uninstallError: unknown
-    const binary = this.binaryPath()
-    if (existsSync(binary)) {
-      try {
-        // RTK requires global scope for Codex uninstall.
-        await this.runRtk(binary, ['init', '-g', '--codex', '--uninstall'])
-      } catch (error) {
-        uninstallError = error
-      }
-    }
+    // Restore from ND's exact before-state instead of letting a third-party
+    // uninstall command delete a user-edited RTK.md before ND can inspect it.
+    // restoreCodexBackup only rewrites files that are unchanged from the
+    // managed hash (or already missing), preserving edits made while enabled.
     this.restoreCodexBackup(backup)
     try { rmSync(this.backupPath, { force: true }) } catch { /* best effort */ }
-    if (uninstallError) throw uninstallError
   }
 
   private async ensureInstalled(): Promise<string> {
     const asset = platformAsset()
     if (!asset) throw new Error('External app optimization is not supported on this operating system/CPU yet')
     const canonical = this.binaryPath()
-    if (existsSync(canonical)) return canonical
+    if (this.hasValidInstall(asset)) {
+      await this.verifyExecutable(canonical)
+      return canonical
+    }
 
+    // Any old, incomplete, or locally modified helper is discarded and
+    // rebuilt from the pinned release. Never execute an unverifiable reuse.
+    await rm(this.installDir, { recursive: true, force: true })
     await mkdir(this.downloadDir, { recursive: true })
     await mkdir(this.installDir, { recursive: true })
     const archivePath = join(this.downloadDir, asset.name)
@@ -123,8 +132,6 @@ export class RtkManager {
     if (digest !== asset.sha256) throw new Error('External optimization helper failed integrity verification')
     await writeFile(archivePath, bytes)
 
-    await rm(this.installDir, { recursive: true, force: true })
-    await mkdir(this.installDir, { recursive: true })
     if (asset.archive === 'zip') {
       await runProcess('powershell.exe', [
         '-NoProfile',
@@ -145,8 +152,47 @@ export class RtkManager {
       const { chmod } = await import('node:fs/promises')
       await chmod(canonical, 0o755)
     }
-    await this.runRtk(canonical, ['--version'])
+    await this.verifyExecutable(canonical)
+    const binarySha256 = hashFile(canonical)
+    if (!binarySha256) throw new Error('Could not verify the installed external optimization helper')
+    this.writeInstallManifest({
+      version: 1,
+      rtkVersion: RTK_VERSION,
+      asset: asset.name,
+      archiveSha256: asset.sha256,
+      binarySha256,
+    })
     return canonical
+  }
+
+  private hasValidInstall(asset: RtkAsset): boolean {
+    const binary = this.binaryPath()
+    if (!existsSync(binary)) return false
+    try {
+      const manifest = JSON.parse(readFileSync(this.manifestPath, 'utf8')) as RtkInstallManifest
+      if (
+        manifest?.version !== 1
+        || manifest.rtkVersion !== RTK_VERSION
+        || manifest.asset !== asset.name
+        || manifest.archiveSha256 !== asset.sha256
+        || typeof manifest.binarySha256 !== 'string'
+      ) return false
+      return hashFile(binary) === manifest.binarySha256
+    } catch {
+      return false
+    }
+  }
+
+  private writeInstallManifest(manifest: RtkInstallManifest): void {
+    writeJsonAtomicSync(this.manifestPath, manifest)
+  }
+
+  private async verifyExecutable(binary: string): Promise<void> {
+    const result = await this.runRtk(binary, ['--version'])
+    const output = `${result.stdout}\n${result.stderr}`
+    if (!output.includes(RTK_VERSION)) {
+      throw new Error(`External optimization helper version mismatch; expected ${RTK_VERSION}`)
+    }
   }
 
   private binaryPath(): string {
@@ -223,8 +269,7 @@ export class RtkManager {
   }
 
   private writeBackup(state: CodexBackupState): void {
-    mkdirSync(dirname(this.backupPath), { recursive: true })
-    writeFileSync(this.backupPath, `${JSON.stringify(state, null, 2)}\n`, 'utf8')
+    writeJsonAtomicSync(this.backupPath, state)
   }
 }
 
@@ -265,6 +310,18 @@ function hashFile(path: string): string | undefined {
     return createHash('sha256').update(readFileSync(path)).digest('hex')
   } catch {
     return undefined
+  }
+}
+
+function writeJsonAtomicSync(path: string, value: unknown): void {
+  mkdirSync(dirname(path), { recursive: true })
+  const temp = `${path}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
+    renameSync(temp, path)
+  } catch (error) {
+    try { rmSync(temp, { force: true }) } catch { /* best effort */ }
+    throw error
   }
 }
 

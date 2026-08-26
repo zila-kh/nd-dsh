@@ -20,7 +20,11 @@ Pinned archive SHA-256 digests:
 | Linux x64 | `rtk-x86_64-unknown-linux-musl.tar.gz` | `34975116da11e09e502501daf758143e0b22ed3a42a10eb67fb693a6270d9e36` |
 | Windows x64 | `rtk-x86_64-pc-windows-msvc.zip` | `f0ec18963581657173bd6a51f5ba012b093823f844db749fec218581af30a568` |
 
-ND verifies the selected digest before extracting/executing the helper.
+These values were rechecked against the upstream GitHub `v0.42.4` release metadata during the pre-beta verification pass.
+
+ND verifies the selected archive digest before extracting/executing the helper. After extraction ND also verifies `rtk --version`, stores the extracted executable SHA-256 in an atomic install manifest, and rechecks that binary hash before every later reuse. A missing/corrupt manifest or changed binary is not trusted; ND removes that install and rebuilds it from the pinned verified release.
+
+Codex integration backup metadata is written atomically. On disable ND restores the exact before-state only while a file is still unchanged from ND's managed hash; user edits made after enablement are preserved rather than overwritten.
 
 ## OmniRoute / 9Router inspiration
 

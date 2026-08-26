@@ -17,6 +17,7 @@ import { formatExternalElementContext, type ExternalElementStage } from '../capt
 import { GatewayClient, pickFreePort } from '../dsh/gateway-client.js'
 import type { ProviderStore } from '../providers.js'
 import type { SessionArchiveStore } from '../sessions/session-archive-store.js'
+import { tokenSaverRuntime } from '../token-saver/token-saver-runtime.js'
 import { ensureProfilePluginLinks } from './profile-plugin-links.js'
 import type { WorkspaceService } from '../workspace/workspace-service.js'
 
@@ -46,6 +47,7 @@ export class HarnessService {
   private stopping = false
   private canceledSessions = new Set<string>()
   private providerRevisionAtStart = -1
+  private tokenSaverEnabledAtStart = true
   private onStatusChanged?: (status: HarnessStatus) => void
   private onEvent?: (frame: DshEventFrame) => void
   private onGatewayReady?: (url: string) => void
@@ -91,8 +93,9 @@ export class HarnessService {
     if (!cleaned) throw new Error('Prompt cannot be empty')
     if (cleaned.length > 100_000) throw new Error('Prompt exceeds the 100,000 character limit')
 
-    // Provider edits are staged in ND settings and take effect on the next
-    // prompt/session. Durable Harness sessions survive this runtime restart.
+    // Provider and Token Saver policy edits are staged in ND settings and take
+    // effect on the next prompt/session. Durable Harness sessions survive the
+    // transparent runtime restart.
     const gateway = await this.ensureStarted(true)
     const sessionId = options?.sessionId?.trim() || this.activeSessionId || await this.createSession()
     this.activeSessionId = sessionId
@@ -174,7 +177,9 @@ export class HarnessService {
 
   /** Whitelisted gateway call for read-oriented UI needs (sessions, models, presets…). */
   async gatewayRpc(method: string, payload?: unknown): Promise<GatewayRpcResult> {
-    let started = await this.ensureStarted()
+    // Creating a session is a launch-policy boundary just like run(): if the
+    // Token Saver switch changed, rebuild the runtime before that new session.
+    let started = await this.ensureStarted(method === 'session.create')
     // Provider edits must reach open model pickers without waiting for the
     // next prompt. Restarting mid-turn would kill it, so the fresh catalog
     // only applies while the runtime is idle; running sessions refresh on
@@ -295,8 +300,16 @@ export class HarnessService {
     this.updateStatus('stopped')
   }
 
-  private async ensureStarted(refreshProviders = false): Promise<GatewayClient> {
-    if (refreshProviders && this.gateway && this.providerRevisionAtStart !== this.providers.revision()) {
+  private async ensureStarted(refreshLaunchPolicy = false): Promise<GatewayClient> {
+    const tokenSaverEnabled = this.tokenSaverEnabled()
+    if (
+      refreshLaunchPolicy
+      && this.gateway
+      && (
+        this.providerRevisionAtStart !== this.providers.revision()
+        || this.tokenSaverEnabledAtStart !== tokenSaverEnabled
+      )
+    ) {
       await this.close()
     }
     if (this.gateway) return this.gateway
@@ -305,6 +318,11 @@ export class HarnessService {
       this.startPromise = undefined
     })
     return this.startPromise
+  }
+
+  private tokenSaverEnabled(): boolean {
+    const settings = tokenSaverRuntime()?.settings()
+    return settings ? settings.ndEnabled && settings.mode !== 'off' : true
   }
 
   /**
@@ -358,6 +376,7 @@ export class HarnessService {
     await fs.cp(presetsDir, join(dshHome, '.agent-presets'), { recursive: true, force: true })
 
     const providerRevision = this.providers.revision()
+    const tokenSaverEnabled = this.tokenSaverEnabled()
     const providerRuntime = this.providers.runtimeConfig()
     const port = await pickFreePort()
     const environment: NodeJS.ProcessEnv = {
@@ -366,6 +385,7 @@ export class HarnessService {
       ND_DSH_LLM_PROVIDERS_JSON: JSON.stringify(providerRuntime.profiles),
       ...(providerRuntime.defaultProvider ? { ND_DSH_DEFAULT_PROVIDER: providerRuntime.defaultProvider } : {}),
       ...(providerRuntime.defaultModel ? { ND_DSH_DEFAULT_MODEL: providerRuntime.defaultModel } : {}),
+      ND_DSH_TOKEN_SAVER_ENABLED: tokenSaverEnabled ? '1' : '0',
       ...this.browser.agentBrowserEnvironment(),
       ND_DSH_EXTERNAL_INSPECT_ENTRY: join(projectRoot(), 'scripts', 'external-inspect-mcp.mjs'),
       DSH_HOME: dshHome,
@@ -423,6 +443,7 @@ export class HarnessService {
     this.gateway = gateway
     this.baseUrl = baseUrl
     this.providerRevisionAtStart = providerRevision
+    this.tokenSaverEnabledAtStart = tokenSaverEnabled
     this.updateStatus('ready')
     this.onGatewayReady?.(baseUrl)
     return gateway

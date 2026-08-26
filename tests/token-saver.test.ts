@@ -95,6 +95,16 @@ describe('TokenSaverService', () => {
     expect(saver.state().settings.externalEnabled).toBe(false)
   })
 
+  it('treats mode Off as disabled even if the master flag is still true', async () => {
+    const saver = service()
+    await saver.updateSettings({ ...saver.settings(), ndEnabled: true, mode: 'off' })
+    const input = Array.from({ length: 250 }, () => 'same line').join('\n')
+    const result = saver.optimize(input, { kind: 'tool-output' })
+    expect(result.changed).toBe(false)
+    expect(result.text).toBe(input)
+    expect(result.recoveryRef).toBeUndefined()
+  })
+
   it('persists external opt-in separately from ND saving', async () => {
     const root = mkdtempSync(join(tmpdir(), 'nd-token-saver-'))
     const path = join(root, 'token-saver.json')
