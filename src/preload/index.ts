@@ -1,5 +1,6 @@
 import './design.js'
 import './organization.js'
+import './terminal.js'
 import { contextBridge, ipcRenderer } from 'electron'
 import { CAPABILITIES_IPC, type CapabilityAssignmentSnapshot, type CapabilityKind, type CapabilitySubjectType } from '../shared/capabilities.js'
 import { IPC, type DesktopApi, type ModelProvider } from '../shared/contracts.js'
