@@ -21,7 +21,7 @@ test.afterAll(async () => {
 test('plugin catalog settings expose search, installed, built-in, and all seven surfaces', async () => {
   const { page } = launched
   await page.getByRole('navigation', { name: 'ND-DSH navigation' }).getByTitle('Settings').click()
-  await page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab', { name: 'Agent capabilities', exact: true }).click()
+  await page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab', { name: 'Plugins', exact: true }).click()
 
   await expect(page.getByRole('heading', { name: 'Plugins', exact: true })).toBeVisible()
   await expect(page.getByLabel('Search plugins')).toBeVisible()
@@ -86,7 +86,7 @@ test('custom extension settings persist through the trusted desktop bridge', asy
   // Navigate away and back so ExtensionSettings remounts and reloads the
   // catalog through the trusted main-process bridge instead of React state.
   await page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab', { name: 'General', exact: true }).click()
-  await page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab', { name: 'Agent capabilities', exact: true }).click()
+  await page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab', { name: 'Plugins', exact: true }).click()
   await page.getByRole('button', { name: 'Plugins', exact: true }).click()
   await expect(page.getByText('E2E Routed Plugin', { exact: true })).toBeVisible()
   expect(rendererErrors).toEqual([])
