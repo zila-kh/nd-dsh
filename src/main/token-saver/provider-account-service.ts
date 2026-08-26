@@ -68,7 +68,7 @@ export class ProviderAccountService {
   private readonly secretsPath: string
   private metadata: AccountMetadataFile = { version: 1 }
   private antigravityTokens: AntigravityTokens | undefined
-  private onChanged?: () => void
+  private onChanged: (() => void) | undefined
 
   constructor(rootDir: string) {
     this.metadataPath = join(rootDir, 'provider-accounts.json')
