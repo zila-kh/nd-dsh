@@ -10,6 +10,7 @@ import {
   rowTitle,
   rowValueText,
 } from './settings-primitives'
+import { GatewaySettings } from './GatewaySettings'
 import { TokenSaverSettings } from './TokenSaverSettings'
 
 interface EngineSettingsProps {
@@ -36,6 +37,7 @@ export function EngineSettings({ onError }: EngineSettingsProps) {
   return (
     <div className="min-h-0 overflow-auto px-[26px] pb-[42px] pt-1.5">
       <TokenSaverSettings onError={onError} />
+      <GatewaySettings onError={onError} />
 
       <SettingsSection title="Coding engines">
         <div className="space-y-1.5">

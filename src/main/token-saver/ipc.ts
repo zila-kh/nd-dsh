@@ -1,6 +1,8 @@
 import { app, ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
 import { join } from 'node:path'
 import { TOKEN_SAVER_IPC, type TokenSaverAccountId } from '../../shared/token-saver.js'
+import { registerNdGatewayIpc } from '../gateway/ipc.js'
+import { ProviderStore } from '../providers.js'
 import { ProviderAccountService } from './provider-account-service.js'
 import { RtkManager } from './rtk-manager.js'
 import { TokenSaverService } from './token-saver-service.js'
@@ -14,6 +16,7 @@ export function registerTokenSaverIpc(window: BrowserWindow): () => void {
   const accounts = new ProviderAccountService(root)
   const external = new RtkManager(root)
   const service = new TokenSaverService(join(root, 'state.json'), { accounts, external })
+  const disposeGatewayIpc = registerNdGatewayIpc(window, () => new ProviderStore(), service)
   setTokenSaverRuntime(service)
 
   const handle = (channel: string, listener: Handler): void => {
@@ -54,9 +57,6 @@ export function registerTokenSaverIpc(window: BrowserWindow): () => void {
   handle(TOKEN_SAVER_IPC.disconnectAccount, (_event, id) => service.disconnectAccount(accountId(id)))
   handle(TOKEN_SAVER_IPC.refreshAccounts, () => service.refreshAccounts())
 
-  // Repair/reapply only a previously opted-in external integration. This runs
-  // after IPC is live so the renderer can still open even if a download or
-  // external configuration step fails.
   void service.initialize().catch((error) => {
     console.warn('Token Saver external integration reconciliation failed:', error instanceof Error ? error.message : String(error))
   })
@@ -65,6 +65,7 @@ export function registerTokenSaverIpc(window: BrowserWindow): () => void {
     for (const channel of channels) ipcMain.removeHandler(channel)
     service.setOnChanged(undefined)
     accounts.setOnChanged(undefined)
+    disposeGatewayIpc()
     setTokenSaverRuntime(undefined)
   }
 }
