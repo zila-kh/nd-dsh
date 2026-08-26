@@ -25,8 +25,8 @@ test('plugin catalog settings expose search, installed, built-in, and all seven 
 
   await expect(page.getByRole('heading', { name: 'Plugins', exact: true })).toBeVisible()
   await expect(page.getByLabel('Search plugins')).toBeVisible()
-  await expect(page.getByText('Installed', { exact: true })).toBeVisible()
-  await expect(page.getByText('Built-in', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Installed', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Built-in', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Add Plugin', exact: true })).toBeVisible()
 
   for (const surface of ['Plugins', 'MCP Servers', 'Skills', 'Commands', 'Hooks', 'Subagents', 'Memory']) {
@@ -72,10 +72,10 @@ test('custom extension settings persist through the trusted desktop bridge', asy
   await page.getByRole('button', { name: 'Add Plugin', exact: true }).click()
   await expect(page.getByText('Custom', { exact: true }).last()).toBeVisible()
 
-  const name = page.getByPlaceholder('Name')
+  const name = page.getByPlaceholder('Name', { exact: true })
   await name.fill('E2E Routed Plugin')
-  await page.getByPlaceholder('Description').fill('Persisted universal routing test.')
-  await page.getByPlaceholder('Portable instructions delivered when this extension route is active.').fill('Use the E2E plugin instructions.')
+  await page.getByPlaceholder('Description', { exact: true }).fill('Persisted universal routing test.')
+  await page.getByPlaceholder('Portable instructions delivered when this extension route is active.', { exact: true }).fill('Use the E2E plugin instructions.')
   await page.getByRole('button', { name: 'Save details', exact: true }).click()
   await expect(page.getByText('E2E Routed Plugin', { exact: true })).toBeVisible()
 
