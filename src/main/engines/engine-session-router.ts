@@ -7,6 +7,7 @@ import type {
 } from '../../shared/contracts.js'
 import { CODEX_CLI_ENGINE_ID, ND_HARNESS_ENGINE_ID } from '../../shared/coding-engines.js'
 import type { ExtensionRouter } from '../extensions/extension-router.js'
+import { tokenSaverRuntime } from '../token-saver/token-saver-runtime.js'
 import type { WorkspaceService } from '../workspace/workspace-service.js'
 import type { CodexCliEngine } from './codex/codex-cli-engine.js'
 import type { HarnessService } from '../harness/harness-service.js'
@@ -42,13 +43,18 @@ export class EngineSessionRouter {
     const routedPrompt = this.extensions
       ? await this.extensions.decoratePrompt(prompt, requested, providerId)
       : prompt
+    // Built-in Token Saver is deliberately applied at the common engine
+    // boundary, after ND has added trusted extension context and before either
+    // the Harness or direct Codex receives the turn. External-app optimization
+    // is independent and never required for this path.
+    const optimizedPrompt = tokenSaverRuntime()?.optimize(routedPrompt, { kind: 'prompt' }).text ?? routedPrompt
     if (requested === CODEX_CLI_ENGINE_ID) {
-      return this.codex.run(routedPrompt, {
+      return this.codex.run(optimizedPrompt, {
         ...(options?.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
         cwd: this.workspace.state().root,
       })
     }
-    return this.harness.run(routedPrompt, options)
+    return this.harness.run(optimizedPrompt, options)
   }
 
   /**

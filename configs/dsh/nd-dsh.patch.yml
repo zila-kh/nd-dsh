@@ -20,6 +20,22 @@
     mode: !!js process.env.DSH_PERMISSION_MODE ?? 'workspace-write'
     workspaceRoot: !!js process.env.DSH_CWD ?? process.cwd()
 
+# ── ND Token Saver: gate Harness-native compaction with the app switch ────────
+
+# The pinned Harness already provides replay-safe model-free tool-result pruning
+# plus automatic conversation compaction. ND owns whether those model-context
+# reducers are active. When Token Saver is off, both plugins are disabled so the
+# product switch means what it says; when on, the upstream safe defaults apply.
+- id: compaction-basic
+  disabled: !!js process.env.ND_DSH_TOKEN_SAVER_ENABLED === '0'
+
+- id: tool-result-pruner
+  disabled: !!js process.env.ND_DSH_TOKEN_SAVER_ENABLED === '0'
+  config:
+    thresholdChars: 8192
+    headChars: 4096
+    tailChars: 1024
+
 # ── provider-neutral LLM routing ──────────────────────────────────────────────
 
 # Harness already owns a provider-neutral LlmRuntime. Its pi-ai adapter is

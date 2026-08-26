@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { CodingEngineDescriptor } from '../../../shared/contracts'
 import {
-  SettingsButton,
   SettingsRow,
   SettingsSection,
   StatusChip,
@@ -11,6 +10,7 @@ import {
   rowTitle,
   rowValueText,
 } from './settings-primitives'
+import { TokenSaverSettings } from './TokenSaverSettings'
 
 interface EngineSettingsProps {
   onError(message: string): void
@@ -35,7 +35,9 @@ export function EngineSettings({ onError }: EngineSettingsProps) {
 
   return (
     <div className="min-h-0 overflow-auto px-[26px] pb-[42px] pt-1.5">
-      <SettingsSection title="Coding engines" className="mt-3.5">
+      <TokenSaverSettings onError={onError} />
+
+      <SettingsSection title="Coding engines">
         <div className="space-y-1.5">
           <SettingsRow>
             <div className={rowStack}>

@@ -1,10 +1,15 @@
 import { ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
 import { TERMINAL_IPC, type TerminalCreateInput, type TerminalPaneLayout } from '../../shared/terminal.js'
+import { registerTokenSaverIpc } from '../token-saver/ipc.js'
 import type { TerminalManager } from './terminal-manager.js'
 
 type Handler = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown | Promise<unknown>
 
 export function registerTerminalIpc(window: BrowserWindow, manager: TerminalManager): () => void {
+  // Token Saver is registered beside the small terminal preload/IPC bridge to
+  // avoid expanding the already-large desktop IPC composition root. The two
+  // services remain independent; this is only lifecycle wiring.
+  const disposeTokenSaverIpc = registerTokenSaverIpc(window)
   const channels: string[] = []
   const handle = (channel: string, listener: Handler): void => {
     ipcMain.removeHandler(channel)
@@ -22,7 +27,10 @@ export function registerTerminalIpc(window: BrowserWindow, manager: TerminalMana
   handle(TERMINAL_IPC.restart, (_e, sessionId, terminalId) => manager.restart(id(sessionId, 'Session id'), id(terminalId, 'Terminal id')))
   handle(TERMINAL_IPC.rename, (_e, sessionId, terminalId, title) => manager.rename(id(sessionId, 'Session id'), id(terminalId, 'Terminal id'), text(title, 'Title', 80)))
   handle(TERMINAL_IPC.setLayout, (_e, sessionId, layout, paneId, terminalId) => manager.setLayout(id(sessionId, 'Session id'), readLayout(layout), nullableId(paneId), nullableId(terminalId)))
-  return () => { for (const channel of channels) ipcMain.removeHandler(channel) }
+  return () => {
+    for (const channel of channels) ipcMain.removeHandler(channel)
+    disposeTokenSaverIpc()
+  }
 }
 
 function createInput(value: unknown): TerminalCreateInput {

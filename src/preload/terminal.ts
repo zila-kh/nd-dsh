@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { TERMINAL_IPC, type TerminalDesktopApi, type TerminalExitEvent, type TerminalOutputEvent, type TerminalStateEvent } from '../shared/terminal.js'
+import { TOKEN_SAVER_IPC, type TokenSaverDesktopApi, type TokenSaverState } from '../shared/token-saver.js'
 
 const api: TerminalDesktopApi = {
   state: (sessionId) => ipcRenderer.invoke(TERMINAL_IPC.state, sessionId),
@@ -26,4 +27,22 @@ const api: TerminalDesktopApi = {
     return () => ipcRenderer.removeListener(TERMINAL_IPC.stateEvent, handler)
   },
 }
+
+const tokenSaverApi: TokenSaverDesktopApi = {
+  state: () => ipcRenderer.invoke(TOKEN_SAVER_IPC.state),
+  updateSettings: (settings) => ipcRenderer.invoke(TOKEN_SAVER_IPC.updateSettings, settings),
+  resetCounters: () => ipcRenderer.invoke(TOKEN_SAVER_IPC.resetCounters),
+  detectExternalApps: () => ipcRenderer.invoke(TOKEN_SAVER_IPC.detectExternalApps),
+  runDemo: () => ipcRenderer.invoke(TOKEN_SAVER_IPC.runDemo),
+  connectAccount: (id) => ipcRenderer.invoke(TOKEN_SAVER_IPC.connectAccount, id),
+  disconnectAccount: (id) => ipcRenderer.invoke(TOKEN_SAVER_IPC.disconnectAccount, id),
+  refreshAccounts: () => ipcRenderer.invoke(TOKEN_SAVER_IPC.refreshAccounts),
+  onChanged: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, value: TokenSaverState) => listener(value)
+    ipcRenderer.on(TOKEN_SAVER_IPC.changedEvent, handler)
+    return () => ipcRenderer.removeListener(TOKEN_SAVER_IPC.changedEvent, handler)
+  },
+}
+
 contextBridge.exposeInMainWorld('ndDshTerminal', api)
+contextBridge.exposeInMainWorld('ndDshTokenSaver', tokenSaverApi)
