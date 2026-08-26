@@ -29,7 +29,7 @@ test('custom MCP stdio transport persists command, args, and secret references',
   await page.getByPlaceholder(/Environment references/).fill('TEST_TOKEN=E2E_PARENT_TEST_TOKEN')
   await page.getByRole('button', { name: 'Save details', exact: true }).click()
 
-  await expect(page.getByText('E2E Custom MCP', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: /E2E Custom MCP v1\.0\.0/ })).toBeVisible()
 
   // Force the settings component to remount and read through IPC again.
   await page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab', { name: 'General', exact: true }).click()
