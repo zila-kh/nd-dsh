@@ -16,8 +16,7 @@ export function registerTokenSaverIpc(window: BrowserWindow): () => void {
   const accounts = new ProviderAccountService(root)
   const external = new RtkManager(root)
   const service = new TokenSaverService(join(root, 'state.json'), { accounts, external })
-  const gatewayProviders = new ProviderStore()
-  const disposeGatewayIpc = registerNdGatewayIpc(window, gatewayProviders, service)
+  const disposeGatewayIpc = registerNdGatewayIpc(window, () => new ProviderStore(), service)
   setTokenSaverRuntime(service)
 
   const handle = (channel: string, listener: Handler): void => {
