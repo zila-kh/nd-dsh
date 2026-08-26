@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Bot, Brain, GitBranch, Plus, Puzzle, RefreshCw, Search, Server, Sparkles, Terminal } from 'lucide-react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { Bot, Brain, GitBranch, Plus, Puzzle, RefreshCw, Search, Server, Sparkles, Terminal, type LucideIcon } from 'lucide-react'
 import type { CodingEngineDescriptor, ModelProvider } from '../../../shared/contracts'
 import {
   EXTENSION_ADAPTERS,
@@ -34,7 +34,7 @@ const SURFACE_TAB_LABEL: Record<AgentExtensionSurface, string> = {
   hook: 'Hooks',
 }
 
-const SURFACE_ICON = {
+const SURFACE_ICON: Record<AgentExtensionSurface, LucideIcon> = {
   plugin: Puzzle,
   mcp: Server,
   skill: Sparkles,
@@ -42,7 +42,7 @@ const SURFACE_ICON = {
   hook: GitBranch,
   subagent: Bot,
   memory: Brain,
-} satisfies Record<AgentExtensionSurface, typeof Puzzle>
+}
 
 interface DetailDraft {
   name: string
@@ -595,7 +595,7 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
   )
 }
 
-function CatalogSection({ title, count, className, children }: { title: string; count: number; className?: string; children: React.ReactNode }) {
+function CatalogSection({ title, count, className, children }: { title: string; count: number; className?: string; children: ReactNode }) {
   return (
     <section className={className}>
       <div className="mb-3 flex items-center gap-1.5">
@@ -619,7 +619,7 @@ function ExtensionCatalogRow({
   extension: AgentExtensionManifest
   selected: boolean
   busy: boolean
-  icon: typeof Puzzle
+  icon: LucideIcon
   last: boolean
   onSelect(): void
   onToggle(enabled: boolean): void
