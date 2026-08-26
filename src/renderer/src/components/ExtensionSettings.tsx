@@ -248,14 +248,16 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
       const runtime = selected.surface === 'mcp' || selected.surface === 'plugin'
         ? parseRuntime(detailDraft)
         : undefined
-      void persist({
+      const next: AgentExtensionManifest = {
         ...selected,
         name: detailDraft.name,
         description: detailDraft.description,
         version: detailDraft.version,
         instructions: detailDraft.instructions,
-        ...(runtime ? { runtime } : { runtime: undefined }),
-      }, 'details')
+      }
+      if (runtime) next.runtime = runtime
+      else delete next.runtime
+      void persist(next, 'details')
     } catch (cause) {
       onError(errorMessage(cause))
     }
