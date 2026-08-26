@@ -10,13 +10,13 @@ afterEach(async () => {
 
 describe('ND Gateway', () => {
   it('requires a provider API key before a local binding can start', async () => {
-    const service = new NdGatewayService(provider(false), tokenSaver())
+    const service = new NdGatewayService(() => provider(false), tokenSaver())
     closers.push(() => service.close())
     await expect(service.prepareLocalBinding('chatgpt', 'llm-only', 'deepseek')).rejects.toThrow(/API key is required/i)
   })
 
   it('binds only to loopback and requires its generated per-app credential', async () => {
-    const service = new NdGatewayService(provider(true), tokenSaver())
+    const service = new NdGatewayService(() => provider(true), tokenSaver())
     closers.push(() => service.close())
     const binding = await service.prepareLocalBinding('chatgpt', 'nd-enhanced', 'deepseek')
     expect(binding.endpoint).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/v1$/)
@@ -33,7 +33,7 @@ describe('ND Gateway', () => {
   })
 
   it('does not pretend ChatGPT Desktop supports a custom model endpoint', () => {
-    const service = new NdGatewayService(provider(true), tokenSaver())
+    const service = new NdGatewayService(() => provider(true), tokenSaver())
     closers.push(() => service.close())
     const chatgpt = service.state().apps.find((app) => app.id === 'chatgpt')
     expect(chatgpt?.supported).toBe(false)
