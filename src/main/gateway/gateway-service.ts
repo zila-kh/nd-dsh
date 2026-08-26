@@ -138,7 +138,10 @@ export class NdGatewayService {
       })
       response.statusCode = result.status
       response.setHeader('content-type', result.headers.get('content-type') ?? 'application/json')
-      if (!result.body) return response.end()
+      if (!result.body) {
+        response.end()
+        return
+      }
       for await (const chunk of result.body) response.write(Buffer.from(chunk))
       response.end()
     } catch (error) {
