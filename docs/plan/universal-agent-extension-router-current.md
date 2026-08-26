@@ -127,17 +127,31 @@ Tool-bearing bindings include exact invocation guidance for either the stable Ha
 
 ## UI
 
-Settings → **Agent capabilities** provides:
+Settings → **Plugins** is the user-facing catalog for Agent Capabilities. It intentionally uses the familiar plugin-manager pattern while preserving the more precise internal capability model.
 
-- Memory, Subagents, Plugins, MCP Servers, Skills, Commands, Hooks;
-- built-in vs custom extension cards;
-- enable/disable for real runs;
+The catalog provides:
+
+- top-level capability tabs for Plugins, MCP, Skills, Commands, Hooks, Subagents, and Memory, each with a live count;
+- search scoped to the selected capability surface;
+- refresh and **+ New** controls;
+- a separate **Installed** area for user-created capability packages;
+- a separate **Built-in** area for ND-owned capabilities and account-free demos;
+- compact enable/disable switches directly in each catalog row;
+- an empty-state **Browse built-ins** path when nothing has been installed yet;
+- detailed configuration for the selected item below the catalog;
 - custom extension create/edit/delete;
 - engine route matrix with `auto` and explicit adapters;
 - model-provider allow/deny scope independent from engine routing;
 - custom MCP stdio command, arguments, and environment-variable references;
 - deterministic **Run demo** action per built-in demo;
 - reset demo pack without deleting custom extensions.
+
+User-facing terminology is intentionally layered:
+
+- **Plugin** is the approachable installable/bundle concept and the Settings entry point.
+- **Capability** is what the agent can do.
+- **Extension** is the persistent internal manifest/routing unit.
+- MCP, Skills, Commands, Hooks, Subagents, and Memory remain explicit advanced surfaces rather than being erased into one generic plugin type.
 
 Aliases route directly to this settings surface: `extensions`, `extension`, `plugin`, and `plugins`.
 
@@ -175,7 +189,8 @@ The branch contains coverage for:
 - stable Harness MCP gateway discovery/call behavior;
 - all seven built-in demos;
 - Settings route aliases;
+- Plugins catalog search, Installed/Built-in sections, toggles, and creation controls;
 - Electron E2E navigation and demo execution;
 - the real zero-dependency Counter MCP example.
 
-The user requested to run the product tests later, so the branch contains the test suites without treating local execution as a delivery blocker for this implementation pass.
+Automated repository CI exercises verification, TypeScript, unit tests, desktop build, and Electron smoke coverage. Manual product QA remains available in `docs/qa/agent-capabilities-manual.md` for the user's later hands-on pass.
