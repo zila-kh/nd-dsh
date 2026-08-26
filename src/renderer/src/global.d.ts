@@ -5,6 +5,7 @@ import type { OrganizationControlDesktopApi } from '../../shared/organization-co
 import type { OrganizationDesktopApi } from '../../shared/organization'
 import type { OrganizationStrategyDesktopApi } from '../../shared/organization-strategy'
 import type { TerminalDesktopApi } from '../../shared/terminal'
+import type { TokenSaverDesktopApi } from '../../shared/token-saver'
 
 declare global {
   interface Window {
@@ -15,6 +16,7 @@ declare global {
     ndDshControl: OrganizationControlDesktopApi
     ndDshStrategy: OrganizationStrategyDesktopApi
     ndDshTerminal: TerminalDesktopApi
+    ndDshTokenSaver: TokenSaverDesktopApi
     ndDshRuntimeMode?: 'ui-preview'
   }
 }

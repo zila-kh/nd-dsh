@@ -1,68 +1,94 @@
 # ND Token Saver
 
-## Decision
+## Status
 
-ND Token Saver is an ND-native product capability. It is not an API-key-only feature and it is not a wrapper around a third-party router.
+Implemented on `feat/token-saver` as an app-first beta feature.
 
-The first release prioritizes **built-in ND compression**. External-app optimization is a separate, optional capability and is **off by default**.
+ND Token Saver is an ND-native product capability. It is not API-key-only and it is not a wrapper around a third-party router. The first release prioritizes built-in ND compression; external-app optimization is a separate opt-in and is off by default.
 
-## User experience
+## Product rules
 
-Normal users configure everything inside the ND desktop app. They are never required to run setup commands, edit TOML/JSON, set environment variables, choose localhost ports, or install RTK/Caveman separately.
+Normal users configure everything inside ND Desktop. They never need to run setup commands, edit TOML/JSON, set environment variables, choose localhost ports, or install compression tools themselves.
 
-### Primary switch
+- **Save tokens in ND**: on by default in Automatic mode.
+- **External apps**: off by default and independently controlled.
+- **Per-app opt-in**: an external app is never modified until the user enables that app.
+- **No machine-wide HTTPS interception**: no root certificate, transparent TLS proxy, or credential scraping.
+- **Failure isolation**: external setup failure rolls the external setting back and never disables built-in ND saving.
 
-- **Save tokens in ND** — built-in ND optimization. Available without enabling any external integration.
+## Built-in ND pipeline
 
-### Optional external switch
+The ND-native service runs at the common coding-engine dispatch boundary, after ND extension context is assembled and before a turn is sent to ND Harness or direct Codex.
 
-- **Enable for external apps** — off by default.
-- When enabled, ND detects supported apps and offers per-app enable/disable controls.
-- ND must back up configuration before changing a supported external app and restore it when integration is disabled.
-- "External" means apps with a safe supported integration path. ND does not install a root certificate or intercept arbitrary HTTPS traffic.
+Prompt compaction is deliberately conservative: line-ending/trailing-space/excessive-blank normalization only. ND does not middle-truncate user instructions.
 
-## Scope model
+Generic/tool-output compaction supports deterministic repeated-line reduction and bounded head/tail clipping. Any lossy result stores its original in a bounded local recovery store and returns a local recovery reference. If storing/compacting fails and Quality protection is enabled, ND uses the original payload.
 
-1. **ND only** — default. Optimize ND Harness and ND-managed coding-engine traffic only.
-2. **External apps** — optional add-on. Supported apps are individually opt-in.
+Telemetry stores counts only:
 
-There is no implicit machine-wide interception mode.
+- original characters
+- optimized characters
+- avoided characters
+- operation count
+- fallback count
 
-## Optimization pipeline
+It does not persist prompt content in the savings counters.
 
-ND owns the orchestration layer and chooses one optimizer per payload. Do not repeatedly apply lossy compression.
+## External apps beta
 
-- Command/tool output: RTK adapter where supported.
-- Large generic structured payloads: Caveman Engine adapter where it provides recoverable compression.
-- Conversation/history compaction: ND-native.
-- Repository relevance, AST/LSP selection, deduplication, cache policy, telemetry, safety, and recovery: ND-native.
-- Original content must remain recoverable whenever a lossy optimizer is used.
+### Codex — full beta support
 
-Third-party engines are replaceable implementation details. The renderer and product model refer to **ND Token Saver**, not RTK or Caveman.
+When a user turns on External apps and enables Codex, ND itself:
 
-## Account/auth scope for this release
+1. downloads the pinned RTK `v0.42.4` release for the current supported OS/CPU;
+2. verifies the upstream published SHA-256 digest before execution;
+3. disables RTK telemetry for the ND-managed helper;
+4. backs up the Codex `AGENTS.md` / `RTK.md` integration surface;
+5. invokes RTK's global Codex integration non-interactively;
+6. records managed-file hashes;
+7. runs RTK's Codex uninstall and restores ND-managed backup state when disabled.
 
-OAuth/provider-account UI is intentionally limited to:
+The helper lives under ND user data. The user does not install it globally and never needs a terminal.
 
-- **Codex** — keep the existing Codex-native account/authentication flow.
-- **Antigravity OAuth** — add as the only new OAuth provider-account adapter in this release.
+Supported helper payloads in this beta: macOS arm64/x64, Linux arm64/x64, and Windows x64.
 
-Do not expose unfinished Claude, Gemini, or other OAuth account flows yet. Their future support must plug into the same provider-account interface without changing Token Saver scope/settings.
+### Antigravity — account support only in this beta
 
-API-key model routes remain a separate existing provider capability.
+Antigravity can be connected as an account, but machine-global external Antigravity optimization is intentionally not exposed yet. Its current rule integration is not equivalent to the safe global Codex path, so the UI reports **Account only** instead of pretending full support.
 
-## Safety requirements
+## OAuth/provider-account scope
 
-- Token Saver is optional.
-- ND built-in saving and external-app integration are independent switches.
-- External integration defaults off.
-- No TLS/root-certificate interception.
-- No credential extraction from third-party apps.
-- Preserve native provider authentication where supported.
-- Back up before modifying external app configuration.
-- Restore on disable/uninstall when possible.
-- Failure of an external optimizer must not break ND built-in chat.
-- Prefer original payload over compressed payload when safety/quality checks fail.
+Only two account surfaces are exposed in this release.
+
+### Codex
+
+Codex authentication stays native to the pinned official Codex runtime. ND can launch `codex login` / `codex logout` from the app, but ND never reads, copies, or stores the Codex access/refresh token.
+
+### Antigravity
+
+The Antigravity flow is ND-native and inspired by the working OmniRoute/9Router desktop pattern:
+
+- Google browser authorization
+- loopback `127.0.0.1` callback on an ephemeral port
+- random state validation
+- offline access / refresh token
+- Antigravity Cloud Code + userinfo scopes
+- public native-client OAuth credentials distributed by the upstream client (scanner-masked in source; not treated as private secrets)
+- account email discovery through Google userinfo
+- refresh-token rotation handling
+
+Access/refresh tokens are encrypted with Electron `safeStorage`. On Linux, ND refuses to persist OAuth tokens when Electron reports the insecure `basic_text` backend; the connected credential stays memory-only for that app session.
+
+Claude, Gemini, OpenAI-native, and other OAuth account buttons are intentionally absent for now.
+
+## Dependency strategy
+
+ND owns the orchestration, UI, settings, safety, recovery, scope, provider-account boundary, and telemetry.
+
+- **ND native**: prompt safety, settings, generic compaction, recovery, telemetry, app UX.
+- **RTK**: optional Codex external command/tool-output optimization; pinned and replaceable.
+- **Caveman**: no hard dependency in this beta. The optimizer interface keeps a future slot; ND already adopts the important recoverability rule for lossy payloads.
+- **OmniRoute/9Router**: architecture/OAuth reference only; no router application or source tree is embedded.
 
 ## UI target
 
@@ -70,50 +96,31 @@ API-key model routes remain a separate existing provider capability.
 Token Saver
 
 Save tokens in ND                         [ ON ]
-Reduce repeated context and noisy tool output automatically.
-
-Mode
-( ) Off
-(*) Automatic (recommended)
-( ) Advanced
+Mode                         Automatic
+Savings                 ~42,000 · 63%
 
 External apps                            [ OFF ]
-Optional. Optimize supported AI coding apps on this computer.
 
-When enabled:
-Codex                                     [ ON ]
-Other detected supported apps             [ OFF ]
+Codex                       Detected      [ OFF ]
+Antigravity                  Account only
 
-Accounts available in this release
-Codex                                      Connected / Connect
-Antigravity                                Connected / Connect
-
-Today
-Original context        ...
-Sent                    ...
-Saved                   ...
-Savings                 ...%
+Accounts
+Codex                     Connected / Connect
+Antigravity                Connected / Connect
 ```
 
-Advanced terminology such as proxy, base URL, adapter, hook, RTK, Caveman, protocol translation, and environment variables stays out of the normal-user UI.
-
-## Delivery order
-
-1. ND-native settings/state, telemetry contract, and ND-only pipeline.
-2. Tool-output optimizer adapter interface and RTK adapter.
-3. Recoverable generic-payload adapter (Caveman Engine where beneficial).
-4. ND-native context dedupe/compaction and repo relevance.
-5. Codex account integration reuse + Antigravity OAuth adapter.
-6. Optional external-app detector/config backup/restore.
-7. Per-app external enablement and savings telemetry.
+Advanced terms such as proxy, base URL, hook, RTK, protocol translation, and environment variables stay out of the normal-user UI.
 
 ## Acceptance criteria
 
-- ND Token Saver works with External apps disabled.
-- A fresh user can enable/disable saving entirely through the ND UI.
+- Built-in ND saving works with External apps disabled.
+- A fresh user controls the feature entirely through ND Desktop.
 - External integration remains disabled until explicit user action.
-- Disabling external integration restores any ND-managed external configuration backup.
-- No unsupported OAuth providers are shown as connectable in this release.
-- Codex and Antigravity are the only provider-account choices surfaced for OAuth/account login.
-- A compression failure falls back to the original payload.
-- Savings telemetry reports original size, optimized size, and avoided size without exposing secrets.
+- Codex external setup downloads only a pinned, digest-verified helper.
+- Disabling external Codex removes the ND-managed integration and restores backup state without touching Codex credentials.
+- No unsupported OAuth provider is shown as connectable.
+- Codex + Antigravity are the only account choices.
+- Antigravity tokens use OS-backed encrypted persistence or memory-only fallback.
+- A compression/setup failure falls back or rolls back safely.
+- Lossy ND generic/tool payloads have an ND-local recovery reference.
+- Savings telemetry contains counts, not user prompt text.
