@@ -8,6 +8,7 @@ import { cloneBuiltinExtensionDemos, type AgentExtensionManifest } from '../src/
 
 const execFileAsync = promisify(execFile)
 const roots: string[] = []
+const HARNESS_ENGINE_ID = 'nd-harness'
 
 const proxyScript = resolve('scripts/nd-extension-runtime.mjs')
 const mcpScript = resolve('scripts/nd-extension-mcp.mjs')
@@ -111,16 +112,16 @@ async function runGateway(catalog: string, state: string, messages: unknown[]) {
 describe('ND extension portable runtime', () => {
   it('lists the built-in Counter MCP contract', async () => {
     const { catalog, state } = await enabledCounterCatalog()
-    const tools = await runProxy(catalog, state, ['list', 'demo-counter-mcp']) as Array<{ name: string }>
+    const tools = await runProxy(catalog, state, ['list', 'demo-counter-mcp', HARNESS_ENGINE_ID]) as Array<{ name: string }>
     expect(tools.map((tool) => tool.name)).toEqual(['counter_get', 'counter_add', 'counter_reset'])
   })
 
   it('executes reset +3 +4 get through the same persisted counter state', async () => {
     const { catalog, state } = await enabledCounterCatalog()
-    await runProxy(catalog, state, ['call', 'demo-counter-mcp', 'counter_reset', '{}'])
-    await runProxy(catalog, state, ['call', 'demo-counter-mcp', 'counter_add', '{"amount":3}'])
-    await runProxy(catalog, state, ['call', 'demo-counter-mcp', 'counter_add', '{"amount":4}'])
-    const result = await runProxy(catalog, state, ['call', 'demo-counter-mcp', 'counter_get', '{}']) as { content: Array<{ text: string }> }
+    await runProxy(catalog, state, ['call', 'demo-counter-mcp', 'counter_reset', '{}', HARNESS_ENGINE_ID])
+    await runProxy(catalog, state, ['call', 'demo-counter-mcp', 'counter_add', '{"amount":3}', HARNESS_ENGINE_ID])
+    await runProxy(catalog, state, ['call', 'demo-counter-mcp', 'counter_add', '{"amount":4}', HARNESS_ENGINE_ID])
+    const result = await runProxy(catalog, state, ['call', 'demo-counter-mcp', 'counter_get', '{}', HARNESS_ENGINE_ID]) as { content: Array<{ text: string }> }
     expect(result.content[0]?.text).toBe('7')
   })
 
@@ -130,17 +131,17 @@ describe('ND extension portable runtime', () => {
     const counter = snapshot.extensions.find((item) => item.id === 'demo-counter-mcp')!
     counter.enabled = false
     await writeFile(catalog, `${JSON.stringify(snapshot, null, 2)}\n`, 'utf8')
-    await expect(runProxy(catalog, state, ['call', 'demo-counter-mcp', 'counter_get', '{}'])).rejects.toThrow(/disabled/i)
+    await expect(runProxy(catalog, state, ['call', 'demo-counter-mcp', 'counter_get', '{}', HARNESS_ENGINE_ID])).rejects.toThrow(/disabled/i)
   })
 
   it('passes only safe base environment plus explicitly referenced secrets to custom MCP children', async () => {
     const { catalog, state } = await customMcpCatalog()
-    const tools = await runProxy(catalog, state, ['list', 'custom-safe-mcp'], {
+    const tools = await runProxy(catalog, state, ['list', 'custom-safe-mcp', HARNESS_ENGINE_ID], {
       ALLOWED_PARENT_TOKEN: 'allowed-value',
       DISALLOWED_SECRET: 'must-not-leak',
     }) as Array<{ name: string }>
     expect(tools[0]?.name).toBe('env_read')
-    const result = await runProxy(catalog, state, ['call', 'custom-safe-mcp', 'env_read', '{}'], {
+    const result = await runProxy(catalog, state, ['call', 'custom-safe-mcp', 'env_read', '{}', HARNESS_ENGINE_ID], {
       ALLOWED_PARENT_TOKEN: 'allowed-value',
       DISALLOWED_SECRET: 'must-not-leak',
     }) as { content: Array<{ text: string }> }
