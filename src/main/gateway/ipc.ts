@@ -6,7 +6,7 @@ import { NdGatewayService } from './gateway-service.js'
 
 type Handler = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown | Promise<unknown>
 
-export function registerNdGatewayIpc(window: BrowserWindow, providers: ProviderStore, tokenSaver: TokenSaverService): () => void {
+export function registerNdGatewayIpc(window: BrowserWindow, providers: () => ProviderStore, tokenSaver: TokenSaverService): () => void {
   const service = new NdGatewayService(providers, tokenSaver)
   const channels: string[] = []
   const handle = (channel: string, listener: Handler): void => {
