@@ -16,7 +16,7 @@ test.afterAll(async () => {
 test('custom MCP stdio transport persists command, args, and secret references', async () => {
   const { page } = launched
   await page.getByRole('navigation', { name: 'ND-DSH navigation' }).getByTitle('Settings').click()
-  await page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab', { name: 'Agent capabilities', exact: true }).click()
+  await page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab', { name: 'Plugins', exact: true }).click()
   await page.getByRole('button', { name: /^MCP Servers\b/ }).click()
   await page.getByRole('button', { name: 'Add MCP Server', exact: true }).click()
 
@@ -32,7 +32,7 @@ test('custom MCP stdio transport persists command, args, and secret references',
 
   // Force the settings component to remount and read through IPC again.
   await page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab', { name: 'General', exact: true }).click()
-  await page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab', { name: 'Agent capabilities', exact: true }).click()
+  await page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab', { name: 'Plugins', exact: true }).click()
   await page.getByRole('button', { name: /^MCP Servers\b/ }).click()
   await page.getByRole('button', { name: /E2E Custom MCP/ }).click()
 
