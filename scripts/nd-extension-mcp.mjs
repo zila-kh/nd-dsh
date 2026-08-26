@@ -13,6 +13,7 @@ import { spawn } from 'node:child_process'
 const NODE = process.env.ND_EXTENSION_NODE?.trim() || process.execPath
 const PROXY = process.env.ND_EXTENSION_PROXY?.trim() || process.env.ND_DSH_EXTENSION_PROXY_ENTRY?.trim() || ''
 const TIMEOUT_MS = 120_000
+const HARNESS_ENGINE_ID = 'nd-harness'
 
 const TOOLS = [
   {
@@ -95,13 +96,13 @@ async function runProxy(args) {
 async function dispatch(name, args) {
   if (name === 'nd_extension_list') {
     const extensionId = cleanId(args?.extensionId, 'extensionId')
-    return { mode: 'list', value: await runProxy(['list', extensionId]) }
+    return { mode: 'list', value: await runProxy(['list', extensionId, HARNESS_ENGINE_ID]) }
   }
   if (name === 'nd_extension_call') {
     const extensionId = cleanId(args?.extensionId, 'extensionId')
     const toolName = cleanTool(args?.toolName)
     const input = args?.arguments && typeof args.arguments === 'object' && !Array.isArray(args.arguments) ? args.arguments : {}
-    return { mode: 'call', value: await runProxy(['call', extensionId, toolName, JSON.stringify(input)]) }
+    return { mode: 'call', value: await runProxy(['call', extensionId, toolName, JSON.stringify(input), HARNESS_ENGINE_ID]) }
   }
   throw new Error(`unknown tool: ${name}`)
 }
