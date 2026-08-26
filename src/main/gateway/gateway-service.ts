@@ -73,6 +73,9 @@ export class NdGatewayService {
    * only an ND-local credential; real provider credentials stay in trusted main.
    */
   async prepareLocalBinding(appId: NdGatewayAppId, mode: NdGatewayMode, providerId: string): Promise<{ endpoint: string; token: string }> {
+    if (mode === 'full-nd') {
+      throw new Error('Full ND mode requires a supported ND app connector and cannot be exposed as a raw LLM proxy')
+    }
     const provider = this.providers().list().find((item) => item.id === providerId)
     if (!provider?.hasApiKey) throw new Error('A provider API key is required before starting ND Gateway')
     this.binding = { appId, mode, providerId, token: `nd_local_${randomBytes(32).toString('base64url')}` }
@@ -167,7 +170,12 @@ function resolveUpstream(providers: ProviderStore, providerId: string, path: str
   }
   if (!apiKey) throw new Error(`${metadata.name} API key is required`)
   if (!baseUrl) throw new Error(`${metadata.name} base URL is not configured`)
-  return { url: `${baseUrl}${path}`, apiKey }
+  return { url: joinBasePath(baseUrl, path), apiKey }
+}
+
+function joinBasePath(baseUrl: string, path: string): string {
+  if (baseUrl.endsWith('/v1') && path.startsWith('/v1/')) return `${baseUrl}${path.slice(3)}`
+  return `${baseUrl}${path}`
 }
 
 function optimizePayload(value: unknown, tokenSaver: TokenSaverService): unknown {
