@@ -47,7 +47,7 @@ const TABS: { id: SettingsTab; label: string }[] = [
   { id: 'appearance', label: 'Appearance' },
   { id: 'models', label: 'Models' },
   { id: 'capabilities', label: 'Capabilities' },
-  { id: 'extensions', label: 'Agent capabilities' },
+  { id: 'extensions', label: 'Plugins' },
   { id: 'engines', label: 'Coding engines' },
   { id: 'presets', label: 'Agent presets' },
 ]
