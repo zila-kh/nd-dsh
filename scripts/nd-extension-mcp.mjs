@@ -161,6 +161,23 @@ async function handleMessage(message) {
 
 function run() {
   let buffer = ''
+  const pending = new Set()
+  let inputEnded = false
+
+  const maybeClose = () => {
+    if (inputEnded && pending.size === 0) process.stdout.end()
+  }
+
+  const dispatchMessage = (message) => {
+    const task = handleMessage(message).catch((error) => {
+      if (message.id !== undefined) writeMessage({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: error instanceof Error ? error.message : String(error) } })
+    }).finally(() => {
+      pending.delete(task)
+      maybeClose()
+    })
+    pending.add(task)
+  }
+
   process.stdin.setEncoding('utf8')
   process.stdin.on('data', (chunk) => {
     buffer += chunk
@@ -171,12 +188,13 @@ function run() {
       if (!line) continue
       let message
       try { message = JSON.parse(line) } catch { continue }
-      void handleMessage(message).catch((error) => {
-        if (message.id !== undefined) writeMessage({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: error instanceof Error ? error.message : String(error) } })
-      })
+      dispatchMessage(message)
     }
   })
-  process.stdin.on('end', () => process.exit(0))
+  process.stdin.on('end', () => {
+    inputEnded = true
+    maybeClose()
+  })
 }
 
 run()
