@@ -11,8 +11,7 @@ interface DiffViewProps {
 }
 
 /** Read-only unified diff rendered from `git diff` output for one file. */
-export function DiffView({ relativePath, staged, onClose, onError }: DiffViewProps) {
-  const [patch, setPatch] = useState<string | null>(null)
+export function DiffView({ relativePath, staged, onClose, onError }: DiffViewProps) {  const [patch, setPatch] = useState<string | null>(null)
 
   useEffect(() => {
     let mounted = true
@@ -66,7 +65,7 @@ export function DiffView({ relativePath, staged, onClose, onError }: DiffViewPro
   )
 }
 
-function diffLineClass(line: string): string | false {
+export function diffLineClass(line: string): string | false {
   if (line.startsWith('+++') || line.startsWith('---')) return 'text-fainter'
   if (line.startsWith('+')) return 'bg-primary/10 text-foreground'
   if (line.startsWith('-')) return 'bg-destructive/15 text-foreground'

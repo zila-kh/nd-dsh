@@ -293,10 +293,11 @@ export class BrowserController {
 
   private assertNotSelfHosted(url: string): void {
     const reserved = this.reservedOrigin?.()
-    if (!reserved) return
+    if (!reserved || reserved === 'null') return
     let origin: string
     try { origin = new URL(url).origin } catch { return }
-    if (origin !== reserved) return
+    // Opaque origins (about:blank, file: pages) are never ND's surface.
+    if (origin === 'null' || origin !== reserved) return
     throw new Error(`Refusing to open ${origin} in the built-in browser: that is ND-DSH's own control-plane surface. Point the browser at the app under development instead.`)
   }
 

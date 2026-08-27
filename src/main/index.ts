@@ -116,8 +116,15 @@ async function createWindow(cdpPort: number): Promise<void> {
 
   // The window's own origin is reserved: neither the project runtime nor a
   // browser-pane navigation may load ND's renderer into ND's browser view.
+  // A file:// renderer has an opaque origin serialized as "null"; that must
+  // never be treated as a reservable http(s) origin, or about:blank (also
+  // "null") would be refused as self-hosted.
   const reservedOrigin = (): string | undefined => {
-    try { return window.isDestroyed() ? undefined : new URL(window.webContents.getURL()).origin } catch { return undefined }
+    try {
+      if (window.isDestroyed()) return undefined
+      const origin = new URL(window.webContents.getURL()).origin
+      return origin === 'null' ? undefined : origin
+    } catch { return undefined }
   }
 
   const browser = new BrowserController(window, cdpPort, projectRoot(), { reservedOrigin })

@@ -80,6 +80,8 @@ export const CheckIcon = (props: IconProps) => <IconBase {...props}><path d="m20
 export const QualityIcon = (props: IconProps) => <IconBase {...props}><circle cx="12" cy="12" r="9" /><path d="m8 12 2.6 2.6L16.5 9" /></IconBase>
 export const SpinnerIcon = (props: IconProps) => <IconBase {...props} className={`animate-spin ${props.className || ''}`}><path d="M21 12a9 9 0 1 1-6.219-8.56" /></IconBase>
 export const SearchIcon = (props: IconProps) => <IconBase {...props}><circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" /></IconBase>
+export const TerminalIcon = (props: IconProps) => <IconBase {...props}><path d="m5 7 5 5-5 5" /><path d="M12 17h7" /></IconBase>
+export const CopyIcon = (props: IconProps) => <IconBase {...props}><rect x="9" y="9" width="12" height="12" rx="1.5" /><path d="M5 15H4a1.5 1.5 0 0 1-1.5-1.5v-9A1.5 1.5 0 0 1 4 3h9A1.5 1.5 0 0 1 14.5 4.5V5" /></IconBase>
 export const CrosshairIcon = (props: IconProps) => (
   <IconBase {...props}>
     <circle cx="12" cy="12" r="7" />

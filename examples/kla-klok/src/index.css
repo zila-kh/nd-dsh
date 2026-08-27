@@ -1,0 +1,292 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-khmer: 'Kantumruy Pro', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    color-scheme: dark;
+  }
+}
+
+.font-khmer {
+  font-family: var(--font-khmer);
+}
+
+.perspective-1000 {
+  perspective: 1000px;
+}
+
+.preserve-3d {
+  transform-style: preserve-3d;
+}
+
+.backface-hidden {
+  backface-visibility: hidden;
+}
+
+/* ------------------------------------------------------------- */
+/* High Contrast Mode Styling (WCAG AAA Compliance)               */
+/* ------------------------------------------------------------- */
+
+.high-contrast {
+  --tw-border-opacity: 1;
+}
+
+.high-contrast header,
+.high-contrast main > div,
+.high-contrast main > section,
+.high-contrast [data-testid="betting-board"],
+.high-contrast [data-testid="chip-selector"],
+.high-contrast [data-testid="bet-controls"],
+.high-contrast [data-testid="dice-arena"],
+.high-contrast [data-testid="recent-roll-history"] {
+  border-width: 2px !important;
+  border-color: #FBBF24 !important;
+  background-color: #000000 !important;
+}
+
+.high-contrast [data-testid^="symbol-tile-"] {
+  border-width: 3px !important;
+  border-color: #FFFFFF !important;
+  background-color: #0C0A09 !important;
+}
+
+.high-contrast [data-testid^="symbol-tile-"][aria-pressed="true"] {
+  border-color: #FDE047 !important;
+  box-shadow: 0 0 0 4px #F59E0B !important;
+}
+
+.high-contrast button:focus-visible,
+.high-contrast [role="button"]:focus-visible,
+.high-contrast [role="radio"]:focus-visible {
+  outline: 3px solid #FDE047 !important;
+  outline-offset: 3px !important;
+  box-shadow: 0 0 0 4px #000000 !important;
+}
+
+.high-contrast kbd {
+  border-color: #FDE047 !important;
+  color: #FDE047 !important;
+  background-color: #000000 !important;
+  font-weight: 900 !important;
+}
+
+/* ------------------------------------------------------------- */
+/* Traditional Kla-Klok Shaker Cup (ត្រឡោក) Animations           */
+/* ------------------------------------------------------------- */
+
+@keyframes cup-vigorous-shake {
+  0% { transform: translate(0, 0) rotate(0deg) scale(1); }
+  10% { transform: translate(-7px, -4px) rotate(-7deg) scale(1.03); }
+  20% { transform: translate(7px, 3px) rotate(7deg) scale(0.98); }
+  30% { transform: translate(-9px, 5px) rotate(-9deg) scale(1.04); }
+  40% { transform: translate(9px, -5px) rotate(8deg) scale(0.97); }
+  50% { transform: translate(-6px, -7px) rotate(-6deg) scale(1.03); }
+  60% { transform: translate(8px, 6px) rotate(7deg) scale(0.99); }
+  70% { transform: translate(-8px, 3px) rotate(-8deg) scale(1.02); }
+  80% { transform: translate(6px, -4px) rotate(6deg) scale(0.98); }
+  90% { transform: translate(-4px, 4px) rotate(-4deg) scale(1.01); }
+  100% { transform: translate(0, 0) rotate(0deg) scale(1); }
+}
+
+.animate-cup-shake {
+  animation: cup-vigorous-shake 0.35s ease-in-out infinite;
+}
+
+@keyframes cup-lift-reveal {
+  0% {
+    transform: translateY(0) rotate(0deg) scale(1);
+    opacity: 1;
+  }
+  30% {
+    transform: translateY(-25px) rotate(-5deg) scale(1.03);
+    opacity: 0.95;
+  }
+  65% {
+    transform: translateY(-65px) rotate(-12deg) scale(1.06);
+    opacity: 0.6;
+  }
+  100% {
+    transform: translateY(-110px) rotate(-18deg) scale(1.1);
+    opacity: 0;
+    pointer-events: none;
+  }
+}
+
+.animate-cup-lift {
+  animation: cup-lift-reveal 0.8s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+}
+
+@keyframes vibration-ring {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.9;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 0.5;
+  }
+  100% {
+    transform: scale(1.45);
+    opacity: 0;
+  }
+}
+
+.animate-vibration-ring {
+  animation: vibration-ring 0.7s ease-out infinite;
+}
+
+/* ------------------------------------------------------------- */
+/* 3D Tumbling Dice Animations (Staggered per die)               */
+/* ------------------------------------------------------------- */
+
+@keyframes tumble-die-0 {
+  0% {
+    transform: translateY(-90px) rotateX(0deg) rotateY(0deg) rotateZ(0deg) scale(0.65);
+    opacity: 0.4;
+  }
+  25% {
+    transform: translateY(-45px) rotateX(360deg) rotateY(180deg) rotateZ(90deg) scale(1.12);
+    opacity: 0.9;
+  }
+  50% {
+    transform: translateY(12px) rotateX(720deg) rotateY(360deg) rotateZ(180deg) scale(0.92);
+    opacity: 1;
+  }
+  70% {
+    transform: translateY(-18px) rotateX(900deg) rotateY(540deg) rotateZ(270deg) scale(1.06);
+  }
+  85% {
+    transform: translateY(6px) rotateX(1080deg) rotateY(720deg) rotateZ(360deg) scale(0.97);
+  }
+  100% {
+    transform: translateY(0) rotateX(1080deg) rotateY(720deg) rotateZ(360deg) scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-tumble-0 {
+  animation: tumble-die-0 0.8s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes tumble-die-1 {
+  0% {
+    transform: translateY(-110px) rotateX(0deg) rotateY(0deg) rotateZ(0deg) scale(0.6);
+    opacity: 0.4;
+  }
+  28% {
+    transform: translateY(-55px) rotateX(-360deg) rotateY(270deg) rotateZ(-120deg) scale(1.15);
+    opacity: 0.9;
+  }
+  55% {
+    transform: translateY(15px) rotateX(-720deg) rotateY(540deg) rotateZ(-240deg) scale(0.9);
+    opacity: 1;
+  }
+  75% {
+    transform: translateY(-22px) rotateX(-900deg) rotateY(720deg) rotateZ(-300deg) scale(1.08);
+  }
+  90% {
+    transform: translateY(7px) rotateX(-1080deg) rotateY(900deg) rotateZ(-360deg) scale(0.96);
+  }
+  100% {
+    transform: translateY(0) rotateX(-1080deg) rotateY(900deg) rotateZ(-360deg) scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-tumble-1 {
+  animation: tumble-die-1 0.8s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes tumble-die-2 {
+  0% {
+    transform: translateY(-130px) rotateX(0deg) rotateY(0deg) rotateZ(0deg) scale(0.55);
+    opacity: 0.4;
+  }
+  32% {
+    transform: translateY(-65px) rotateX(450deg) rotateY(-360deg) rotateZ(180deg) scale(1.18);
+    opacity: 0.9;
+  }
+  60% {
+    transform: translateY(18px) rotateX(810deg) rotateY(-720deg) rotateZ(270deg) scale(0.88);
+    opacity: 1;
+  }
+  80% {
+    transform: translateY(-26px) rotateX(1080deg) rotateY(-900deg) rotateZ(330deg) scale(1.1);
+  }
+  92% {
+    transform: translateY(8px) rotateX(1260deg) rotateY(-1080deg) rotateZ(360deg) scale(0.95);
+  }
+  100% {
+    transform: translateY(0) rotateX(1440deg) rotateY(-1080deg) rotateZ(360deg) scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-tumble-2 {
+  animation: tumble-die-2 0.8s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* ------------------------------------------------------------- */
+/* Landing Bounce & Winning Glow Accents                         */
+/* ------------------------------------------------------------- */
+
+@keyframes die-bounce-settle {
+  0% { transform: scale(1.12) translateY(-10px); }
+  50% { transform: scale(0.94) translateY(4px); }
+  75% { transform: scale(1.03) translateY(-2px); }
+  100% { transform: scale(1) translateY(0); }
+}
+
+.animate-die-settle {
+  animation: die-bounce-settle 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+@keyframes win-glow {
+  0%, 100% {
+    box-shadow: 0 0 15px rgba(245, 158, 11, 0.6), 0 0 30px rgba(245, 158, 11, 0.3), inset 0 0 12px rgba(251, 191, 36, 0.5);
+    border-color: rgba(251, 191, 36, 0.9);
+    transform: scale(1.03);
+  }
+  50% {
+    box-shadow: 0 0 35px rgba(245, 158, 11, 0.9), 0 0 50px rgba(245, 158, 11, 0.5), inset 0 0 20px rgba(251, 191, 36, 0.8);
+    border-color: rgba(253, 224, 71, 1);
+    transform: scale(1.07);
+  }
+}
+
+.animate-win-glow {
+  animation: win-glow 1.5s ease-in-out infinite;
+}
+
+@keyframes particle-sparkle {
+  0% {
+    transform: translateY(0) scale(0.6) rotate(0deg);
+    opacity: 0;
+  }
+  50% {
+    transform: translateY(-20px) scale(1.2) rotate(180deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-40px) scale(0.4) rotate(360deg);
+    opacity: 0;
+  }
+}
+
+.animate-particle {
+  animation: particle-sparkle 1.2s ease-out infinite;
+}
+
+@keyframes shadow-bounce {
+  0%, 100% { transform: scale(1); opacity: 0.6; }
+  50% { transform: scale(1.3); opacity: 0.9; }
+}
+
+.animate-shadow-bounce {
+  animation: shadow-bounce 0.8s ease-in-out infinite;
+}

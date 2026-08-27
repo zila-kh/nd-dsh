@@ -30,3 +30,7 @@ artifacts/
 
 # ZCode session artifacts
 .zcode/
+
+# Todo example local runtime state (npm cache, logs, JSON data store)
+examples/todo/cache/
+examples/todo/data/

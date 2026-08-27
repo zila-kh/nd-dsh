@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { groupEntries } from '../src/shared/chat-grouping.js'
+import { groupEntries, toolPreview } from '../src/shared/chat-grouping.js'
 import type { ThreadEntry } from '../src/shared/chat-types.js'
 
 describe('groupEntries', () => {
@@ -64,6 +64,75 @@ describe('groupEntries', () => {
       label: 'Loaded 1 skill',
       icon: 'skill',
     })
+  })
+
+  it('groups shell tools into a "Ran N commands" group', () => {
+    const entries: ThreadEntry[] = [
+      { kind: 'tool', id: 't1', name: 'command execution', args: { command: 'pnpm test' }, status: 'done' },
+      { kind: 'tool', id: 't2', name: 'bash', args: { command: 'pnpm build' }, status: 'done' },
+    ]
+    const groups = groupEntries(entries)
+    expect(groups).toHaveLength(1)
+    expect(groups[0]).toEqual({
+      kind: 'tool-group',
+      key: 't1',
+      tools: entries,
+      label: 'Ran 2 commands',
+      icon: 'command',
+    })
+  })
+
+  it('groups search tools into a "Searched N files" group', () => {
+    const entries: ThreadEntry[] = [
+      { kind: 'tool', id: 't1', name: 'code_search', args: { query: 'groupEntries' }, status: 'done' },
+      { kind: 'tool', id: 't2', name: 'glob_files', args: { pattern: '*.ts' }, status: 'done' },
+    ]
+    const groups = groupEntries(entries)
+    expect(groups).toHaveLength(1)
+    expect(groups[0]).toEqual({
+      kind: 'tool-group',
+      key: 't1',
+      tools: entries,
+      label: 'Searched 2 files',
+      icon: 'search',
+    })
+  })
+
+  it('labels uncategorized tools as "Used N tools" instead of raw call counts', () => {
+    const entries: ThreadEntry[] = [
+      { kind: 'tool', id: 't1', name: 'browser_navigate', args: { url: 'https://example.com' }, status: 'done' },
+    ]
+    const groups = groupEntries(entries)
+    expect(groups).toHaveLength(1)
+    expect(groups[0]).toMatchObject({ label: 'Used 1 tool', icon: 'tool' })
+  })
+
+  it('treats codex "file change" entries as file edits', () => {
+    const entries: ThreadEntry[] = [
+      { kind: 'tool', id: 't1', name: 'file change', args: { files: {} }, status: 'done' },
+    ]
+    const groups = groupEntries(entries)
+    expect(groups).toHaveLength(1)
+    expect(groups[0]).toMatchObject({ label: 'Edited 1 file', icon: 'file' })
+  })
+
+  it('extracts a command preview from shell tool args', () => {
+    const entry: ThreadEntry = { kind: 'tool', id: 't1', name: 'command execution', args: { command: 'pnpm verify' }, status: 'done' }
+    expect(toolPreview(entry)).toBe('pnpm verify')
+  })
+
+  it('extracts a command preview from array commands and nested arguments', () => {
+    const arrayCommand: ThreadEntry = { kind: 'tool', id: 't1', name: 'bash', args: { command: ['git', 'status'] }, status: 'done' }
+    expect(toolPreview(arrayCommand)).toBe('git status')
+    const nested: ThreadEntry = { kind: 'tool', id: 't2', name: 'bash', args: { arguments: { command: 'pnpm lint' } }, status: 'done' }
+    expect(toolPreview(nested)).toBe('pnpm lint')
+  })
+
+  it('falls back to paths and undefined when no command exists', () => {
+    const pathEntry: ThreadEntry = { kind: 'tool', id: 't1', name: 'fs_read', args: { path: 'src/a.ts' }, status: 'done' }
+    expect(toolPreview(pathEntry)).toBe('src/a.ts')
+    const empty: ThreadEntry = { kind: 'tool', id: 't2', name: 'fs_read', status: 'done' }
+    expect(toolPreview(empty)).toBeUndefined()
   })
 
   it('sub-groups mixed tool sequences by category', () => {

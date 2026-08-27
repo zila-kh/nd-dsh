@@ -1,0 +1,27 @@
+{
+  "name": "@examples/tic-tac-toe",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Production-ready, highly accessible React TypeScript Tic-Tac-Toe game.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "tsc && node tests/run-tests.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0"
+  },
+  "keywords": [
+    "tic-tac-toe",
+    "react",
+    "typescript",
+    "accessibility",
+    "a11y",
+    "wcag"
+  ],
+  "author": "ND",
+  "license": "MIT"
+}

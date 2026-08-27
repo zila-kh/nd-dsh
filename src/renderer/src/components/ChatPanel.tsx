@@ -13,7 +13,9 @@ import type {
   WorkspaceSuggestion,
 } from '../../../shared/contracts'
 import { CODEX_CLI_ENGINE_ID, ND_HARNESS_ENGINE_ID } from '../../../shared/coding-engines'
-import { DisplayGroup, groupEntries } from '../../../shared/chat-grouping'
+import { DisplayGroup, groupEntries, toolPreview } from '../../../shared/chat-grouping'
+import { splitAssistantSegments, type ReviewVerdict } from '../../../shared/structured-output'
+import type { ProjectPlanInput } from '../../../shared/organization'
 import type { AskQuestion, ThreadEntry, TodoItem } from '../lib/types'
 import { FOLDER_ACCENT, SKILL_ACCENT, fileExtensionOf, fileAccent } from '../lib/file-accents'
 import { applyMention, detectMentionTrigger } from '../../../shared/mentions'
@@ -27,7 +29,9 @@ import {
   CheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  CloseIcon,
   ContextIcon,
+  CopyIcon,
   CrosshairIcon,
   FileIcon,
   FolderIcon,
@@ -40,9 +44,12 @@ import {
   SparkIcon,
   SpinnerIcon,
   StopIcon,
+  TerminalIcon,
 } from './Icons'
 import { cn } from '../lib/utils'
 import { TerminalDock } from './TerminalDock'
+import { ChangedFilesCard } from './ChangedFilesCard'
+import { MarkdownLite } from './MarkdownLite'
 
 interface ChatPanelProps {
   status: HarnessStatus | null
@@ -132,6 +139,17 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // Composer grows with its content up to the CSS max-height, then scrolls.
+  const autosizeComposer = (): void => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }
+  useEffect(() => {
+    autosizeComposer()
+  }, [prompt])
   const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -148,6 +166,19 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
   const entries = useMemo(() => threads[activeSessionId ?? ''] ?? [], [threads, activeSessionId])
   const threadContext = useMemo(() => collectThreadContext(entries), [entries])
   const busy = busySessions.has(activeSessionId ?? '')
+  // Elapsed wall-clock time for the active session's current turn; drives the
+  // "Working for 2m 14s" hint next to the thinking indicator.
+  const [busyElapsedMs, setBusyElapsedMs] = useState(0)
+  useEffect(() => {
+    if (!busy) {
+      setBusyElapsedMs(0)
+      return
+    }
+    const startedAt = Date.now()
+    setBusyElapsedMs(0)
+    const timer = window.setInterval(() => setBusyElapsedMs(Date.now() - startedAt), 1000)
+    return () => window.clearInterval(timer)
+  }, [busy])
   // Non-harness sessions (and drafts of one) hide harness-only composer controls.
   const engineSessionIds = useMemo(() => new Set(engineSessions.map((session) => session.sessionId)), [engineSessions])
   const activeEngineSession = activeSessionId !== null ? engineSessions.find((session) => session.sessionId === activeSessionId) : undefined
@@ -599,9 +630,32 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
     return undefined
   }
 
+  // Prompt that produced a given entry — walks back to the nearest user
+  // message so Retry on an assistant bubble resends the right turn.
+  function lastPromptBefore(list: ThreadEntry[], entryId: string): string | undefined {
+    const index = list.findIndex((item) => item.id === entryId)
+    if (index === -1) return undefined
+    for (let i = index; i >= 0; i--) {
+      const item = list[i]!
+      if (item.kind === 'user') return item.text
+    }
+    return undefined
+  }
+
+  // ChatGPT-style scroll: follow the newest content only while the user is
+  // already at (or near) the bottom; scrolling up to read wins.
+  const [atBottom, setAtBottom] = useState(true)
+  const onFeedScroll = (): void => {
+    const el = scrollRef.current
+    if (!el) return
+    setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 48)
+  }
+  const scrollToEnd = (smooth = true): void => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
+  }
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
-  }, [entries.length])
+    if (atBottom) scrollToEnd(false)
+  }, [entries.length, atBottom])
 
   useEffect(() => {
     const handleOutsideClick = (event: MouseEvent): void => {
@@ -948,28 +1002,11 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
         ) : null}
 
         {changedFiles.length > 0 ? (
-          <div className="mx-3 my-1.5 flex items-center justify-between rounded-lg border border-border-soft bg-surface-1 px-2.5 py-1.5 text-[11px]">
-            <div className="flex min-w-0 items-center gap-1.5 text-soft">
-              <ChevronRightIcon className="size-3.5 shrink-0 text-faint" />
-              <span className="font-semibold text-foreground">{changedFiles.length} file{changedFiles.length === 1 ? '' : 's'} changed</span>
-              <div className="flex min-w-0 items-center gap-[5px]">
-                {changedFiles.slice(0, 4).map((file) => (
-                  <button
-                    key={file}
-                    className="max-w-[170px] cursor-pointer truncate rounded border border-border-soft bg-surface-0 px-1.5 py-0.5 font-mono text-[8px] text-primary transition-colors hover:bg-primary/10"
-                    onClick={() => onOpenFile?.(file)}
-                    title={file}
-                  >
-                    {file}
-                  </button>
-                ))}
-                {changedFiles.length > 4 ? <span className="whitespace-nowrap text-[9px] text-faint">+{changedFiles.length - 4} more</span> : null}
-              </div>
-            </div>
-          </div>
+          <ChangedFilesCard files={changedFiles} {...(onOpenFile ? { onOpenFile } : {})} onError={onError} />
         ) : null}
 
-        <div className="min-h-0 flex-1 overflow-auto px-3 pt-2.5 pb-4" ref={scrollRef}>
+        <div className="relative min-h-0 flex-1">
+          <div className="h-full overflow-auto px-3 pt-2.5 pb-4" ref={scrollRef} onScroll={onFeedScroll}>
           {entries.length === 0 && !busy ? (
             <div className="flex h-full flex-col items-center justify-center gap-1 p-5 text-center text-faint">
               <span className="mb-1.5 grid size-[46px] place-items-center rounded-xl border border-primary/30 bg-primary/10 text-primary [&_svg]:size-5"><SparkIcon /></span>
@@ -977,21 +1014,29 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
               <p className="m-0 max-w-[300px] text-[9px]/[1.6]">Ask anything about this workspace — open files, inspect the browser, or plan company goals. Context used during the thread appears on the composer badge.</p>
             </div>
           ) : null}
-          {groupEntries(entries).map((group) => (
-            <Fragment key={group.key}>
-              {group.kind === 'tool-group' ? (
-                <ToolGroupView group={group} {...(onOpenFile ? { onOpenFile } : {})} />
-              ) : (
-                <ThreadEntryView
-                  entry={group.entry}
-                  onAnswerApproval={answerApproval}
-                  onRetry={retry}
-                  onSwitchModel={() => { setModelMenuOpen(true); setModelMenuPane('root') }}
-                  {...(onOpenFile ? { onOpenFile } : {})}
-                />
-              )}
-            </Fragment>
-          ))}
+          {groupEntries(entries).map((group, index, groups) => {
+            const isLastAssistant = group.kind === 'entry'
+              && group.entry.kind === 'assistant'
+              && groups.slice(index + 1).every((later) => later.kind === 'tool-group' || later.entry.kind !== 'assistant')
+            const entryRetryPrompt = group.kind === 'entry' && group.entry.kind === 'user' ? group.entry.text : lastPromptBefore(entries, group.key)
+            return (
+              <Fragment key={group.key}>
+                {group.kind === 'tool-group' ? (
+                  <ToolGroupView group={group} {...(onOpenFile ? { onOpenFile } : {})} />
+                ) : (
+                  <ThreadEntryView
+                    entry={group.entry}
+                    isLastAssistant={isLastAssistant}
+                    {...(entryRetryPrompt ? { retryPrompt: entryRetryPrompt } : {})}
+                    onAnswerApproval={answerApproval}
+                    onRetry={retry}
+                    onSwitchModel={() => { setModelMenuOpen(true); setModelMenuPane('root') }}
+                    {...(onOpenFile ? { onOpenFile } : {})}
+                  />
+                )}
+              </Fragment>
+            )
+          })}
           {busy ? (
             <div className="mb-2 flex items-center gap-2.5">
               <span className="grid size-[20px] shrink-0 place-items-center rounded-full bg-primary/15 [&_svg]:size-[11px]">
@@ -1004,7 +1049,21 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
               <em className="text-[11px] font-normal not-italic text-faint">
                 {status?.state === 'starting' && onHarnessThread ? 'Starting runtime…' : onHarnessThread ? 'Thinking…' : `${activeEngineName} is working…`}
               </em>
+              {busyElapsedMs >= 30_000 ? (
+                <span className="ml-auto mr-1 whitespace-nowrap font-mono text-[9px] tabular-nums text-fainter">
+                  Working for {formatElapsed(busyElapsedMs)}
+                </span>
+              ) : null}
             </div>
+          ) : null}
+          </div>
+          {!atBottom ? (
+            <button
+              className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1 rounded-full border border-border-strong bg-surface-1 px-2.5 py-1 text-[9px] font-medium text-soft shadow-[0_4px_16px_rgba(0,0,0,0.35)] transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[10px]"
+              onClick={() => { setAtBottom(true); scrollToEnd() }}
+            >
+              <ChevronDownIcon /> Latest
+            </button>
           ) : null}
         </div>
 
@@ -1152,8 +1211,8 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
                 }
               }}
               placeholder="Ask the agent to work in this workspace — use @ for files and / for skills"
-              rows={3}
-              className="w-full resize-none bg-transparent text-xs/[1.5] text-foreground outline-none placeholder:text-faint"
+              rows={1}
+              className="max-h-[180px] w-full resize-none overflow-y-auto bg-transparent text-xs/[1.5] text-foreground outline-none placeholder:text-faint"
             />
           </div>
 
@@ -1604,34 +1663,59 @@ function ContextRow({ label, value }: { label: string; value: string }) {
 
 interface ThreadEntryViewProps {
   entry: ThreadEntry
+  isLastAssistant?: boolean
+  retryPrompt?: string
   onAnswerApproval?(entry: Extract<ThreadEntry, { kind: 'approval' }>, outcome: 'allowed-once' | 'rejected'): void
   onOpenFile?(path: string): void
   onRetry?(prompt: string): void
   onSwitchModel?(): void
 }
 
-function ThreadEntryView({ entry, onAnswerApproval, onOpenFile, onRetry, onSwitchModel }: ThreadEntryViewProps) {
+function ThreadEntryView({ entry, isLastAssistant, retryPrompt, onAnswerApproval, onOpenFile, onRetry, onSwitchModel }: ThreadEntryViewProps) {
   switch (entry.kind) {
     case 'user':
       return (
-        <div className="mb-4 flex justify-end">
-          <article className="max-w-[85%] rounded-2xl rounded-br-sm bg-info/[0.13] px-3.5 py-2.5">
-            <div className="whitespace-pre-wrap [overflow-wrap:anywhere] text-[12.5px]/[1.65] text-foreground">{entry.text}</div>
-          </article>
+        <div className="group mb-4 flex justify-end">
+          <div className="flex max-w-[85%] items-end gap-1.5">
+            <CopyMessageButton text={entry.text} />
+            <article className="rounded-2xl rounded-br-sm bg-info/[0.13] px-3.5 py-2.5">
+              <div className="whitespace-pre-wrap [overflow-wrap:anywhere] text-[12.5px]/[1.65] text-foreground">{entry.text}</div>
+            </article>
+          </div>
         </div>
       )
-    case 'assistant':
+    case 'assistant': {
+      const segments = splitAssistantSegments(entry.text)
       return (
-        <article className="mb-2 flex items-start gap-2.5">
+        <article className="group mb-2 flex items-start gap-2.5">
           <span className="mt-[2px] grid size-[20px] shrink-0 place-items-center rounded-full bg-primary/15 text-primary [&_svg]:size-[11px]">
             <SparkIcon />
           </span>
-          <div className="min-w-0 flex-1 pb-1 whitespace-pre-wrap [overflow-wrap:anywhere] text-[12.5px]/[1.7] text-foreground/90">
-            {entry.text}
+          <div className="min-w-0 flex-1 pb-1">
+            {segments.map((segment, index) => {
+              if (segment.kind === 'review') return <ReviewVerdictCard key={index} review={segment.review} />
+              if (segment.kind === 'plan') return <PlanSubmittedCard key={index} plan={segment.plan} />
+              return <MarkdownLite key={index} text={segment.text} />
+            })}
             {entry.streaming ? <span className="ml-0.5 inline-block h-[13px] w-1.5 animate-caret-blink bg-primary align-bottom" /> : null}
+            {!entry.streaming ? (
+              <div className="mt-1 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                <CopyMessageButton text={entry.text} labeled />
+                {isLastAssistant && onRetry && retryPrompt ? (
+                  <button
+                    className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[9px] font-medium text-faint transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[10px]"
+                    title="Regenerate from the last prompt"
+                    onClick={() => onRetry(retryPrompt)}
+                  >
+                    <RotateIcon /> Retry
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         </article>
       )
+    }
     case 'notice':
       return (
         <article
@@ -1784,13 +1868,17 @@ function ToolGroupView({ group, onOpenFile }: {
     <SparkIcon className="text-primary/60" />
   ) : group.icon === 'read' ? (
     <FileIcon className="text-faint" />
+  ) : group.icon === 'command' ? (
+    <TerminalIcon className={cn(hasRunning ? 'text-info' : hasError ? 'text-destructive' : 'text-faint')} />
+  ) : group.icon === 'search' ? (
+    <SearchIcon className={cn(hasRunning ? 'text-info' : hasError ? 'text-destructive' : 'text-faint')} />
   ) : (
     <ContextIcon className={cn(hasRunning ? 'text-info' : hasError ? 'text-destructive' : 'text-faint')} />
   )
 
   return (
     <div className="mb-2 ml-[30px]">
-      {/* Summary row — matches the ZCode reference pill style */}
+      {/* Summary pill — icon + friendly verb label + expand/collapse */}
       <button
         className={cn(
           'flex items-center gap-1.5 rounded-md py-[3px] pl-[5px] pr-2 text-[11px] transition-colors hover:bg-accent [&_svg]:size-[11px]',
@@ -1806,12 +1894,14 @@ function ToolGroupView({ group, onOpenFile }: {
         <ChevronDownIcon className={cn('ml-0.5 transition-transform [&]:size-[10px]', open && 'rotate-180')} />
       </button>
 
-      {/* Expanded sub-rows */}
+      {/* Expanded rows inside a soft bordered box, like a mini terminal log */}
       {open ? (
-        <div className="mt-0.5 flex flex-col pl-1.5">
+        <div className="mt-1 flex flex-col gap-px rounded-lg border border-border-soft bg-surface-1 px-1 py-1">
           {group.tools.map((tool) => {
             const path = toolPath(tool.args)
-            const rowLabel = path ?? tool.name
+            const preview = toolPreview(tool)
+            const rowLabel = preview ?? path ?? tool.name
+            const isCommand = group.icon === 'command' && preview !== undefined
             const clickable = Boolean(path && onOpenFile)
             const Wrapper = clickable ? 'button' : 'div'
             return (
@@ -1825,22 +1915,134 @@ function ToolGroupView({ group, onOpenFile }: {
                   tool.status === 'error' && '!text-destructive',
                 )}
                 {...(clickable ? { onClick: () => onOpenFile!(path!) } : {})}
-                title={tool.result ? tool.result.slice(0, 120) : tool.name}
+                title={tool.result ? tool.result.slice(0, 120) : rowLabel}
               >
-                {group.icon === 'file' || group.icon === 'read' ? <FileIcon /> : group.icon === 'skill' ? <SparkIcon /> : <ContextIcon />}
+                {isCommand ? (
+                  <span className="shrink-0 select-none text-primary/70">$</span>
+                ) : group.icon === 'file' || group.icon === 'read' ? (
+                  <FileIcon />
+                ) : group.icon === 'skill' ? (
+                  <SparkIcon />
+                ) : group.icon === 'command' ? (
+                  <TerminalIcon />
+                ) : group.icon === 'search' ? (
+                  <SearchIcon />
+                ) : (
+                  <ContextIcon />
+                )}
                 <span className="min-w-0 truncate">{rowLabel}</span>
                 {tool.status === 'running' ? (
                   <span className="ml-auto shrink-0 animate-pulse-dot font-sans text-[8px] not-italic text-info">running</span>
                 ) : tool.status === 'error' ? (
                   <span className="ml-auto shrink-0 font-sans text-[8px] not-italic text-destructive">failed</span>
                 ) : (
-                  <ChevronRightIcon className="ml-auto shrink-0 text-fainter/50" />
+                  <CheckIcon className="ml-auto shrink-0 text-fainter/50" />
                 )}
               </Wrapper>
             )
           })}
         </div>
       ) : null}
+    </div>
+  )
+}
+
+function CopyMessageButton({ text, labeled = false }: { text: string; labeled?: boolean }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <button
+      className={cn(
+        'flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[9px] font-medium text-faint transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[10px]',
+        labeled ? '' : 'mb-0.5 opacity-0 group-hover:opacity-100',
+      )}
+      title="Copy message"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text)
+          setCopied(true)
+          window.setTimeout(() => setCopied(false), 1_600)
+        } catch {
+          // Clipboard may be denied; nothing to fall back to in the renderer.
+        }
+      }}
+    >
+      {copied ? <CheckIcon /> : <CopyIcon />}
+      {labeled ? (copied ? 'Copied' : 'Copy') : null}
+    </button>
+  )
+}
+
+function ReviewVerdictCard({ review }: { review: ReviewVerdict }) {
+  const passed = review.verdict === 'pass'
+  return (
+    <div className={cn(
+      'mb-2 mt-1 rounded-lg border px-3 py-2.5',
+      passed ? 'border-primary/30 bg-primary/[0.06]' : 'border-destructive/30 bg-destructive/[0.07]',
+    )}>
+      <div className="mb-1.5 flex items-center gap-1.5">
+        <span className={cn(
+          'inline-flex items-center gap-1 rounded-full px-1.5 py-px text-[9px] font-bold uppercase tracking-[0.06em] [&_svg]:size-[9px]',
+          passed ? 'bg-primary/15 text-primary' : 'bg-destructive/15 text-destructive',
+        )}>
+          {passed ? <CheckIcon /> : <CloseIcon />}
+          {review.verdict}
+        </span>
+        <span className="text-[9px] font-semibold uppercase tracking-[0.08em] text-faint">Review verdict</span>
+      </div>
+      <div className="whitespace-pre-wrap [overflow-wrap:anywhere] text-[11px]/[1.6] text-soft">{review.summary}</div>
+      {review.issues && review.issues.length > 0 ? (
+        <div className="mt-2 border-t border-border-soft pt-1.5">
+          <div className="mb-[3px] text-[9px] font-semibold uppercase tracking-[0.08em] text-warning">Issues</div>
+          {review.issues.map((issue, index) => (
+            <div key={index} className="flex items-start gap-1.5 py-px text-[10.5px]/[1.5] text-soft">
+              <span className="mt-[5px] size-[4px] shrink-0 rounded-full bg-warning" />
+              <span className="min-w-0">{issue}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {review.memory && review.memory.length > 0 ? (
+        <div className="mt-2 flex flex-wrap gap-1 border-t border-border-soft pt-1.5">
+          {review.memory.map((lesson, index) => (
+            <span
+              key={index}
+              className="inline-flex max-w-full items-center gap-1 rounded-full border border-border-soft bg-surface-1 px-1.5 py-px text-[9px] text-faint"
+              title={lesson.content}
+            >
+              <BrainIcon className="size-[9px] shrink-0 text-faint" />
+              <span className="truncate">{lesson.title}</span>
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function PlanSubmittedCard({ plan }: { plan: ProjectPlanInput }) {
+  const taskCount = plan.milestones.reduce((sum, milestone) => sum + (milestone.tasks?.length ?? 0), 0)
+  return (
+    <div className="mb-2 mt-1 rounded-lg border border-info/25 bg-info/[0.06] px-3 py-2.5">
+      <div className="mb-1 flex items-center gap-1.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-info [&_svg]:size-[10px]">
+        <FolderIcon /> Project plan
+      </div>
+      <div className="text-[11.5px] font-semibold text-foreground">{plan.goal.title}</div>
+      <div className="mt-0.5 text-[10.5px]/[1.5] text-soft">{plan.goal.description}</div>
+      <div className="mt-1.5 flex flex-wrap gap-1">
+        {plan.milestones.map((milestone, index) => (
+          <span
+            key={index}
+            className="inline-flex max-w-full items-center gap-1 rounded-full border border-border-soft bg-surface-1 px-1.5 py-px text-[9px] text-faint"
+            title={milestone.description}
+          >
+            <span className="truncate font-medium text-soft">{milestone.title}</span>
+            <span className="shrink-0">{milestone.tasks?.length ?? 0} task{(milestone.tasks?.length ?? 0) === 1 ? '' : 's'}</span>
+          </span>
+        ))}
+      </div>
+      <div className="mt-1.5 text-[9px] text-faint">
+        {plan.milestones.length} milestone{plan.milestones.length === 1 ? '' : 's'} · {taskCount} task{taskCount === 1 ? '' : 's'} queued
+      </div>
     </div>
   )
 }
@@ -2076,6 +2278,13 @@ function collectThreadContext(entries: ThreadEntry[]): ThreadContext {
     userMessages,
     assistantMessages,
   }
+}
+
+function formatElapsed(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000)
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`
 }
 
 function toolPath(args: unknown): string | undefined {
