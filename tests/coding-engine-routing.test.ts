@@ -31,6 +31,7 @@ class FakeHarness {
 class FakeEngineRuns {
   created: string[] = []
   runs: Array<{ prompt: string; sessionId?: string }> = []
+  stopped: string[] = []
   private engineSessionCounter = 0
 
   constructor(private readonly harness: FakeHarness) {}
@@ -49,6 +50,10 @@ class FakeEngineRuns {
     if (sessionId?.startsWith('session-')) return this.harness.run(prompt, { sessionId })
     this.runs.push({ prompt, ...(sessionId !== undefined ? { sessionId } : {}) })
     return { sessionId: sessionId ?? 'engine-session' }
+  }
+
+  async stopSession(sessionId: string): Promise<void> {
+    this.stopped.push(sessionId)
   }
 }
 
@@ -102,7 +107,6 @@ describe('organization coding-engine routing', () => {
 
     const receiptResult = await orchestrator.runTask(task.id)
 
-    // The direct path never touches the harness runtime.
     expect(harness.prompts).toHaveLength(0)
     expect(harness.sessions).toHaveLength(0)
     expect(engineRuns.created).toEqual([CODEX_CLI_ENGINE_ID])
@@ -111,6 +115,24 @@ describe('organization coding-engine routing', () => {
     expect(engineRuns.runs[0]?.prompt).not.toContain('subagent_codex')
     expect(receiptResult.sessionId).toBe('engine-session-1')
     expect((await store.state()).tasks[0]?.status).toBe('in_progress')
+  })
+
+  it('cancels exactly the direct engine session owned by an organization run', async () => {
+    const { store, task, harness } = await fixture()
+    const engines = {
+      assignedEngine: async () => CODEX_CLI_ENGINE_ID,
+      assertAvailable: () => descriptor(CODEX_CLI_ENGINE_ID),
+    }
+    const engineRuns = new FakeEngineRuns(harness)
+    const orchestrator = new OrganizationOrchestrator(store, harness as never, new FakeWorkspace() as never, engines as never, engineRuns as never)
+    const run = await orchestrator.runTask(task.id)
+
+    await orchestrator.cancelRun(run.runId)
+
+    expect(engineRuns.stopped).toEqual([run.sessionId])
+    const state = await store.state()
+    expect(state.runs.find((item) => item.id === run.runId)?.status).toBe('failed')
+    expect(state.tasks.find((item) => item.id === task.id)?.status).toBe('blocked')
   })
 
   it('keeps unassigned employees on the ND Harness execution path through the router', async () => {
