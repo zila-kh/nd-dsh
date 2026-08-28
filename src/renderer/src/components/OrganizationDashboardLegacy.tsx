@@ -7,6 +7,8 @@ import type { OrganizationPolicyEffect, OrganizationRun, OrganizationSnapshot, O
 import { DEFAULT_PROJECT_PORT } from '../../../shared/organization'
 import { Card as UiCard } from './ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog'
+import { Input } from './ui/input'
 import { cn } from '../lib/utils'
 
 interface Props {
@@ -41,6 +43,7 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onError }: Pr
   const [section, setSection] = useState<Section>('overview')
   const [busy, setBusy] = useState<string | null>(null)
   const [companyDraft, setCompanyDraft] = useState({ name: '', mission: '' })
+  const [showCreateCompany, setShowCreateCompany] = useState(false)
   const [projectDraft, setProjectDraft] = useState({ name: '', objective: '', workspacePath: workspace?.root ?? '' })
   const [taskDraft, setTaskDraft] = useState({ title: '', description: '', priority: 'medium' as TaskPriority })
   const [memoryDraft, setMemoryDraft] = useState({ title: '', content: '' })
@@ -187,6 +190,7 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onError }: Pr
     await action('company', async () => {
       await mutate({ type: 'company.create', name: companyDraft.name, mission: companyDraft.mission })
       setCompanyDraft({ name: '', mission: '' })
+      setShowCreateCompany(false)
     })
   }
 
@@ -310,22 +314,9 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onError }: Pr
   ]
 
   return <div className="grid h-full min-h-0 grid-rows-[auto_auto_auto_auto_minmax(0,1fr)] overflow-hidden bg-surface-0 text-foreground">
-    <header className="flex items-center justify-between gap-[18px] border-b border-border-soft bg-sidebar px-4 py-3">
-      <div className="flex items-center gap-[9px]">
-        <span className="grid size-[34px] shrink-0 place-items-center rounded-lg border border-primary/30 bg-primary/10 text-[15px] font-extrabold text-primary">{initials(company.name)}</span>
-        <div className="flex min-w-0 flex-col">
-          <small className="text-[11px] tracking-[0.12em] text-faint">COMPANY</small>
-          <Select value={company.id} onValueChange={(value) => void action('company-switch', () => mutate({ type: 'company.activate', id: value }))}>
-            <SelectTrigger aria-label="Switch company" className="max-w-[260px] gap-2 border-0 bg-transparent p-0 text-[18px] font-semibold text-foreground shadow-none [&>svg]:size-4">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {state.companies.map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
+    <header className="flex items-center justify-end gap-[18px] border-b border-border-soft bg-sidebar px-4 py-3">
       <div className="flex flex-wrap items-center justify-end gap-[9px]">
+        <button className={orgButton} onClick={() => setShowCreateCompany(true)}>+ New</button>
         <label className="flex items-center gap-1.5 text-sm text-muted-foreground" title="Autonomy level">
           Autonomy
           <Select value={String(company.autonomyLevel)} onValueChange={(value) => void action('autonomy', () => mutate({ type: 'company.update', id: company.id, patch: { autonomyLevel: Number(value) as 0 | 1 | 2 | 3 | 4 } }))}>
@@ -346,8 +337,30 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onError }: Pr
       </div>
     </header>
 
+    <Dialog open={showCreateCompany} onOpenChange={setShowCreateCompany}>
+      <DialogContent className="sm:max-w-[460px]">
+        <DialogHeader>
+          <DialogTitle>Create AI company</DialogTitle>
+          <DialogDescription>Seeds an AI PM, builder, reviewer, researcher, teams, skills, workflow, memory boundary, and safety policies for the new company.</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={createCompany} className="grid gap-[9px]">
+          <Input placeholder="Company name" value={companyDraft.name} onChange={(event) => setCompanyDraft((value) => ({ ...value, name: event.target.value }))} required autoFocus />
+          <Input placeholder="Company mission" value={companyDraft.mission} onChange={(event) => setCompanyDraft((value) => ({ ...value, mission: event.target.value }))} required />
+          <DialogFooter>
+            <DialogClose asChild>
+              <button type="button" className={orgButton} onClick={() => setShowCreateCompany(false)}>Cancel</button>
+            </DialogClose>
+            <button type="submit" className={orgPrimaryButton} disabled={busy !== null}>{busy === 'company' ? 'Creating…' : 'Create AI company'}</button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+
     <div className="flex min-h-[46px] items-stretch overflow-x-auto border-b border-border-soft bg-surface-1">
       <strong className="flex items-center px-3 text-xs tracking-[0.1em] text-faint">PROJECTS</strong>
+      {projects.length === 0 ? (
+        <span role="status" className="flex items-center px-3 text-sm text-faint">No projects yet — create one below</span>
+      ) : null}
       {projects.map((item) => (
         <button
           key={item.id}
@@ -718,7 +731,6 @@ function Empty({ text }: { text: string }) {
 }
 
 function sectionLabel(value: Section): string { return value === 'workforce' ? 'Teams & Skills' : value === 'knowledge' ? 'Memory & Policies' : `${value[0]?.toUpperCase()}${value.slice(1)}` }
-function initials(value: string): string { return value.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('') || 'ND' }
 function short(value: string): string { return value.length > 14 ? `${value.slice(0, 6)}…${value.slice(-5)}` : value }
 function clock(value: number): string { return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) }
 function runKindLabel(kind: OrganizationRun['kind']): string {

@@ -9,12 +9,13 @@ interface Props {
   workspace: WorkspaceState | null
   onOpenDeepSeek(): void
   onError(message: string): void
+  companyView: CompanyView
+  onCompanyViewChange(view: CompanyView): void
 }
 
-type CompanyView = 'workspace' | 'operations' | 'strategy'
+export type CompanyView = 'workspace' | 'operations' | 'strategy'
 
-export function OrganizationDashboard(props: Props) {
-  const [view, setView] = useState<CompanyView>('workspace')
+export function OrganizationDashboard({ workspace, onOpenDeepSeek, onError, companyView, onCompanyViewChange }: Props) {
   const [state, setState] = useState<OrganizationSnapshot | null>(null)
   const [cancelingRunId, setCancelingRunId] = useState<string | null>(null)
 
@@ -22,7 +23,7 @@ export function OrganizationDashboard(props: Props) {
     let mounted = true
     void window.ndDshOrganization.state()
       .then((next) => { if (mounted) setState(next) })
-      .catch((cause) => props.onError(errorMessage(cause)))
+      .catch((cause) => onError(errorMessage(cause)))
     const off = window.ndDshOrganization.onChanged((next) => {
       if (mounted) setState(next)
     })
@@ -30,7 +31,7 @@ export function OrganizationDashboard(props: Props) {
       mounted = false
       off()
     }
-  }, [props.onError])
+  }, [onError])
 
   const company = state?.companies.find((item) => item.id === state.activeCompanyId) ?? state?.companies[0]
   const project = state?.projects.find((item) => item.id === state.activeProjectId && item.companyId === company?.id)
@@ -47,7 +48,7 @@ export function OrganizationDashboard(props: Props) {
     try {
       await window.ndDshOrganization.cancelRun(activeRun.id)
     } catch (cause) {
-      props.onError(errorMessage(cause))
+      onError(errorMessage(cause))
     } finally {
       setCancelingRunId(null)
     }
@@ -73,31 +74,31 @@ export function OrganizationDashboard(props: Props) {
             </button>
           ) : null}
           <div className="flex items-center rounded-md border border-border-strong bg-secondary p-0.5">
-            <button type="button" className={viewButton(view === 'workspace')} onClick={() => setView('workspace')}>Company Workspace</button>
-            <button type="button" className={viewButton(view === 'operations')} onClick={() => setView('operations')}>Operations</button>
-            <button type="button" className={viewButton(view === 'strategy')} onClick={() => setView('strategy')}>Strategy</button>
+            <button type="button" className={viewButton(companyView === 'workspace')} onClick={() => onCompanyViewChange('workspace')}>Company Workspace</button>
+            <button type="button" className={viewButton(companyView === 'operations')} onClick={() => onCompanyViewChange('operations')}>Operations</button>
+            <button type="button" className={viewButton(companyView === 'strategy')} onClick={() => onCompanyViewChange('strategy')}>Strategy</button>
           </div>
         </div>
       </div>
 
       <div className="min-h-0 flex-1">
-        {view === 'workspace' ? (
-          <OrganizationDashboardLegacy {...props} />
+        {companyView === 'workspace' ? (
+          <OrganizationDashboardLegacy workspace={workspace} onOpenDeepSeek={onOpenDeepSeek} onError={onError} />
         ) : company ? (
           <div className="h-full overflow-auto p-[14px]">
-            {view === 'operations' ? (
+            {companyView === 'operations' ? (
               <OrganizationControlCenter
                 companyId={company.id}
                 {...(project ? { projectId: project.id } : {})}
                 agents={agents}
-                onError={props.onError}
+                onError={onError}
               />
             ) : (
               <OrganizationStrategyCenter
                 companyId={company.id}
                 {...(project ? { projectId: project.id } : {})}
                 agents={agents}
-                onError={props.onError}
+                onError={onError}
               />
             )}
           </div>

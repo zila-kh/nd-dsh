@@ -1,9 +1,13 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import { toast } from 'sonner'
 import type { BrowserState, ExternalElementPickView, HarnessStatus, InspectScope, ThemeMode, ThemeState, WorkspaceFile, WorkspaceState } from '../../shared/contracts'
+import type { OrganizationSnapshot } from '../../shared/organization'
 import { BrowserPane } from './components/BrowserPane'
 import { Button } from './components/ui/button'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select'
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from './components/ui/dialog'
+import { Input } from './components/ui/input'
 import { Badge } from './components/ui/badge'
 import { Toaster } from './components/ui/sonner'
 import { ChatPanel } from './components/ChatPanel'
@@ -12,7 +16,7 @@ import { DiffView } from './components/DiffView'
 import { EditorPane } from './components/EditorPane'
 import { Explorer } from './components/Explorer'
 import { BrowserIcon, CameraIcon, CompanyIcon, CrosshairIcon, ExternalIcon, FileIcon, MonitorIcon, PencilIcon, QualityIcon, SettingsIcon, SidebarToggleIcon, SparkIcon } from './components/Icons'
-import { OrganizationDashboard } from './components/OrganizationDashboard'
+import { OrganizationDashboard, type CompanyView } from './components/OrganizationDashboard'
 import { QaView } from './components/QaView'
 import { RuntimePrompts } from './components/RuntimePrompts'
 import { ThemeToggle } from './components/ThemeToggle'
@@ -100,11 +104,17 @@ export default function App() {
   const isFloatOverlay = isFloatOverlayRoute()
   const uiPreview = window.ndDshRuntimeMode === 'ui-preview'
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null)
+  const [orgState, setOrgState] = useState<OrganizationSnapshot | null>(null)
   const [browserState, setBrowserState] = useState<BrowserState | null>(null)
   const [harnessStatus, setHarnessStatus] = useState<HarnessStatus | null>(null)
   const [selectedFile, setSelectedFile] = useState<WorkspaceFile | null>(null)
   const [activeDiff, setActiveDiff] = useState<{ relativePath: string; staged: boolean } | null>(null)
   const [view, setView] = useState<ProductView>(viewFromHash)
+  const [companyView, setCompanyView] = useState<CompanyView>('workspace')
+  const [companyCreateOpen, setCompanyCreateOpen] = useState(false)
+  const [companyDraft, setCompanyDraft] = useState({ name: '', mission: '' })
+  const [failedCompanyIds, setFailedCompanyIds] = useState<Set<string>>(() => new Set())
+  const [failedProjectIds, setFailedProjectIds] = useState<Set<string>>(() => new Set())
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(settingsTabFromLocation)
   const [settingsSubTabs, setSettingsSubTabs] = useState<SettingsSubTabs>(settingsSubTabsFromLocation)
   const [agentPane, setAgentPane] = useState<AgentPane>('files')
@@ -158,6 +168,20 @@ export default function App() {
     const hasSummary = pendingAppInspect !== null
     void window.ndDsh.window?.resizeFloatWindow(hasSummary ? 324 : 170, hasSummary ? 194 : 56)
   }, [isFloatOverlay, pendingAppInspect])
+
+  useEffect(() => {
+    let mounted = true
+    void window.ndDshOrganization.state()
+      .then((next) => { if (mounted) setOrgState(next) })
+      .catch((cause) => notify(errorMessage(cause)))
+    const off = window.ndDshOrganization.onChanged((next) => {
+      if (mounted) setOrgState(next)
+    })
+    return () => {
+      mounted = false
+      off()
+    }
+  }, [notify])
 
   const handlePillPointerDown = (e: React.PointerEvent<HTMLDivElement>): void => {
     // Buttons opt out of the draggable region. Capturing their pointer on the
@@ -451,6 +475,29 @@ export default function App() {
     setView('agent')
   }
 
+  const company = orgState?.companies.find((item) => item.id === orgState.activeCompanyId) ?? orgState?.companies[0] ?? null
+  const companyProjects = orgState && company ? orgState.projects.filter((item) => item.companyId === company.id) : []
+  const project = companyProjects.find((item) => item.id === orgState?.activeProjectId) ?? companyProjects[0] ?? null
+
+  const createCompany = (event: FormEvent): void => {
+    event.preventDefault()
+    void window.ndDshOrganization.mutate({ type: 'company.create', name: companyDraft.name, mission: companyDraft.mission })
+      .then(() => { setCompanyDraft({ name: '', mission: '' }); setCompanyCreateOpen(false) })
+      .catch((cause) => notify(errorMessage(cause)))
+  }
+
+  const switchCompany = (id: string): void => {
+    void window.ndDshOrganization.mutate({ type: 'company.activate', id })
+      .then(() => setFailedCompanyIds((prev) => (prev.has(id) ? new Set([...prev].filter((value) => value !== id)) : prev)))
+      .catch(() => setFailedCompanyIds((prev) => new Set(prev).add(id)))
+  }
+
+  const switchProject = (id: string): void => {
+    void window.ndDshOrganization.mutate({ type: 'project.activate', id })
+      .then(() => setFailedProjectIds((prev) => (prev.has(id) ? new Set([...prev].filter((value) => value !== id)) : prev)))
+      .catch(() => setFailedProjectIds((prev) => new Set(prev).add(id)))
+  }
+
   const navItems: Array<{ id: ProductView; label: string; icon: ReactNode }> = [
     { id: 'company', label: 'Company', icon: <CompanyIcon /> },
     { id: 'agent', label: 'Agent', icon: <SparkIcon /> },
@@ -529,27 +576,81 @@ export default function App() {
   }
 
   return (
-    <div className={cn('grid h-full w-full select-none bg-[radial-gradient(circle_at_35%_-20%,var(--bg-glow),transparent_35%)]', uiPreview ? 'grid-rows-[25px_38px_minmax(0,1fr)]' : 'grid-rows-[38px_minmax(0,1fr)]')}>
+    <div className={cn('grid h-full w-full select-none bg-[radial-gradient(circle_at_35%_-20%,var(--bg-glow),transparent_35%)]', uiPreview ? 'grid-rows-[25px_auto_minmax(0,1fr)]' : 'grid-rows-[auto_minmax(0,1fr)]')}>
       {uiPreview ? (
         <aside className="flex items-center justify-center border-b border-warning/25 bg-warning/10 px-3 text-[10px] font-bold tracking-[0.08em] text-warning">
           UI PREVIEW · DEVELOPMENT FIXTURES · ACTIONS ARE SIMULATED · LAUNCH ELECTRON FOR REAL RUNTIME FEATURES
         </aside>
       ) : null}
       <header className="app-drag grid grid-cols-[minmax(180px,1fr)_auto_minmax(180px,1fr)] items-center gap-[18px] border-b border-border-soft bg-titlebar pr-[148px] pl-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <TitlebarIconButton
-            title={sessionsCollapsed ? 'Expand sessions sidebar' : 'Collapse sessions sidebar'}
-            onClick={() => setSessionsCollapsed((collapsed) => !collapsed)}
-          >
-            <SidebarToggleIcon collapsed={sessionsCollapsed} />
-          </TitlebarIconButton>
-          <span className="grid size-6 shrink-0 place-items-center rounded-[7px] border border-primary/30 bg-primary/10 text-sm font-extrabold tracking-[0.08em] text-primary">ND</span>
-          <div className="flex min-w-0 flex-col">
-            <strong className="text-[15px] tracking-[0.06em] text-strong">ND-DSH</strong>
-            <span className="overflow-hidden text-xs text-faint text-ellipsis whitespace-nowrap">
-              {workspace?.projectName ?? workspace?.name ?? 'No workspace'}
-            </span>
+        <div className="flex min-w-0 flex-col gap-[7px]">
+          <div className="flex min-w-0 items-center gap-2">
+            <TitlebarIconButton
+              title={sessionsCollapsed ? 'Expand sessions sidebar' : 'Collapse sessions sidebar'}
+              onClick={() => setSessionsCollapsed((collapsed) => !collapsed)}
+            >
+              <SidebarToggleIcon collapsed={sessionsCollapsed} />
+            </TitlebarIconButton>
+            <span className="grid size-6 shrink-0 place-items-center rounded-[7px] border border-primary/30 bg-primary/10 text-sm font-extrabold tracking-[0.08em] text-primary">ND</span>
+            <div className="flex min-w-0 flex-col">
+              <strong className="text-[15px] tracking-[0.06em] text-strong">ND-DSH</strong>
+              <span className="overflow-hidden text-xs text-faint text-ellipsis whitespace-nowrap">
+                {workspace?.projectName ?? workspace?.name ?? 'No workspace'}
+              </span>
+            </div>
           </div>
+          {orgState ? (
+            <div className="app-no-drag flex items-center gap-[8px]">
+              <label className="flex items-center gap-[5px]">
+                <span className="text-[10px] font-semibold tracking-[0.1em] text-faint">COMPANY</span>
+                <Select value={company?.id ?? ''} onValueChange={switchCompany}>
+                  <SelectTrigger size="sm" aria-label="Switch company" className="h-6! max-w-[220px]! min-w-0 gap-1.5 rounded-md border-border-strong bg-surface-1/50 px-2! text-xs! text-soft [&>svg]:size-3.5">
+                    <SelectValue placeholder="No company" />
+                  </SelectTrigger>
+                  <SelectContent align="start" position="popper">
+                    {orgState.companies.map((item) => <SelectItem key={item.id} value={item.id} disabled={failedCompanyIds.has(item.id)}>{item.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </label>
+              <Dialog open={companyCreateOpen} onOpenChange={setCompanyCreateOpen}>
+                <DialogTrigger asChild>
+                  <Button variant="outline" size="xs" className="h-6 shrink-0 rounded-md px-2 text-xs" title="Create a new AI company">
+                    + New
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="sm:max-w-[460px]">
+                  <DialogHeader>
+                    <DialogTitle>Create AI company</DialogTitle>
+                    <DialogDescription>Seeds an AI PM, builder, reviewer, researcher, teams, skills, workflow, memory boundary, and safety policies for the new company.</DialogDescription>
+                  </DialogHeader>
+                  <form onSubmit={createCompany} className="grid gap-[9px]">
+                    <Input placeholder="Company name" value={companyDraft.name} onChange={(event) => setCompanyDraft((value) => ({ ...value, name: event.target.value }))} required autoFocus />
+                    <Input placeholder="Company mission" value={companyDraft.mission} onChange={(event) => setCompanyDraft((value) => ({ ...value, mission: event.target.value }))} required />
+                    <DialogFooter>
+                      <DialogClose asChild>
+                        <Button variant="outline" type="button">Cancel</Button>
+                      </DialogClose>
+                      <Button type="submit">Create AI company</Button>
+                    </DialogFooter>
+                  </form>
+                </DialogContent>
+              </Dialog>
+              <label className="flex items-center gap-[5px]">
+                <span className="text-[10px] font-semibold tracking-[0.1em] text-faint">PROJECT</span>
+                <Select value={project?.id ?? ''} onValueChange={switchProject}>
+                  <SelectTrigger size="sm" aria-label="Switch project" className="h-6! max-w-[220px]! min-w-0 gap-1.5 rounded-md border-border-strong bg-surface-1/50 px-2! text-xs! text-soft [&>svg]:size-3.5">
+                    <SelectValue placeholder="No project" />
+                  </SelectTrigger>
+                  <SelectContent align="start" position="popper">
+                    {companyProjects.map((item) => <SelectItem key={item.id} value={item.id} disabled={failedProjectIds.has(item.id)}>{item.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </label>
+              <Button variant="outline" size="xs" className="h-6 rounded-md px-2 text-xs" onClick={() => { setView('company'); setCompanyView('operations') }}>
+                Manage
+              </Button>
+            </div>
+          ) : null}
         </div>
         <nav className="app-no-drag flex min-w-0 items-center justify-center" aria-label="ND-DSH navigation">
           <div className="flex min-w-0 items-center justify-center gap-0.5 rounded-lg border border-border-soft bg-surface-1/70 p-[3px] shadow-[inset_0_1px_0_rgba(255,255,255,0.025),0_4px_14px_rgba(0,0,0,0.12)]">
@@ -610,7 +711,7 @@ export default function App() {
 
       <main className="relative min-h-0 min-w-0 overflow-hidden bg-surface-0">
         <section aria-hidden={view !== 'company'} className={cn('absolute inset-0 overflow-hidden', view === 'company' ? 'block' : 'hidden')}>
-          <OrganizationDashboard workspace={workspace} onOpenDeepSeek={() => setView('agent')} onError={notify} />
+          <OrganizationDashboard workspace={workspace} onOpenDeepSeek={() => setView('agent')} onError={notify} companyView={companyView} onCompanyViewChange={setCompanyView} />
         </section>
 
         <section aria-hidden={view !== 'agent'} className={cn('absolute inset-0 overflow-hidden', view === 'agent' ? 'flex' : 'hidden')}>
