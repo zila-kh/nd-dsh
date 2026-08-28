@@ -5,8 +5,10 @@ import type { CodingEngineRegistry } from '../engines/coding-engine-registry.js'
 import type { EngineSessionRouter } from '../engines/engine-session-router.js'
 import type { HarnessService } from '../harness/harness-service.js'
 import type { WorkspaceService } from '../workspace/workspace-service.js'
+import { isRetryableExecutionFailure, MAX_EXECUTION_ATTEMPTS, retryBackoffMs, stallTimeoutMs } from './execution-reliability.js'
 import type { OrganizationStore } from './store.js'
 import { TaskWorktreeManager, type TaskWorktree } from './task-worktree.js'
+import { formatVerificationEvidence, runVerification } from './verification-evidence.js'
 
 interface ReviewVerdict {
   verdict: 'pass' | 'fail'
@@ -20,7 +22,11 @@ interface ReviewWorktreeCheckpoint {
   head: string
 }
 
-const MAX_AUTOPILOT_EXECUTION_ATTEMPTS = 3
+interface ExecutionAttemptBoundary {
+  worktree: TaskWorktree
+  head: string
+}
+
 const MAX_AUTOPILOT_PARALLEL_FILL = 16
 
 /**
@@ -34,7 +40,6 @@ const MAX_AUTOPILOT_PARALLEL_FILL = 16
 const STRUCTURED_RESULT_GRACE_MS = 2_500
 
 type WorkflowKind = 'plan' | 'execute' | 'review'
-
 type TaskEngine = Pick<CodingEngineDescriptor, 'id' | 'name' | 'workerInstructions'>
 
 const DEFAULT_WORKER_INSTRUCTIONS = '\nExecution engine: ND Harness. Work directly in the project workspace using the available ND tools.\n'
@@ -45,7 +50,11 @@ export class OrganizationOrchestrator {
   private structuredInFlight = new Set<string>()
   private autoAdvance = new Map<string, string>()
   private reviewWorktrees = new Map<string, ReviewWorktreeCheckpoint>()
+  private executionBaselines = new Map<string, ExecutionAttemptBoundary>()
+  private canceledSessions = new Set<string>()
+  private lastProgressAt = new Map<string, number>()
   private parallelFillProjects = new Set<string>()
+  private stallReconcileBusy = false
   private readonly taskWorktrees = new TaskWorktreeManager()
 
   constructor(
@@ -53,7 +62,7 @@ export class OrganizationOrchestrator {
     private readonly harness: HarnessService,
     private readonly workspace: WorkspaceService,
     private readonly engines?: Pick<CodingEngineRegistry, 'assignedEngine' | 'assertAvailable'>,
-    private readonly engineRuns?: Pick<EngineSessionRouter, 'createSession' | 'run'>,
+    private readonly engineRuns?: Pick<EngineSessionRouter, 'createSession' | 'run' | 'stopSession'>,
     private readonly projectRuntime?: { check(projectId: string): Promise<unknown> },
     private readonly capabilities?: { assertUsableForAgent(agent?: { id?: string; roleId?: string; teamId?: string }): Promise<void> },
   ) {}
@@ -72,10 +81,12 @@ export class OrganizationOrchestrator {
     const modelOpts = this.resolveAgentModel(pmAgent, pmRole)
     const sessionId = await this.harness.createSession()
     const run = await this.store.beginRun('pm-plan', context.company.id, projectId, sessionId)
+    this.lastProgressAt.set(sessionId, run.startedAt)
     try {
       await this.harness.run(pmPrompt(context), { sessionId, ...modelOpts })
     } catch (cause) {
-      await this.store.completeRun(run.id, undefined, errorMessage(cause)).catch(() => undefined)
+      const active = await this.store.runBySession(sessionId)
+      if (active) await this.store.completeRun(run.id, undefined, errorMessage(cause)).catch(() => undefined)
       throw cause
     }
     return receipt(run)
@@ -86,11 +97,18 @@ export class OrganizationOrchestrator {
     this.assertPolicy(await this.store.policy(context.company.id, 'task.execute'), explicit, 'task execution')
     if (!explicit && context.company.autonomyLevel < 3) throw new Error('Autonomy level 3+ is required for automatic execution')
     if (context.task.status !== 'ready' && context.task.status !== 'blocked') throw new Error(`Task is ${context.task.status}; only ready or blocked tasks can run`)
-    const engine = await this.resolveTaskEngine(context.agent?.id)
+
+    const state = await this.store.state()
+    const previousExecution = state.runs.find((item) => item.taskId === taskId && item.kind === 'task-execution')
+    const attempt = await this.store.executionAttemptCount(taskId) + 1
+    const useFallbackRoute = Boolean(previousExecution?.status === 'failed' && isRetryableExecutionFailure(previousExecution.error ?? ''))
+    const engine = await this.resolveTaskEngine(context.agent?.id, useFallbackRoute)
     const taskWorktree = await this.taskWorktrees.ensure(context.project.workspacePath, context.task.id)
-    const prompt = workerPrompt(context, engine, taskWorktree)
-    const modelOpts = this.resolveAgentModel(context.agent, context.role)
-    await this.assertTaskRunSlot(context.task.id, context.project.id, context.agent?.id, Boolean(taskWorktree))
+    await this.assertTaskRunSlot(context.task.id, context.project.id, Boolean(taskWorktree))
+    const attemptHead = taskWorktree ? await this.taskWorktrees.baseline(taskWorktree) : undefined
+    const prompt = workerPrompt(context, engine, attempt, taskWorktree)
+    const modelOpts = useFallbackRoute ? {} : this.resolveAgentModel(context.agent, context.role)
+
     if (!taskWorktree) await this.prepareWorkspace(context.project.workspacePath)
     await this.warmProjectTarget(context.project.id)
     await this.capabilities?.assertUsableForAgent(context.agent)
@@ -106,13 +124,21 @@ export class OrganizationOrchestrator {
       context.task.goalId,
       taskWorktree ? { parallelTask: true } : {},
     )
+    if (taskWorktree && attemptHead) this.executionBaselines.set(target.sessionId, { worktree: taskWorktree, head: attemptHead })
+    this.lastProgressAt.set(target.sessionId, run.startedAt)
+
     try {
       await this.store.markExecution(context.task.id, target.sessionId)
       if (this.engineRuns) await this.engineRuns.run(prompt, { sessionId: target.sessionId, ...modelOpts })
       else await this.harness.run(prompt, { sessionId: target.sessionId, ...modelOpts })
     } catch (cause) {
-      await this.store.completeRun(run.id, undefined, errorMessage(cause)).catch(() => undefined)
-      await this.failTask(context.task.id, errorMessage(cause))
+      const message = errorMessage(cause)
+      const queued = await this.handleExecutionFailure(run, message)
+      this.cleanupSession(target.sessionId)
+      if (queued) {
+        await delay(retryBackoffMs(attempt))
+        await this.continueProject(run.projectId)
+      }
       throw cause
     }
     return receipt(run)
@@ -131,7 +157,7 @@ export class OrganizationOrchestrator {
     const reviewerRole = reviewerAgent ? projectCtx.roles.find((r) => r.id === reviewerAgent.roleId) : projectCtx.roles.find((r) => r.name.toLowerCase().includes('reviewer'))
     const modelOpts = this.resolveAgentModel(reviewerAgent, reviewerRole)
     const taskWorktree = await this.taskWorktrees.existing(context.project.workspacePath, context.task.id)
-    await this.assertTaskRunSlot(context.task.id, context.project.id, reviewerAgent?.id, Boolean(taskWorktree))
+    await this.assertTaskRunSlot(context.task.id, context.project.id, Boolean(taskWorktree))
     if (!taskWorktree) await this.prepareWorkspace(context.project.workspacePath)
     const reviewHead = taskWorktree ? await this.taskWorktrees.checkpoint(taskWorktree, context.task.title) : undefined
     const sessionId = await this.createHarnessSession(taskWorktree?.root)
@@ -145,13 +171,17 @@ export class OrganizationOrchestrator {
       taskWorktree ? { parallelTask: true } : {},
     )
     if (taskWorktree && reviewHead) this.reviewWorktrees.set(sessionId, { worktree: taskWorktree, head: reviewHead })
+    this.lastProgressAt.set(sessionId, run.startedAt)
     await this.store.markReviewStarted(taskId, sessionId)
     try {
       await this.harness.run(reviewPrompt(context.task, context, taskWorktree), { sessionId, ...modelOpts })
     } catch (cause) {
-      await this.store.completeRun(run.id, undefined, errorMessage(cause)).catch(() => undefined)
-      await this.store.clearReviewSession(taskId).catch(() => undefined)
-      this.reviewWorktrees.delete(sessionId)
+      const active = await this.store.runBySession(sessionId)
+      if (active) {
+        await this.store.completeRun(run.id, undefined, errorMessage(cause)).catch(() => undefined)
+        await this.store.clearReviewSession(taskId).catch(() => undefined)
+      }
+      this.cleanupSession(sessionId)
       throw cause
     }
     return receipt(run)
@@ -190,7 +220,7 @@ export class OrganizationOrchestrator {
       return first
     }
 
-    if (running.length > 0) return receipt(running[0]!)
+    if (running.length > 0) return receipt(running.find((item) => item.projectId === id) ?? running[0]!)
 
     const hasGoals = state.goals.some((goal) => goal.projectId === id)
     if (!hasGoals && workflow.has('plan')) {
@@ -201,9 +231,56 @@ export class OrganizationOrchestrator {
     return null
   }
 
+  /** Cancel one organization run without touching unrelated workers. */
+  async cancelRun(runId: string): Promise<void> {
+    const state = await this.store.state()
+    const run = state.runs.find((item) => item.id === runId && item.status === 'running')
+    if (!run) throw new Error('Organization run is not active')
+    this.canceledSessions.add(run.sessionId)
+    try {
+      await this.stopSession(run.sessionId)
+    } catch (error) {
+      this.canceledSessions.delete(run.sessionId)
+      throw error
+    }
+    const stillActive = await this.store.runBySession(run.sessionId)
+    if (stillActive) await this.handleCanceledRun(stillActive, run.sessionId)
+  }
+
+  /**
+   * Called by the existing organization reconciliation loop. A stale session is
+   * canceled, rolled back and retried only when Autopilot and bounded policy
+   * allow it; the 30-minute task lease is never used as a stall detector.
+   */
+  async reconcileStalledRuns(now = Date.now()): Promise<number> {
+    if (this.stallReconcileBusy) return 0
+    this.stallReconcileBusy = true
+    let recovered = 0
+    try {
+      const state = await this.store.state()
+      for (const run of state.runs.filter((item) => item.status === 'running' && item.kind === 'task-execution' && item.taskId)) {
+        const lastProgress = this.lastProgressAt.get(run.sessionId) ?? run.startedAt
+        if (now - lastProgress < stallTimeoutMs()) continue
+        const message = `Execution stalled with no engine progress for ${stallTimeoutMs()}ms.`
+        try { await this.stopSession(run.sessionId) } catch { /* recovery still fails closed below */ }
+        const queued = await this.handleExecutionFailure(run, message, true)
+        this.cleanupSession(run.sessionId)
+        recovered += 1
+        if (queued) {
+          await delay(retryBackoffMs(await this.store.executionAttemptCount(run.taskId!)))
+          await this.continueProject(run.projectId)
+        }
+      }
+      return recovered
+    } finally {
+      this.stallReconcileBusy = false
+    }
+  }
+
   async handleHarnessEvent(frame: DshEventFrame): Promise<void> {
     const sessionId = frame.sessionId
     if (!sessionId) return
+    this.lastProgressAt.set(sessionId, Date.now())
     const run = await this.store.runBySession(sessionId)
 
     if (frame.kind === 'session-event' && frame.event && run) {
@@ -221,8 +298,17 @@ export class OrganizationOrchestrator {
     }
 
     if (frame.kind === 'agent-error' && run) {
-      if (this.harness.consumeCanceledSession(sessionId)) {
+      if (this.consumeCanceledSession(sessionId)) {
         await this.handleCanceledRun(run, sessionId)
+        return
+      }
+      if (run.kind === 'task-execution' && run.taskId) {
+        const queued = await this.handleExecutionFailure(run, frame.message ?? 'Agent error')
+        this.cleanupSession(sessionId)
+        if (queued) {
+          await delay(retryBackoffMs(await this.store.executionAttemptCount(run.taskId)))
+          await this.continueProject(run.projectId)
+        }
         return
       }
       await this.store.completeRun(run.id, this.finalText.get(sessionId), frame.message ?? 'Agent error')
@@ -234,7 +320,7 @@ export class OrganizationOrchestrator {
 
     if (frame.kind !== 'session-status' || frame.running !== false) return
 
-    const canceled = this.harness.consumeCanceledSession(sessionId)
+    const canceled = this.consumeCanceledSession(sessionId)
     if (canceled) {
       if (run) await this.handleCanceledRun(run, sessionId)
       else this.cleanupSession(sessionId)
@@ -242,11 +328,22 @@ export class OrganizationOrchestrator {
     }
 
     if (run?.kind === 'task-execution' && run.taskId) {
-      const output = this.finalText.get(sessionId) ?? 'Worker session finished.'
+      const workerOutput = this.finalText.get(sessionId) ?? 'Worker session finished.'
       try {
         const context = await this.store.taskContext(run.taskId)
         const worktree = await this.taskWorktrees.existing(context.project.workspacePath, run.taskId)
         if (worktree) await this.taskWorktrees.checkpoint(worktree, context.task.title)
+        const verification = await runVerification(context.project.testCommand, worktree?.root ?? context.project.workspacePath)
+        const output = `${workerOutput}${formatVerificationEvidence(verification)}`
+        if (verification.status === 'failed') {
+          const message = `Machine verification failed: ${verification.reason ?? `exit ${verification.exitCode ?? 'unknown'}`}`
+          await this.store.completeRun(run.id, output, message)
+          await this.failTask(run.taskId, message)
+          const queued = await this.queueVerificationRework(run.taskId, message)
+          this.cleanupSession(sessionId)
+          if (queued) await this.continueProject(run.projectId)
+          return
+        }
         const workflow = await this.workflowKinds(run.projectId)
         if (!workflow.has('review') && worktree) await this.taskWorktrees.integrate(context.project.workspacePath, run.taskId)
         await this.store.completeRun(run.id, output)
@@ -254,7 +351,7 @@ export class OrganizationOrchestrator {
         else await this.store.completeWithoutReview(run.taskId, output)
       } catch (cause) {
         const message = errorMessage(cause)
-        await this.store.completeRun(run.id, output, message).catch(() => undefined)
+        await this.store.completeRun(run.id, workerOutput, message).catch(() => undefined)
         await this.failTask(run.taskId, message)
       }
       this.cleanupSession(sessionId)
@@ -265,7 +362,7 @@ export class OrganizationOrchestrator {
     if (run && this.structuredHandled.has(sessionId)) {
       await this.store.completeRun(run.id, this.finalText.get(sessionId))
     } else if (run && (run.kind === 'pm-plan' || run.kind === 'task-review')) {
-      await new Promise((resolve) => setTimeout(resolve, STRUCTURED_RESULT_GRACE_MS))
+      await delay(STRUCTURED_RESULT_GRACE_MS)
       const reopened = await this.store.runBySession(sessionId)
       if (!reopened) {
         this.cleanupSession(sessionId)
@@ -328,7 +425,7 @@ export class OrganizationOrchestrator {
       const executionAttempts = await this.store.executionAttemptCount(taskId)
       const automaticRework = !passed
         && context.company.autonomyLevel >= 4
-        && executionAttempts < MAX_AUTOPILOT_EXECUTION_ATTEMPTS
+        && executionAttempts < MAX_EXECUTION_ATTEMPTS
 
       await this.store.completeReview(taskId, passed, summary, review.memory ?? [])
       if (automaticRework) await this.store.queueRework(taskId, summary)
@@ -339,11 +436,60 @@ export class OrganizationOrchestrator {
     this.autoAdvance.set(sessionId, projectId)
   }
 
+  private async handleExecutionFailure(run: OrganizationRun, message: string, stalled = false): Promise<boolean> {
+    if (!run.taskId) return false
+    const active = await this.store.runBySession(run.sessionId)
+    if (!active) return false
+    const rollback = await this.rollbackExecutionAttempt(run.sessionId)
+    const detail = rollback ? message : `${message}\nRollback failed; automatic retry disabled.`
+    await this.store.completeRun(run.id, this.finalText.get(run.sessionId), detail).catch(() => undefined)
+    await this.failTask(run.taskId, detail)
+    if (!rollback) return false
+    const context = await this.store.taskContext(run.taskId)
+    const attempts = await this.store.executionAttemptCount(run.taskId)
+    const retryable = stalled || isRetryableExecutionFailure(message)
+    if (context.company.autonomyLevel < 4 || attempts >= MAX_EXECUTION_ATTEMPTS || !retryable) return false
+    await this.store.queueRework(run.taskId, `${stalled ? 'Stall recovery' : 'Transient engine/provider failure'}: ${message}`)
+    return true
+  }
+
+  private async queueVerificationRework(taskId: string, message: string): Promise<boolean> {
+    const context = await this.store.taskContext(taskId)
+    const attempts = await this.store.executionAttemptCount(taskId)
+    if (context.company.autonomyLevel < 4 || attempts >= MAX_EXECUTION_ATTEMPTS) return false
+    await this.store.queueRework(taskId, message)
+    return true
+  }
+
   private async handleCanceledRun(run: OrganizationRun, sessionId: string): Promise<void> {
     const message = 'Canceled by user before the run completed.'
+    if (run.kind === 'task-execution') await this.rollbackExecutionAttempt(sessionId)
     await this.store.completeRun(run.id, this.finalText.get(sessionId), message)
     if (run.taskId) await this.failTask(run.taskId, message)
     this.cleanupSession(sessionId)
+  }
+
+  private async rollbackExecutionAttempt(sessionId: string): Promise<boolean> {
+    const boundary = this.executionBaselines.get(sessionId)
+    if (!boundary) return false
+    try {
+      await this.taskWorktrees.rollback(boundary.worktree, boundary.head)
+      return true
+    } catch (error) {
+      console.warn('Organization attempt rollback failed:', errorMessage(error))
+      return false
+    }
+  }
+
+  private async stopSession(sessionId: string): Promise<void> {
+    if (this.engineRuns) return this.engineRuns.stopSession(sessionId)
+    const result = await this.harness.gatewayRpc('session.cancel', { sessionId })
+    if (!result.ok) throw new Error(result.error?.message ?? 'Harness session.cancel failed')
+  }
+
+  private consumeCanceledSession(sessionId: string): boolean {
+    if (this.canceledSessions.delete(sessionId)) return true
+    return this.harness.consumeCanceledSession(sessionId)
   }
 
   private async continueProject(projectId: string): Promise<void> {
@@ -369,7 +515,7 @@ export class OrganizationOrchestrator {
           await this.runTask(ready.id, false)
         } catch (error) {
           const message = errorMessage(error)
-          if (/capacity|active|busy|isolated|worktree|leased/i.test(message)) return
+          if (/capacity|active|isolated|worktree|leased/i.test(message)) return
           console.warn('Parallel autopilot fill paused:', message)
           return
         }
@@ -390,6 +536,9 @@ export class OrganizationOrchestrator {
     const task = state.tasks.find((item) => item.id === taskId)
     if (!task) return
     await this.store.mutate({ type: 'task.update', id: taskId, patch: { status: 'blocked' } })
+    if (task.assignedAgentId) {
+      await this.store.mutate({ type: 'agent.update', id: task.assignedAgentId, patch: { status: 'idle' } }).catch(() => undefined)
+    }
     console.warn(`Organization task blocked: ${message}`)
   }
 
@@ -400,7 +549,7 @@ export class OrganizationOrchestrator {
     throw new Error(`Another project already has an active ${active.kind} run in session ${active.sessionId}`)
   }
 
-  private async assertTaskRunSlot(taskId: string, projectId: string, actorId: string | undefined, isolated: boolean): Promise<void> {
+  private async assertTaskRunSlot(taskId: string, projectId: string, isolated: boolean): Promise<void> {
     const state = await this.store.state()
     const active = state.runs.filter((item) => item.status === 'running')
     if (active.length === 0) return
@@ -409,10 +558,8 @@ export class OrganizationOrchestrator {
     if (global) throw new Error(`Global ${global.kind} run is active in session ${global.sessionId}`)
     const sameTask = active.find((item) => item.taskId === taskId)
     if (sameTask) throw new Error(`Task already has an active ${sameTask.kind} run in session ${sameTask.sessionId}`)
-    if (actorId) {
-      const actor = state.agents.find((item) => item.id === actorId)
-      if (actor && (actor.status === 'working' || actor.status === 'reviewing')) throw new Error(`AI employee ${actor.name} is already busy with another task`)
-    }
+    // Agent records are logical employees, not single OS worker slots. The
+    // control plane owns bounded capacity; isolated task worktrees own safety.
     for (const run of active) {
       if (!run.taskId) throw new Error('Non-task organization work cannot overlap task execution')
       const context = await this.store.taskContext(run.taskId)
@@ -423,8 +570,14 @@ export class OrganizationOrchestrator {
     if (!project) throw new Error('Project not found')
   }
 
-  private async resolveTaskEngine(agentId: string | undefined): Promise<TaskEngine> {
-    if (!this.engines) return { id: ND_HARNESS_ENGINE_ID, name: 'ND Harness' }
+  private async resolveTaskEngine(agentId: string | undefined, fallback: boolean): Promise<TaskEngine> {
+    if (!this.engines || fallback) {
+      if (this.engines && fallback) {
+        const descriptor = this.engines.assertAvailable(ND_HARNESS_ENGINE_ID)
+        return { id: descriptor.id, name: descriptor.name, ...(descriptor.workerInstructions === undefined ? {} : { workerInstructions: descriptor.workerInstructions }) }
+      }
+      return { id: ND_HARNESS_ENGINE_ID, name: 'ND Harness' }
+    }
     const engineId = await this.engines.assignedEngine(agentId)
     const descriptor = this.engines.assertAvailable(engineId)
     return {
@@ -452,6 +605,9 @@ export class OrganizationOrchestrator {
     this.structuredInFlight.delete(sessionId)
     this.autoAdvance.delete(sessionId)
     this.reviewWorktrees.delete(sessionId)
+    this.executionBaselines.delete(sessionId)
+    this.canceledSessions.delete(sessionId)
+    this.lastProgressAt.delete(sessionId)
   }
 
   private assertPolicy(effect: 'allow' | 'ask' | 'deny', explicit: boolean, label: string): void {
@@ -487,10 +643,10 @@ export class OrganizationOrchestrator {
 function pmPrompt(context: Awaited<ReturnType<OrganizationStore['projectContext']>>): string {
   const roles = context.roles.map((item) => `- ${item.name}: ${item.responsibility}`).join('\n') || '- Software Engineer'
   const teams = context.teams.map((item) => `- ${item.name}: ${item.purpose}`).join('\n') || '- Engineering'
-  return `You are the AI Product Manager for ${context.company.name}.\nMission: ${context.company.mission}\nProject: ${context.project.name}\nObjective: ${context.project.objective}\n\nCreate a practical delivery plan. Respect company/project isolation. Use the existing teams and roles when assigning work. Return concise reasoning, then exactly one JSON object between <nd-dsh-plan> and </nd-dsh-plan>.\n\nSchema:\n<nd-dsh-plan>{"goal":{"title":"...","description":"..."},"milestones":[{"title":"...","description":"...","tasks":[{"title":"...","description":"...","priority":"medium","acceptanceCriteria":["..."],"dependsOn":["earlier task title"],"role":"Software Engineer"}]}],"memory":[{"title":"...","content":"...","tags":["plan"]}]}</nd-dsh-plan>\n\nAvailable roles:\n${roles}\nAvailable teams:\n${teams}\nKnown memory:\n${context.memory.map((item) => `- ${item.title}: ${item.content}`).join('\n') || '- none'}\nPolicies:\n${context.policies.map((item) => `- ${item.action}: ${item.effect}`).join('\n')}`
+  return `You are the AI Product Manager for ${context.company.name}.\nMission: ${context.company.mission}\nProject: ${context.project.name}\nObjective: ${context.project.objective}\n\nCreate a practical delivery plan. Respect company/project isolation. Use the existing teams and roles when assigning work. Keep independent work parallel: use dependsOn only for real code/data ordering, never merely to serialize execution. Tests, docs, accessibility, i18n, fixtures and independent components should remain parallel when safe. Return concise reasoning, then exactly one JSON object between <nd-dsh-plan> and </nd-dsh-plan>.\n\nSchema:\n<nd-dsh-plan>{"goal":{"title":"...","description":"..."},"milestones":[{"title":"...","description":"...","tasks":[{"title":"...","description":"...","priority":"medium","acceptanceCriteria":["..."],"dependsOn":["earlier task title"],"role":"Software Engineer"}]}],"memory":[{"title":"...","content":"...","tags":["plan"]}]}</nd-dsh-plan>\n\nAvailable roles:\n${roles}\nAvailable teams:\n${teams}\nKnown memory:\n${context.memory.map((item) => `- ${item.title}: ${item.content}`).join('\n') || '- none'}\nPolicies:\n${context.policies.map((item) => `- ${item.action}: ${item.effect}`).join('\n')}`
 }
 
-function workerPrompt(context: Awaited<ReturnType<OrganizationStore['taskContext']>>, engine: TaskEngine, worktree?: TaskWorktree): string {
+function workerPrompt(context: Awaited<ReturnType<OrganizationStore['taskContext']>>, engine: TaskEngine, attempt: number, worktree?: TaskWorktree): string {
   const reviewFeedback = context.task.reviewSummary
     ? `\nPrevious independent review feedback:\n${context.task.reviewSummary}\nResolve every relevant issue before declaring the task complete.\n`
     : ''
@@ -498,14 +654,14 @@ function workerPrompt(context: Awaited<ReturnType<OrganizationStore['taskContext
   const isolation = worktree
     ? `\nND task isolation: this session is already rooted at the dedicated worktree ${worktree.root}. Stay on branch ${worktree.branch}; do not switch worktrees/branches, push, merge into the project branch, or modify the base checkout. ND will checkpoint and integrate only after verification.\n`
     : ''
-  return `You are ${context.agent?.name ?? 'an AI worker'} acting as ${context.role?.name ?? 'Software Engineer'} inside company ${context.company.name}.\nCompany mission: ${context.company.mission}\nProject: ${context.project.name}\nObjective: ${context.project.objective}\nTask: ${context.task.title}\nDescription: ${context.task.description}\nAcceptance criteria:\n${context.task.acceptanceCriteria.map((item) => `- ${item}`).join('\n')}${reviewFeedback}\nResponsibilities: ${context.role?.responsibility ?? 'Complete the assigned work.'}\nRole instructions: ${context.role?.systemPrompt ?? 'Execute carefully and verify the result.'}\nRelevant skills:\n${context.skills.map((item) => `- ${item.name}: ${item.instructions}`).join('\n')}\nRelevant memory:\n${context.memory.map((item) => `- ${item.title}: ${item.content}`).join('\n') || '- none'}\nPolicies:\n${context.policies.map((item) => `- ${item.action}: ${item.effect}`).join('\n')}${engineInstructions}${isolation}\nInspect before editing, run meaningful validation, and finish with a concise result summary for the independent reviewer.`
+  return `You are ${context.agent?.name ?? 'an AI worker'} acting as ${context.role?.name ?? 'Software Engineer'} inside company ${context.company.name}.\nCompany mission: ${context.company.mission}\nProject: ${context.project.name}\nObjective: ${context.project.objective}\nTask: ${context.task.title}\nExecution attempt: ${attempt}/${MAX_EXECUTION_ATTEMPTS}\nDescription: ${context.task.description}\nAcceptance criteria:\n${context.task.acceptanceCriteria.map((item) => `- ${item}`).join('\n')}${reviewFeedback}\nResponsibilities: ${context.role?.responsibility ?? 'Complete the assigned work.'}\nRole instructions: ${context.role?.systemPrompt ?? 'Execute carefully and verify the result.'}\nRelevant skills:\n${context.skills.map((item) => `- ${item.name}: ${item.instructions}`).join('\n')}\nRelevant memory:\n${context.memory.map((item) => `- ${item.title}: ${item.content}`).join('\n') || '- none'}\nPolicies:\n${context.policies.map((item) => `- ${item.action}: ${item.effect}`).join('\n')}${engineInstructions}${isolation}\nInspect before editing, run meaningful validation, and finish with a concise result summary for the independent reviewer.`
 }
 
 function reviewPrompt(task: OrganizationTask, context: Awaited<ReturnType<OrganizationStore['taskContext']>>, worktree?: TaskWorktree): string {
   const isolation = worktree
     ? `\nReview the isolated task branch ${worktree.branch} in the current worktree. Do not edit, commit, switch branches, merge, or push; a PASS is valid only while the exact checkpoint stays unchanged.\n`
     : ''
-  return `You are an independent reviewer for ${context.company.name}. Do not assume the worker succeeded. Inspect the actual workspace and verify the task against acceptance criteria.\nProject: ${context.project.name}\nTask: ${task.title}\nDescription: ${task.description}\nAcceptance criteria:\n${task.acceptanceCriteria.map((item) => `- ${item}`).join('\n')}\nWorker summary:\n${task.resultSummary ?? 'No summary provided.'}${isolation}\n\nRun relevant tests/checks. Then return exactly one JSON object between <nd-dsh-review> and </nd-dsh-review>:\n<nd-dsh-review>{"verdict":"pass|fail","summary":"evidence-based review","issues":["..."],"memory":[{"title":"lesson","content":"durable lesson","tags":["review"]}]}</nd-dsh-review>`
+  return `You are an independent reviewer for ${context.company.name}. Do not assume the worker succeeded. Inspect the actual workspace and verify the task against acceptance criteria. ND machine verification has already run when a project test command is configured; reviewer prose cannot override a red machine check.\nProject: ${context.project.name}\nTask: ${task.title}\nDescription: ${task.description}\nAcceptance criteria:\n${task.acceptanceCriteria.map((item) => `- ${item}`).join('\n')}\nWorker summary:\n${task.resultSummary ?? 'No summary provided.'}${isolation}\n\nRun relevant additional checks. Then return exactly one JSON object between <nd-dsh-review> and </nd-dsh-review>:\n<nd-dsh-review>{"verdict":"pass|fail","summary":"evidence-based review","issues":["..."],"memory":[{"title":"lesson","content":"durable lesson","tags":["review"]}]}</nd-dsh-review>`
 }
 
 function receipt(run: OrganizationRun): OrganizationRunReceipt {
@@ -545,5 +701,39 @@ function extractTaggedJson<T>(text: string, tag: string): T | undefined {
 
 function validatePlan(plan: ProjectPlanInput): void {
   if (!plan?.goal?.title?.trim() || !plan.goal.description?.trim() || !Array.isArray(plan.milestones) || plan.milestones.length === 0) throw new Error('Invalid ND-DSH project plan')
-  for (const milestone of plan.milestones) if (!milestone.title?.trim() || !Array.isArray(milestone.tasks) || milestone.tasks.length === 0) throw new Error('Every milestone needs a title and tasks')
+  const tasks = plan.milestones.flatMap((milestone) => {
+    if (!milestone.title?.trim() || !Array.isArray(milestone.tasks) || milestone.tasks.length === 0) throw new Error('Every milestone needs a title and tasks')
+    return milestone.tasks
+  })
+  const titleMap = new Map<string, ProjectPlanInput['milestones'][number]['tasks'][number]>()
+  for (const task of tasks) {
+    const key = task.title.trim().toLowerCase()
+    if (!key) throw new Error('Every planned task needs a title')
+    if (titleMap.has(key)) throw new Error(`Duplicate planned task title: ${task.title}`)
+    titleMap.set(key, task)
+  }
+  const graph = new Map<string, string[]>()
+  for (const [key, task] of titleMap) {
+    const dependencies = (task.dependsOn ?? []).map((value) => value.trim().toLowerCase())
+    for (const dependency of dependencies) {
+      if (!titleMap.has(dependency)) throw new Error(`Unknown planned task dependency: ${dependency}`)
+      if (dependency === key) throw new Error(`Task cannot depend on itself: ${task.title}`)
+    }
+    graph.set(key, dependencies)
+  }
+  const visiting = new Set<string>()
+  const visited = new Set<string>()
+  const visit = (key: string): void => {
+    if (visited.has(key)) return
+    if (visiting.has(key)) throw new Error(`Planned task dependency cycle detected at ${titleMap.get(key)?.title ?? key}`)
+    visiting.add(key)
+    for (const dependency of graph.get(key) ?? []) visit(dependency)
+    visiting.delete(key)
+    visited.add(key)
+  }
+  for (const key of graph.keys()) visit(key)
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
