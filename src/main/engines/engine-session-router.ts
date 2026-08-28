@@ -82,6 +82,17 @@ export class EngineSessionRouter {
     return { engineId, sessionId }
   }
 
+  /** Cancel exactly one engine session; unrelated organization workers continue. */
+  async stopSession(sessionId: string): Promise<void> {
+    const engine = this.engineForSession(sessionId)
+    if (engine === CODEX_CLI_ENGINE_ID) {
+      await this.codex.stop(sessionId)
+      return
+    }
+    const result = await this.harness.gatewayRpc('session.cancel', { sessionId })
+    if (!result.ok) throw new Error(result.error?.message ?? 'Harness session.cancel failed')
+  }
+
   /** Cancel pending turns on every engine; each keeps its runtime available. */
   async stop(): Promise<HarnessStatus> {
     await this.codex.stop()
