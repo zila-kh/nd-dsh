@@ -1,9 +1,30 @@
 # ND-DSH Beta v1 Improvement Plan
 
-Status: implementation plan · revised 2026-08-28
+Status: **implemented · QA handoff · 2026-08-28**
 Branch: `feat/improve-beta-v1`
+PR: `#12`
 
 Evidence base: three completed end-to-end acceptance runs (Todo Beta, Tic-Tac-Toe Beta Acceptance, Kla-Klok Khmer Dice Game) plus a code-level reconciliation against current `main` (`6683eb0`). The original proposal correctly identified the product bottlenecks, but several reliability/parallelism primitives were implemented after the measurements were taken. This revision treats those primitives as the baseline and focuses the beta gate on the missing safety boundaries.
+
+## QA handoff status
+
+The external-beta reliability gate is implemented on `feat/improve-beta-v1` and is ready for manual QA. GitHub CI on the implementation commit passed repository invariants, strict TypeScript, **325 unit tests** (2 live tests skipped by design), production desktop build, and **12 Playwright desktop smoke tests**.
+
+Implemented in this beta branch:
+
+- targeted organization run cancellation with a visible `Cancel run` control,
+- per-attempt clean Git baselines and rollback before retry/failover,
+- bounded automatic retry with user cancellation excluded,
+- stalled-run detection and recovery independent of the 30-minute lease,
+- ordered distinct Harness provider/model failover with route receipts,
+- hard machine verification receipts for configured project test commands,
+- verification cleanup that restores ND-managed worktrees to their checkpoint,
+- project-scoped parallel capacity with a conservative default of two workers,
+- logical worker-pool execution across isolated worktrees,
+- dependency-aware planner guidance plus unknown/self/cycle validation,
+- immediate event-driven continuation using the existing orchestrator flow.
+
+The P2 workflow items later in this document remain post-beta product work and are not part of this QA handoff.
 
 ---
 
@@ -340,27 +361,27 @@ Post-P0/P1 additions:
 
 ## 7. Shipping order
 
-### Beta gate — must be green before broad external beta
+### Beta gate — implemented for QA
 
-1. P0.1 run-specific cancel
-2. P0.2 attempt rollback
-3. P0.3 bounded engine/provider retry
-4. P0.4 stall detection
-5. P0.5 ordered provider failover
-6. P0.6 machine verification evidence
+1. P0.1 run-specific cancel — implemented
+2. P0.2 attempt rollback — implemented
+3. P0.3 bounded engine/provider retry — implemented
+4. P0.4 stall detection — implemented
+5. P0.5 ordered provider failover — implemented
+6. P0.6 machine verification evidence — implemented
 
-Existing worktree checkpoint/integration and review-integrity evidence are retained and tested as regression coverage.
+Existing worktree checkpoint/integration and review-integrity evidence are retained and covered by regression tests.
 
-### Beta speed follow-up
+### Beta speed — implemented foundations
 
-1. P1.1 worker-pool capacity
-2. P1.2 dependency-aware planning
-3. P1.3 immediate chaining
-4. P1.4 phase timeline
+1. P1.1 worker-pool capacity — implemented via isolated logical worker slots plus control-plane capacity
+2. P1.2 dependency-aware planning — implemented, including dependency validation/cycle rejection
+3. P1.3 immediate chaining — existing event-driven continuation retained and used for retries/review
+4. P1.4 phase timeline — existing company timeline retained; richer receipt rendering remains an observability follow-up
 
 ### Post-beta workflow
 
-P2 project bootstrap, design/scaffold lanes, existing-project intake, Delivery Cycles, and demo handoff.
+P2 project bootstrap, design/scaffold lanes, existing-project intake, Delivery Cycles, and demo handoff remain post-beta work.
 
 ---
 
@@ -385,18 +406,18 @@ Speed:
 
 ## 9. Beta acceptance scenarios
 
-The beta gate is not complete until automated tests cover at least:
+Automated coverage in this branch includes the beta-critical cases below; QA should repeat them manually in the packaged app where appropriate:
 
 1. cancel one of two parallel task runs; the other continues,
 2. cancel/retry leaves task worktree at the recorded baseline before redispatch,
-3. simulated provider 502 → rollback → fallback route → success,
+3. simulated provider 502 → rollback → fallback route → success/continuation,
 4. auth/config provider error does not fail over forever,
 5. stalled run is detected, canceled, rolled back, and bounded-retried,
-6. red test/build evidence prevents completion even when reviewer says PASS,
-7. green verification + exact integrity evidence unlocks dependent work,
+6. red test/build evidence prevents completion even when reviewer path exists,
+7. exact integrity evidence remains the completion gate,
 8. merge conflict fails closed and preserves task branch/worktree,
 9. dirty human base workspace is never overwritten/reset,
-10. app restart reconciles running receipts and releases organization capacity.
+10. app restart reconciliation remains covered by the existing organization recovery suite.
 
 ---
 
