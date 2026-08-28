@@ -31,6 +31,22 @@ class FakeHarness {
   async run(_prompt: string, options?: { sessionId?: string }): Promise<{ sessionId: string }> { return { sessionId: options?.sessionId ?? 'harness-session' } }
   async close(): Promise<void> {}
   consumeCanceledSession(): boolean { return false }
+  status(): { provider: string; model: string } { return { provider: 'provider-primary', model: 'model-primary' } }
+  async gatewayRpc(method: string): Promise<{ ok: boolean; value?: unknown; error?: { message?: string } }> {
+    if (method === 'session.models') {
+      return {
+        ok: true,
+        value: {
+          groups: [
+            { id: 'provider-primary', models: [{ id: 'model-primary' }] },
+            { id: 'provider-fallback', models: [{ id: 'model-fallback' }] },
+            { id: 'provider-last', models: [{ id: 'model-last' }] },
+          ],
+        },
+      }
+    }
+    return { ok: true, value: {} }
+  }
 }
 
 class FakeWorkspace {
@@ -39,12 +55,19 @@ class FakeWorkspace {
   async setRoot(path: string): Promise<{ root: string; name: string }> { this.root = path; return { root: path, name: path.split('/').at(-1) ?? path } }
 }
 
+interface EngineRunOptions {
+  sessionId?: string
+  provider?: string
+  model?: string
+}
+
 class FakeEngineRuns {
+  protected runCount = 0
   private count = 0
-  private runCount = 0
   private readonly workspaceBySession = new Map<string, string | undefined>()
   stopped: string[] = []
   created: string[] = []
+  runOptions: EngineRunOptions[] = []
 
   constructor(private readonly failFirst = false) {}
 
@@ -56,8 +79,9 @@ class FakeEngineRuns {
     return { engineId, sessionId }
   }
 
-  async run(_prompt: string, options?: { sessionId?: string }): Promise<{ sessionId: string }> {
+  async run(_prompt: string, options?: EngineRunOptions): Promise<{ sessionId: string }> {
     this.runCount += 1
+    this.runOptions.push({ ...(options ?? {}) })
     const sessionId = options?.sessionId ?? 'worker'
     if (this.failFirst && this.runCount === 1) {
       const cwd = this.workspaceBySession.get(sessionId)
@@ -68,6 +92,14 @@ class FakeEngineRuns {
   }
 
   async stopSession(sessionId: string): Promise<void> { this.stopped.push(sessionId) }
+}
+
+class AuthFailEngineRuns extends FakeEngineRuns {
+  override async run(_prompt: string, options?: EngineRunOptions): Promise<{ sessionId: string }> {
+    this.runCount += 1
+    this.runOptions.push({ ...(options ?? {}) })
+    throw new Error('401 unauthorized: invalid api key')
+  }
 }
 
 async function organizationFixture(testCommand?: string, assignedEngine = ND_HARNESS_ENGINE_ID, engineRuns = new FakeEngineRuns()) {
@@ -151,7 +183,27 @@ describe('beta execution reliability', () => {
     expect(state.tasks.find((item) => item.id === task.id)?.status).toBe('blocked')
   })
 
-  it('rolls back a 502 attempt and retries on the ND Harness fallback route in Autopilot', async () => {
+  it('cancels one of two isolated parallel runs without stopping the other', async () => {
+    const { store, company, project, task, engineRuns, orchestrator } = await organizationFixture()
+    let state = await store.mutate({
+      type: 'task.create', companyId: company.id, projectId: project.id,
+      title: 'Parallel feature', description: 'Independent task', priority: 'high',
+      acceptanceCriteria: ['Independent task completes.'], assignedAgentId: task.assignedAgentId,
+    })
+    const second = state.tasks.find((item) => item.title === 'Parallel feature')!
+    await store.mutate({ type: 'task.update', id: second.id, patch: { status: 'ready' } })
+
+    const firstRun = await orchestrator.runTask(task.id)
+    const secondRun = await orchestrator.runTask(second.id)
+    await orchestrator.cancelRun(firstRun.runId)
+
+    state = await store.state()
+    expect(engineRuns.stopped).toEqual([firstRun.sessionId])
+    expect(state.runs.find((item) => item.id === firstRun.runId)?.status).toBe('failed')
+    expect(state.runs.find((item) => item.id === secondRun.runId)?.status).toBe('running')
+  })
+
+  it('rolls back a 502 attempt and retries on the next distinct Harness provider route in Autopilot', async () => {
     const engineRuns = new FakeEngineRuns(true)
     const { root, store, company, task, orchestrator } = await organizationFixture(undefined, CODEX_CLI_ENGINE_ID, engineRuns)
     await store.mutate({ type: 'company.update', id: company.id, patch: { autonomyLevel: 4 } })
@@ -159,6 +211,7 @@ describe('beta execution reliability', () => {
     await expect(orchestrator.runTask(task.id)).rejects.toThrow(/502/)
 
     expect(engineRuns.created).toEqual([CODEX_CLI_ENGINE_ID, ND_HARNESS_ENGINE_ID])
+    expect(engineRuns.runOptions[1]).toMatchObject({ provider: 'provider-primary', model: 'model-primary' })
     const manager = new TaskWorktreeManager()
     const worktree = await manager.existing(root, task.id)
     expect(worktree).toBeDefined()
@@ -166,8 +219,22 @@ describe('beta execution reliability', () => {
     const state = await store.state()
     const taskRuns = state.runs.filter((item) => item.taskId === task.id && item.kind === 'task-execution')
     expect(taskRuns).toHaveLength(2)
-    expect(taskRuns.some((item) => item.status === 'failed' && /502/.test(item.error ?? ''))).toBe(true)
+    expect(taskRuns.some((item) => item.status === 'failed' && /502/.test(item.error ?? '') && /nd-dsh-execution-route/.test(item.output ?? ''))).toBe(true)
     expect(taskRuns.some((item) => item.status === 'running')).toBe(true)
+  })
+
+  it('does not fail over authentication/configuration failures', async () => {
+    const engineRuns = new AuthFailEngineRuns()
+    const { store, company, task, orchestrator } = await organizationFixture(undefined, CODEX_CLI_ENGINE_ID, engineRuns)
+    await store.mutate({ type: 'company.update', id: company.id, patch: { autonomyLevel: 4 } })
+
+    await expect(orchestrator.runTask(task.id)).rejects.toThrow(/unauthorized/i)
+
+    expect(engineRuns.created).toEqual([CODEX_CLI_ENGINE_ID])
+    expect(engineRuns.runOptions).toHaveLength(1)
+    const state = await store.state()
+    expect(state.runs.filter((item) => item.taskId === task.id && item.kind === 'task-execution')).toHaveLength(1)
+    expect(state.tasks.find((item) => item.id === task.id)?.status).toBe('blocked')
   })
 
   it('hard-blocks completion when the configured machine verification command fails', async () => {
@@ -182,6 +249,7 @@ describe('beta execution reliability', () => {
     expect(storedRun?.status).toBe('failed')
     expect(storedRun?.error).toMatch(/machine verification failed/i)
     expect(storedRun?.output).toContain('<nd-dsh-verification>')
+    expect(storedRun?.output).toContain('<nd-dsh-execution-route>')
     expect(state.tasks.find((item) => item.id === task.id)?.status).toBe('blocked')
   })
 })
