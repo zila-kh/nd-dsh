@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
-import { ND_HARNESS_ENGINE_ID } from '../src/shared/coding-engines.js'
+import { CODEX_CLI_ENGINE_ID, ND_HARNESS_ENGINE_ID } from '../src/shared/coding-engines.js'
 import { isRetryableExecutionFailure } from '../src/main/organization/execution-reliability.js'
 import { OrganizationOrchestrator } from '../src/main/organization/orchestrator.js'
 import { OrganizationStore } from '../src/main/organization/store.js'
@@ -41,20 +41,39 @@ class FakeWorkspace {
 
 class FakeEngineRuns {
   private count = 0
+  private runCount = 0
+  private readonly workspaceBySession = new Map<string, string | undefined>()
   stopped: string[] = []
-  async createSession(engineId: string): Promise<{ sessionId: string; engineId: string }> {
+  created: string[] = []
+
+  constructor(private readonly failFirst = false) {}
+
+  async createSession(engineId: string, cwd?: string): Promise<{ sessionId: string; engineId: string }> {
     this.count += 1
-    return { engineId, sessionId: `worker-${this.count}` }
+    const sessionId = `worker-${this.count}`
+    this.created.push(engineId)
+    this.workspaceBySession.set(sessionId, cwd)
+    return { engineId, sessionId }
   }
+
   async run(_prompt: string, options?: { sessionId?: string }): Promise<{ sessionId: string }> {
-    return { sessionId: options?.sessionId ?? 'worker' }
+    this.runCount += 1
+    const sessionId = options?.sessionId ?? 'worker'
+    if (this.failFirst && this.runCount === 1) {
+      const cwd = this.workspaceBySession.get(sessionId)
+      if (cwd) await writeFile(join(cwd, 'partial-provider-write.txt'), 'partial\n')
+      throw new Error('Provider returned 502 Bad Gateway')
+    }
+    return { sessionId }
   }
+
   async stopSession(sessionId: string): Promise<void> { this.stopped.push(sessionId) }
 }
 
-async function organizationFixture(testCommand?: string) {
+async function organizationFixture(testCommand?: string, assignedEngine = ND_HARNESS_ENGINE_ID, engineRuns = new FakeEngineRuns()) {
   const root = await gitWorkspace()
-  const store = new OrganizationStore(join(root, '.organization-test.json'))
+  const stateDir = await mkdtemp(join(tmpdir(), 'nd-dsh-beta-state-'))
+  const store = new OrganizationStore(join(stateDir, 'organization.json'))
   let state = await store.mutate({ type: 'company.create', name: 'Beta Co', mission: 'Ship safely' })
   const company = state.companies[0]!
   state = await store.mutate({ type: 'project.create', companyId: company.id, name: 'Beta App', objective: 'Pass QA', workspacePath: root, ...(testCommand ? { testCommand } : {}) })
@@ -64,10 +83,9 @@ async function organizationFixture(testCommand?: string) {
     milestones: [{ title: 'Build', description: 'Build safely', tasks: [{ title: 'Feature', description: 'Implement feature' }] }],
   })
   const task = (await store.state()).tasks[0]!
-  const engineRuns = new FakeEngineRuns()
   const engines = {
-    assignedEngine: async () => ND_HARNESS_ENGINE_ID,
-    assertAvailable: () => ({ id: ND_HARNESS_ENGINE_ID, name: 'ND Harness' }),
+    assignedEngine: async () => assignedEngine,
+    assertAvailable: (id: string) => ({ id, name: id === CODEX_CLI_ENGINE_ID ? 'Codex CLI' : 'ND Harness' }),
   }
   const orchestrator = new OrganizationOrchestrator(
     store,
@@ -76,7 +94,7 @@ async function organizationFixture(testCommand?: string) {
     engines as never,
     engineRuns as never,
   )
-  return { root, store, project, task, engineRuns, orchestrator }
+  return { root, store, company, project, task, engineRuns, orchestrator }
 }
 
 describe('beta execution reliability', () => {
@@ -131,6 +149,25 @@ describe('beta execution reliability', () => {
     const state = await store.state()
     expect(state.runs.find((item) => item.id === run.runId)?.status).toBe('failed')
     expect(state.tasks.find((item) => item.id === task.id)?.status).toBe('blocked')
+  })
+
+  it('rolls back a 502 attempt and retries on the ND Harness fallback route in Autopilot', async () => {
+    const engineRuns = new FakeEngineRuns(true)
+    const { root, store, company, task, orchestrator } = await organizationFixture(undefined, CODEX_CLI_ENGINE_ID, engineRuns)
+    await store.mutate({ type: 'company.update', id: company.id, patch: { autonomyLevel: 4 } })
+
+    await expect(orchestrator.runTask(task.id)).rejects.toThrow(/502/)
+
+    expect(engineRuns.created).toEqual([CODEX_CLI_ENGINE_ID, ND_HARNESS_ENGINE_ID])
+    const manager = new TaskWorktreeManager()
+    const worktree = await manager.existing(root, task.id)
+    expect(worktree).toBeDefined()
+    await expect(access(join(worktree!.root, 'partial-provider-write.txt'))).rejects.toThrow()
+    const state = await store.state()
+    const taskRuns = state.runs.filter((item) => item.taskId === task.id && item.kind === 'task-execution')
+    expect(taskRuns).toHaveLength(2)
+    expect(taskRuns.some((item) => item.status === 'failed' && /502/.test(item.error ?? ''))).toBe(true)
+    expect(taskRuns.some((item) => item.status === 'running')).toBe(true)
   })
 
   it('hard-blocks completion when the configured machine verification command fails', async () => {
