@@ -710,13 +710,9 @@ export default function App() {
       </header>
 
       <main className="relative min-h-0 min-w-0 overflow-hidden bg-surface-0">
-        <section aria-hidden={view !== 'company'} className={cn('absolute inset-0 overflow-hidden', view === 'company' ? 'block' : 'hidden')}>
-          <OrganizationDashboard workspace={workspace} onOpenDeepSeek={() => setView('agent')} onError={notify} companyView={companyView} onCompanyViewChange={setCompanyView} />
-        </section>
-
-        <section aria-hidden={view !== 'agent'} className={cn('absolute inset-0 overflow-hidden', view === 'agent' ? 'flex' : 'hidden')}>
-          {workspaceCollapsed ? (
-            <div className="flex h-full w-full min-w-0 flex-col overflow-hidden">
+        {view !== 'settings' ? (
+          <Group orientation="horizontal" className="h-full w-full">
+            <Panel className="flex min-w-0 flex-col overflow-hidden" defaultSize={580} minSize={sessionsCollapsed ? CHAT_MIN_PX_SIDEBAR_COLLAPSED : CHAT_MIN_PX}>
               <ChatPanel
                 status={harnessStatus}
                 {...(workspace?.projectName || workspace?.name ? { workspaceName: workspace.projectName ?? workspace.name } : {})}
@@ -728,114 +724,106 @@ export default function App() {
                 onExternalPromptConsumed={() => setExternalPrompt(null)}
                 elementAttachmentVersion={elementAttachmentVersion}
               />
-            </div>
-          ) : (
-            <Group orientation="horizontal" className="h-full w-full">
-              <Panel className="flex min-w-0 flex-col overflow-hidden" defaultSize={580} minSize={sessionsCollapsed ? CHAT_MIN_PX_SIDEBAR_COLLAPSED : CHAT_MIN_PX}>
-                <ChatPanel
-                  status={harnessStatus}
-                  {...(workspace?.projectName || workspace?.name ? { workspaceName: workspace.projectName ?? workspace.name } : {})}
-                  sessionsCollapsed={sessionsCollapsed}
-                  onError={notify}
-                onOpenSettings={openSettings}
-                  onOpenFile={(path) => void openFile(path)}
-                  externalPrompt={externalPrompt}
-                  onExternalPromptConsumed={() => setExternalPrompt(null)}
-                  elementAttachmentVersion={elementAttachmentVersion}
-                />
-              </Panel>
-              <Separator
-                aria-label="Resize chat pane"
-                className="w-[5px] shrink-0 cursor-col-resize touch-none [&_div]:transition-[width,background-color] [&_div]:duration-150 hover:[&_div]:w-0.5 hover:[&_div]:bg-primary active:[&_div]:w-0.5 active:[&_div]:bg-primary"
-              >
-                <div className="h-full w-px bg-border-strong" />
-              </Separator>
-              <Panel className="flex min-w-0 flex-col overflow-hidden bg-surface-0" minSize={WORKSPACE_MIN_PX}>
-                <div className="flex shrink-0 items-center gap-[3px] border-b border-border-soft bg-secondary px-2 py-1" role="tablist" aria-label="Agent workspace panes">
-                  <button className={paneTabClasses(agentPane === 'files')} onClick={() => setAgentPane('files')}>
-                    <FileIcon />
-                    <span>Files</span>
-                  </button>
-                  <button className={paneTabClasses(agentPane === 'browser')} onClick={() => setAgentPane('browser')}>
-                    <BrowserIcon />
-                    <span>Browser</span>
-                  </button>
-                </div>
-                <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-                  {agentPane === 'files' ? (
-                    <div className="grid h-full w-full min-h-0 grid-cols-[minmax(0,1fr)_200px]">
-                      <div className="min-h-0 min-w-0 overflow-hidden">
-                        {activeDiff ? (
-                          <DiffView
-                            relativePath={activeDiff.relativePath}
-                            staged={activeDiff.staged}
-                            onClose={() => setActiveDiff(null)}
+            </Panel>
+            <Separator
+              aria-label="Resize chat pane"
+              className="w-[5px] shrink-0 cursor-col-resize touch-none [&_div]:transition-[width,background-color] [&_div]:duration-150 hover:[&_div]:w-0.5 hover:[&_div]:bg-primary active:[&_div]:w-0.5 active:[&_div]:bg-primary"
+            >
+              <div className="h-full w-px bg-border-strong" />
+            </Separator>
+            <Panel className="relative min-h-0 min-w-0 overflow-hidden bg-surface-0" minSize={WORKSPACE_MIN_PX}>
+              <section aria-hidden={view !== 'company'} className={cn('absolute inset-0 overflow-hidden', view === 'company' ? 'block' : 'hidden')}>
+                <OrganizationDashboard workspace={workspace} onOpenDeepSeek={() => setView('agent')} onError={notify} companyView={companyView} onCompanyViewChange={setCompanyView} />
+              </section>
+
+              <section aria-hidden={view !== 'agent'} className={cn('absolute inset-0 overflow-hidden', view === 'agent' && !workspaceCollapsed ? 'flex' : 'hidden')}>
+                <div className="flex h-full w-full min-w-0 flex-col overflow-hidden">
+                  <div className="flex shrink-0 items-center gap-[3px] border-b border-border-soft bg-secondary px-2 py-1" role="tablist" aria-label="Agent workspace panes">
+                    <button className={paneTabClasses(agentPane === 'files')} onClick={() => setAgentPane('files')}>
+                      <FileIcon />
+                      <span>Files</span>
+                    </button>
+                    <button className={paneTabClasses(agentPane === 'browser')} onClick={() => setAgentPane('browser')}>
+                      <BrowserIcon />
+                      <span>Browser</span>
+                    </button>
+                  </div>
+                  <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+                    {agentPane === 'files' ? (
+                      <div className="grid h-full w-full min-h-0 grid-cols-[minmax(0,1fr)_200px]">
+                        <div className="min-h-0 min-w-0 overflow-hidden">
+                          {activeDiff ? (
+                            <DiffView
+                              relativePath={activeDiff.relativePath}
+                              staged={activeDiff.staged}
+                              onClose={() => setActiveDiff(null)}
+                              onError={notify}
+                            />
+                          ) : (
+                            <EditorPane file={selectedFile} onAgentPrompt={askAgent} onError={notify} />
+                          )}
+                        </div>
+                        <div className="min-h-0 border-l border-border-soft">
+                          <Explorer
+                            workspace={workspace}
+                            selectedPath={selectedFile?.relativePath}
+                            onWorkspaceChanged={changeWorkspace}
+                            onOpenFile={(path) => void openFile(path)}
+                            onOpenDiff={openDiff}
                             onError={notify}
                           />
-                        ) : (
-                          <EditorPane file={selectedFile} onAgentPrompt={askAgent} onError={notify} />
-                        )}
+                        </div>
                       </div>
-                      <div className="min-h-0 border-l border-border-soft">
-                        <Explorer
-                          workspace={workspace}
-                          selectedPath={selectedFile?.relativePath}
-                          onWorkspaceChanged={changeWorkspace}
-                          onOpenFile={(path) => void openFile(path)}
-                          onOpenDiff={openDiff}
-                          onError={notify}
-                        />
-                      </div>
-                    </div>
-                  ) : (
-                    <BrowserPane
-                      active={view === 'agent'}
-                      state={browserState}
-                      onSnapshot={() => notify('Browser snapshot captured from the live page.')}
-                      onError={notify}
-                    />
-                  )}
+                    ) : (
+                      <BrowserPane
+                        active={view === 'agent'}
+                        state={browserState}
+                        onSnapshot={() => notify('Browser snapshot captured from the live page.')}
+                        onError={notify}
+                      />
+                    )}
+                  </div>
                 </div>
-              </Panel>
-            </Group>
-          )}
-        </section>
+              </section>
 
-        <section aria-hidden={view !== 'design'} className={cn('absolute inset-0 overflow-hidden', view === 'design' ? 'block' : 'hidden')}>
-          <DesignView
-            active={view === 'design'}
-            workspace={workspace}
-            browser={browserState}
-            harness={harnessStatus}
-            onWorkspaceChanged={changeWorkspace}
-            onAskAgent={askAgent}
-            onError={notify}
-          />
-        </section>
+              <section aria-hidden={view !== 'design'} className={cn('absolute inset-0 overflow-hidden', view === 'design' ? 'block' : 'hidden')}>
+                <DesignView
+                  active={view === 'design'}
+                  workspace={workspace}
+                  browser={browserState}
+                  harness={harnessStatus}
+                  onWorkspaceChanged={changeWorkspace}
+                  onAskAgent={askAgent}
+                  onError={notify}
+                />
+              </section>
 
-        <section aria-hidden={view !== 'qa'} className={cn('absolute inset-0 overflow-hidden', view === 'qa' ? 'block' : 'hidden')}>
-          <QaView active={view === 'qa'} {...(workspace?.root ? { workspaceRoot: workspace.root } : {})} onError={notify} onAskAgent={askAgent} />
-        </section>
-
-        <section aria-hidden={view !== 'settings'} className={cn('absolute inset-0 overflow-hidden', view === 'settings' ? 'block' : 'hidden')}>
-          <Suspense fallback={<div className="grid h-full w-full place-items-center bg-surface-0"><div className="size-[34px] animate-spin rounded-full border border-border-strong border-t-primary" /></div>}>
-            <SettingsPane
-              theme={theme}
-              onSelectTheme={selectTheme}
-              workspace={workspace}
-              onWorkspaceChanged={changeWorkspace}
-              harness={harnessStatus}
-              browser={browserState}
-              onError={notify}
-              tab={settingsTab}
-              onSelectTab={setSettingsTab}
-              subTab={settingsSubTabs.general}
-              onSelectSubTab={(subTab) => setSettingsSubTabs((current) => ({ ...current, general: subTab }))}
-              capabilitySubTab={settingsSubTabs.capabilities}
-              onSelectCapabilitySubTab={(subTab) => setSettingsSubTabs((current) => ({ ...current, capabilities: subTab }))}
-            />
-          </Suspense>
-        </section>
+              <section aria-hidden={view !== 'qa'} className={cn('absolute inset-0 overflow-hidden', view === 'qa' ? 'block' : 'hidden')}>
+                <QaView active={view === 'qa'} {...(workspace?.root ? { workspaceRoot: workspace.root } : {})} onError={notify} onAskAgent={askAgent} />
+              </section>
+            </Panel>
+          </Group>
+        ) : (
+          <section aria-hidden={view !== 'settings'} className="relative h-full w-full overflow-hidden">
+            <Suspense fallback={<div className="grid h-full w-full place-items-center bg-surface-0"><div className="size-[34px] animate-spin rounded-full border border-border-strong border-t-primary" /></div>}>
+              <SettingsPane
+                theme={theme}
+                onSelectTheme={selectTheme}
+                workspace={workspace}
+                onWorkspaceChanged={changeWorkspace}
+                harness={harnessStatus}
+                browser={browserState}
+                onError={notify}
+                tab={settingsTab}
+                onSelectTab={setSettingsTab}
+                subTab={settingsSubTabs.general}
+                onSelectSubTab={(subTab) => setSettingsSubTabs((current) => ({ ...current, general: subTab }))}
+                capabilitySubTab={settingsSubTabs.capabilities}
+                onSelectCapabilitySubTab={(subTab) => setSettingsSubTabs((current) => ({ ...current, capabilities: subTab }))}
+              />
+            </Suspense>
+          </section>
+        )}
       </main>
 
       <RuntimePrompts onError={notify} />
