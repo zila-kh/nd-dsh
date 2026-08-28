@@ -38,9 +38,18 @@ export async function runVerification(command: string | undefined, cwd: string |
     let stderr = ''
     let settled = false
     const capture = (current: string, chunk: Buffer | string): string => `${current}${String(chunk)}`.slice(-MAX_CAPTURE_CHARS)
+    const outputFields = (): Pick<VerificationEvidence, 'stdout' | 'stderr'> => {
+      const cleanStdout = cleanOutput(stdout)
+      const cleanStderr = cleanOutput(stderr)
+      return {
+        ...(cleanStdout ? { stdout: cleanStdout } : {}),
+        ...(cleanStderr ? { stderr: cleanStderr } : {}),
+      }
+    }
     child.stdout?.on('data', (chunk) => { stdout = capture(stdout, chunk) })
     child.stderr?.on('data', (chunk) => { stderr = capture(stderr, chunk) })
 
+    let timer: NodeJS.Timeout
     const done = (value: Omit<VerificationEvidence, 'completedAt' | 'durationMs'>): void => {
       if (settled) return
       settled = true
@@ -50,21 +59,20 @@ export async function runVerification(command: string | undefined, cwd: string |
 
     child.once('error', (error) => done({
       status: 'failed', command: cleaned, cwd, startedAt,
-      stdout: cleanOutput(stdout), stderr: cleanOutput(stderr), reason: error.message,
+      ...outputFields(), reason: error.message,
     }))
     child.once('exit', (code, signal) => done({
       status: code === 0 ? 'passed' : 'failed', command: cleaned, cwd, startedAt,
       ...(typeof code === 'number' ? { exitCode: code } : {}),
-      stdout: cleanOutput(stdout), stderr: cleanOutput(stderr),
+      ...outputFields(),
       ...(code === 0 ? {} : { reason: `Verification command exited ${signal ?? String(code ?? 'without a code')}.` }),
     }))
 
-    const timer = setTimeout(() => {
+    timer = setTimeout(() => {
       try { child.kill(process.platform === 'win32' ? undefined : 'SIGTERM') } catch { /* already stopped */ }
       done({
         status: 'failed', command: cleaned, cwd, startedAt,
-        stdout: cleanOutput(stdout), stderr: cleanOutput(stderr),
-        reason: `Verification timed out after ${timeoutMs}ms.`,
+        ...outputFields(), reason: `Verification timed out after ${timeoutMs}ms.`,
       })
     }, timeoutMs)
     timer.unref()
