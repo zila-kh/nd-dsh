@@ -16,6 +16,7 @@ type CompanyView = 'workspace' | 'operations' | 'strategy'
 export function OrganizationDashboard(props: Props) {
   const [view, setView] = useState<CompanyView>('workspace')
   const [state, setState] = useState<OrganizationSnapshot | null>(null)
+  const [cancelingRunId, setCancelingRunId] = useState<string | null>(null)
 
   useEffect(() => {
     let mounted = true
@@ -33,9 +34,24 @@ export function OrganizationDashboard(props: Props) {
 
   const company = state?.companies.find((item) => item.id === state.activeCompanyId) ?? state?.companies[0]
   const project = state?.projects.find((item) => item.id === state.activeProjectId && item.companyId === company?.id)
+  const activeRun = state?.runs.find((run) => run.status === 'running'
+    && run.companyId === company?.id
+    && (!project || run.projectId === project.id))
   const agents = state?.agents
     .filter((agent) => agent.companyId === company?.id)
     .map((agent) => ({ id: agent.id, name: agent.name })) ?? []
+
+  async function cancelActiveRun(): Promise<void> {
+    if (!activeRun || cancelingRunId) return
+    setCancelingRunId(activeRun.id)
+    try {
+      await window.ndDshOrganization.cancelRun(activeRun.id)
+    } catch (cause) {
+      props.onError(errorMessage(cause))
+    } finally {
+      setCancelingRunId(null)
+    }
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
@@ -44,10 +60,23 @@ export function OrganizationDashboard(props: Props) {
           <strong className="block truncate text-sm">{company?.name ?? 'AI Company'}</strong>
           <span className="block truncate text-[10px] text-faint">{project?.name ?? 'Company-wide'} · software delivery operating system</span>
         </div>
-        <div className="flex items-center rounded-md border border-border-strong bg-secondary p-0.5">
-          <button type="button" className={viewButton(view === 'workspace')} onClick={() => setView('workspace')}>Company Workspace</button>
-          <button type="button" className={viewButton(view === 'operations')} onClick={() => setView('operations')}>Operations</button>
-          <button type="button" className={viewButton(view === 'strategy')} onClick={() => setView('strategy')}>Strategy</button>
+        <div className="flex items-center gap-2">
+          {activeRun ? (
+            <button
+              type="button"
+              className="h-7 rounded-md border border-destructive/30 bg-destructive/[0.06] px-2.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/[0.12] disabled:pointer-events-none disabled:opacity-50"
+              disabled={cancelingRunId !== null}
+              title={`Cancel only this ${activeRun.kind} run; other workers continue.`}
+              onClick={() => void cancelActiveRun()}
+            >
+              {cancelingRunId === activeRun.id ? 'Canceling…' : 'Cancel run'}
+            </button>
+          ) : null}
+          <div className="flex items-center rounded-md border border-border-strong bg-secondary p-0.5">
+            <button type="button" className={viewButton(view === 'workspace')} onClick={() => setView('workspace')}>Company Workspace</button>
+            <button type="button" className={viewButton(view === 'operations')} onClick={() => setView('operations')}>Operations</button>
+            <button type="button" className={viewButton(view === 'strategy')} onClick={() => setView('strategy')}>Strategy</button>
+          </div>
         </div>
       </div>
 
