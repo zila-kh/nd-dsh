@@ -515,6 +515,13 @@ const organizationApi: OrganizationDesktopApi = {
   runTask: async (taskId) => ({ runId: 'preview-task', sessionId: 'preview-session', projectId: organization.activeProjectId!, taskId, kind: 'task-execution' }),
   reviewTask: async (taskId) => ({ runId: 'preview-review', sessionId: 'preview-session', projectId: organization.activeProjectId!, taskId, kind: 'task-review' }),
   runNext: async (projectId) => ({ runId: 'preview-next', sessionId: 'preview-session', projectId: projectId ?? organization.activeProjectId!, kind: 'task-execution' }),
+  cancelRun: async (runId) => {
+    organization = {
+      ...organization,
+      runs: organization.runs.map((run) => run.id === runId ? { ...run, status: 'failed', error: 'Canceled in UI preview.', completedAt: Date.now() } : run),
+    }
+    organizationEvents.emit(organization)
+  },
   onChanged: organizationEvents.on,
   projectRuntime: async (projectId) => ({ projectId, state: 'ready', targetUrl: 'http://localhost:3000/', port: 3000, checkedAt: now }),
   startProjectRuntime: async (projectId) => ({ projectId, state: 'starting', targetUrl: 'http://localhost:3000/', port: 3000 }),
