@@ -18,6 +18,7 @@ const api: OrganizationDesktopApi = {
   runTask: (taskId) => ipcRenderer.invoke(ORGANIZATION_IPC.runTask, taskId),
   reviewTask: (taskId) => ipcRenderer.invoke(ORGANIZATION_IPC.reviewTask, taskId),
   runNext: (projectId) => ipcRenderer.invoke(ORGANIZATION_IPC.runNext, projectId),
+  cancelRun: (runId) => ipcRenderer.invoke(ORGANIZATION_IPC.cancelRun, runId),
   onChanged: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, state: Parameters<typeof listener>[0]) => listener(state)
     ipcRenderer.on(ORGANIZATION_IPC.changed, handler)
