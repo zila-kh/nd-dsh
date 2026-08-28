@@ -1,5 +1,5 @@
 export type NdGatewayMode = 'llm-only' | 'nd-enhanced' | 'full-nd'
-export type NdGatewayAppId = 'chatgpt'
+export type NdGatewayAppId = 'chatgpt' | 'codex'
 
 export interface NdGatewayAppState {
   id: NdGatewayAppId

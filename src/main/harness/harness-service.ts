@@ -391,10 +391,11 @@ export class HarnessService {
       DSH_HOME: dshHome,
       DSH_CWD: workspaceRoot,
       DSH_PERMISSION_MODE: process.env.ND_DSH_PERMISSION_MODE ?? 'workspace-write',
+      ...(app.isPackaged ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
     }
 
     this.updateStatus('starting')
-    const child = spawn(process.env.ND_DSH_NODE_BIN?.trim() || 'node', [
+    const child = spawn(process.env.ND_DSH_NODE_BIN?.trim() || (app.isPackaged ? process.execPath : 'node'), [
       cliBin,
       '--profile', 'web',
       '--patch', patchPath,

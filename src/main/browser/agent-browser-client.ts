@@ -29,6 +29,7 @@ export class AgentBrowserClient {
   readonly configPath: string
   readonly binary: string
   readonly entryPath: string
+  private readonly electronNodeMode: boolean
   private statusValue: AgentBrowserStatus = { state: 'binding' }
 
   constructor(cdpPort: number, projectRoot: string) {
@@ -39,6 +40,7 @@ export class AgentBrowserClient {
       process.env.ND_DSH_AGENT_BROWSER_ENTRY
         ?? join(projectRoot, 'node_modules', 'agent-browser', 'bin', 'agent-browser.js'),
     )
+    this.electronNodeMode = app.isPackaged && !process.env.ND_DSH_AGENT_BROWSER_BIN?.trim()
   }
 
   status(): AgentBrowserStatus {
@@ -169,6 +171,7 @@ export class AgentBrowserClient {
       if (isAbsolute(override) || override.includes('/') || override.includes('\\')) return resolve(override)
       return override
     }
+    if (app.isPackaged) return process.execPath
     const executable = process.platform === 'win32' ? 'agent-browser.cmd' : 'agent-browser'
     return join(projectRoot, 'node_modules', '.bin', executable)
   }
@@ -178,7 +181,10 @@ export class AgentBrowserClient {
       throw new Error(`agent-browser is not installed at ${this.binary}. Run pnpm install.`)
     }
 
-    const args = ['--config', this.configPath, '--json', ...globalArguments, ...command]
+    const args = [
+      ...(this.electronNodeMode ? [this.entryPath] : []),
+      '--config', this.configPath, '--json', ...globalArguments, ...command,
+    ]
     return new Promise((resolvePromise, reject) => {
       const child = spawn(this.binary, args, {
         cwd: process.cwd(),
@@ -189,6 +195,7 @@ export class AgentBrowserClient {
           PATH: process.env.PATH?.split(delimiter).filter(Boolean).join(delimiter),
           AGENT_BROWSER_CONFIG: this.configPath,
           AGENT_BROWSER_SESSION: this.sessionName,
+          ...(this.electronNodeMode ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
         },
       })
       let stdout = ''

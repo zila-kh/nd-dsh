@@ -1,13 +1,21 @@
-import { ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
+import { app, ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
+import { join } from 'node:path'
 import { ND_GATEWAY_IPC, type NdGatewayAppId, type NdGatewayConnectInput, type NdGatewayMode } from '../../shared/gateway.js'
 import type { ProviderStore } from '../providers.js'
 import type { TokenSaverService } from '../token-saver/token-saver-service.js'
 import { NdGatewayService } from './gateway-service.js'
+import { CodexGatewayConfigManager } from './codex-config-manager.js'
 
 type Handler = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown | Promise<unknown>
 
 export function registerNdGatewayIpc(window: BrowserWindow, providers: () => ProviderStore, tokenSaver: TokenSaverService): () => void {
-  const service = new NdGatewayService(providers, tokenSaver)
+  const codexHome = process.env.CODEX_HOME || join(app.getPath('home'), '.codex')
+  const service = new NdGatewayService(
+    providers,
+    tokenSaver,
+    fetch,
+    new CodexGatewayConfigManager(join(codexHome, 'config.toml'), join(app.getPath('userData'), 'nd-gateway-codex-route.json')),
+  )
   const channels: string[] = []
   const handle = (channel: string, listener: Handler): void => {
     ipcMain.removeHandler(channel)
@@ -45,7 +53,7 @@ function readConnectInput(value: unknown): NdGatewayConnectInput {
 }
 
 function readAppId(value: unknown): NdGatewayAppId {
-  if (value === 'chatgpt') return value
+  if (value === 'chatgpt' || value === 'codex') return value
   throw new Error('Unsupported external app')
 }
 

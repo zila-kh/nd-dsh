@@ -316,6 +316,7 @@ export class CodexCliEngine {
       if (key.startsWith('ND_DSH_') || key.startsWith('DSH_')) continue
       environment[key] = value
     }
+    if (argv[0] === process.execPath && bin.toLowerCase().endsWith('.js')) environment.ELECTRON_RUN_AS_NODE = '1'
 
     const log = this.options.log ?? ((line: string) => console.warn(line))
     const spawnProcess = this.options.spawnProcess ?? spawn

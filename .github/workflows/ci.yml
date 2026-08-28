@@ -25,6 +25,8 @@ jobs:
         run: corepack pnpm install --frozen-lockfile
       - name: Verify repository invariants
         run: corepack pnpm verify
+      - name: Verify release packaging configuration
+        run: corepack pnpm release:verify -- --config-only
       - name: Typecheck
         run: corepack pnpm typecheck
       - name: Unit tests

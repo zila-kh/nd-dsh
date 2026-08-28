@@ -5,6 +5,9 @@ allowBuilds:
   esbuild: true
   electron: true
   node-pty: true
+  # Squirrel is a transitive optional target; ND's Windows beta uses the
+  # portable target, so its install-time download/build step stays disabled.
+  electron-winstaller: false
 
 # DeepSeek Harness intentionally remains its own pinned workspace under
 # vendor/deepseek-harness. Bootstrap installs and builds it with --dir instead

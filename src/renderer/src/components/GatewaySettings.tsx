@@ -45,13 +45,14 @@ export function GatewaySettings({ onError }: GatewaySettingsProps) {
   }, [onError])
 
   const chatgpt = state?.apps.find((app) => app.id === 'chatgpt')
+  const codex = state?.apps.find((app) => app.id === 'codex')
   const selectedProvider = useMemo(() => providers.find((provider) => provider.id === providerId), [providerId, providers])
-  const canConnect = Boolean(chatgpt?.supported && selectedProvider?.hasApiKey && !busy)
-
+  const responsesCompatible = selectedProvider?.apiFormat.toLowerCase().includes('responses') ?? false
+  const canConnect = Boolean(codex?.supported && selectedProvider?.hasApiKey && responsesCompatible && mode !== 'full-nd' && !busy)
   const connect = async (): Promise<void> => {
     setBusy(true)
     try {
-      setState(await window.ndDshGateway.connect({ appId: 'chatgpt', mode, providerId }))
+      setState(await window.ndDshGateway.connect({ appId: 'codex', mode, providerId }))
     } catch (cause) {
       onError(message(cause))
     } finally {
@@ -62,7 +63,7 @@ export function GatewaySettings({ onError }: GatewaySettingsProps) {
   const disconnect = async (): Promise<void> => {
     setBusy(true)
     try {
-      setState(await window.ndDshGateway.disconnect('chatgpt'))
+      setState(await window.ndDshGateway.disconnect('codex'))
     } catch (cause) {
       onError(message(cause))
     } finally {
@@ -84,6 +85,17 @@ export function GatewaySettings({ onError }: GatewaySettingsProps) {
 
         <SettingsRow>
           <div className={rowStack}>
+            <strong className={rowTitle}>Codex</strong>
+            <span className={rowDesc}>{codex?.detail ?? 'Checking this computer…'}</span>
+            <span className={rowPathText}>{codex?.detected ? 'Detected on this computer' : 'Custom-provider setup available'}</span>
+          </div>
+          <StatusChip good={codex?.connected} neutral={!codex?.connected}>
+            {codex?.connected ? 'Proxy ready' : 'Ready to connect'}
+          </StatusChip>
+        </SettingsRow>
+
+        <SettingsRow>
+          <div className={rowStack}>
             <strong className={rowTitle}>ChatGPT Desktop</strong>
             <span className={rowDesc}>{chatgpt?.detail ?? 'Checking this computer…'}</span>
             <span className={rowPathText}>{chatgpt?.detected ? 'Detected on this computer' : 'Not detected yet'}</span>
@@ -100,7 +112,7 @@ export function GatewaySettings({ onError }: GatewaySettingsProps) {
           </div>
           <div className="flex shrink-0 gap-1">
             {(['llm-only', 'nd-enhanced', 'full-nd'] as const).map((value) => (
-              <SettingsButton key={value} active={mode === value} disabled={busy} onClick={() => setMode(value)}>
+              <SettingsButton key={value} active={mode === value} disabled={busy || value === 'full-nd'} onClick={() => setMode(value)}>
                 {value === 'llm-only' ? 'LLM only' : value === 'nd-enhanced' ? 'ND Enhanced' : 'Full ND'}
               </SettingsButton>
             ))}
@@ -110,7 +122,7 @@ export function GatewaySettings({ onError }: GatewaySettingsProps) {
         <SettingsRow>
           <div className={rowStack}>
             <strong className={rowTitle}>Model provider</strong>
-            <span className={rowDesc}>A provider API key is required. The key is never copied into ChatGPT or another external app.</span>
+            <span className={rowDesc}>Codex requires a provider route using Responses (/responses). The real provider key stays inside ND.</span>
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <select
@@ -130,18 +142,28 @@ export function GatewaySettings({ onError }: GatewaySettingsProps) {
         <SettingsRow>
           <div className={rowStack}>
             <strong className={rowTitle}>Connection</strong>
-            <span className={rowDesc}>ND never installs a root certificate, changes system proxy settings, or asks you to use Terminal.</span>
-            {!chatgpt?.supported ? <span className={rowPathText}>ChatGPT currently has no supported custom LLM base URL, so ND refuses to force the proxy.</span> : null}
+            <span className={rowDesc}>Connect installs a reversible, ND-marked route in your user-level Codex config. Native Codex choices stay native; only ND â€” provider â€” model choices route through ND.</span>
+            {selectedProvider && !responsesCompatible ? <span className={rowPathText}>Change this provider’s API format to Responses (/responses) in Models first.</span> : null}
           </div>
           <div className="flex shrink-0 items-center gap-2">
             {selectedProvider && !selectedProvider.hasApiKey ? <span className={rowValueText}>Add the API key in Models first</span> : null}
-            {chatgpt?.connected ? (
+            {codex?.connected ? (
               <SettingsButton disabled={busy} onClick={() => void disconnect()}>{busy ? 'Working…' : 'Disconnect'}</SettingsButton>
             ) : (
               <SettingsButton disabled={!canConnect} onClick={() => void connect()}>{busy ? 'Connecting…' : 'Connect'}</SettingsButton>
             )}
           </div>
         </SettingsRow>
+
+        {codex?.connected ? (
+          <SettingsRow>
+            <div className={rowStack}>
+              <strong className={rowTitle}>Proxy model catalog enabled</strong>
+              <span className={rowDesc}>Restart Codex once, then choose an ND â€” {selectedProvider?.name ?? 'provider'} â€” model. Disconnect restores your prior configuration and removes these entries when Codex refreshes.</span>
+            </div>
+            <StatusChip good>Installed</StatusChip>
+          </SettingsRow>
+        ) : null}
       </div>
     </SettingsSection>
   )

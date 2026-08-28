@@ -172,8 +172,10 @@ test('Design Live App keeps the workspace and inspector panes usable', async () 
     liveApp.boundingBox(),
     inspectorPane.boundingBox(),
   ])
-  expect(workspaceBox?.width).toBeGreaterThanOrEqual(200)
-  expect(inspectorBox?.width).toBeGreaterThanOrEqual(220)
+  // Electron can report CSS layout widths on fractional device pixels even
+  // when the resizable panel has enforced its integer-pixel minimum.
+  expect(Math.round(workspaceBox?.width ?? 0)).toBeGreaterThanOrEqual(200)
+  expect(Math.round(inspectorBox?.width ?? 0)).toBeGreaterThanOrEqual(220)
   expect(liveAppBox?.x).toBeGreaterThanOrEqual((workspaceBox?.x ?? 0) + (workspaceBox?.width ?? 0))
   expect(inspectorBox?.x).toBeGreaterThanOrEqual((liveAppBox?.x ?? 0) + (liveAppBox?.width ?? 0))
 })

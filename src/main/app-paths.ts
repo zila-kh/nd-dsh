@@ -30,7 +30,9 @@ export function harnessRoot(): string {
 
 /** The dsh CLI launcher bin: boots the `web` profile the desktop shells. */
 export function harnessCliBinPath(): string {
-  return join(harnessRoot(), 'apps/cli/lib/bin.js')
+  const root = harnessRoot()
+  const sourceEntry = join(root, 'apps/cli/lib/bin.js')
+  return existsSync(sourceEntry) ? sourceEntry : join(root, 'lib/bin.js')
 }
 
 /** ND-DSH's patch overlay applied on top of the web profile. */
@@ -59,7 +61,10 @@ export function codexBinPath(): string | undefined {
     const resolved = resolve(override)
     return existsSync(resolved) ? resolved : undefined
   }
-  const subagentEntry = join(harnessRoot(), 'packages/subagent/subagent-codex/lib/index.js')
+  const root = harnessRoot()
+  const sourceEntry = join(root, 'packages/subagent/subagent-codex/lib/index.js')
+  const deployedEntry = join(root, 'node_modules/@deepseek-ai/dsh-subagent-codex/lib/index.js')
+  const subagentEntry = existsSync(sourceEntry) ? sourceEntry : deployedEntry
   if (!existsSync(subagentEntry)) return undefined
   try {
     const requireFromSubagent = createRequire(subagentEntry)

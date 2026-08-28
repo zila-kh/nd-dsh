@@ -28,12 +28,21 @@ export async function captureWorkspaceEvidence(workspacePath: string | undefined
 
   try {
     const cwd = resolve(workspacePath)
-    const [{ stdout: headRaw }, { stdout: diff }, { stdout: trackedNames }, { stdout: untrackedRaw }] = await Promise.all([
+    const [headResult, diffResult, trackedNamesResult, untrackedResult] = await Promise.allSettled([
       runGit(cwd, ['rev-parse', 'HEAD']),
       runGit(cwd, ['diff', '--binary', 'HEAD', '--', '.']),
       runGit(cwd, ['diff', '--name-only', 'HEAD', '--', '.']),
       runGit(cwd, ['ls-files', '--others', '--exclude-standard', '-z']),
     ])
+    if (headResult.status === 'rejected') throw headResult.reason
+    if (diffResult.status === 'rejected') throw diffResult.reason
+    if (trackedNamesResult.status === 'rejected') throw trackedNamesResult.reason
+    if (untrackedResult.status === 'rejected') throw untrackedResult.reason
+
+    const { stdout: headRaw } = headResult.value
+    const { stdout: diff } = diffResult.value
+    const { stdout: trackedNames } = trackedNamesResult.value
+    const { stdout: untrackedRaw } = untrackedResult.value
 
     const gitHead = headRaw.trim()
     const untracked = untrackedRaw.split('\0').map((item) => item.trim()).filter(Boolean).sort()

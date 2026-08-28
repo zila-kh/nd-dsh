@@ -1,0 +1,12 @@
+{
+  "name": "speed-round-v3",
+  "version": "1.0.0",
+  "description": "Minimal plain Node.js tip-of-the-day CLI",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node test.js"
+  },
+  "license": "MIT"
+}

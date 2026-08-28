@@ -21,7 +21,7 @@ const INSERTED_ENTRY_PACKAGES = [
  */
 export function ensureProfilePluginLinks(dshHome: string, harnessRootDirectory: string): void {
   for (const inserted of INSERTED_ENTRY_PACKAGES) {
-    const target = join(harnessRootDirectory, inserted.vendoredPath)
+    const target = packageTarget(harnessRootDirectory, inserted)
     if (!existsSync(join(target, 'package.json'))) continue
     ensureLink(join(dshHome, 'profiles', 'node_modules', ...inserted.name.split('/')), target)
   }
@@ -36,6 +36,12 @@ function ensureLink(link: string, target: string): void {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
     // A racing creator produced the same link; correct is correct.
   }
+}
+
+function packageTarget(root: string, inserted: typeof INSERTED_ENTRY_PACKAGES[number]): string {
+  const source = join(root, inserted.vendoredPath)
+  if (existsSync(join(source, 'package.json'))) return source
+  return join(root, 'node_modules', ...inserted.name.split('/'))
 }
 
 function sameTarget(link: string, target: string): boolean {

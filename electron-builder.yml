@@ -1,0 +1,48 @@
+appId: com.nddsh.desktop
+productName: ND-DSH
+copyright: Copyright (c) 2026 ND-DSH contributors
+
+directories:
+  output: dist
+
+asar: true
+npmRebuild: false
+asarUnpack:
+  - node_modules/node-pty/**
+
+files:
+  - out/**
+  - package.json
+  - node_modules/**
+  - '!node_modules/.cache/**'
+
+extraResources:
+  # projectRoot() deliberately resolves this runtime root before app.asar.
+  - from: package.json
+    to: package.json
+  - from: .release/release-manifest.json
+    to: release-manifest.json
+  - from: .release/harness
+    to: vendor/deepseek-harness
+  - from: configs/dsh
+    to: configs/dsh
+  - from: scripts
+    to: scripts
+    filter:
+      - external-inspect-mcp.mjs
+      - nd-extension-mcp.mjs
+      - nd-extension-runtime.mjs
+  - from: node_modules/agent-browser
+    to: node_modules/agent-browser
+  - from: resources/nd-pencil
+    to: nd-pencil
+  - from: LICENSE
+    to: LICENSE.nd-dsh
+
+win:
+  target:
+    - portable
+  artifactName: ND-DSH-${version}-${os}-${arch}.${ext}
+
+portable:
+  artifactName: ND-DSH-${version}-private-beta-${arch}.${ext}

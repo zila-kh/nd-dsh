@@ -35,6 +35,12 @@ ND deliberately does **not** force ChatGPT traffic through a machine-level MITM 
 
 ChatGPT MCP/Apps SDK integration is a different integration class: it can expose ND tools/ecosystem to ChatGPT, but it does not replace ChatGPT's private model transport and therefore cannot provide LLM-level Token Saver for ChatGPT's own model calls.
 
+## Codex boundary
+
+Codex exposes a native model catalog and accepts a local Responses route, so ND Gateway can add explicit `ND â€” provider â€” model` rows to that catalog without changing normal Codex selections. The selected ND provider must use the Responses (`/responses`) API format. Only an ND-prefixed row is sent to the selected provider; every other model request stays on Codex's native path.
+
+Connect installs one ND-marked `openai_base_url` line in the user-level Codex configuration, records the prior line, and restores it on disconnect. A Codex catalog refresh adds the ND rows; after disconnect, the restored route removes them on the next refresh. If a user changes the managed line while connected, ND refuses to overwrite that change. The provider key never enters Codex: it remains in ND's trusted main process.
+
 ## Current implementation
 
 - `src/shared/gateway.ts` — product contracts and IPC names.
@@ -53,5 +59,8 @@ ChatGPT MCP/Apps SDK integration is a different integration class: it can expose
 - ND Enhanced runs safe Token Saver prompt optimization;
 - local gateway is inaccessible without its generated per-app credential;
 - ChatGPT is not marked supported until an official safe connection method exists;
+- Codex is marked supported only for provider routes configured for the Responses API;
+- Codex never receives the upstream provider key;
+- the Codex model catalog adds namespaced ND rows while preserving native rows;
 - disabling/disconnecting stops the local gateway;
 - unsupported setup fails without changing machine networking.
