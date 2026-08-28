@@ -188,7 +188,8 @@ describe('beta execution reliability', () => {
     let state = await store.mutate({
       type: 'task.create', companyId: company.id, projectId: project.id,
       title: 'Parallel feature', description: 'Independent task', priority: 'high',
-      acceptanceCriteria: ['Independent task completes.'], assignedAgentId: task.assignedAgentId,
+      acceptanceCriteria: ['Independent task completes.'],
+      ...(task.assignedAgentId ? { assignedAgentId: task.assignedAgentId } : {}),
     })
     const second = state.tasks.find((item) => item.title === 'Parallel feature')!
     await store.mutate({ type: 'task.update', id: second.id, patch: { status: 'ready' } })
