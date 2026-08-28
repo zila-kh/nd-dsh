@@ -287,6 +287,7 @@ export interface OrganizationDesktopApi {
   runTask(taskId: string): Promise<OrganizationRunReceipt>
   reviewTask(taskId: string): Promise<OrganizationRunReceipt>
   runNext(projectId?: string): Promise<OrganizationRunReceipt | null>
+  cancelRun(runId: string): Promise<void>
   onChanged(listener: (state: OrganizationSnapshot) => void): () => void
   projectRuntime(projectId: string): Promise<ProjectRuntimeStatus>
   startProjectRuntime(projectId: string): Promise<ProjectRuntimeStatus>
@@ -301,6 +302,7 @@ export const ORGANIZATION_IPC = {
   runTask: 'organization:run-task',
   reviewTask: 'organization:review-task',
   runNext: 'organization:run-next',
+  cancelRun: 'organization:cancel-run',
   changed: 'organization:changed',
   runtimeState: 'organization:runtime-state',
   runtimeStart: 'organization:runtime-start',
