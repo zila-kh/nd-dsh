@@ -23,7 +23,7 @@ import { captureWorkspaceEvidence } from './worktree-evidence.js'
 
 const DAY_MS = 24 * 60 * 60 * 1_000
 const DEFAULT_LEASE_MS = 30 * 60 * 1_000
-const DEFAULT_MAX_PARALLEL_WORKERS = 1
+const DEFAULT_MAX_PARALLEL_WORKERS = 2
 const EMPTY: OrganizationControlSnapshot = {
   version: 1,
   turns: [],
@@ -111,7 +111,7 @@ export class OrganizationControlPlane {
 
     if (taskId && (action === 'task.execute' || action === 'task.review')) {
       const maxParallelWorkers = budget?.maxParallelWorkers ?? DEFAULT_MAX_PARALLEL_WORKERS
-      const runningTaskTurns = organization.runs.filter((item) => item.status === 'running' && item.taskId && item.taskId !== taskId).length
+      const runningTaskTurns = organization.runs.filter((item) => item.status === 'running' && item.projectId === project.id && item.taskId && item.taskId !== taskId).length
       if (runningTaskTurns >= maxParallelWorkers) {
         return {
           route: 'wait', action, companyId: company.id, projectId: project.id, taskId,
