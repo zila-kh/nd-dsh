@@ -24,6 +24,7 @@ class FakeHarness {
     return { sessionId: options?.sessionId ?? 'session' }
   }
   async close(): Promise<void> {}
+  status(): { provider: string; model: string } { return { provider: 'test-provider', model: 'test-model' } }
   consumeCanceledSession(): boolean { return false }
 }
 
