@@ -27,6 +27,18 @@ interface ExecutionAttemptBoundary {
   head: string
 }
 
+interface ExecutionRoute {
+  engineId: string
+  attempt: number
+  provider?: string
+  model?: string
+}
+
+interface ProviderRoute {
+  provider: string
+  model: string
+}
+
 const MAX_AUTOPILOT_PARALLEL_FILL = 16
 
 /**
@@ -51,6 +63,9 @@ export class OrganizationOrchestrator {
   private autoAdvance = new Map<string, string>()
   private reviewWorktrees = new Map<string, ReviewWorktreeCheckpoint>()
   private executionBaselines = new Map<string, ExecutionAttemptBoundary>()
+  private executionRoutes = new Map<string, ExecutionRoute>()
+  private attemptedProviderRoutes = new Map<string, Set<string>>()
+  private pendingFallbackRoutes = new Map<string, ProviderRoute>()
   private canceledSessions = new Set<string>()
   private lastProgressAt = new Map<string, number>()
   private parallelFillProjects = new Set<string>()
@@ -107,7 +122,13 @@ export class OrganizationOrchestrator {
     await this.assertTaskRunSlot(context.task.id, context.project.id, Boolean(taskWorktree))
     const attemptHead = taskWorktree ? await this.taskWorktrees.baseline(taskWorktree) : undefined
     const prompt = workerPrompt(context, engine, attempt, taskWorktree)
-    const modelOpts = useFallbackRoute ? {} : this.resolveAgentModel(context.agent, context.role)
+    let modelOpts = this.resolveAgentModel(context.agent, context.role)
+    if (useFallbackRoute) {
+      const fallback = this.pendingFallbackRoutes.get(taskId) ?? await this.selectFallbackProviderRoute(context)
+      if (!fallback) throw new Error('No distinct fallback provider/model route is available for this failed execution attempt')
+      modelOpts = fallback
+      this.pendingFallbackRoutes.delete(taskId)
+    }
 
     if (!taskWorktree) await this.prepareWorkspace(context.project.workspacePath)
     await this.warmProjectTarget(context.project.id)
@@ -125,6 +146,9 @@ export class OrganizationOrchestrator {
       taskWorktree ? { parallelTask: true } : {},
     )
     if (taskWorktree && attemptHead) this.executionBaselines.set(target.sessionId, { worktree: taskWorktree, head: attemptHead })
+    const effectiveRoute = this.effectiveExecutionRoute(engine.id, attempt, modelOpts)
+    this.executionRoutes.set(target.sessionId, effectiveRoute)
+    this.noteProviderAttempt(taskId, effectiveRoute)
     this.lastProgressAt.set(target.sessionId, run.startedAt)
 
     try {
@@ -328,7 +352,7 @@ export class OrganizationOrchestrator {
     }
 
     if (run?.kind === 'task-execution' && run.taskId) {
-      const workerOutput = this.finalText.get(sessionId) ?? 'Worker session finished.'
+      const workerOutput = `${this.finalText.get(sessionId) ?? 'Worker session finished.'}${this.routeEvidence(sessionId)}`
       try {
         const context = await this.store.taskContext(run.taskId)
         const worktree = await this.taskWorktrees.existing(context.project.workspacePath, run.taskId)
@@ -340,6 +364,7 @@ export class OrganizationOrchestrator {
           await this.store.completeRun(run.id, output, message)
           await this.failTask(run.taskId, message)
           const queued = await this.queueVerificationRework(run.taskId, message)
+          this.cleanupTaskRouting(run.taskId)
           this.cleanupSession(sessionId)
           if (queued) await this.continueProject(run.projectId)
           return
@@ -349,6 +374,7 @@ export class OrganizationOrchestrator {
         await this.store.completeRun(run.id, output)
         if (workflow.has('review')) await this.store.markForReview(run.taskId, output)
         else await this.store.completeWithoutReview(run.taskId, output)
+        this.cleanupTaskRouting(run.taskId)
       } catch (cause) {
         const message = errorMessage(cause)
         await this.store.completeRun(run.id, workerOutput, message).catch(() => undefined)
@@ -442,13 +468,17 @@ export class OrganizationOrchestrator {
     if (!active) return false
     const rollback = await this.rollbackExecutionAttempt(run.sessionId)
     const detail = rollback ? message : `${message}\nRollback failed; automatic retry disabled.`
-    await this.store.completeRun(run.id, this.finalText.get(run.sessionId), detail).catch(() => undefined)
+    const output = `${this.finalText.get(run.sessionId) ?? ''}${this.routeEvidence(run.sessionId)}` || undefined
+    await this.store.completeRun(run.id, output, detail).catch(() => undefined)
     await this.failTask(run.taskId, detail)
     if (!rollback) return false
     const context = await this.store.taskContext(run.taskId)
     const attempts = await this.store.executionAttemptCount(run.taskId)
     const retryable = stalled || isRetryableExecutionFailure(message)
     if (context.company.autonomyLevel < 4 || attempts >= MAX_EXECUTION_ATTEMPTS || !retryable) return false
+    const fallback = await this.selectFallbackProviderRoute(context)
+    if (!fallback) return false
+    this.pendingFallbackRoutes.set(run.taskId, fallback)
     await this.store.queueRework(run.taskId, `${stalled ? 'Stall recovery' : 'Transient engine/provider failure'}: ${message}`)
     return true
   }
@@ -464,8 +494,12 @@ export class OrganizationOrchestrator {
   private async handleCanceledRun(run: OrganizationRun, sessionId: string): Promise<void> {
     const message = 'Canceled by user before the run completed.'
     if (run.kind === 'task-execution') await this.rollbackExecutionAttempt(sessionId)
-    await this.store.completeRun(run.id, this.finalText.get(sessionId), message)
-    if (run.taskId) await this.failTask(run.taskId, message)
+    const output = `${this.finalText.get(sessionId) ?? ''}${this.routeEvidence(sessionId)}` || undefined
+    await this.store.completeRun(run.id, output, message)
+    if (run.taskId) {
+      await this.failTask(run.taskId, message)
+      this.cleanupTaskRouting(run.taskId)
+    }
     this.cleanupSession(sessionId)
   }
 
@@ -479,6 +513,65 @@ export class OrganizationOrchestrator {
       console.warn('Organization attempt rollback failed:', errorMessage(error))
       return false
     }
+  }
+
+  private async selectFallbackProviderRoute(context: Awaited<ReturnType<OrganizationStore['taskContext']>>): Promise<ProviderRoute | undefined> {
+    const attempted = this.attemptedProviderRoutes.get(context.task.id) ?? new Set<string>()
+    const assignedEngineId = this.engines ? await this.engines.assignedEngine(context.agent?.id) : ND_HARNESS_ENGINE_ID
+    if (assignedEngineId === ND_HARNESS_ENGINE_ID && attempted.size === 0) {
+      const configured = this.resolveAgentModel(context.agent, context.role)
+      const provider = configured.provider ?? this.harness.status().provider
+      const model = configured.model ?? this.harness.status().model
+      if (provider && model) attempted.add(providerRouteKey(provider, model))
+    }
+    this.attemptedProviderRoutes.set(context.task.id, attempted)
+
+    const catalog = await this.harness.gatewayRpc('session.models').catch(() => undefined)
+    if (!catalog?.ok || !catalog.value || typeof catalog.value !== 'object') return undefined
+    const groups = (catalog.value as { groups?: unknown }).groups
+    if (!Array.isArray(groups)) return undefined
+    for (const group of groups) {
+      if (!group || typeof group !== 'object') continue
+      const provider = typeof (group as { id?: unknown }).id === 'string' ? (group as { id: string }).id.trim() : ''
+      const models = (group as { models?: unknown }).models
+      if (!provider || !Array.isArray(models)) continue
+      for (const item of models) {
+        if (!item || typeof item !== 'object') continue
+        const model = typeof (item as { id?: unknown }).id === 'string' ? (item as { id: string }).id.trim() : ''
+        if (!model || attempted.has(providerRouteKey(provider, model))) continue
+        return { provider, model }
+      }
+    }
+    return undefined
+  }
+
+  private effectiveExecutionRoute(engineId: string, attempt: number, modelOpts: { provider?: string; model?: string }): ExecutionRoute {
+    if (engineId !== ND_HARNESS_ENGINE_ID) return { engineId, attempt }
+    const provider = modelOpts.provider ?? this.harness.status().provider
+    const model = modelOpts.model ?? this.harness.status().model
+    return {
+      engineId,
+      attempt,
+      ...(provider ? { provider } : {}),
+      ...(model ? { model } : {}),
+    }
+  }
+
+  private noteProviderAttempt(taskId: string, route: ExecutionRoute): void {
+    if (!route.provider || !route.model) return
+    const routes = this.attemptedProviderRoutes.get(taskId) ?? new Set<string>()
+    routes.add(providerRouteKey(route.provider, route.model))
+    this.attemptedProviderRoutes.set(taskId, routes)
+  }
+
+  private routeEvidence(sessionId: string): string {
+    const route = this.executionRoutes.get(sessionId)
+    return route ? `\n\n<nd-dsh-execution-route>${JSON.stringify(route)}</nd-dsh-execution-route>` : ''
+  }
+
+  private cleanupTaskRouting(taskId: string): void {
+    this.attemptedProviderRoutes.delete(taskId)
+    this.pendingFallbackRoutes.delete(taskId)
   }
 
   private async stopSession(sessionId: string): Promise<void> {
@@ -537,7 +630,11 @@ export class OrganizationOrchestrator {
     if (!task) return
     await this.store.mutate({ type: 'task.update', id: taskId, patch: { status: 'blocked' } })
     if (task.assignedAgentId) {
-      await this.store.mutate({ type: 'agent.update', id: task.assignedAgentId, patch: { status: 'idle' } }).catch(() => undefined)
+      const hasOtherActiveRun = state.runs.some((run) => run.status === 'running' && run.taskId && run.taskId !== taskId
+        && state.tasks.find((candidate) => candidate.id === run.taskId)?.assignedAgentId === task.assignedAgentId)
+      if (!hasOtherActiveRun) {
+        await this.store.mutate({ type: 'agent.update', id: task.assignedAgentId, patch: { status: 'idle' } }).catch(() => undefined)
+      }
     }
     console.warn(`Organization task blocked: ${message}`)
   }
@@ -606,6 +703,7 @@ export class OrganizationOrchestrator {
     this.autoAdvance.delete(sessionId)
     this.reviewWorktrees.delete(sessionId)
     this.executionBaselines.delete(sessionId)
+    this.executionRoutes.delete(sessionId)
     this.canceledSessions.delete(sessionId)
     this.lastProgressAt.delete(sessionId)
   }
@@ -672,6 +770,11 @@ function receipt(run: OrganizationRun): OrganizationRunReceipt {
     ...(run.taskId ? { taskId: run.taskId } : {}),
     kind: run.kind,
   }
+}
+
+function providerRouteKey(provider: string, model: string): string {
+  const route = provider === 'deepseek' ? 'deepseek-official' : provider
+  return `${route.trim()}::${model.trim()}`
 }
 
 function errorMessage(error: unknown): string {
