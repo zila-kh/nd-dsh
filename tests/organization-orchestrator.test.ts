@@ -12,6 +12,7 @@ class FakeHarness {
   async createSession(): Promise<string> { this.counter += 1; return `session-${this.counter}` }
   async run(prompt: string, options?: { sessionId?: string }): Promise<{ sessionId: string }> { this.prompts.push({ prompt, ...(options?.sessionId ? { sessionId: options.sessionId } : {}) }); return { sessionId: options?.sessionId ?? 'session' } }
   async close(): Promise<void> {}
+  status(): { provider: string; model: string } { return { provider: 'test-provider', model: 'test-model' } }
   cancel(sessionId: string): void { this.canceled.add(sessionId) }
   consumeCanceledSession(sessionId: string): boolean { return this.canceled.delete(sessionId) }
 }
