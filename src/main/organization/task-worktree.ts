@@ -58,6 +58,31 @@ export class TaskWorktreeManager {
     return await isAttachedWorktree(descriptor.root) ? descriptor : undefined
   }
 
+  /**
+   * Record the exact clean HEAD before one execution attempt. Retry/failover is
+   * allowed only from this boundary, never on top of unknown partial writes.
+   */
+  async baseline(worktree: TaskWorktree): Promise<string> {
+    const status = await git(worktree.root, ['status', '--porcelain=v1', '--untracked-files=all'])
+    if (status.stdout.trim()) {
+      throw new Error('Task worktree is dirty before execution attempt; refusing to create an unsafe retry boundary')
+    }
+    return (await git(worktree.root, ['rev-parse', 'HEAD'])).stdout.trim()
+  }
+
+  /** Restore only the ND-owned task worktree to its pre-attempt boundary. */
+  async rollback(worktree: TaskWorktree, expectedHead: string): Promise<void> {
+    await git(worktree.root, ['reset', '--hard', expectedHead])
+    await git(worktree.root, ['clean', '-fd', '--'])
+    const [head, status] = await Promise.all([
+      git(worktree.root, ['rev-parse', 'HEAD']),
+      git(worktree.root, ['status', '--porcelain=v1', '--untracked-files=all']),
+    ])
+    if (head.stdout.trim() !== expectedHead || status.stdout.trim()) {
+      throw new Error('Task worktree could not be restored to its execution-attempt baseline')
+    }
+  }
+
   /** Freeze the worker result into the task branch before independent review. */
   async checkpoint(worktree: TaskWorktree, title: string): Promise<string> {
     const status = await git(worktree.root, ['status', '--porcelain=v1', '--untracked-files=all'])

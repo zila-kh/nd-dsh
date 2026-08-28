@@ -56,10 +56,13 @@ export function registerOrganizationIpc(
   const restoreOrchestrator = guardOrchestrator(orchestrator, store, control)
 
   // Organization runs finish on engine event streams, outside renderer IPC.
-  // Reconcile independently so evidence, typed results, leases and quotas never
-  // depend on a screen being open or a user requesting status.
+  // Reconcile independently so evidence, typed results, leases, quotas and
+  // stalled-session recovery never depend on a screen being open.
   const reconcileTimer = setInterval(() => {
-    void reconcileControlState(store, control).catch((error) => console.warn('Organization control reconciliation failed:', error instanceof Error ? error.message : String(error)))
+    void (async () => {
+      await orchestrator.reconcileStalledRuns()
+      await reconcileControlState(store, control)
+    })().catch((error) => console.warn('Organization control reconciliation failed:', error instanceof Error ? error.message : String(error)))
   }, 1_500)
   reconcileTimer.unref()
 
@@ -106,6 +109,7 @@ export function registerOrganizationIpc(
   handle(ORGANIZATION_IPC.runTask, (_event, value) => orchestrator.runTask(asId(value, 'Task id')))
   handle(ORGANIZATION_IPC.reviewTask, (_event, value) => orchestrator.reviewTask(asId(value, 'Task id')))
   handle(ORGANIZATION_IPC.runNext, (_event, value) => orchestrator.runNext(value === undefined || value === null ? undefined : asId(value, 'Project id')))
+  handle(ORGANIZATION_IPC.cancelRun, (_event, value) => orchestrator.cancelRun(asId(value, 'Run id')))
 
   handle(ORGANIZATION_CONTROL_IPC.state, () => control.state())
   handle(ORGANIZATION_CONTROL_IPC.mutate, async (_event, value) => {

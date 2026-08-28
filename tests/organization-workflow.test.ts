@@ -11,6 +11,7 @@ class Harness {
   async createSession(): Promise<string> { this.counter += 1; return `workflow-session-${this.counter}` }
   async run(prompt: string, options?: { sessionId?: string }): Promise<{ sessionId: string }> { this.prompts.push(prompt); return { sessionId: options?.sessionId ?? 'session' } }
   async close(): Promise<void> {}
+  status(): { provider: string; model: string } { return { provider: 'test-provider', model: 'test-model' } }
   consumeCanceledSession(): boolean { return false }
 }
 class Workspace {

@@ -1,107 +1,432 @@
 # ND-DSH Beta v1 Improvement Plan
 
-Status: proposal · 2026-08-27
-Evidence base: three completed end-to-end acceptance runs (Todo Beta, Tic-Tac-Toe Beta Acceptance, Kla-Klok Khmer Dice Game) on dev build `b150a551b8d4` harness. Instrumented phase timings and failure modes are recorded in this document.
+Status: **implemented · QA handoff · 2026-08-28**
+Branch: `feat/improve-beta-v1`
+PR: `#12`
+
+Evidence base: three completed end-to-end acceptance runs (Todo Beta, Tic-Tac-Toe Beta Acceptance, Kla-Klok Khmer Dice Game) plus a code-level reconciliation against current `main` (`6683eb0`). The original proposal correctly identified the product bottlenecks, but several reliability/parallelism primitives were implemented after the measurements were taken. This revision treats those primitives as the baseline and focuses the beta gate on the missing safety boundaries.
+
+## QA handoff status
+
+The external-beta reliability gate is implemented on `feat/improve-beta-v1` and is ready for manual QA. GitHub CI on the implementation commit passed repository invariants, strict TypeScript, **325 unit tests** (2 live tests skipped by design), production desktop build, and **12 Playwright desktop smoke tests**.
+
+Implemented in this beta branch:
+
+- targeted organization run cancellation with a visible `Cancel run` control,
+- per-attempt clean Git baselines and rollback before retry/failover,
+- bounded automatic retry with user cancellation excluded,
+- stalled-run detection and recovery independent of the 30-minute lease,
+- ordered distinct Harness provider/model failover with route receipts,
+- hard machine verification receipts for configured project test commands,
+- verification cleanup that restores ND-managed worktrees to their checkpoint,
+- project-scoped parallel capacity with a conservative default of two workers,
+- logical worker-pool execution across isolated worktrees,
+- dependency-aware planner guidance plus unknown/self/cycle validation,
+- immediate event-driven continuation using the existing orchestrator flow.
+
+The P2 workflow items later in this document remain post-beta product work and are not part of this QA handoff.
 
 ---
 
-## 1. Why: AI-era speed is the product
+## 1. Product goal
 
-Three demo companies finished 3-for-3, but the wall clock is dominated by serialization and dead time, not by model latency:
+AI-era software delivery should be limited by useful model work, not by ND orchestration dead time, wedged sessions, provider outages, unsafe retries, or manual demo handoff.
+
+Measured baseline from the acceptance runs:
 
 | Measured (Kla-Klok, 8 tasks) | Duration |
-|---|---|
+|---|---:|
 | PM plan | ~20 s |
 | Task execution (healthy) | 5–12 min (one 23 min outlier) |
 | Independent review | 1–3 min |
 | Phase auto-chain gap | ~1 min |
-| **Provider 502 outage penalty** | **~60 min lost (blocked task + wedged session + 1 h lease)** |
+| Provider 502 outage penalty | ~60 min lost |
 
-Real software teams run lanes in parallel: PM planning, designer in the design surface, and dev scaffolding starter tech all start on day zero. Existing projects run sprint loops with demo handoffs. ND-DSH currently runs a single serialized pipeline (`Plan → Execute → Review`, `DEFAULT_MAX_PARALLEL_WORKERS = 1` at `src/main/organization/control-plane.ts:26`). The plan below reorganizes the org around parallel lanes and dead-time elimination.
+Beta target:
 
----
-
-## 2. Workstream A — New projects: parallel lane startup
-
-**Today:** one pipeline; planner, builder, reviewer run strictly in sequence; the workspace must already exist and be correct (Tic-Tac-Toe inherited the todo workspace and nearly clobbered it).
-
-**Target state (day-zero, three lanes in parallel):**
-
-1. **PM lane** — `pm-plan` produces goals/milestones/tasks as today.
-2. **Design lane** — a **Designer role** (new; `defaults.ts` currently has PM / Software Engineer / Reviewer only) drives **ND Pencil** (`src/main/design/nd-pencil-controller.ts`) in design mode: Freeform `.op` mockups for screens, flow, states, and a11y annotations, targeting the active project's real source. Design artifacts land as tasks inputs (`designRef` on task or milestone).
-3. **Dev lane** — a **Scaffold role** (or the PM's first worker task) prepares starter tech from `repoUrls` or a template: clone/scaffold, dependency install, CI skeleton, lint/test harness, git init + initial commit. This runs while planning and design are still in flight.
-
-**Changes required:**
-
-- A2.1 Add `Designer` role + design-mode pipeline kind (`design-mockup`) that talks to the Pencil editor/MCP bridge instead of filesystem tools (per AGENTS.md Pencil boundary).
-- A2.2 `project.create` gains a bootstrap step: template/`repoUrls` clone or empty-dir scaffold, validated by preflight (non-empty? existing repo? write access?) before any agent runs. Adds workspace-path editing + preflight UI to the project view (currently only the Add-project form has a workspace field).
-- A2.3 Orchestrator (`src/main/organization/orchestrator.ts`) supports lane concurrency: lane-aware scheduler where `pm-plan`, `design-mockup`, and `scaffold` phases of the *same* project can run concurrently, converging at `build` gates.
-- A2.4 Planner prompt/contract: emit `dependsOn` edges that actually enable parallelism (independent tasks: tests, i18n, a11y, docs should not serialize). Current plans serialized 8 tasks with only 1–2 real edges.
-
-## 3. Workstream B — Existing projects: sprint loop + demo handoff
-
-**Today:** no sprint concept anywhere in the org model; "existing project" means re-running the same plan pipeline; demo handoff is manual (runtime panel Start button, UNREACHABLE badge until a human checks).
-
-**Target state:**
-
-1. **Sprint entity** (new, alongside milestone): time-boxed goal set with sprint planning (`pm-plan` scoped to `sprint.backlog`), sprint goal, capacity budget (`budget.maxParallelWorkers`, `dailyTurnLimit` already exist in the control plane — reuse them as sprint capacity).
-2. **Sprint flow**: intake → plan → parallel build → integrate → demo → retro.
-   - *Intake* (new project kind `existing`): analyze the repo (structure, test command, start command, target URL — the project runtime fields already exist), produce a codebase map goal, then sprint-plan from the backlog.
-   - *Integrate*: task worktrees (already exist: `TaskWorktreeManager`, `task-worktree.ts`) merge via rebase + evidence run (`worktree-evidence.ts`) before review.
-3. **Demo handoff (automated)**: on sprint/demo gate — start project runtime, poll target URL health (loopback), capture screenshot via the embedded browser, generate release notes from merged task summaries, and present a **demo sign-off card** (approval gate at autonomy ≤ 3; auto at Autopilot). The acceptance-runtime pieces (start command, health-check path, target URL) already exist in the runtime panel — wire them into the pipeline as a `demo-verify` run kind instead of leaving them manual.
-
-**Changes required:**
-
-- B3.1 `Sprint` in org store + IPC (`sprint.plan`, `sprint.start`, `sprint.demo`, `sprint.close`), surfaced in Work tab.
-- B3.2 `demo-verify` run kind: runtime start → health poll → screenshot → release-note generation → sign-off (approval-gate integration).
-- B3.3 Intake analyzer: repo profile (language, package manager, test cmd, start cmd) auto-filled into project runtime config at project creation.
-
-## 4. Workstream C — Safety net: cancel, checkpoint, rollback (P0 gate)
-
-Observed failures all landed here; this is the beta gate.
-
-- C4.1 **Stop/cancel run** IPC + orchestrator support: kill session, break lease, release worker slot. (Today: impossible; a wedged session held slot 1/1 for 45+ min.)
-- C4.2 **Lease break**: allow `runTask` to supersede an expired-or-stalled lease (`control-plane.ts` lease check) with confirmation at autonomy ≤ 3.
-- C4.3 **Task-bound commits**: auto `git commit` (or snapshot for non-git workspaces via `snapshot-manager.ts`) at every task transition, tagged `task/<id>` — today entire demos existed as uncommitted working-tree changes one bad task away from destruction.
-- C4.4 **Stall detection**: no agent output / no workspace writes for N minutes → surfaced event + auto-retry policy instead of silent blocked state.
-- C4.5 **Blocked-task auto-retry**: Autopilot retries `blocked` tasks N times via `runTask` (currently only `fail` verdicts rework; both blocked demo tasks needed manual `runTask`).
-
-## 5. Workstream D — Provider resilience (P0 gate)
-
-- D5.1 Multi-route failover: provider store (`src/main/providers.ts`) gains ordered routes; harness runtime falls through on 5xx/empty-stream (the observed `502 … reset after 1h 14m` failure mode).
-- D5.2 Bounded retry with backoff around task execution turns; a route outage should cost seconds-minutes, not an hour.
-- D5.3 Model-per-role routing: reviews consistently took 1–3 min (cheap, fast model is fine); executions need the strong model. Route by role/pipeline kind.
-
-## 6. Workstream E — Speed & parallelism mechanics
-
-- E6.1 Raise `DEFAULT_MAX_PARALLEL_WORKERS` (control-plane.ts:26) to ≥ 2–4; keep budget override. Ensure task worktrees are created for git workspaces so parallel writes never collide (worktree path exists — verify it engages for `examples/*`-style workspaces nested in the parent repo).
-- E6.2 Kill residual dead time: review→next-execution handoff is ~1 min; target < 10 s via immediate orchestration event instead of polling.
-- E6.3 Review stays cheap: keep 1–3 min reviews; promote **verify-evidence** (test/build run — `qa/`, `worktree-evidence.ts`) to the hard acceptance gate so reviews validate rather than contradict passing suites (both demo "blocked" verdicts were false negatives against green tests).
-
-## 7. Workstream F — Observability
-
-- F7.1 Phase timeline with per-phase durations in the Work tab (the data this plan measured via CDP scraping should be native: run start/end, queue gaps, workspace-write heartbeats).
-- F7.2 Streaming agent output per run in Agent console.
-- F7.3 Turn/cost accounting per task/project against the budget plane.
-- F7.4 Loopback telemetry endpoint so external harnesses (e2e drivers) don't scrape `window.ndDshOrganization` via CDP.
+- A provider/session failure never leaves the project in an unknown workspace state.
+- A user can cancel one organization run without stopping unrelated workers.
+- Autopilot retries only from a known attempt boundary and only within a bounded policy.
+- Machine-verifiable checks are owned by ND, not inferred from reviewer prose.
+- Parallel execution is limited by explicit worker capacity and isolated worktrees.
+- Existing functionality is reused instead of rebuilt.
 
 ---
 
-## 8. Phasing
+## 2. Current baseline — already implemented
 
-**v1 beta gate (block external users):** C4.1, C4.3, D5.1, D5.2, E6.3
-**v1.1 (speed):** E6.1, E6.2, C4.4, C4.5, A2.4, F7.1
-**v1.2 (real-world flows):** Workstream A lanes (A2.1–A2.3), Workstream B sprints + demo handoff (B3.1–B3.3), F7.2–F7.4
+The following items from the original proposal already exist on current `main` and must be preserved:
 
-## 9. Success metrics
+### 2.1 Isolated task worktrees and task checkpoints
 
-- Wall-clock per 8-task project: from ~95–185 min → **< 45 min** (parallel lanes + no dead time).
-- Provider outage cost: from ~60 min → **< 2 min** (failover + bounded retry).
-- Human interventions per project: from 2–3 (workspace fix, blocked retry, stall) → **0** at Autopilot.
-- Zero unrecoverable workspace states (task-bound commits, 100 % coverage).
+`TaskWorktreeManager` already:
 
-## 10. Open questions
+- creates deterministic per-task Git worktrees,
+- bootstraps a truly empty project directory as Git,
+- checkpoints worker results into task commits,
+- verifies that review did not mutate the checkpoint,
+- integrates verified task branches without auto-resolving merge conflicts,
+- refuses to merge over dirty human/local changes.
 
-- Do design-lane artifacts gate build tasks (hard dependency) or inform them (soft ref)? Default proposal: soft ref with a `design-ready` gate only for UI tasks.
-- Sprint length default for AI teams (suggest: no calendar time; sprint = fixed task budget, e.g. 8 tasks or `dailyTurnLimit`).
-- Parallel merge strategy when two worktree tasks touch the same file (rebase-order vs PM arbitration).
+Therefore the beta task is **not** “add task commits”. The missing boundary is **attempt rollback before retry/failover**.
+
+### 2.2 Parallel task filling
+
+The orchestrator already:
+
+- permits concurrent isolated task execution/review,
+- fills multiple ready tasks in Autopilot,
+- rejects unsafe parallel work when worktree isolation is unavailable.
+
+The remaining limitation is that a company normally has one Builder agent and the same agent cannot own two active tasks. Raising `DEFAULT_MAX_PARALLEL_WORKERS` alone does not create useful parallelism.
+
+### 2.3 Cancellation primitives
+
+Harness supports `session.cancel`; Codex supports stopping an individual session internally. Organization event handling already understands canceled runs.
+
+The missing product primitive is **organization run-specific cancellation routed to the engine that owns that session**, exposed over organization IPC/UI.
+
+### 2.4 Review integrity evidence
+
+The control plane already fingerprints exact task worktree state and invalidates stale review evidence.
+
+That proves source integrity, but it does **not** prove tests/build/runtime checks passed. Beta needs a separate machine-verification receipt.
+
+### 2.5 Project runtime
+
+The project runtime service already owns:
+
+`validate workspace → start command → health poll → target ready → browser handoff`
+
+This is the base for the later `demo-verify` flow; do not build another dev-server manager.
+
+---
+
+## 3. Beta gate P0 — reliability before external users
+
+### P0.1 Run-specific cancel and lease release
+
+**Goal:** one wedged task must never block unrelated organization work.
+
+Required behavior:
+
+1. Add `organization.cancelRun(runId)`.
+2. Resolve the active run and its owning engine/session.
+3. Cancel only that session/turn.
+4. Mark the run failed/canceled through the existing event path.
+5. Release agent ownership and task lease through reconciliation.
+6. Leave other task worktrees/runs untouched.
+7. Cancellation is idempotent: canceling an already-finished run is a no-op/error with a clear message, never a global stop.
+
+### P0.2 Attempt-bound recovery boundary
+
+A post-execution checkpoint is too late for safe retries. Every task execution attempt must begin from a known Git state.
+
+For isolated Git worktrees:
+
+```text
+attempt start
+  ↓
+record attempt baseline HEAD
+  ↓
+run agent
+  ├─ success → checkpoint result → review
+  └─ cancel/engine/provider failure
+        ↓
+      reset --hard baseline
+      clean generated untracked files for this worktree
+        ↓
+      bounded retry/failover
+```
+
+Rules:
+
+- Never reset the real/base project checkout.
+- Never destroy human/local dirty changes.
+- Retry only inside ND-owned task worktrees.
+- Preserve the failed run receipt and error for observability.
+- Review failures are **rework**, not rollback: the reviewed checkpoint is useful evidence and should remain available to the next attempt.
+
+For non-Git existing workspaces, beta should fail closed instead of pretending snapshots exist. ND may auto-initialize Git only for a truly empty workspace until a dedicated safe baseline-import flow is implemented.
+
+### P0.3 Bounded automatic retry
+
+Autopilot retry policy:
+
+- execution engine/provider failures: up to 3 total execution attempts per task,
+- review failures: existing bounded rework policy remains,
+- cancellation by user: never auto-retry,
+- deterministic workspace/integration errors: do not spin; surface the blocker,
+- backoff for transient engine/provider errors: short bounded delay, never an hour-long lease wait.
+
+A retry must call P0.2 rollback before redispatch.
+
+### P0.4 Stall detection
+
+A running organization task needs a heartbeat independent of model prose.
+
+Track at minimum:
+
+- last engine/session event,
+- last workspace mutation/fingerprint change when available,
+- run start time.
+
+When there is no meaningful progress for the configured stall window:
+
+1. mark the run as stalled in management state,
+2. cancel the owning session,
+3. rollback the attempt worktree,
+4. retry only if bounded retry policy permits,
+5. otherwise block the task with a concrete reason.
+
+Do not use the 30-minute task lease as a stall detector.
+
+### P0.5 Provider resilience via route policy
+
+Do not overload `ModelProvider` into a failover abstraction. Keep it as one configured provider endpoint and add an execution route/profile above it.
+
+Target model:
+
+```text
+Role / Agent
+  ↓
+Execution profile
+  ↓
+ordered routes
+  1. provider A / model strong
+  2. provider B / model strong
+  3. provider C / model fallback
+```
+
+Required behavior:
+
+- fail over only on retryable transport/provider failures (5xx, unreachable, empty/aborted stream class),
+- never silently fail over authentication/permission/configuration errors,
+- each failover is a **new attempt after rollback**, not continuation from partial files,
+- record which route each attempt used,
+- role-specific routing remains supported; reviewers can use cheaper/faster models than builders.
+
+Beta can ship with a simple ordered route list; adaptive routing is not required.
+
+### P0.6 Machine verification evidence
+
+Separate two evidence classes:
+
+**Integrity evidence** (already mostly implemented)
+
+- Git HEAD,
+- changed files,
+- exact fingerprint,
+- stale/verified state.
+
+**Verification evidence** (beta addition)
+
+- command/suite id,
+- working directory/worktree,
+- started/completed timestamps,
+- exit code/status,
+- duration,
+- bounded stdout/stderr summary,
+- optional runtime/browser result.
+
+Acceptance rule:
+
+- deterministic configured checks are a hard gate when available,
+- independent reviewer evaluates semantic correctness and requirements,
+- reviewer prose cannot override a red machine check to PASS,
+- reviewer false negatives against green machine evidence can be surfaced/reworked without losing the machine receipt.
+
+---
+
+## 4. Beta speed P1 — after P0 is green
+
+### P1.1 Worker-pool capacity
+
+Do not create fake permanent employees merely to gain concurrency. Add execution capacity to roles/teams or an equivalent worker-slot abstraction.
+
+Example:
+
+```text
+Engineering
+  Software Engineer
+    capacity: 3
+```
+
+Scheduler requirements:
+
+- one logical role may own multiple ephemeral worker slots,
+- each slot still gets isolated task/session/worktree ownership,
+- `maxParallelWorkers` remains the control-plane ceiling,
+- effective concurrency = minimum of budget capacity, role/team capacity, ready dependency-safe tasks, and safe engine capacity.
+
+Start beta defaults conservatively at 2; allow explicit 3–4.
+
+### P1.2 Dependency-aware PM planning
+
+Planner prompt should minimize fake serialization:
+
+- use `dependsOn` only for real data/code ordering,
+- tests, docs, i18n, accessibility, fixtures, and independent components should remain parallel when safe,
+- validate dependency references and reject cycles.
+
+### P1.3 Immediate phase chaining
+
+Remove residual polling-style handoff where possible. Completion events should enqueue the next eligible execution/review immediately, targeting <10 s orchestration gap.
+
+### P1.4 Native phase timeline
+
+Work tab should expose:
+
+- queued/start/end timestamps,
+- execution/review duration,
+- retry/failover route,
+- stall/cancel reason,
+- verification duration,
+- idle orchestration gap.
+
+---
+
+## 5. Real-world workflow P2 — post beta gate
+
+### P2.1 Project bootstrap run
+
+Do **not** make `project.create` clone/install/scaffold synchronously. Keep creation as a fast durable state mutation and dispatch a cancellable/retryable `project-bootstrap` run:
+
+```text
+project.create
+  ↓
+project-bootstrap
+  ├─ workspace preflight
+  ├─ clone repo / apply starter template
+  ├─ detect language/package manager
+  ├─ install dependencies when policy allows
+  ├─ establish Git baseline
+  ├─ detect test/start commands
+  └─ persist runtime profile
+```
+
+### P2.2 New-project parallel lanes
+
+Once bootstrap has produced a safe workspace, start parallel lanes:
+
+1. PM lane — plan milestones/tasks.
+2. Design lane — Designer drives ND Pencil and emits design references.
+3. Scaffold lane — starter technical foundation/CI/test harness where it does not conflict with bootstrap.
+
+Design references are soft dependencies by default; UI tasks may opt into a `design-ready` gate.
+
+### P2.3 Existing-project intake
+
+Add a repo intake/profile step:
+
+- structure/language/package manager,
+- test/lint/typecheck/build commands,
+- start command/target URL/health path,
+- architecture map and known risks,
+- backlog seed.
+
+### P2.4 Delivery Cycle (Sprint) model
+
+Use a lightweight AI-native Delivery Cycle rather than requiring calendar sprints:
+
+`intake → plan → parallel build → integrate → demo → retro`
+
+Default capacity can be a fixed task/turn budget. Calendar duration is optional metadata.
+
+### P2.5 Automated demo handoff
+
+Build `demo-verify` on the existing `ProjectRuntimeService`:
+
+1. start/check runtime,
+2. wait for healthy target,
+3. open embedded browser,
+4. capture runtime/browser evidence,
+5. generate release notes from integrated task receipts,
+6. present demo sign-off card,
+7. require approval at lower autonomy; allow configured Autopilot completion at level 4.
+
+---
+
+## 6. Observability and external automation
+
+Post-P0/P1 additions:
+
+- streaming run output in Agent console,
+- turn/cost accounting per task/project,
+- execution route/attempt history,
+- loopback telemetry endpoint for E2E/automation consumers instead of scraping renderer internals,
+- verification receipts visible from task details.
+
+---
+
+## 7. Shipping order
+
+### Beta gate — implemented for QA
+
+1. P0.1 run-specific cancel — implemented
+2. P0.2 attempt rollback — implemented
+3. P0.3 bounded engine/provider retry — implemented
+4. P0.4 stall detection — implemented
+5. P0.5 ordered provider failover — implemented
+6. P0.6 machine verification evidence — implemented
+
+Existing worktree checkpoint/integration and review-integrity evidence are retained and covered by regression tests.
+
+### Beta speed — implemented foundations
+
+1. P1.1 worker-pool capacity — implemented via isolated logical worker slots plus control-plane capacity
+2. P1.2 dependency-aware planning — implemented, including dependency validation/cycle rejection
+3. P1.3 immediate chaining — existing event-driven continuation retained and used for retries/review
+4. P1.4 phase timeline — existing company timeline retained; richer receipt rendering remains an observability follow-up
+
+### Post-beta workflow
+
+P2 project bootstrap, design/scaffold lanes, existing-project intake, Delivery Cycles, and demo handoff remain post-beta work.
+
+---
+
+## 8. Success metrics
+
+Beta reliability:
+
+- provider/session outage recovery: <2 min when a healthy fallback route exists,
+- user cancellation releases the affected task slot promptly and never kills unrelated task runs,
+- 100% automatic execution retries begin from a verified attempt baseline,
+- zero automatic retries on user cancellation,
+- zero completed tasks with failed configured machine verification,
+- zero unrecoverable workspace states in the beta acceptance suite.
+
+Speed:
+
+- 8-task project wall clock: target <45 min where dependency graph/model latency permits,
+- orchestration handoff gap: <10 s,
+- Autopilot human interventions for healthy demo projects: 0.
+
+---
+
+## 9. Beta acceptance scenarios
+
+Automated coverage in this branch includes the beta-critical cases below; QA should repeat them manually in the packaged app where appropriate:
+
+1. cancel one of two parallel task runs; the other continues,
+2. cancel/retry leaves task worktree at the recorded baseline before redispatch,
+3. simulated provider 502 → rollback → fallback route → success/continuation,
+4. auth/config provider error does not fail over forever,
+5. stalled run is detected, canceled, rolled back, and bounded-retried,
+6. red test/build evidence prevents completion even when reviewer path exists,
+7. exact integrity evidence remains the completion gate,
+8. merge conflict fails closed and preserves task branch/worktree,
+9. dirty human base workspace is never overwritten/reset,
+10. app restart reconciliation remains covered by the existing organization recovery suite.
+
+---
+
+## 10. Architectural rules
+
+- ND owns orchestration, safety, retries, evidence, routing policy, and workspace recovery.
+- Engines/models are disposable executors, never the authority for task state.
+- Never retry on top of unknown partial writes.
+- Never increase concurrency without isolation and explicit capacity.
+- Never equate reviewer prose with machine verification.
+- Never put slow/network bootstrap side effects inside the durable `project.create` mutation.
+- Prefer extending existing TaskWorktree, control-plane, project-runtime, QA, and engine-router seams over parallel implementations.
