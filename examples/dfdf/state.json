@@ -1,0 +1,12 @@
+{
+  "status": "IDLE",
+  "activeTaskCount": 0,
+  "completedTaskCount": 500,
+  "failedTaskCount": 0,
+  "metrics": {
+    "processedTasks": 500,
+    "errorCount": 0,
+    "avgLatencyMs": 0.1
+  },
+  "lastUpdated": "2026-08-31T18:06:26.605Z"
+}

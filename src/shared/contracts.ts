@@ -203,6 +203,8 @@ export interface HarnessStatus {
   state: HarnessState
   sourceReady: boolean
   apiKeyPresent: boolean
+  /** Whether the active provider route normally requires a credential. */
+  apiKeyRequired: boolean
   provider: string
   model: string
   sessionId?: string

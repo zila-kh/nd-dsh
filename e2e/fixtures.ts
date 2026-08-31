@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -32,20 +33,40 @@ export async function launchApp(): Promise<LaunchedApp> {
  */
 export async function closeApp({ app }: LaunchedApp): Promise<void> {
   const child = app.process()
+  const close = app.close().catch(() => undefined)
+  const settled = await settlesWithin(close, 8_000)
+  if (!settled && child.exitCode === null) forceKillProcessTree(child.pid)
+  await Promise.race([close, waitForExit(child, 5_000)])
+}
+
+async function settlesWithin(promise: Promise<unknown>, timeoutMs: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise.then(() => true),
+      new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs) }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+async function waitForExit(child: ReturnType<ElectronApplication['process']>, timeoutMs: number): Promise<void> {
+  if (child.exitCode !== null) return
   await new Promise<void>((resolve) => {
-    let settled = false
-    const finish = (): void => {
-      if (settled) return
-      settled = true
+    const timer = setTimeout(resolve, timeoutMs)
+    child.once('exit', () => {
+      clearTimeout(timer)
       resolve()
-    }
-    const fallback = setTimeout(() => {
-      if (child.exitCode === null && !child.killed) child.kill('SIGKILL')
-      finish()
-    }, 20_000)
-    void app.close().finally(() => {
-      clearTimeout(fallback)
-      finish()
     })
   })
+}
+
+function forceKillProcessTree(pid: number | undefined): void {
+  if (pid == null) return
+  if (process.platform === 'win32') {
+    spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+    return
+  }
+  try { process.kill(pid, 'SIGKILL') } catch { /* the child may have exited during close */ }
 }

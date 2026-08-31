@@ -17,9 +17,6 @@ files:
   - '!node_modules/.cache/**'
 
 extraResources:
-  # projectRoot() deliberately resolves this runtime root before app.asar.
-  - from: package.json
-    to: package.json
   - from: .release/release-manifest.json
     to: release-manifest.json
   - from: .release/harness

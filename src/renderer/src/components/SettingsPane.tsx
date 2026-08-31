@@ -247,10 +247,10 @@ export function SettingsPane({
                         <SettingsRow>
                           <div className={rowStack}>
                             <strong className={rowTitle}>Provider credential</strong>
-                            <span className={rowDesc}>{harness?.apiKeyPresent ? 'Provider credentials configured' : 'No API-key credential on the active route'}</span>
+                            <span className={rowDesc}>{harness?.apiKeyPresent ? 'Provider credentials configured' : harness?.apiKeyRequired ? 'Credential required for the active route' : 'No credential required for the active local route'}</span>
                           </div>
-                          <StatusChip good={harness?.apiKeyPresent} warn={!harness?.apiKeyPresent}>
-                            {harness?.apiKeyPresent ? 'Ready' : 'Check route'}
+                          <StatusChip good={harness?.apiKeyPresent || !harness?.apiKeyRequired} warn={!harness?.apiKeyPresent && harness?.apiKeyRequired}>
+                            {harness?.apiKeyPresent ? 'Ready' : harness?.apiKeyRequired ? 'Check route' : 'No key needed'}
                           </StatusChip>
                         </SettingsRow>
                         {harness?.sessionId ? (

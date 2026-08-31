@@ -12,12 +12,13 @@ const repo = resolve(import.meta.dirname, '..')
 const userDataDir = join(tmpdir(), 'nd-dsh-todo-run')
 const shotsDir = join(import.meta.dirname, 'shots')
 const logFile = join(import.meta.dirname, 'todo-run.log')
-const workspaceDir = 'C:\\Users\\dila\\Documents\\GitHub\\nd-dsh-todo-fullstack'
+const workspaceDir = process.env.TODO_TARGET_WS ?? 'C:\\Users\\dila\\Documents\\GitHub\\nd-dsh-todo-fullstack'
 const PROVIDER_ID = 'omiroute-todo'
-const MODEL_ID = 'antigravity/gemini-3.7-flash-high'
+const MODEL_ID = process.env.TODO_MODEL ?? 'auto/coding:pro'
+const PROVIDER_BASE_URL = process.env.TODO_PROVIDER_BASE_URL ?? 'http://localhost:20128/v1'
 
-const MAX_RUN_MS = 50 * 60 * 1000
-const STALL_MS = 8 * 60 * 1000
+const MAX_RUN_MS = Number(process.env.TODO_MAX_RUN_MS ?? 50 * 60 * 1000)
+const STALL_MS = Number(process.env.TODO_STALL_MS ?? 8 * 60 * 1000)
 
 mkdirSync(shotsDir, { recursive: true })
 for (const f of readdirSync(shotsDir)) rmSync(join(shotsDir, f), { force: true })
@@ -61,7 +62,7 @@ writeFileSync(join(userDataDir, 'providers.json'), JSON.stringify([
     id: PROVIDER_ID,
     name: 'Omiroute Local',
     enabled: true,
-    baseUrl: 'http://localhost:20128/v1',
+    baseUrl: PROVIDER_BASE_URL,
     apiFormat: 'OpenAI compatible (/v1/chat/completions)',
     models: [{ id: MODEL_ID, context: '1000000' }],
   },
@@ -72,7 +73,7 @@ log('profile prepared at', userDataDir, '| workspace', workspaceDir)
 const app = await _electron.launch({
   cwd: repo,
   args: ['.', `--user-data-dir=${userDataDir}`],
-  env: { ...process.env, ND_DSH_CDP_PORT: '9933' },
+  env: { ...process.env, ND_DSH_CDP_PORT: process.env.ND_DSH_CDP_PORT ?? '9933' },
 })
 const page = await app.firstWindow()
 await page.waitForLoadState('domcontentloaded')
@@ -162,7 +163,9 @@ while (Date.now() - startedAt < MAX_RUN_MS) {
 
   const active = current.runs.some((r) => r.status === 'running')
   const settled = current.tasks.length > 0 && current.tasks.every((t) => ['completed', 'blocked'].includes(t.status)) && !active
-  if (settled) { log('PIPELINE SETTLED'); break }
+  const blocked = current.tasks.some((t) => t.status === 'blocked')
+  const noRunnableWork = current.tasks.length > 0 && current.tasks.every((t) => !['ready', 'in_progress', 'review'].includes(t.status))
+  if (settled || (!active && blocked && noRunnableWork)) { log(settled ? 'PIPELINE SETTLED' : 'PIPELINE BLOCKED'); break }
 
   if (!active && Date.now() - lastChangeAt > STALL_MS && recoveryClicks < 3) {
     recoveryClicks++
@@ -177,5 +180,30 @@ const final = summarize(await page.evaluate(() => window.ndDshOrganization.state
 writeFileSync(join(import.meta.dirname, 'todo-final-state.json'), JSON.stringify(final, null, 2))
 log('FINAL', JSON.stringify(final, null, 1))
 await shot(page, 'final')
-await app.close()
+await closeApp(app)
 log('app closed; run complete')
+const success = final.projects.length > 0
+  && final.projects.every((project) => project.status === 'completed')
+  && final.tasks.length > 0
+  && final.tasks.every((task) => task.status === 'completed')
+process.exitCode = success ? 0 : 1
+
+async function closeApp(app) {
+  const child = app.process()
+  await new Promise((resolve) => {
+    let settled = false
+    const finish = () => {
+      if (settled) return
+      settled = true
+      resolve()
+    }
+    const fallback = setTimeout(() => {
+      if (child.exitCode === null && !child.killed) child.kill('SIGKILL')
+      finish()
+    }, 20_000)
+    void app.close().finally(() => {
+      clearTimeout(fallback)
+      finish()
+    })
+  })
+}

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import { toast } from 'sonner'
 import type { BrowserState, ExternalElementPickView, HarnessStatus, InspectScope, ThemeMode, ThemeState, WorkspaceFile, WorkspaceState } from '../../shared/contracts'
@@ -10,7 +10,7 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 import { Input } from './components/ui/input'
 import { Badge } from './components/ui/badge'
 import { Toaster } from './components/ui/sonner'
-import { ChatPanel } from './components/ChatPanel'
+import { ChatPanel, type ChatPanelHandle } from './components/ChatPanel'
 import { DesignView } from './components/DesignView'
 import { DiffView } from './components/DiffView'
 import { EditorPane } from './components/EditorPane'
@@ -22,6 +22,7 @@ import { RuntimePrompts } from './components/RuntimePrompts'
 import { ThemeToggle } from './components/ThemeToggle'
 import { TitlebarIconButton } from './components/titlebar-icon-button'
 import { cn } from './lib/utils'
+import { fileAccent } from './lib/file-accents'
 import { pickSelfElement } from './lib/self-element-picker'
 import {
   capabilitySubTabFromLocation,
@@ -108,6 +109,7 @@ export default function App() {
   const [browserState, setBrowserState] = useState<BrowserState | null>(null)
   const [harnessStatus, setHarnessStatus] = useState<HarnessStatus | null>(null)
   const [selectedFile, setSelectedFile] = useState<WorkspaceFile | null>(null)
+  const [openFileTabs, setOpenFileTabs] = useState<WorkspaceFile[]>([])
   const [activeDiff, setActiveDiff] = useState<{ relativePath: string; staged: boolean } | null>(null)
   const [view, setView] = useState<ProductView>(viewFromHash)
   const [companyView, setCompanyView] = useState<CompanyView>('workspace')
@@ -118,6 +120,8 @@ export default function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(settingsTabFromLocation)
   const [settingsSubTabs, setSettingsSubTabs] = useState<SettingsSubTabs>(settingsSubTabsFromLocation)
   const [agentPane, setAgentPane] = useState<AgentPane>('files')
+  const chatPanelRef = useRef<ChatPanelHandle | null>(null)
+  const [terminalState, setTerminalState] = useState<{ open: boolean; enabled: boolean }>({ open: false, enabled: false })
   const [sessionsCollapsed, setSessionsCollapsed] = useState(false)
   const [workspaceCollapsed, setWorkspaceCollapsed] = useState(false)
   const [externalPrompt, setExternalPrompt] = useState<{ id: string; text: string } | null>(null)
@@ -383,6 +387,7 @@ export default function App() {
     const offWorkspace = window.ndDsh.workspace.onState((next) => {
       setWorkspace(next)
       setSelectedFile(null)
+      setOpenFileTabs([])
       setActiveDiff(null)
     })
     const offBrowser = window.ndDsh.browser.onState(setBrowserState)
@@ -452,18 +457,43 @@ export default function App() {
   const changeWorkspace = (next: WorkspaceState): void => {
     setWorkspace(next)
     setSelectedFile(null)
+    setOpenFileTabs([])
     setActiveDiff(null)
   }
 
   const openFile = async (path: string): Promise<void> => {
     try {
-      setSelectedFile(await window.ndDsh.workspace.read(path))
+      const file = await window.ndDsh.workspace.read(path)
+      setSelectedFile(file)
+      setOpenFileTabs((tabs) => {
+        const existing = tabs.findIndex((tab) => tab.relativePath === file.relativePath)
+        if (existing >= 0) {
+          const next = [...tabs]
+          next[existing] = file
+          return next
+        }
+        return [...tabs, file]
+      })
       setActiveDiff(null)
       setAgentPane('files')
       setView('agent')
     } catch (cause) {
       notify(errorMessage(cause))
     }
+  }
+
+  const closeFileTab = (relativePath: string): void => {
+    setOpenFileTabs((tabs) => {
+      const index = tabs.findIndex((tab) => tab.relativePath === relativePath)
+      if (index < 0) return tabs
+      const next = tabs.filter((_, i) => i !== index)
+      setSelectedFile((current) =>
+        current && current.relativePath === relativePath
+          ? next[Math.min(index, next.length - 1)] ?? null
+          : current
+      )
+      return next
+    })
   }
 
   const openDiff = (relativePath: string, staged: boolean): void => {
@@ -478,6 +508,13 @@ export default function App() {
   const company = orgState?.companies.find((item) => item.id === orgState.activeCompanyId) ?? orgState?.companies[0] ?? null
   const companyProjects = orgState && company ? orgState.projects.filter((item) => item.companyId === company.id) : []
   const project = companyProjects.find((item) => item.id === orgState?.activeProjectId) ?? companyProjects[0] ?? null
+  // Every organization run records the session it ran in, so the chat sidebar
+  // can scope its workspace-wide session list down to the active project.
+  const runSessionProjects = useMemo(() => {
+    const map: Record<string, string> = {}
+    for (const run of orgState?.runs ?? []) map[run.sessionId] = run.projectId
+    return map
+  }, [orgState])
 
   const createCompany = (event: FormEvent): void => {
     event.preventDefault()
@@ -715,8 +752,19 @@ export default function App() {
             <Panel className="flex min-w-0 flex-col overflow-hidden" defaultSize={580} minSize={sessionsCollapsed ? CHAT_MIN_PX_SIDEBAR_COLLAPSED : CHAT_MIN_PX}>
               <ChatPanel
                 key={workspace?.root ?? 'workspace-loading'}
+                ref={chatPanelRef}
                 status={harnessStatus}
                 {...(workspace?.projectName || workspace?.name ? { workspaceName: workspace.projectName ?? workspace.name } : {})}
+                sessionProjectScope={{ activeProjectId: project?.id, sessionProjects: runSessionProjects }}
+                {...(companyProjects.length ? {
+                  projects: companyProjects.map((item) => ({
+                    id: item.id,
+                    name: item.name,
+                    active: item.id === project?.id,
+                    linked: Boolean(item.workspacePath),
+                  })),
+                  onSelectProject: switchProject,
+                } : {})}
                 sessionsCollapsed={sessionsCollapsed}
                 onError={notify}
                 onOpenSettings={openSettings}
@@ -724,6 +772,7 @@ export default function App() {
                 externalPrompt={externalPrompt}
                 onExternalPromptConsumed={() => setExternalPrompt(null)}
                 elementAttachmentVersion={elementAttachmentVersion}
+                onTerminalStateChange={setTerminalState}
               />
             </Panel>
             <Separator
@@ -748,6 +797,20 @@ export default function App() {
                       <BrowserIcon />
                       <span>Browser</span>
                     </button>
+                    <button
+                      type="button"
+                      disabled={!terminalState.enabled}
+                      className={cn(
+                        'ml-auto flex h-6 items-center gap-1 rounded-md border px-1.5 font-mono text-[9px] transition-colors disabled:opacity-40',
+                        terminalState.open
+                          ? 'border-primary/25 bg-primary/[0.08] text-primary'
+                          : 'border-border-soft text-faint hover:bg-accent hover:text-foreground'
+                      )}
+                      title="Toggle this chat's isolated terminal (Ctrl/Cmd + Backtick)"
+                      onClick={() => chatPanelRef.current?.toggleTerminal()}
+                    >
+                      <span>&gt;_</span><span>Terminal</span>
+                    </button>
                   </div>
                   <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
                     {agentPane === 'files' ? (
@@ -761,7 +824,41 @@ export default function App() {
                               onError={notify}
                             />
                           ) : (
-                            <EditorPane file={selectedFile} onAgentPrompt={askAgent} onError={notify} />
+                            <>
+                              {openFileTabs.length ? (
+                                <div className="flex items-stretch overflow-x-auto border-b border-border-soft bg-secondary" role="tablist" aria-label="Open files">
+                                  {openFileTabs.map((tab) => {
+                                    const active = selectedFile?.relativePath === tab.relativePath
+                                    return (
+                                      <div
+                                        key={tab.relativePath}
+                                        className={cn(
+                                          'group flex max-w-[220px] shrink-0 cursor-pointer items-center gap-1.5 border-r border-border-soft px-[11px] py-[7px] text-[10px]',
+                                          active ? 'bg-surface-0 text-strong' : 'text-soft hover:bg-accent/60'
+                                        )}
+                                        title={tab.relativePath}
+                                        onClick={() => setSelectedFile(tab)}
+                                      >
+                                        <FileIcon style={{ color: fileAccent(tab.relativePath) }} className="size-[13px] shrink-0" />
+                                        <span className="truncate">{tab.relativePath.split(/[\\/]/).at(-1)}</span>
+                                        <button
+                                          type="button"
+                                          aria-label={`Close ${tab.relativePath}`}
+                                          className={cn(
+                                            'ml-0.5 shrink-0 rounded px-1 text-[11px] leading-none text-faint hover:bg-border-soft hover:text-foreground',
+                                            active ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                                          )}
+                                          onClick={(e) => { e.stopPropagation(); closeFileTab(tab.relativePath) }}
+                                        >
+                                          ×
+                                        </button>
+                                      </div>
+                                    )
+                                  })}
+                                </div>
+                              ) : null}
+                              <EditorPane file={selectedFile} onAgentPrompt={askAgent} onError={notify} />
+                            </>
                           )}
                         </div>
                         <div className="min-h-0 border-l border-border-soft">

@@ -116,7 +116,13 @@ export class OrganizationOrchestrator {
     const state = await this.store.state()
     const previousExecution = state.runs.find((item) => item.taskId === taskId && item.kind === 'task-execution')
     const attempt = await this.store.executionAttemptCount(taskId) + 1
-    const useFallbackRoute = Boolean(previousExecution?.status === 'failed' && isRetryableExecutionFailure(previousExecution.error ?? ''))
+    const retryablePreviousFailure = Boolean(previousExecution?.status === 'failed' && isRetryableExecutionFailure(previousExecution.error ?? ''))
+    const fallbackRoute = retryablePreviousFailure
+      ? this.pendingFallbackRoutes.get(taskId) ?? await this.selectFallbackProviderRoute(context)
+      : undefined
+    // If the provider is temporarily busy and there is no distinct route,
+    // retry the original configured route within the normal attempt cap.
+    const useFallbackRoute = Boolean(fallbackRoute)
     const engine = await this.resolveTaskEngine(context.agent?.id, useFallbackRoute)
     const taskWorktree = await this.taskWorktrees.ensure(context.project.workspacePath, context.task.id)
     await this.assertTaskRunSlot(context.task.id, context.project.id, Boolean(taskWorktree))
@@ -124,9 +130,7 @@ export class OrganizationOrchestrator {
     const prompt = workerPrompt(context, engine, attempt, taskWorktree)
     let modelOpts = this.resolveAgentModel(context.agent, context.role)
     if (useFallbackRoute) {
-      const fallback = this.pendingFallbackRoutes.get(taskId) ?? await this.selectFallbackProviderRoute(context)
-      if (!fallback) throw new Error('No distinct fallback provider/model route is available for this failed execution attempt')
-      modelOpts = fallback
+      modelOpts = fallbackRoute!
       this.pendingFallbackRoutes.delete(taskId)
     }
 
@@ -397,8 +401,14 @@ export class OrganizationOrchestrator {
       if (this.structuredHandled.has(sessionId)) {
         await this.store.completeRun(run.id, this.finalText.get(sessionId))
       } else {
-        await this.store.completeRun(run.id, this.finalText.get(sessionId), `Expected structured ${run.kind} result was not produced`)
-        if (run.taskId) await this.failTask(run.taskId, 'Structured review result was not produced')
+        const message = `Expected structured ${run.kind} result was not produced`
+        await this.store.completeRun(run.id, this.finalText.get(sessionId), message)
+        if (run.taskId) {
+          // Keep the completed worker evidence reviewable. A malformed or
+          // truncated reviewer response is a retryable review failure, not a
+          // reason to hide the task behind the blocked state.
+          await this.store.clearReviewSession(run.taskId)
+        }
       }
     } else if (run) {
       await this.store.completeRun(run.id, this.finalText.get(sessionId), `Expected structured ${run.kind} result was not produced`)
@@ -477,8 +487,7 @@ export class OrganizationOrchestrator {
     const retryable = stalled || isRetryableExecutionFailure(message)
     if (context.company.autonomyLevel < 4 || attempts >= MAX_EXECUTION_ATTEMPTS || !retryable) return false
     const fallback = await this.selectFallbackProviderRoute(context)
-    if (!fallback) return false
-    this.pendingFallbackRoutes.set(run.taskId, fallback)
+    if (fallback) this.pendingFallbackRoutes.set(run.taskId, fallback)
     await this.store.queueRework(run.taskId, `${stalled ? 'Stall recovery' : 'Transient engine/provider failure'}: ${message}`)
     return true
   }

@@ -17,6 +17,7 @@ export interface AskQuestion {
 export type ThreadEntry =
   | { kind: 'user'; id: string; text: string }
   | { kind: 'assistant'; id: string; text: string; streaming?: boolean }
+  | { kind: 'reasoning'; id: string; text: string }
   | { kind: 'tool'; id: string; callId?: string; name: string; args?: unknown; status: 'running' | 'done' | 'error'; result?: string }
   | { kind: 'todo'; id: string; items: TodoItem[] }
   | { kind: 'approval'; id: string; sessionId: string; approvalId: string; toolName: string; reason?: string; rpcId: string; resolved?: 'allowed-once' | 'rejected' }

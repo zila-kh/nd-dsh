@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type KeyboardEvent, type ReactNode, Fragment } from 'react'
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type KeyboardEvent, type ReactNode, type Ref, Fragment } from 'react'
 import type {
   CodingEngineDescriptor,
   DshEventFrame,
@@ -13,7 +13,8 @@ import type {
   WorkspaceSuggestion,
 } from '../../../shared/contracts'
 import { CODEX_CLI_ENGINE_ID, ND_HARNESS_ENGINE_ID } from '../../../shared/coding-engines'
-import { DisplayGroup, groupEntries, toolPreview } from '../../../shared/chat-grouping'
+import { DisplayGroup, groupEntries, parseFileChanges, toolPreview } from '../../../shared/chat-grouping'
+import { filterSessionsInProjectScope, isSessionInProjectScope } from '../../../shared/session-project-scope'
 import { splitAssistantSegments, type ReviewVerdict } from '../../../shared/structured-output'
 import type { ProjectPlanInput } from '../../../shared/organization'
 import type { AskQuestion, ThreadEntry, TodoItem } from '../lib/types'
@@ -55,6 +56,12 @@ interface ChatPanelProps {
   status: HarnessStatus | null
   workspaceName?: string
   sessionsCollapsed: boolean
+  /** Run attribution for scoping the sidebar to the active project's sessions. */
+  sessionProjectScope?: { activeProjectId?: string | undefined; sessionProjects: Readonly<Record<string, string>> }
+  /** Projects of the active company, listed in the sidebar; click to switch workspace. */
+  projects?: Array<{ id: string; name: string; active: boolean; linked: boolean }>
+  /** Requests activation of a project; the coordinator rebinds the workspace root. */
+  onSelectProject?(projectId: string): void
   onError(message: string): void
   onOpenSettings?(tab?: 'models'): void
   onOpenFile?(path: string): void
@@ -62,7 +69,12 @@ interface ChatPanelProps {
   onExternalPromptConsumed?(): void
   /** Bumped by the titlebar when a picked element is staged or removed. */
   elementAttachmentVersion?: number
+  /** Reports the session-terminal toggle state so the workbench can host the button. */
+  onTerminalStateChange?(state: { open: boolean; enabled: boolean }): void
 }
+
+/** Imperative surface for the workbench: the terminal toggle lives outside this panel. */
+export type ChatPanelHandle = { toggleTerminal(): void }
 
 const PERMISSION_MODES = [
   { id: 'read-only', label: 'Read only' },
@@ -71,6 +83,9 @@ const PERMISSION_MODES = [
 ] as const
 
 const RESULT_MAX_CHARS = 2_000
+
+/** Stable fallback so the project-scope memos keep a consistent dependency. */
+const EMPTY_SESSION_PROJECTS: Readonly<Record<string, string>> = {}
 
 const FS_WRITE_TOOL_NAMES = new Set(['fs_edit', 'fs_write', 'fs_write_text', 'fs_create', 'fs_apply_patch', 'fs_str_replace', 'apply_patch'])
 
@@ -100,7 +115,7 @@ function fileMentionTag(relativePath: string): string {
   return extension ? extension.toUpperCase().slice(0, 5) : 'FILE'
 }
 
-export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, onOpenSettings, onOpenFile, externalPrompt, onExternalPromptConsumed, elementAttachmentVersion }: ChatPanelProps) {
+export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionProjectScope, projects, onSelectProject, onError, onOpenSettings, onOpenFile, externalPrompt, onExternalPromptConsumed, elementAttachmentVersion, onTerminalStateChange, ref }: ChatPanelProps & { ref?: Ref<ChatPanelHandle> }) {
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [terminalOpen, setTerminalOpen] = useState(false)
@@ -162,6 +177,12 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
     return () => window.removeEventListener('keydown', onShortcut)
   }, [activeSessionId])
 
+  useImperativeHandle(ref, () => ({ toggleTerminal: () => setTerminalOpen((open) => !open) }), [])
+
+  useEffect(() => {
+    onTerminalStateChange?.({ open: terminalOpen, enabled: Boolean(activeSessionId) })
+  }, [terminalOpen, activeSessionId, onTerminalStateChange])
+
   const activeSession = useMemo(() => sessions.find((s) => s.sessionId === activeSessionId) ?? null, [sessions, activeSessionId])
   const entries = useMemo(() => threads[activeSessionId ?? ''] ?? [], [threads, activeSessionId])
   const threadContext = useMemo(() => collectThreadContext(entries), [entries])
@@ -193,14 +214,25 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
   // Extra chat engines come straight from the catalog; unavailable ones never render.
   const chatEngines = useMemo(() => engines.filter((engine) => engine.available && engine.id !== ND_HARNESS_ENGINE_ID), [engines])
   // Both listings arrive pre-annotated with ND archive flags; the sidebar
-  // shows one bucket at a time.
+  // shows one bucket at a time. Run attribution narrows each bucket to the
+  // active project's sessions (unattributed manual chats always stay).
+  const activeProjectId = sessionProjectScope?.activeProjectId
+  const sessionProjects = sessionProjectScope?.sessionProjects ?? EMPTY_SESSION_PROJECTS
   const visibleSessions = useMemo(
-    () => sessions.filter((session) => (showArchived ? session.archived === true : session.archived !== true)),
-    [sessions, showArchived],
+    () => filterSessionsInProjectScope(
+      sessions.filter((session) => (showArchived ? session.archived === true : session.archived !== true)),
+      activeProjectId,
+      sessionProjects,
+    ),
+    [sessions, showArchived, activeProjectId, sessionProjects],
   )
   const visibleEngineSessions = useMemo(
-    () => engineSessions.filter((session) => (showArchived ? session.archived === true : session.archived !== true)),
-    [engineSessions, showArchived],
+    () => filterSessionsInProjectScope(
+      engineSessions.filter((session) => (showArchived ? session.archived === true : session.archived !== true)),
+      activeProjectId,
+      sessionProjects,
+    ),
+    [engineSessions, showArchived, activeProjectId, sessionProjects],
   )
 
   const refreshSessions = useCallback(async (): Promise<void> => {
@@ -358,16 +390,19 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
 
   // Archiving (or leaving the archived view) must not strand the composer on
   // a hidden thread: fall back to the first visible chat, else the draft state.
+  // Switching the active project hides other projects' run sessions the same
+  // way, so the fallback covers project-scope changes too.
   useEffect(() => {
     if (!activeSessionId || showArchived) return
     const activeArchived = sessions.some((session) => session.sessionId === activeSessionId && session.archived === true)
       || engineSessions.some((session) => session.sessionId === activeSessionId && session.archived === true)
-    if (!activeArchived) return
-    const nextHarness = sessions.find((session) => session.archived !== true && !session.blank)
-    const nextEngine = engineSessions.find((session) => session.archived !== true)
+    const activeOutOfProject = !isSessionInProjectScope(activeSessionId, activeProjectId, sessionProjects)
+    if (!activeArchived && !activeOutOfProject) return
+    const nextHarness = visibleSessions.find((session) => !session.blank)
+    const nextEngine = visibleEngineSessions[0]
     setDraftEngineId(null)
     setActiveSessionId(nextHarness?.sessionId ?? nextEngine?.sessionId ?? null)
-  }, [activeSessionId, showArchived, sessions, engineSessions])
+  }, [activeSessionId, showArchived, activeProjectId, sessionProjects, visibleSessions, visibleEngineSessions, sessions, engineSessions])
 
   useEffect(() => {
     // The gateway model catalog only applies to harness sessions.
@@ -837,7 +872,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
 
   return (
     <div className="flex h-full w-full min-h-0 min-w-0 flex-1 flex-row overflow-hidden">
-      <aside className={cn('flex h-full min-h-0 w-[168px] shrink-0 grow-0 basis-[168px] flex-col overflow-hidden border-r border-border-soft bg-sidebar', sessionsCollapsed && 'hidden')}>
+      <aside className={cn('flex h-full min-h-0 w-[185px] shrink-0 grow-0 basis-[185px] flex-col overflow-hidden border-r border-border-soft bg-sidebar', sessionsCollapsed && 'hidden')}>
         <div className="space-y-1 px-3 pb-1 pt-2">
           <button
             className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-border-soft bg-secondary px-3 py-[7px] text-xs font-medium text-soft transition-colors hover:border-border-strong hover:bg-accent hover:text-foreground [&_svg]:size-3.5"
@@ -891,6 +926,29 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
             <FolderIcon />
             <span className="truncate">{workspaceName ?? 'workspace'}</span>
           </div>
+
+          {projects && projects.length > 0 ? (
+            <div className="mt-1 flex flex-col gap-0.5">
+              <span className="px-2 text-[9px] font-semibold tracking-[0.08em] text-faint">PROJECTS</span>
+              {projects.map((project) => (
+                <button
+                  key={project.id}
+                  className={cn(
+                    'flex h-[23px] w-full items-center gap-2 rounded-md px-2 text-left text-xs transition-colors [&_svg]:size-3 [&_svg]:shrink-0',
+                    project.active
+                      ? 'bg-selected-row text-selected-row-foreground hover:bg-selected-row'
+                      : 'text-soft hover:bg-accent hover:text-foreground',
+                  )}
+                  title={project.linked ? project.name : `${project.name} (workspace not linked)`}
+                  onClick={() => !project.active && onSelectProject?.(project.id)}
+                >
+                  <FolderIcon style={{ color: FOLDER_ACCENT }} />
+                  <span className="min-w-0 truncate">{project.name}</span>
+                  {project.active ? <span className="ml-auto text-[9px] font-bold text-primary">ACTIVE</span> : null}
+                </button>
+              ))}
+            </div>
+          ) : null}
 
           <div className="mt-1.5 flex flex-col gap-1">
             {!sessionsLoaded ? (
@@ -966,15 +1024,6 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
-            <button
-              type="button"
-              disabled={!activeSessionId}
-              className={cn('flex h-6 items-center gap-1 rounded-md border px-1.5 font-mono text-[9px] transition-colors disabled:opacity-40', terminalOpen ? 'border-primary/25 bg-primary/[0.08] text-primary' : 'border-border-soft text-faint hover:bg-accent hover:text-foreground')}
-              title="Toggle this chat's isolated terminal (Ctrl/Cmd + Backtick)"
-              onClick={() => setTerminalOpen((open) => !open)}
-            >
-              <span>&gt;_</span><span>Terminal</span>
-            </button>
             <span
               className={cn(
                 'inline-block size-2 rounded-full',
@@ -994,10 +1043,17 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
             <span>Run <code className="font-mono">pnpm bootstrap</code> once.</span>
           </div>
         ) : null}
-        {status?.sourceReady && !status.apiKeyPresent ? (
+        {status?.sourceReady && status.apiKeyRequired && !status.apiKeyPresent ? (
           <div className="mx-3 mt-2.5 flex flex-col gap-[3px] rounded-[7px] border border-warning/25 bg-warning/10 p-2.5 text-[9px] text-warning">
-            <strong>API key missing</strong>
-            <span>Add <code className="font-mono">DEEPSEEK_API_KEY</code> to <code className="font-mono">.env</code>.</span>
+            <div className="flex items-center justify-between gap-2">
+              <strong>Provider credential missing</strong>
+              {onOpenSettings ? (
+                <button className="shrink-0 rounded border border-warning/35 px-1.5 py-0.5 font-medium hover:bg-warning/10" onClick={() => onOpenSettings('models')}>
+                  Open Models
+                </button>
+              ) : null}
+            </div>
+            <span>Add a credential for <code className="font-mono">{status.provider}</code> in Settings → Models.</span>
           </div>
         ) : null}
 
@@ -1017,12 +1073,14 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, onError, o
           {groupEntries(entries).map((group, index, groups) => {
             const isLastAssistant = group.kind === 'entry'
               && group.entry.kind === 'assistant'
-              && groups.slice(index + 1).every((later) => later.kind === 'tool-group' || later.entry.kind !== 'assistant')
+              && groups.slice(index + 1).every((later) => later.kind !== 'entry' || later.entry.kind !== 'assistant')
             const entryRetryPrompt = group.kind === 'entry' && group.entry.kind === 'user' ? group.entry.text : lastPromptBefore(entries, group.key)
             return (
               <Fragment key={group.key}>
                 {group.kind === 'tool-group' ? (
                   <ToolGroupView group={group} {...(onOpenFile ? { onOpenFile } : {})} />
+                ) : group.kind === 'reasoning-group' ? (
+                  <ReasoningCard text={group.text} />
                 ) : (
                   <ThreadEntryView
                     entry={group.entry}
@@ -1695,7 +1753,7 @@ function ThreadEntryView({ entry, isLastAssistant, retryPrompt, onAnswerApproval
             {segments.map((segment, index) => {
               if (segment.kind === 'review') return <ReviewVerdictCard key={index} review={segment.review} />
               if (segment.kind === 'plan') return <PlanSubmittedCard key={index} plan={segment.plan} />
-              return <MarkdownLite key={index} text={segment.text} />
+              return <MarkdownLite key={index} text={segment.text} {...(onOpenFile ? { onOpenFile } : {})} />
             })}
             {entry.streaming ? <span className="ml-0.5 inline-block h-[13px] w-1.5 animate-caret-blink bg-primary align-bottom" /> : null}
             {!entry.streaming ? (
@@ -1846,6 +1904,32 @@ function ToolCardView({ entry }: { entry: Extract<ThreadEntry, { kind: 'tool' }>
   )
 }
 
+function ReasoningCard({ text }: { text: string }) {
+  const [open, setOpen] = useState(false)
+  const lines = text.split('\n').filter((line) => line.trim())
+  const firstLine = lines[0] ?? ''
+  return (
+    <div className="mb-2 ml-[30px]">
+      <button
+        className="flex items-center gap-1.5 rounded-md py-[3px] pl-[5px] pr-2 text-[11px] text-faint transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[11px]"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <BrainIcon className="text-primary/50" />
+        <span className="max-w-[320px] truncate font-medium">{firstLine}</span>
+        <span className="text-[9px] text-fainter">{lines.length > 1 ? `+${lines.length - 1}` : ''}</span>
+        <ChevronDownIcon className={cn('ml-0.5 transition-transform [&]:size-[10px]', open && 'rotate-180')} />
+      </button>
+      {open ? (
+        <div className="mt-1 flex flex-col gap-1 border-l-2 border-primary/20 pl-2.5">
+          {lines.map((line, index) => (
+            <div key={index} className="[overflow-wrap:anywhere] font-mono text-[9.5px]/[1.7] text-faint">{line}</div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function ToolGroupView({ group, onOpenFile }: {
   group: Extract<DisplayGroup, { kind: 'tool-group' }>
   onOpenFile?: (path: string) => void
@@ -1931,6 +2015,19 @@ function ToolGroupView({ group, onOpenFile }: {
                   <ContextIcon />
                 )}
                 <span className="min-w-0 truncate">{rowLabel}</span>
+                {(() => {
+                  // File-change rows: per-file +/- counts, like a diff stat.
+                  if (group.icon !== 'file' || tool.status === 'running') return null
+                  const changes = parseFileChanges(tool.args)
+                  const info = changes.find((c) => c.path === path) ?? (changes.length === 1 ? changes[0] : undefined)
+                  if (!info || (info.added === 0 && info.removed === 0)) return null
+                  return (
+                    <span className="ml-auto flex shrink-0 gap-1 font-sans text-[8px] not-italic">
+                      {info.added > 0 ? <span className="text-green-400">+{info.added}</span> : null}
+                      {info.removed > 0 ? <span className="text-red-400">−{info.removed}</span> : null}
+                    </span>
+                  )
+                })()}
                 {tool.status === 'running' ? (
                   <span className="ml-auto shrink-0 animate-pulse-dot font-sans text-[8px] not-italic text-info">running</span>
                 ) : tool.status === 'error' ? (
@@ -2181,6 +2278,17 @@ function foldEventInto(entries: ThreadEntry[], envelope: HistoryEventEnvelope): 
       }
       return
     }
+    case 'agent/reasoning': {
+      const text = typeof data.text === 'string' ? data.text : ''
+      if (!text) return
+      const last = entries.at(-1)
+      if (last?.kind === 'reasoning' && last.text.length < 4000) {
+        last.text = `${last.text}\n${text}`
+      } else {
+        entries.push({ kind: 'reasoning', id: crypto.randomUUID(), text })
+      }
+      return
+    }
     case 'tool/call': {
       const callId = typeof data.callId === 'string' ? data.callId : undefined
       const name = typeof data.name === 'string' ? data.name : 'tool'
@@ -2235,9 +2343,17 @@ function collectChangedFiles(entries: ThreadEntry[]): string[] {
   const files = new Set<string>()
   for (const entry of entries) {
     if (entry.kind !== 'tool') continue
-    if (!FS_WRITE_TOOL_NAMES.has(entry.name)) continue
-    const path = toolPath(entry.args)
-    if (path) files.add(path)
+    if (FS_WRITE_TOOL_NAMES.has(entry.name)) {
+      const path = toolPath(entry.args)
+      if (path) files.add(path)
+      continue
+    }
+    // Codex "file change" batches carry per-file diffs in args.files.
+    if (entry.name === 'file change') {
+      for (const change of parseFileChanges(entry.args)) {
+        if (change.path) files.add(change.path)
+      }
+    }
   }
   return [...files]
 }

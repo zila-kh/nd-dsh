@@ -26,7 +26,7 @@ const THREAD_POLICY: Record<CodexRunMode, { approvalPolicy: string; sandbox?: st
   unattended: { approvalPolicy: 'never' },
 }
 
-const TRANSCRIPT_EVENT_TYPES = new Set(['user/message', 'assistant/message', 'tool/call', 'tool/result'])
+const TRANSCRIPT_EVENT_TYPES = new Set(['user/message', 'assistant/message', 'agent/reasoning', 'tool/call', 'tool/result'])
 const RESULT_SNIPPET_MAX_CHARS = 4_000
 
 interface PendingApproval {
@@ -391,7 +391,15 @@ export class CodexCliEngine {
       this.recordAssistantMessage(session, text)
       return
     }
-    if (type === 'reasoning' || type === 'todoList') return
+    if (type === 'reasoning') {
+      // Surface model reasoning as a collapsible chat card; skip empty deltas.
+      const text = typeof item.text === 'string' ? item.text : ''
+      if (text.trim() && !started) {
+        this.recordEnvelope(session, { type: 'agent/reasoning', data: { text } })
+      }
+      return
+    }
+    if (type === 'todoList') return
 
     const callId = typeof item.id === 'string' ? item.id : `${session.sequence + 1}`
     if (type === 'commandExecution') {

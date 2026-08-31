@@ -81,6 +81,7 @@ let harness: HarnessStatus = {
   state: 'ready',
   sourceReady: true,
   apiKeyPresent: true,
+  apiKeyRequired: true,
   provider: 'openai-prod',
   model: 'gpt-5.6',
   sessionId: 'preview-session',

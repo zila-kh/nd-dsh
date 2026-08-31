@@ -169,7 +169,7 @@ function TreeEntry({ entry, depth, selectedPath, onOpenFile }: {
       <button
         className={cn(
           'flex h-[23px] w-full min-w-0 items-center gap-[5px] pr-2 text-left text-xs text-soft hover:bg-accent/50 hover:text-foreground [&_svg]:size-3 [&_svg]:shrink-0',
-          isSelected && 'bg-selected text-foreground',
+          isSelected && 'bg-selected-row text-selected-row-foreground hover:bg-selected-row hover:text-selected-row-foreground',
         )}
         style={{ paddingLeft: 8 + depth * 14 }}
         onClick={() => void toggle()}

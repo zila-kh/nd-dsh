@@ -25,6 +25,13 @@ for (const marker of [
 ]) {
   if (!builderConfig.includes(marker)) throw new Error(`electron-builder.yml is missing: ${marker}`)
 }
+const extraResourcesConfig = builderConfig.split('extraResources:')[1] ?? ''
+if (!builderConfig.includes('  - package.json\n  - node_modules/**')) {
+  throw new Error('electron-builder.yml must keep the application package.json in app.asar')
+}
+if (/\n\s*- from: package\.json\b/.test(extraResourcesConfig)) {
+  throw new Error('electron-builder.yml must not exclude package.json from app.asar via extraResources')
+}
 
 if (!configOnly) {
   const requiredFiles = [
@@ -32,6 +39,7 @@ if (!configOnly) {
     '.release/harness/lib/bin.js',
     '.release/harness/LICENSE',
     '.release/harness/THIRD_PARTY_NOTICES.md',
+    '.release/harness/node_modules/@deepseek-ai/cordis-plugin-group/lib/index.js',
     '.release/harness/node_modules/@deepseek-ai/dsh-mcp-client/lib/index.js',
     '.release/harness/node_modules/@deepseek-ai/dsh-subagent-codex/lib/index.js',
     '.release/harness/node_modules/@deepseek-ai/dsh-subagent-codex/node_modules/@openai/codex/package.json',

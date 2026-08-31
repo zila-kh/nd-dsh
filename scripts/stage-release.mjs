@@ -11,6 +11,7 @@ const harnessSource = join(root, 'vendor', 'deepseek-harness')
 const stageRoot = join(root, '.release')
 const harnessOutput = join(stageRoot, 'harness')
 const codexOutput = join(harnessOutput, 'node_modules', '@deepseek-ai', 'dsh-subagent-codex')
+const cordisGroupOutput = join(harnessOutput, 'node_modules', '@deepseek-ai', 'cordis-plugin-group')
 const pencilBuildScript = join(root, 'scripts', 'build-nd-pencil.mjs')
 const pencilBinaryName = process.platform === 'win32' ? 'op-host-web-server.exe' : 'op-host-web-server'
 const pencilBinary = join(root, 'resources', 'nd-pencil', 'bin', pencilBinaryName)
@@ -32,6 +33,10 @@ await fs.mkdir(stageRoot, { recursive: true })
 // upstream-defined closure and use a production closure for the isolated
 // Codex adapter.
 await deploy('@deepseek-ai/dsh', harnessOutput, false)
+// dsh-app-boot requires this upstream peer at runtime, but the CLI does not
+// declare it directly. Deploy it into the portable closure so plain Node and
+// the packaged Electron runtime resolve the same graph as the source workspace.
+await deploy('@deepseek-ai/cordis-plugin-group', cordisGroupOutput, false)
 await deploy('@deepseek-ai/dsh-subagent-codex', codexOutput, true)
 await fs.copyFile(join(harnessSource, 'LICENSE'), join(harnessOutput, 'LICENSE'))
 await fs.copyFile(join(harnessSource, 'THIRD_PARTY_NOTICES.md'), join(harnessOutput, 'THIRD_PARTY_NOTICES.md'))
@@ -41,6 +46,7 @@ await run(process.execPath, [pencilBuildScript], root)
 
 const required = [
   join(harnessOutput, 'lib', 'bin.js'),
+  join(cordisGroupOutput, 'lib', 'index.js'),
   join(harnessOutput, 'node_modules', '@deepseek-ai', 'dsh-mcp-client', 'lib', 'index.js'),
   join(codexOutput, 'lib', 'index.js'),
   join(codexOutput, 'node_modules', '@openai', 'codex', 'package.json'),

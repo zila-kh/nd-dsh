@@ -4,6 +4,11 @@ import { ArrowLeftIcon, ArrowRightIcon, CameraIcon, ContextIcon, ExternalIcon, P
 import { BridgePill } from './bridge-pill'
 import { cn } from '../lib/utils'
 
+interface BrowserTab {
+  id: number
+  url: string
+}
+
 interface BrowserPaneProps {
   active: boolean
   state: BrowserState | null
@@ -30,10 +35,59 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
   const surfaceRef = useRef<HTMLDivElement>(null)
   const addressFocused = useRef(false)
   const [address, setAddress] = useState(state?.url ?? 'about:blank')
+  // Sub-tabs share the single embedded WebContentsView; each remembers its own
+  // URL and re-navigates the shared surface on switch.
+  const nextTabId = useRef(1)
+  const [tabs, setTabs] = useState<BrowserTab[]>([])
+  const [activeTabId, setActiveTabId] = useState<number | null>(null)
 
   useEffect(() => {
     if (!addressFocused.current && state?.url) setAddress(state.url)
   }, [state?.url])
+
+  // Keep the active tab's remembered URL in sync with the shared surface.
+  useEffect(() => {
+    if (activeTabId === null || !state?.url) return
+    setTabs((current) => current.map((tab) => (tab.id === activeTabId ? { ...tab, url: state.url } : tab)))
+  }, [state?.url, activeTabId])
+
+  const createTab = (): void => {
+    const id = nextTabId.current++
+    setTabs((current) => [...current, { id, url: 'about:blank' }])
+    setActiveTabId(id)
+    setAddress('about:blank')
+    if (state?.url && state.url !== 'about:blank') {
+      void runBrowserAction(() => window.ndDsh.browser.navigate('about:blank'))
+    }
+  }
+
+  const switchTab = (id: number): void => {
+    setActiveTabId(id)
+    const tab = tabs.find((t) => t.id === id)
+    if (!tab) return
+    setAddress(tab.url)
+    if (state?.url !== tab.url) {
+      void runBrowserAction(() => window.ndDsh.browser.navigate(tab.url))
+    }
+  }
+
+  const closeTab = (id: number): void => {
+    setTabs((current) => {
+      const index = current.findIndex((t) => t.id === id)
+      const next = current.filter((t) => t.id !== id)
+      if (activeTabId === id) {
+        const fallback = next[Math.min(index, next.length - 1)] ?? null
+        setActiveTabId(fallback?.id ?? null)
+        if (fallback) {
+          setAddress(fallback.url)
+          if (state?.url !== fallback.url) {
+            void runBrowserAction(() => window.ndDsh.browser.navigate(fallback.url))
+          }
+        }
+      }
+      return next
+    })
+  }
 
   useEffect(() => {
     const surface = surfaceRef.current
@@ -210,6 +264,47 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
         <BridgePill state={state?.agentBrowser ?? 'binding'} title={state?.agentBrowserError}>
           {state?.agentBrowser === 'ready' ? 'Agent linked' : state?.agentBrowser === 'unavailable' ? 'Agent offline' : 'Linking'}
         </BridgePill>
+      </div>
+      {/* Sub-tabs: each remembers its own URL and drives the shared surface on switch. */}
+      <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border-soft bg-secondary px-[7px] py-[3px]" role="tablist" aria-label="Browser tabs">
+        {tabs.map((tab) => {
+          const tabActive = tab.id === activeTabId
+          const label = tab.url === 'about:blank' ? `Tab ${tab.id}` : tab.url.replace(/^https?:\/\//, '').split(/[/?]/)[0] || `Tab ${tab.id}`
+          return (
+            <div
+              key={tab.id}
+              role="tab"
+              aria-selected={tabActive}
+              className={cn(
+                'group flex max-w-[160px] shrink-0 cursor-pointer items-center gap-1.5 rounded-t-[5px] px-2 py-[3px] text-[9px]',
+                tabActive ? 'bg-surface-0 text-strong' : 'text-soft hover:bg-accent/60'
+              )}
+              title={tab.url}
+              onClick={() => switchTab(tab.id)}
+            >
+              <span className="truncate">{label}</span>
+              <button
+                type="button"
+                aria-label={`Close ${label}`}
+                className={cn(
+                  'shrink-0 rounded px-1 text-[10px] leading-none text-faint hover:bg-border-soft hover:text-foreground',
+                  tabActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                )}
+                onClick={(e) => { e.stopPropagation(); closeTab(tab.id) }}
+              >
+                ×
+              </button>
+            </div>
+          )
+        })}
+        <button
+          type="button"
+          className="shrink-0 rounded px-1.5 py-[2px] text-[11px] leading-none text-faint transition-colors hover:bg-accent hover:text-foreground"
+          title="New tab"
+          onClick={createTab}
+        >
+          +
+        </button>
       </div>
       {/* Native WebContentsView host — bounds-synced over CDP; keep this DOM stable. */}
       <div className="relative flex-1 min-h-0 min-w-0 overflow-hidden bg-browser" ref={surfaceRef}>

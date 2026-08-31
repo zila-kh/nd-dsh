@@ -1,9 +1,11 @@
-import { useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import hljs from 'highlight.js/lib/common'
 import type { WorkspaceFile } from '../../../shared/contracts'
 import { fileAccent } from '../lib/file-accents'
 import { FileIcon, SparkIcon } from './Icons'
 import { SelectionPromptMenu, type SelectionAction } from './SelectionPromptMenu'
+import { MarkdownLite } from './MarkdownLite'
+import { cn } from '../lib/utils'
 
 interface EditorPaneProps {
   file: WorkspaceFile | null
@@ -31,6 +33,14 @@ function languageFromPath(path: string): string {
 
 export function EditorPane({ file, onAgentPrompt, onError }: EditorPaneProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
+  const [viewMode, setViewMode] = useState<'code' | 'preview'>('code')
+
+  const isMarkdown = file?.relativePath.toLowerCase().endsWith('.md') ?? false
+
+  // Reset to code view when switching files.
+  useEffect(() => {
+    setViewMode('code')
+  }, [file?.relativePath])
 
   const highlighted = useMemo(() => {
     if (!file) return ''
@@ -74,25 +84,64 @@ export function EditorPane({ file, onAgentPrompt, onError }: EditorPaneProps) {
 
   return (
     <section className="code-editor grid h-full w-full grid-rows-[31px_auto_minmax(0,1fr)] min-h-0 bg-surface-0" aria-label={`Editor ${file.relativePath}`}>
-      <div className="flex border-b border-border-soft bg-secondary">
-        <div className="flex items-center gap-1.5 border-r border-border-soft px-[11px] text-[10px] text-soft [&_svg]:size-[13px]">
+      <div className="flex items-center justify-between border-b border-border-soft bg-secondary">
+        <div
+          className="flex min-w-0 items-center gap-1.5 border-r border-border-soft px-[11px] text-[10px] text-soft [&_svg]:size-[13px]"
+          title={file.relativePath}
+        >
           <FileIcon style={{ color: fileAccent(file.relativePath) }} />
-          <span>{file.relativePath.split(/[\\/]/).at(-1)}</span>
+          <span className="truncate">{file.relativePath}</span>
         </div>
-      </div>
-      {file.truncated ? (
-        <div className="border-b border-warning/25 bg-warning/10 px-2.5 py-[5px] text-[9px] text-warning">Preview truncated at 1 MiB.</div>
-      ) : null}
-      <div className="min-h-0 overflow-auto" ref={scrollRef}>
-        <div className="flex min-w-full items-start">
-          <div aria-hidden="true" className="shrink-0 select-none whitespace-pre py-[13px] pr-[13px] pb-10 text-right font-mono text-[11px]/[1.62] text-code-dim">
-            {lineNumbers}
+        {isMarkdown ? (
+          <div className="flex items-center gap-0.5 px-1.5">
+            <button
+              type="button"
+              onClick={() => setViewMode('code')}
+              className={cn(
+                'rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors',
+                viewMode === 'code'
+                  ? 'bg-primary/10 text-primary font-semibold'
+                  : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+              )}
+            >
+              Code
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('preview')}
+              className={cn(
+                'rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors',
+                viewMode === 'preview'
+                  ? 'bg-primary/10 text-primary font-semibold'
+                  : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+              )}
+            >
+              Preview
+            </button>
           </div>
-          <pre className="m-0 block min-w-0 flex-1 overflow-visible whitespace-pre pt-[13px] pr-[18px] pb-10 font-mono text-[11px]/[1.62] text-soft">
-            <code dangerouslySetInnerHTML={{ __html: highlighted }} />
-          </pre>
-        </div>
+        ) : null}
       </div>
+      {viewMode === 'preview' && isMarkdown ? (
+        <div className="min-h-0 flex-1 overflow-auto px-4 py-3 text-[12px]/[1.65]">
+          <MarkdownLite text={file.content} />
+        </div>
+      ) : (
+        <>
+          {file.truncated ? (
+            <div className="border-b border-warning/25 bg-warning/10 px-2.5 py-[5px] text-[9px] text-warning">Preview truncated at 1 MiB.</div>
+          ) : null}
+          <div className="min-h-0 overflow-auto" ref={scrollRef}>
+            <div className="flex min-w-full items-start">
+              <div aria-hidden="true" className="shrink-0 select-none whitespace-pre py-[13px] pr-[13px] pb-10 text-right font-mono text-[11px]/[1.62] text-code-dim">
+                {lineNumbers}
+              </div>
+              <pre className="m-0 block min-w-0 flex-1 overflow-visible whitespace-pre pt-[13px] pr-[18px] pb-10 font-mono text-[11px]/[1.62] text-soft">
+                <code dangerouslySetInnerHTML={{ __html: highlighted }} />
+              </pre>
+            </div>
+          </div>
+        </>
+      )}
       <SelectionPromptMenu containerRef={scrollRef} actions={SELECTION_ACTIONS} onRun={runSelectionAction} />
     </section>
   )

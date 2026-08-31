@@ -488,10 +488,12 @@ export class HarnessService {
     const configured = this.providers.enabled()
     const runtime = this.providers.runtimeConfig()
     const apiKeyPresent = Boolean(configured?.apiKey.trim())
+    const apiKeyRequired = providerRequiresCredential(configured)
     return {
       state,
       sourceReady,
       apiKeyPresent,
+      apiKeyRequired,
       provider: nonEmpty(runtime.defaultProvider, process.env.ND_DSH_PROVIDER, COMPAT_DEFAULT_PROVIDER),
       model: nonEmpty(runtime.defaultModel, process.env.ND_DSH_MODEL, COMPAT_DEFAULT_MODEL),
       ...(this.activeSessionId ? { sessionId: this.activeSessionId } : {}),
@@ -503,6 +505,20 @@ export class HarnessService {
   private updateStatus(state: HarnessStatus['state'], error?: string): void {
     this.statusValue = this.computeStatus(state, error)
     this.onStatusChanged?.(this.status())
+  }
+}
+
+function providerRequiresCredential(provider: { baseUrl: string } | undefined): boolean {
+  if (!provider) return false
+  // Local OpenAI-compatible servers commonly run without authentication. Keep
+  // the startup notice useful for them while remaining conservative for the
+  // built-in DeepSeek route and other non-loopback endpoints.
+  try {
+    const url = new URL(provider.baseUrl)
+    if (url.protocol === 'http:' && (url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]' || url.hostname === '::1')) return false
+    return true
+  } catch {
+    return true
   }
 }
 

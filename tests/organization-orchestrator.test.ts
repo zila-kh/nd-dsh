@@ -153,6 +153,29 @@ describe('OrganizationOrchestrator', () => {
     expect(await store.activeRun(project.id)).toBeUndefined()
   })
 
+  it('keeps a task reviewable when the reviewer omits the structured verdict', async () => {
+    const { store, project, orchestrator } = await fixture()
+    await store.applyPlan(project.id, { goal: { title: 'Goal', description: 'Goal' }, milestones: [{ title: 'M1', description: 'M1', tasks: [{ title: 'Reviewable task', description: 'Do work' }] }] })
+    const task = (await store.state()).tasks[0]!
+    const execution = await orchestrator.runTask(task.id)
+
+    await finishWorker(orchestrator, execution.sessionId)
+    let state = await store.state()
+    const reviewRun = state.runs.find((item) => item.kind === 'task-review')!
+    expect(state.tasks[0]?.status).toBe('review')
+    expect(state.tasks[0]?.reviewSessionId).toBe(reviewRun.sessionId)
+
+    await orchestrator.handleHarnessEvent(assistant(reviewRun.sessionId, 'I reviewed the changes, but forgot the required result tag.'))
+    await orchestrator.handleHarnessEvent(stopped(reviewRun.sessionId))
+
+    state = await store.state()
+    expect(state.tasks[0]?.status).toBe('review')
+    expect(state.tasks[0]?.reviewSessionId).toBeUndefined()
+    expect(state.runs.find((item) => item.id === reviewRun.id)?.status).toBe('failed')
+    expect(state.runs.find((item) => item.id === reviewRun.id)?.error).toMatch(/structured task-review/i)
+    expect(await store.activeRun(project.id)).toBeUndefined()
+  })
+
   it('treats user cancellation as a failed blocked run instead of successful work', async () => {
     const { store, project, harness, orchestrator } = await fixture()
     await store.applyPlan(project.id, { goal: { title: 'Goal', description: 'Goal' }, milestones: [{ title: 'M1', description: 'M1', tasks: [{ title: 'Cancelable task', description: 'Do work' }] }] })

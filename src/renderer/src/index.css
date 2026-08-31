@@ -59,6 +59,8 @@
   --browser: #0d0e11;
   --inset: rgb(0 0 0 / 22%);
   --selected: rgb(10 132 255 / 17%);
+  --selected-row: #d3dcec;
+  --selected-row-foreground: #1d1d1f;
   --folder: #ffd60a;
   --file: #98989d;
   --toast-bg: rgb(34 35 40 / 96%);
@@ -129,6 +131,8 @@
   --browser: #ececf0;
   --inset: rgb(30 30 35 / 5%);
   --selected: rgb(0 122 255 / 12%);
+  --selected-row: rgb(0 122 255 / 14%);
+  --selected-row-foreground: #1d1d1f;
   --folder: #b77900;
   --file: #7c7c80;
   --toast-bg: rgb(255 255 255 / 96%);
@@ -196,6 +200,8 @@
   --color-browser: var(--browser);
   --color-inset: var(--inset);
   --color-selected: var(--selected);
+  --color-selected-row: var(--selected-row);
+  --color-selected-row-foreground: var(--selected-row-foreground);
   --color-folder: var(--folder);
   --color-file: var(--file);
   --color-toast: var(--toast-bg);

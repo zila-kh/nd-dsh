@@ -3,13 +3,39 @@ import { CheckIcon, CopyIcon } from './Icons'
 import { parseMarkdownBlocks, tokenizeInline } from '../../../shared/markdown-lite'
 import { cn } from '../lib/utils'
 
+/** Extensions that make a bare filename (no folder prefix) worth linking. */
+const BARE_FILE_EXTENSIONS = new Set([
+  'md', 'txt', 'json', 'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'css', 'html', 'yml', 'yaml', 'toml', 'sh', 'py', 'rs', 'go', 'svg', 'csv',
+])
+
+/** True when an inline code token plausibly names a workspace-relative file. */
+function looksLikeWorkspacePath(text: string): boolean {
+  if (text.length === 0 || text.length > 260 || /\s/.test(text)) return false
+  if (/[\\/]/.test(text)) return /\.[A-Za-z0-9]{1,10}$/.test(text)
+  const dot = text.lastIndexOf('.')
+  return dot > 0 && BARE_FILE_EXTENSIONS.has(text.slice(dot + 1).toLowerCase())
+}
+
 /** Inline formatting: `code`, **bold**, *italic* → styled React nodes. */
-function InlineText({ text }: { text: string }) {
+function InlineText({ text, onOpenFile }: { text: string; onOpenFile?: (path: string) => void }) {
   const tokens = tokenizeInline(text)
   return (
     <>
       {tokens.map((token, index) => {
         if (token.kind === 'code') {
+          if (onOpenFile && looksLikeWorkspacePath(token.text)) {
+            return (
+              <button
+                key={index}
+                type="button"
+                className="cursor-pointer rounded border border-border-soft bg-surface-1 px-[4px] py-px font-mono text-[11px] text-primary transition-colors hover:border-border-strong hover:bg-accent hover:text-foreground"
+                title={`Open ${token.text} in Files`}
+                onClick={() => onOpenFile(token.text)}
+              >
+                {token.text}
+              </button>
+            )
+          }
           return (
             <code key={index} className="rounded border border-border-soft bg-surface-1 px-[4px] py-px font-mono text-[11px] text-primary">
               {token.text}
@@ -53,7 +79,7 @@ function CodeBlock({ language, text }: { language: string; text: string }) {
 }
 
 /** Chat-grade markdown renderer: block parser + inline tokens, no raw HTML. */
-export function MarkdownLite({ text, className }: { text: string; className?: string }) {
+export function MarkdownLite({ text, className, onOpenFile }: { text: string; className?: string; onOpenFile?: (path: string) => void }) {
   const blocks = parseMarkdownBlocks(text)
   return (
     <div className={cn('flex flex-col gap-1', className)}>
@@ -70,7 +96,7 @@ export function MarkdownLite({ text, className }: { text: string; className?: st
                   block.level === 1 ? 'text-[13px]' : block.level === 2 ? 'text-[12px]' : 'text-[11.5px]',
                 )}
               >
-                <InlineText text={block.text} />
+                <InlineText text={block.text} {...(onOpenFile ? { onOpenFile } : {})} />
               </div>
             )
           case 'bullet-list':
@@ -78,7 +104,7 @@ export function MarkdownLite({ text, className }: { text: string; className?: st
               <ul key={index} className="m-0 flex list-disc flex-col gap-0.5 pl-[18px]">
                 {block.items.map((item, itemIndex) => (
                   <li key={itemIndex} className="[overflow-wrap:anywhere] text-[12px]/[1.6] text-foreground/90">
-                    <InlineText text={item} />
+                    <InlineText text={item} {...(onOpenFile ? { onOpenFile } : {})} />
                   </li>
                 ))}
               </ul>
@@ -88,7 +114,7 @@ export function MarkdownLite({ text, className }: { text: string; className?: st
               <ol key={index} className="m-0 flex list-decimal flex-col gap-0.5 pl-[18px]">
                 {block.items.map((item, itemIndex) => (
                   <li key={itemIndex} className="[overflow-wrap:anywhere] text-[12px]/[1.6] text-foreground/90">
-                    <InlineText text={item} />
+                    <InlineText text={item} {...(onOpenFile ? { onOpenFile } : {})} />
                   </li>
                 ))}
               </ol>
@@ -96,13 +122,13 @@ export function MarkdownLite({ text, className }: { text: string; className?: st
           case 'quote':
             return (
               <blockquote key={index} className="my-0.5 border-l-2 border-border-strong pl-2 text-[11.5px]/[1.6] text-faint">
-                <InlineText text={block.text} />
+                <InlineText text={block.text} {...(onOpenFile ? { onOpenFile } : {})} />
               </blockquote>
             )
           default:
             return (
               <div key={index} className="whitespace-pre-wrap [overflow-wrap:anywhere] text-[12.5px]/[1.7] text-foreground/90">
-                <InlineText text={block.text} />
+                <InlineText text={block.text} {...(onOpenFile ? { onOpenFile } : {})} />
               </div>
             )
         }

@@ -6,6 +6,21 @@ import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
 const MAX_GIT_OUTPUT = 24 * 1024 * 1024
+const CHECKPOINT_EXCLUDED_PATHS = [
+  ':(exclude,glob)**/node_modules/**',
+  ':(exclude,glob)**/.pnpm-store/**',
+  ':(exclude,glob)**/.npm-cache/**',
+  ':(exclude,glob)**/dist/**',
+  ':(exclude,glob)**/build/**',
+  ':(exclude,glob)**/.next/**',
+  ':(exclude,glob)**/.turbo/**',
+  ':(exclude,glob)**/.cache/**',
+  ':(exclude,glob)**/coverage/**',
+]
+const DISPOSABLE_DIRECTORY_NAMES = new Set([
+  'node_modules', '.pnpm-store', '.npm-cache', 'dist', 'build', '.next',
+  '.turbo', '.cache', 'coverage',
+])
 
 export interface TaskWorktree {
   root: string
@@ -63,6 +78,7 @@ export class TaskWorktreeManager {
    * allowed only from this boundary, never on top of unknown partial writes.
    */
   async baseline(worktree: TaskWorktree): Promise<string> {
+    await removeDisposableArtifacts(worktree.root)
     const status = await git(worktree.root, ['status', '--porcelain=v1', '--untracked-files=all'])
     if (status.stdout.trim()) {
       throw new Error('Task worktree is dirty before execution attempt; refusing to create an unsafe retry boundary')
@@ -87,17 +103,26 @@ export class TaskWorktreeManager {
   async checkpoint(worktree: TaskWorktree, title: string): Promise<string> {
     const status = await git(worktree.root, ['status', '--porcelain=v1', '--untracked-files=all'])
     if (status.stdout.trim()) {
-      await git(worktree.root, ['add', '-A', '--'])
-      await git(worktree.root, [
-        '-c', 'user.name=ND-DSH',
-        '-c', 'user.email=nd-dsh@local',
-        'commit', '-m', `nd-dsh: ${title.slice(0, 120)}`,
-      ])
+      // A failed earlier add/commit may have left a partial index behind.
+      // The task worktree is ND-owned, so restage the current files from the
+      // working tree instead of carrying stale cache entries into a retry.
+      await git(worktree.root, ['reset', '--'])
+      await git(worktree.root, ['add', '-A', '--', '.', ...CHECKPOINT_EXCLUDED_PATHS])
+      const staged = await git(worktree.root, ['diff', '--cached', '--name-only'])
+      if (staged.stdout.trim()) {
+        await git(worktree.root, [
+          '-c', 'user.name=ND-DSH',
+          '-c', 'user.email=nd-dsh@local',
+          'commit', '-m', `nd-dsh: ${title.slice(0, 120)}`,
+        ])
+      }
     }
+    await removeDisposableArtifacts(worktree.root)
     return (await git(worktree.root, ['rev-parse', 'HEAD'])).stdout.trim()
   }
 
   async assertUnchanged(worktree: TaskWorktree, expectedHead: string): Promise<void> {
+    await removeDisposableArtifacts(worktree.root)
     const [status, head] = await Promise.all([
       git(worktree.root, ['status', '--porcelain=v1', '--untracked-files=all']),
       git(worktree.root, ['rev-parse', 'HEAD']),
@@ -144,6 +169,27 @@ export class TaskWorktreeManager {
       .then((repoRoot) => describe(repoRoot, taskId).root)
       .catch(() => undefined)
   }
+}
+
+/**
+ * Dependency managers and build tools commonly write caches into the project
+ * directory. They are never part of a task checkpoint and must not make an
+ * otherwise clean ND-owned worktree look modified during review or rework.
+ */
+async function removeDisposableArtifacts(root: string): Promise<void> {
+  async function visit(directory: string): Promise<void> {
+    const entries = await fs.readdir(directory, { withFileTypes: true }).catch(() => [])
+    for (const entry of entries) {
+      if (entry.name === '.git' || entry.isSymbolicLink()) continue
+      const candidate = join(directory, entry.name)
+      if (entry.isDirectory() && DISPOSABLE_DIRECTORY_NAMES.has(entry.name)) {
+        await fs.rm(candidate, { recursive: true, force: true })
+        continue
+      }
+      if (entry.isDirectory()) await visit(candidate)
+    }
+  }
+  await visit(root)
 }
 
 export async function taskEvidenceWorkspace(projectWorkspace: string | undefined, taskId: string): Promise<string | undefined> {

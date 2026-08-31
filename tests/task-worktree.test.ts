@@ -65,6 +65,34 @@ describe('TaskWorktreeManager', () => {
     expect(await readFile(join(workspace, 'app.ts'), 'utf8')).toContain('ready = true')
   })
 
+  it('does not checkpoint dependency, build, or package-manager caches', async () => {
+    const repo = await repoFixture()
+    const manager = new TaskWorktreeManager()
+    const worktree = await manager.ensure(repo, 'task-artifacts')
+    expect(worktree).toBeTruthy()
+    if (!worktree) return
+
+    await mkdir(join(worktree.root, 'node_modules', 'demo'), { recursive: true })
+    await mkdir(join(worktree.root, '.pnpm-store', 'v10'), { recursive: true })
+    await mkdir(join(worktree.root, '.npm-cache', '_cacache'), { recursive: true })
+    await mkdir(join(worktree.root, 'dist'), { recursive: true })
+    await writeFile(join(worktree.root, 'node_modules', 'demo', 'index.js'), 'module.exports = 1\n')
+    await writeFile(join(worktree.root, '.pnpm-store', 'v10', 'index.json'), '{}\n')
+    await writeFile(join(worktree.root, '.npm-cache', '_cacache', 'index-v5'), 'cache\n')
+    await writeFile(join(worktree.root, 'dist', 'bundle.js'), 'generated\n')
+    await writeFile(join(worktree.root, 'app.ts'), 'export const value = 2\n')
+
+    await manager.checkpoint(worktree, 'Checkpoint source only')
+    const tracked = (await exec('git', ['ls-tree', '-r', '--name-only', 'HEAD'], { cwd: worktree.root })).stdout
+    const clean = (await exec('git', ['status', '--porcelain=v1', '--untracked-files=all'], { cwd: worktree.root })).stdout
+    expect(tracked).toContain('app.ts')
+    expect(tracked).not.toContain('node_modules/')
+    expect(tracked).not.toContain('.pnpm-store/')
+    expect(tracked).not.toContain('.npm-cache/')
+    expect(tracked).not.toContain('dist/')
+    expect(clean).toBe('')
+  })
+
   it('does not create a new task branch from a dirty human workspace', async () => {
     const repo = await repoFixture()
     const manager = new TaskWorktreeManager()

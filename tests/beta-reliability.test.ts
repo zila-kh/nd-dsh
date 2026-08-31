@@ -69,7 +69,7 @@ class FakeEngineRuns {
   created: string[] = []
   runOptions: EngineRunOptions[] = []
 
-  constructor(private readonly failFirst = false) {}
+  constructor(private readonly failFirst = false, private readonly failureMessage = 'Provider returned 502 Bad Gateway') {}
 
   async createSession(engineId: string, cwd?: string): Promise<{ sessionId: string; engineId: string }> {
     this.count += 1
@@ -86,7 +86,7 @@ class FakeEngineRuns {
     if (this.failFirst && this.runCount === 1) {
       const cwd = this.workspaceBySession.get(sessionId)
       if (cwd) await writeFile(join(cwd, 'partial-provider-write.txt'), 'partial\n')
-      throw new Error('Provider returned 502 Bad Gateway')
+      throw new Error(this.failureMessage)
     }
     return { sessionId }
   }
@@ -102,7 +102,7 @@ class AuthFailEngineRuns extends FakeEngineRuns {
   }
 }
 
-async function organizationFixture(testCommand?: string, assignedEngine = ND_HARNESS_ENGINE_ID, engineRuns = new FakeEngineRuns()) {
+async function organizationFixture(testCommand?: string, assignedEngine = ND_HARNESS_ENGINE_ID, engineRuns = new FakeEngineRuns(), harness = new FakeHarness()) {
   const root = await gitWorkspace()
   const stateDir = await mkdtemp(join(tmpdir(), 'nd-dsh-beta-state-'))
   const store = new OrganizationStore(join(stateDir, 'organization.json'))
@@ -121,7 +121,7 @@ async function organizationFixture(testCommand?: string, assignedEngine = ND_HAR
   }
   const orchestrator = new OrganizationOrchestrator(
     store,
-    new FakeHarness() as never,
+    harness as never,
     new FakeWorkspace(root) as never,
     engines as never,
     engineRuns as never,
@@ -222,6 +222,27 @@ describe('beta execution reliability', () => {
     expect(taskRuns).toHaveLength(2)
     expect(taskRuns.some((item) => item.status === 'failed' && /502/.test(item.error ?? '') && /nd-dsh-execution-route/.test(item.output ?? ''))).toBe(true)
     expect(taskRuns.some((item) => item.status === 'running')).toBe(true)
+  })
+
+  it('retries a transient capacity failure on the same route when no fallback exists', async () => {
+    const engineRuns = new FakeEngineRuns(true, '503 chat_admission_busy: retry shortly')
+    const harness = new FakeHarness()
+    harness.gatewayRpc = async (method: string) => method === 'session.models'
+      ? { ok: true, value: { groups: [{ id: 'provider-primary', models: [{ id: 'model-primary' }] }] } }
+      : { ok: true, value: {} }
+    const { store, company, task, orchestrator } = await organizationFixture(undefined, ND_HARNESS_ENGINE_ID, engineRuns, harness)
+    await store.mutate({ type: 'company.update', id: company.id, patch: { autonomyLevel: 4 } })
+
+    await expect(orchestrator.runTask(task.id)).rejects.toThrow(/503/)
+
+    expect(engineRuns.created).toEqual([ND_HARNESS_ENGINE_ID, ND_HARNESS_ENGINE_ID])
+    expect(engineRuns.runOptions).toHaveLength(2)
+    expect(engineRuns.runOptions[1]).not.toHaveProperty('provider')
+    expect(engineRuns.runOptions[1]).not.toHaveProperty('model')
+    const state = await store.state()
+    expect(state.tasks.find((item) => item.id === task.id)?.status).toBe('in_progress')
+    expect(state.runs.filter((item) => item.taskId === task.id && item.kind === 'task-execution')).toHaveLength(2)
+    expect(state.runs.some((item) => item.status === 'running')).toBe(true)
   })
 
   it('does not fail over authentication/configuration failures', async () => {

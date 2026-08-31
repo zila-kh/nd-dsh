@@ -4,8 +4,8 @@
 
 ND-DSH is a desktop **AI Company Operating System for software delivery**. Instead of treating an AI model as a single chat box, ND owns companies, projects, roles, teams, agents, tasks, workflows, skills, memory, policies, model-provider routes, and coding-engine capabilities.
 
-> **⚠️ Status: not beta yet — this project just started.**
-> The core loop runs on real desktop/runtime state, but there is no downloadable beta, no signed installers, and no stability promise yet. Expect breaking changes at any time. See [What we ship and what's planned](#what-we-ship-and-whats-planned) and the [Roadmap](#roadmap).
+> **⚠️ Status: Developer Preview / Private Beta.**
+> The core loop runs on real desktop/runtime state, but there is no signed public installer or broad stability promise yet. Use it with supervised beta workflows and expect breaking changes. See [What we ship and what's planned](#what-we-ship-and-whats-planned) and the [Roadmap](#roadmap).
 
 The current product is coding-first: an AI PM plans work, assigned workers operate the real workspace and browser, an independent reviewer verifies the result, failed reviews can return to rework, durable memory is recorded, dependencies unlock, and the next task can continue automatically according to company autonomy and policy.
 
@@ -149,7 +149,7 @@ Review the resulting runtime/config compatibility against the ND overlay and ada
 
 ## Project status
 
-**ND-DSH is not beta yet — it just started.** There is no downloadable public build and no compatibility guarantee yet; expect breaking changes at any time.
+**ND-DSH is a Developer Preview / Private Beta.** Supervised source-build and staged-runtime workflows are available, but a signed public installer, installed-app coverage, and a broad compatibility guarantee are still pending; expect breaking changes.
 
 What exists today is the source tree and a real running slice: the app runs on actual desktop/runtime state with no production fallback to mock companies, fake sessions, fake workspaces, or a localhost demo page, and the renderer fails closed if its trusted desktop bridges are missing.
 
@@ -215,4 +215,4 @@ Released under the **MIT License** — see [`LICENSE`](LICENSE). DeepSeek Harnes
 
 ---
 
-> **ND-DSH** — Company team first. Built for devs, by real devs. Any CLI engine: Codex, DeepSeek Harness, and many more. · *Not beta yet — just started.* · [Roadmap](docs/roadmap.md) · MIT License
+> **ND-DSH** — Company team first. Built for devs, by real devs. Any CLI engine: Codex, DeepSeek Harness, and many more. · *Developer Preview / Private Beta.* · [Roadmap](docs/roadmap.md) · MIT License

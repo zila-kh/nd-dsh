@@ -660,25 +660,43 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onError }: Pr
 
 function TaskCard({ task, state, busy, run }: { task: OrganizationTask; state: OrganizationSnapshot; busy: string | null; run(key: string, fn: () => Promise<unknown>): Promise<void> }) {
   const agent = state.agents.find((item) => item.id === task.assignedAgentId)
+  const latestReview = state.runs
+    .filter((item) => item.taskId === task.id && item.kind === 'task-review')
+    .sort((left, right) => (right.completedAt ?? right.startedAt) - (left.completedAt ?? left.startedAt))[0]
+  const latestExecution = state.runs
+    .filter((item) => item.taskId === task.id && item.kind === 'task-execution')
+    .sort((left, right) => (right.completedAt ?? right.startedAt) - (left.completedAt ?? left.startedAt))[0]
+  // A previous failed review should remain actionable until a newer worker
+  // attempt has produced fresh evidence. Do not label the first review after
+  // successful rework as a retry merely because the history contains a fail.
+  const reviewFailure = latestReview?.status === 'failed'
+    && (!latestExecution || (latestReview.completedAt ?? latestReview.startedAt) > (latestExecution.completedAt ?? latestExecution.startedAt))
+    ? latestReview
+    : undefined
   return (
     <article className="mb-[7px] flex flex-col gap-1.5 rounded-[7px] border border-border-soft bg-sidebar p-[9px]">
       <small className="text-[11px] uppercase text-faint">{task.priority}</small>
       <strong className="text-sm">{task.title}</strong>
       <p className="m-0 text-xs/[1.45] text-muted-foreground">{task.description}</p>
+      {task.status === 'review' && reviewFailure ? (
+        <p className="m-0 rounded-md border border-warning/25 bg-warning/10 px-2 py-1 text-[11px]/[1.4] text-warning">
+          Review needs retry{reviewFailure.error ? `: ${reviewFailure.error.slice(0, 220)}` : '.'}
+        </p>
+      ) : null}
       <footer className="flex items-center justify-between gap-1.5 text-[11px] text-faint">
         <span className="truncate">{agent?.name ?? 'AI worker'}</span>
-        <TaskAction task={task} busy={busy} run={run} />
+        <TaskAction task={task} busy={busy} run={run} reviewRetry={Boolean(reviewFailure)} />
       </footer>
     </article>
   )
 }
 
-function TaskAction({ task, busy, run }: { task: OrganizationTask; busy: string | null; run(key: string, fn: () => Promise<unknown>): Promise<void> }) {
+function TaskAction({ task, busy, run, reviewRetry }: { task: OrganizationTask; busy: string | null; run(key: string, fn: () => Promise<unknown>): Promise<void>; reviewRetry: boolean }) {
   if (task.status === 'ready' || task.status === 'blocked') {
     return <button className={cn(orgButton, 'h-[22px] px-1.5 text-[11px]')} disabled={busy !== null} onClick={() => void run(`task-${task.id}`, () => window.ndDshOrganization.runTask(task.id))}>{task.status === 'blocked' ? 'Retry' : 'Run'}</button>
   }
   if (task.status === 'review') {
-    return <button className={cn(orgButton, 'h-[22px] px-1.5 text-[11px]')} disabled={busy !== null || Boolean(task.reviewSessionId)} onClick={() => void run(`review-${task.id}`, () => window.ndDshOrganization.reviewTask(task.id))}>{task.reviewSessionId ? 'Reviewing…' : 'Review'}</button>
+    return <button className={cn(orgButton, 'h-[22px] px-1.5 text-[11px]')} disabled={busy !== null || Boolean(task.reviewSessionId)} onClick={() => void run(`review-${task.id}`, () => window.ndDshOrganization.reviewTask(task.id))}>{task.reviewSessionId ? 'Reviewing…' : reviewRetry ? 'Retry review' : 'Review'}</button>
   }
   return <small className="shrink-0">{task.status}</small>
 }

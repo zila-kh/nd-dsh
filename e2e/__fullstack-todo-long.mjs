@@ -21,6 +21,9 @@ const REPO = resolve(HERE, '..')
 const RUN_ROOT = join(tmpdir(), 'nd-dsh-e2e-fullstack')
 const TARGET_WS = process.env.TODO_TARGET_WS ?? 'C:\\Users\\dila\\Documents\\GitHub\\nd-dsh-todo-fullstack'
 const MODEL_ID = process.env.TODO_MODEL ?? 'auto/coding:pro'
+const PROVIDER_ID = process.env.TODO_PROVIDER_ID ?? 'omiroute-e2e'
+const PROVIDER_BASE_URL = process.env.TODO_PROVIDER_BASE_URL ?? 'http://localhost:20128/v1'
+const PROVIDER_API_KEY = process.env.TODO_API_KEY ?? 'sk-local-proxy'
 const PROVIDER_SEED = join(RUN_ROOT, 'providers.seed.json')
 
 const POLL_MS = 20_000
@@ -65,8 +68,17 @@ function countWorkspaceFiles(root) {
 
 async function main() {
   // 1. Seed user-data profile before launch so ProviderStore boots with Omiroute.
+  writeFileSync(PROVIDER_SEED, JSON.stringify([{
+    id: PROVIDER_ID,
+    name: 'Omiroute Local',
+    enabled: true,
+    baseUrl: PROVIDER_BASE_URL,
+    apiFormat: 'OpenAI compatible (/v1/chat/completions)',
+    models: [{ id: MODEL_ID, context: '1000000' }],
+  }], null, 2))
   const userDataDir = mkdtempSync(join(RUN_ROOT, 'userdata-'))
   writeFileSync(join(userDataDir, 'providers.json'), readFileSync(PROVIDER_SEED, 'utf8'))
+  mkdirSync(TARGET_WS, { recursive: true })
   log(`user-data dir: ${userDataDir}`)
   log(`target workspace: ${TARGET_WS} (files now: ${countWorkspaceFiles(TARGET_WS)})`)
 
@@ -86,6 +98,9 @@ async function main() {
   page.on('console', (message) => {
     if (message.type() === 'error') rendererErrors.push(`console: ${message.text()}`)
   })
+  if (PROVIDER_API_KEY && /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/|$)/i.test(PROVIDER_BASE_URL)) {
+    await page.evaluate(async ({ id, key }) => window.ndDsh.providers.setApiKey(id, key), { id: PROVIDER_ID, key: PROVIDER_API_KEY })
+  }
 
   // 3. Create the company.
   const nav = page.getByRole('navigation', { name: 'ND-DSH navigation' })
@@ -148,6 +163,14 @@ async function main() {
     } catch (error) {
       log(`state poll failed: ${error.message.split('\n')[0]}`)
       continue
+    }
+
+    const approvalCard = page.locator('aside[aria-label="Runtime requests"]')
+    const allowOnce = approvalCard.getByRole('button', { name: 'Allow once' })
+    if (await allowOnce.count() > 0) {
+      log('runtime approval requested by local full-stack test — allowing once')
+      await allowOnce.first().click()
+      await sleep(1_000)
     }
 
     const project = snap.projects.find((p) => p.name === PROJECT.name) ?? snap.projects.at(-1)

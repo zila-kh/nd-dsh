@@ -1,0 +1,21 @@
+{
+  "name": "dfdf",
+  "type": "module",
+  "version": "1.0.0",
+  "description": "Core dfdf Feature Logic for dd product (mission dss)",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "node tests/runTests.ts",
+    "start": "node dist/index.js"
+  },
+  "keywords": ["dfdf", "dd", "dss"],
+  "author": "Builder <builder@dd.internal>",
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.3.3",
+    "@types/node": "^20.11.0"
+  }
+}
