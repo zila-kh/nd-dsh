@@ -9,6 +9,7 @@ import { CODEX_CLI_ENGINE_ID, ND_HARNESS_ENGINE_ID } from '../../shared/coding-e
 import type { ExtensionRouter } from '../extensions/extension-router.js'
 import { tokenSaverRuntime } from '../token-saver/token-saver-runtime.js'
 import type { WorkspaceService } from '../workspace/workspace-service.js'
+import { sessionInWorkspace } from '../workspace/path-utils.js'
 import type { CodexCliEngine } from './codex/codex-cli-engine.js'
 import type { HarnessService } from '../harness/harness-service.js'
 
@@ -106,7 +107,10 @@ export class EngineSessionRouter {
   }
 
   sessions(): EngineSessionSummary[] {
-    return this.codex.listSessions()
+    const workspaceRoot = this.workspace.state().root
+    return this.codex
+      .listSessions()
+      .filter((session) => sessionInWorkspace(workspaceRoot, session.cwd))
   }
 
   transcript(sessionId: string): EngineSessionTranscript {

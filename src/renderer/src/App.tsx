@@ -714,6 +714,7 @@ export default function App() {
           <Group orientation="horizontal" className="h-full w-full">
             <Panel className="flex min-w-0 flex-col overflow-hidden" defaultSize={580} minSize={sessionsCollapsed ? CHAT_MIN_PX_SIDEBAR_COLLAPSED : CHAT_MIN_PX}>
               <ChatPanel
+                key={workspace?.root ?? 'workspace-loading'}
                 status={harnessStatus}
                 {...(workspace?.projectName || workspace?.name ? { workspaceName: workspace.projectName ?? workspace.name } : {})}
                 sessionsCollapsed={sessionsCollapsed}

@@ -19,6 +19,7 @@ import type { ProviderStore } from '../providers.js'
 import type { SessionArchiveStore } from '../sessions/session-archive-store.js'
 import { tokenSaverRuntime } from '../token-saver/token-saver-runtime.js'
 import { ensureProfilePluginLinks } from './profile-plugin-links.js'
+import { scopeSessionListPayload } from './session-scope.js'
 import type { WorkspaceService } from '../workspace/workspace-service.js'
 
 const COMPAT_DEFAULT_PROVIDER = 'deepseek-official'
@@ -204,20 +205,19 @@ export class HarnessService {
    * ND owns chat archival: the pinned runtime has no archive concept, so its
    * session.list items are annotated with ND-side flags before reaching the
    * renderer. The runtime payload itself is never rewritten.
+   *
+   * The runtime returns sessions for every project it has ever run; the active
+   * workspace scoping is applied here too, so the sidebar only shows chats for
+   * the current company/project/workspace. A session stays visible when its
+   * recorded cwd is the active workspace root or a descendant (delegated task
+   * worktrees, open subfolders); sessions without a cwd cannot be attributed to
+   * another workspace and are kept.
    */
   private async annotateArchivedSessions(result: GatewayRpcResult): Promise<GatewayRpcResult> {
     if (!result.ok) return result
-    const items = (result.value as { items?: unknown } | undefined)?.items
-    if (!Array.isArray(items)) return result
     const archivedIds = await this.sessionArchive.archivedIds()
-    if (archivedIds.size === 0) return result
-    return {
-      ...result,
-      value: {
-        ...(typeof result.value === 'object' && result.value !== null ? result.value : {}),
-        items: items.map((item) => (isSessionLike(item) && archivedIds.has(item.sessionId) ? { ...item, archived: true } : item)),
-      },
-    }
+    const workspaceRoot = this.workspace.state().root
+    return { ...result, value: scopeSessionListPayload(result.value, workspaceRoot, archivedIds) }
   }
 
   /** Boot the runtime eagerly. */
@@ -428,18 +428,10 @@ export class HarnessService {
     const baseUrl = `http://127.0.0.1:${port}`
     await this.waitUntilReady(child, baseUrl, () => childError)
     const gateway = new GatewayClient(baseUrl)
-    // The reservation is released before the child binds, so a foreign local
-    // service can win the port race; it would answer HTTP 404 to every RPC
-    // (observed as session.create failing right after boot). Verify the
-    // responder actually speaks the gateway protocol before adopting it.
-    const identity = await gateway.rpc('session.list')
-    if (!identity.ok && (identity.error?.code === 'gateway-http' || identity.error?.code === 'gateway-protocol')) {
-      this.stopping = true
-      gateway.close()
-      child.kill()
-      if (attempt >= 2) throw new Error(`Port ${port} keeps being taken by another local server; runtime cannot bind`)
-      return this.start(attempt + 1)
-    }
+    // The static frontend becomes reachable before the /api route tree has
+    // finished mounting. Do not mistake that short-lived HTTP 404 for a port
+    // collision and kill the healthy child before it can accept session RPCs.
+    await this.waitUntilGatewayReady(child, gateway, () => childError)
     gateway.openEvents((frame) => this.handleEvent(frame))
     this.gateway = gateway
     this.baseUrl = baseUrl
@@ -469,6 +461,19 @@ export class HarnessService {
     }
     const err = getChildError().trim()
     throw new Error(`Runtime did not become ready within the timeout${err ? `: ${err}` : ''}`)
+  }
+
+  /** Wait until the already-listening web runtime has mounted its RPC routes. */
+  private async waitUntilGatewayReady(child: ChildProcess, gateway: GatewayClient, getChildError: () => string): Promise<void> {
+    const deadline = Date.now() + READY_TIMEOUT_MS
+    while (Date.now() < deadline) {
+      if (child.exitCode !== null) break
+      const identity = await gateway.rpc('session.list')
+      if (identity.ok) return
+      await new Promise((resolve) => setTimeout(resolve, READY_POLL_MS))
+    }
+    const err = getChildError().trim()
+    throw new Error(`Runtime gateway did not become ready within the timeout${err ? `: ${err}` : ''}`)
   }
 
   private handleEvent(frame: DshEventFrame): void {
@@ -617,10 +622,6 @@ function stripUiContext(value: string): string {
 
 function rpcFailureMessage(method: string, result: GatewayRpcResult): string {
   return `${method} failed: ${result.error?.message ?? result.error?.code ?? 'unknown error'}`
-}
-
-function isSessionLike(value: unknown): value is { sessionId: string } {
-  return typeof value === 'object' && value !== null && typeof (value as { sessionId?: unknown }).sessionId === 'string'
 }
 
 function nonEmpty(...values: Array<string | undefined>): string {
