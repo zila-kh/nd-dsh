@@ -2,158 +2,154 @@
 @import 'tw-animate-css';
 
 /*
- * ND-DSH renderer design tokens.
+ * ND-DSH desktop design system.
  *
- * Dark values live on :root (the product default); light overrides sit under
- * :root[data-theme='light'] exactly like the legacy stylesheet did, so the
- * preload-backed theme service keeps working unchanged.
- *
- * Semantic tokens follow shadcn conventions (--background, --primary, ...).
- * Green stays the brand color via --primary; blue/warning map to --info and
- * --warning extras. Legacy surface names survive as surface-0..3 so panels
- * keep their distinct elevations.
+ * The visual language is inspired by modern macOS: quiet graphite surfaces,
+ * restrained translucency, system-blue focus states, soft separators and
+ * generous corner radii. It intentionally uses original ND components and
+ * does not copy Apple artwork or private assets.
  */
 :root {
-  --background: #090b0e;
-  --foreground: #e9edf3;
-  --bg-glow: rgb(77 115 85 / 13%);
+  --background: #0b0c0f;
+  --foreground: #f5f5f7;
+  --bg-glow: rgb(10 132 255 / 14%);
 
-  --card: #13181e;
-  --card-foreground: #e9edf3;
-  --popover: #181e26;
-  --popover-foreground: #e9edf3;
+  --card: rgb(29 30 35 / 94%);
+  --card-foreground: #f5f5f7;
+  --popover: rgb(35 36 42 / 96%);
+  --popover-foreground: #f5f5f7;
 
-  --primary: #a6f06d;
-  --primary-foreground: #17200f;
+  --primary: #0a84ff;
+  --primary-foreground: #ffffff;
 
-  --secondary: #151a21;
-  --secondary-foreground: #eef1f5;
+  --secondary: rgb(31 32 37 / 92%);
+  --secondary-foreground: #f5f5f7;
 
-  --muted: rgb(255 255 255 / 5%);
-  --muted-foreground: #929ca9;
+  --muted: rgb(255 255 255 / 6%);
+  --muted-foreground: #a1a1aa;
 
-  --accent: rgb(255 255 255 / 5%);
-  --accent-foreground: #e9edf3;
+  --accent: rgb(255 255 255 / 8%);
+  --accent-foreground: #f5f5f7;
 
-  --destructive: #ff7b86;
-  --destructive-foreground: #2a0d10;
+  --destructive: #ff453a;
+  --destructive-foreground: #ffffff;
 
-  --border: #242b35;
-  --border-soft: #1b2129;
-  --border-strong: #272f39;
-  --input: #242b35;
-  --ring: #a6f06d;
+  --border: rgb(255 255 255 / 10%);
+  --border-soft: rgb(255 255 255 / 7%);
+  --border-strong: rgb(255 255 255 / 15%);
+  --input: rgb(255 255 255 / 13%);
+  --ring: #0a84ff;
 
-  /* Product extras */
-  --info: #76a9ff;
-  --warning: #f1bd67;
-  --strong: #eef1f5;
-  --soft: #c8d0da;
-  --faint: #626d7b;
-  --fainter: #3f4955;
-  --code-dim: #46515e;
-  --surface-0: #0b0e12;
-  --surface-1: #0f1318;
-  --surface-2: #13181e;
-  --surface-3: #181e26;
-  --titlebar: #0c0f13;
-  --sidebar: #0e1116;
-  --composer: #11161c;
-  --meta: #0c1014;
-  --browser: #080a0d;
-  --inset: rgb(5 8 11 / 30%);
-  --selected: rgb(118 169 255 / 12%);
-  --folder: #d1aa63;
-  --file: #8492a2;
-  --toast-bg: #191217;
-  --toast-border: #4a3137;
-  --toast-text: #ae8d92;
+  /* Product surfaces */
+  --info: #64d2ff;
+  --warning: #ffd60a;
+  --strong: #ffffff;
+  --soft: #d1d1d6;
+  --faint: #8e8e93;
+  --fainter: #636366;
+  --code-dim: #6e6e73;
+  --surface-0: #101115;
+  --surface-1: rgb(25 26 31 / 94%);
+  --surface-2: rgb(31 32 38 / 94%);
+  --surface-3: rgb(40 41 47 / 94%);
+  --titlebar: rgb(28 29 34 / 86%);
+  --sidebar: rgb(23 24 29 / 92%);
+  --composer: rgb(29 30 35 / 96%);
+  --meta: rgb(24 25 30 / 92%);
+  --browser: #0d0e11;
+  --inset: rgb(0 0 0 / 22%);
+  --selected: rgb(10 132 255 / 17%);
+  --folder: #ffd60a;
+  --file: #98989d;
+  --toast-bg: rgb(34 35 40 / 96%);
+  --toast-border: rgb(255 255 255 / 12%);
+  --toast-text: #f5f5f7;
 
-  --radius: 0.5rem;
+  --radius: 0.75rem;
 
   /* Plain vars consumed by the irreducible CSS blocks below */
-  --scrollbar: #2c343e;
-  --scrollbar-hover: #3a4551;
+  --scrollbar: rgb(255 255 255 / 22%);
+  --scrollbar-hover: rgb(255 255 255 / 34%);
   --editor-selection: #264f78;
-  --border-focus: #3b4856;
-  --prompt-menu-bg: #252526;
-  --prompt-menu-border: #3c3c3c;
-  --prompt-menu-text: #cccccc;
-  --prompt-menu-hover: #37373d;
+  --border-focus: rgb(10 132 255 / 55%);
+  --prompt-menu-bg: rgb(35 36 42 / 98%);
+  --prompt-menu-border: rgb(255 255 255 / 12%);
+  --prompt-menu-text: #f5f5f7;
+  --prompt-menu-hover: rgb(255 255 255 / 8%);
 
   color-scheme: dark;
 }
 
 :root[data-theme='light'] {
-  --background: #f4f5f7;
-  --foreground: #1b2128;
-  --bg-glow: rgb(76 138 16 / 8%);
+  --background: #eef0f4;
+  --foreground: #1d1d1f;
+  --bg-glow: rgb(0 122 255 / 11%);
 
-  --card: #ffffff;
-  --card-foreground: #1b2128;
-  --popover: #ffffff;
-  --popover-foreground: #1b2128;
+  --card: rgb(255 255 255 / 90%);
+  --card-foreground: #1d1d1f;
+  --popover: rgb(255 255 255 / 96%);
+  --popover-foreground: #1d1d1f;
 
-  --primary: #4c8a10;
+  --primary: #007aff;
   --primary-foreground: #ffffff;
 
-  --secondary: #ffffff;
-  --secondary-foreground: #10151b;
+  --secondary: rgb(255 255 255 / 78%);
+  --secondary-foreground: #1d1d1f;
 
-  --muted: rgb(15 25 40 / 5%);
-  --muted-foreground: #5b6570;
+  --muted: rgb(30 30 35 / 5%);
+  --muted-foreground: #6e6e73;
 
-  --accent: rgb(15 25 40 / 5%);
-  --accent-foreground: #1b2128;
+  --accent: rgb(30 30 35 / 7%);
+  --accent-foreground: #1d1d1f;
 
-  --destructive: #c92e3d;
+  --destructive: #ff3b30;
   --destructive-foreground: #ffffff;
 
-  --border: #d2d7de;
-  --border-soft: #e3e6ea;
-  --border-strong: #c4cad2;
-  --input: #d2d7de;
-  --ring: #4c8a10;
+  --border: rgb(30 30 35 / 12%);
+  --border-soft: rgb(30 30 35 / 8%);
+  --border-strong: rgb(30 30 35 / 17%);
+  --input: rgb(30 30 35 / 14%);
+  --ring: #007aff;
 
-  --info: #2f6fe0;
-  --warning: #a16207;
-  --strong: #10151b;
-  --soft: #2e3740;
-  --faint: #8b94a0;
-  --fainter: #b3bbc4;
-  --code-dim: #9aa3ae;
-  --surface-0: #ffffff;
-  --surface-1: #fafbfc;
-  --surface-2: #f0f2f5;
-  --surface-3: #e8ebef;
-  --titlebar: #eef0f3;
-  --sidebar: #f2f3f6;
-  --composer: #ffffff;
-  --meta: #f1f3f5;
-  --browser: #e9ebee;
-  --inset: rgb(20 30 45 / 3%);
-  --selected: rgb(47 111 224 / 10%);
-  --folder: #b07f2e;
-  --file: #7c8894;
-  --toast-bg: #fdf2f3;
-  --toast-border: #e6c4c9;
-  --toast-text: #8a3d47;
+  --info: #007aff;
+  --warning: #9a6700;
+  --strong: #1d1d1f;
+  --soft: #3a3a3c;
+  --faint: #8e8e93;
+  --fainter: #aeaeb2;
+  --code-dim: #98989d;
+  --surface-0: #f6f6f8;
+  --surface-1: rgb(255 255 255 / 88%);
+  --surface-2: rgb(242 242 247 / 92%);
+  --surface-3: rgb(229 229 234 / 92%);
+  --titlebar: rgb(246 246 248 / 86%);
+  --sidebar: rgb(242 242 247 / 90%);
+  --composer: rgb(255 255 255 / 94%);
+  --meta: rgb(242 242 247 / 90%);
+  --browser: #ececf0;
+  --inset: rgb(30 30 35 / 5%);
+  --selected: rgb(0 122 255 / 12%);
+  --folder: #b77900;
+  --file: #7c7c80;
+  --toast-bg: rgb(255 255 255 / 96%);
+  --toast-border: rgb(30 30 35 / 12%);
+  --toast-text: #1d1d1f;
 
-  --scrollbar: #c6ccd3;
-  --scrollbar-hover: #a9b1bb;
-  --editor-selection: #add6ff;
-  --border-focus: #a9bcd8;
-  --prompt-menu-bg: #ffffff;
-  --prompt-menu-border: #d2d7de;
-  --prompt-menu-text: #1b2128;
-  --prompt-menu-hover: #f0f2f5;
+  --scrollbar: rgb(60 60 67 / 24%);
+  --scrollbar-hover: rgb(60 60 67 / 38%);
+  --editor-selection: #b7d8ff;
+  --border-focus: rgb(0 122 255 / 45%);
+  --prompt-menu-bg: rgb(255 255 255 / 98%);
+  --prompt-menu-border: rgb(30 30 35 / 12%);
+  --prompt-menu-text: #1d1d1f;
+  --prompt-menu-hover: rgb(30 30 35 / 6%);
 
   color-scheme: light;
 }
 
 @theme inline {
-  --font-sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --font-mono: 'SFMono-Regular', Consolas, monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', Inter, 'Segoe UI', sans-serif;
+  --font-mono: 'SFMono-Regular', 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
 
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -226,7 +222,19 @@
 
   body {
     @apply bg-background text-foreground font-sans antialiased;
+    background-image:
+      radial-gradient(circle at 50% -18%, var(--bg-glow), transparent 38%),
+      linear-gradient(180deg, color-mix(in srgb, var(--background) 94%, white 6%), var(--background));
+    font-feature-settings: 'kern' 1, 'liga' 1, 'calt' 1;
+    letter-spacing: -0.006em;
     text-rendering: optimizeLegibility;
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
   }
 }
 
@@ -247,6 +255,111 @@ body.float-mode,
   background-color: transparent !important;
 }
 
+/*
+ * Shared macOS-inspired surface treatment. These target shadcn/Radix slots so
+ * every ND feature gets the same language without feature-specific rewrites.
+ */
+[data-slot='card'],
+[data-slot='dialog-content'],
+[data-slot='alert-dialog-content'],
+[data-slot='popover-content'],
+[data-slot='dropdown-menu-content'],
+[data-slot='select-content'],
+[data-slot='command'] {
+  border-color: var(--border-soft);
+  backdrop-filter: blur(24px) saturate(1.25);
+  box-shadow:
+    0 20px 55px rgb(0 0 0 / 24%),
+    inset 0 1px 0 rgb(255 255 255 / 5%);
+}
+
+:root[data-theme='light'] [data-slot='card'],
+:root[data-theme='light'] [data-slot='dialog-content'],
+:root[data-theme='light'] [data-slot='alert-dialog-content'],
+:root[data-theme='light'] [data-slot='popover-content'],
+:root[data-theme='light'] [data-slot='dropdown-menu-content'],
+:root[data-theme='light'] [data-slot='select-content'],
+:root[data-theme='light'] [data-slot='command'] {
+  box-shadow:
+    0 18px 48px rgb(31 35 48 / 12%),
+    inset 0 1px 0 rgb(255 255 255 / 75%);
+}
+
+[data-slot='dialog-content'],
+[data-slot='alert-dialog-content'],
+[data-slot='popover-content'],
+[data-slot='dropdown-menu-content'],
+[data-slot='select-content'] {
+  border-radius: 14px;
+}
+
+[data-slot='select-trigger'],
+[data-slot='input'],
+[data-slot='textarea'] {
+  border-radius: 9px;
+}
+
+/* Main workbench chrome: translucent titlebar and native-feeling segmentation. */
+#root > div:not(.float-mode) > header.app-drag {
+  min-height: 72px;
+  background: var(--titlebar);
+  border-color: var(--border-soft);
+  backdrop-filter: blur(28px) saturate(1.3);
+  box-shadow: inset 0 -1px 0 rgb(0 0 0 / 10%);
+}
+
+#root > div:not(.float-mode) > header.app-drag nav[aria-label='ND-DSH navigation'] > div {
+  border: 1px solid var(--border-soft);
+  border-radius: 11px;
+  background: var(--inset);
+  padding: 3px;
+  box-shadow:
+    inset 0 1px 2px rgb(0 0 0 / 16%),
+    0 1px 0 rgb(255 255 255 / 4%);
+  backdrop-filter: blur(18px);
+}
+
+#root > div:not(.float-mode) > header.app-drag nav[aria-label='ND-DSH navigation'] button {
+  min-height: 30px;
+  border-radius: 8px;
+  padding-inline: 12px;
+  letter-spacing: -0.01em;
+}
+
+#root > div:not(.float-mode) > header.app-drag nav[aria-label='ND-DSH navigation'] button[aria-current='page'] {
+  border-color: var(--border-soft);
+  background: color-mix(in srgb, var(--surface-1) 90%, white 10%);
+  color: var(--strong);
+  box-shadow:
+    0 1px 3px rgb(0 0 0 / 24%),
+    inset 0 1px 0 rgb(255 255 255 / 7%);
+}
+
+:root[data-theme='light'] #root > div:not(.float-mode) > header.app-drag nav[aria-label='ND-DSH navigation'] button[aria-current='page'] {
+  background: rgb(255 255 255 / 90%);
+  box-shadow:
+    0 1px 4px rgb(31 35 48 / 12%),
+    inset 0 1px 0 rgb(255 255 255 / 100%);
+}
+
+[role='tablist'] {
+  backdrop-filter: blur(18px) saturate(1.15);
+}
+
+[role='tablist'] button {
+  border-radius: 8px !important;
+}
+
+/* Keep floating inspection lightweight and consistent with the desktop shell. */
+.float-mode > .app-drag {
+  border-color: var(--border-strong) !important;
+  background: var(--titlebar) !important;
+  box-shadow:
+    0 18px 45px rgb(0 0 0 / 34%),
+    inset 0 1px 0 rgb(255 255 255 / 8%) !important;
+  backdrop-filter: blur(28px) saturate(1.25);
+}
+
 @keyframes pulse-dot {
   0%,
   100% {
@@ -254,7 +367,7 @@ body.float-mode,
   }
   50% {
     opacity: 1;
-    box-shadow: 0 0 6px currentColor;
+    box-shadow: 0 0 7px currentColor;
   }
 }
 
@@ -288,37 +401,8 @@ body.float-mode,
 }
 
 ::-webkit-scrollbar {
-  width: 9px;
-  height: 9px;
-}
-
-/* Model settings — dark IDE surface scope (independent of the product palette). */
-.models-scope {
-  --models-bg: #1a1a1a;
-  --models-surface: #222222;
-  --models-surface-3: #2d2d2d;
-  --models-field: #2a2a2a;
-  --models-border: #333333;
-  --models-border-2: #3a3a3a;
-  --models-text: #d4d4d4;
-  --models-muted: #9ca3af;
-  --models-faint: #6b7280;
-  --models-green: #22c55e;
-  --models-green-soft: rgb(34 197 94 / 15%);
-}
-
-:root[data-theme='light'] .models-scope {
-  --models-bg: #f4f5f7;
-  --models-surface: #ffffff;
-  --models-surface-3: #eceef1;
-  --models-field: #f0f2f5;
-  --models-border: #d2d7de;
-  --models-border-2: #c4cad2;
-  --models-text: #1b2128;
-  --models-muted: #5b6570;
-  --models-faint: #8b94a0;
-  --models-green: #16a34a;
-  --models-green-soft: rgb(22 163 74 / 12%);
+  width: 7px;
+  height: 7px;
 }
 
 ::-webkit-scrollbar-track {
@@ -327,7 +411,7 @@ body.float-mode,
 
 ::-webkit-scrollbar-thumb {
   border: 2px solid transparent;
-  border-radius: 8px;
+  border-radius: 999px;
   background: var(--scrollbar);
   background-clip: padding-box;
 }
@@ -337,6 +421,35 @@ body.float-mode,
   background-clip: padding-box;
 }
 
+/* Model settings use the same desktop palette instead of a separate IDE skin. */
+.models-scope {
+  --models-bg: #15161a;
+  --models-surface: #1c1d22;
+  --models-surface-3: #27282e;
+  --models-field: #202126;
+  --models-border: rgb(255 255 255 / 9%);
+  --models-border-2: rgb(255 255 255 / 14%);
+  --models-text: #f5f5f7;
+  --models-muted: #a1a1aa;
+  --models-faint: #6e6e73;
+  --models-green: #0a84ff;
+  --models-green-soft: rgb(10 132 255 / 15%);
+}
+
+:root[data-theme='light'] .models-scope {
+  --models-bg: #f2f2f7;
+  --models-surface: #ffffff;
+  --models-surface-3: #e5e5ea;
+  --models-field: #f5f5f7;
+  --models-border: rgb(30 30 35 / 10%);
+  --models-border-2: rgb(30 30 35 / 16%);
+  --models-text: #1d1d1f;
+  --models-muted: #6e6e73;
+  --models-faint: #8e8e93;
+  --models-green: #007aff;
+  --models-green-soft: rgb(0 122 255 / 12%);
+}
+
 /* VS Code-style selection inside code surfaces. */
 .code-editor ::selection {
   background: var(--editor-selection);
@@ -344,7 +457,7 @@ body.float-mode,
 
 /* Syntax highlighting — One Dark Pro (dark) / One Light (light). */
 :root {
-  --syntax-comment: #5c6370;
+  --syntax-comment: #7f848e;
   --syntax-keyword: #c678dd;
   --syntax-tag: #e06c75;
   --syntax-literal: #56b6c2;
