@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Counter · macOS Style</title>
+  <meta name="description" content="A standalone, dependency-free macOS-style counter app.">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="window" aria-label="Counter app window">
+    <header class="titlebar">
+      <div class="traffic-lights" aria-hidden="true">
+        <span class="light light-close" title="Close"></span>
+        <span class="light light-minimize" title="Minimize"></span>
+        <span class="light light-zoom" title="Zoom"></span>
+      </div>
+      <h1 class="title">Counter</h1>
+    </header>
+
+    <section class="content" aria-label="Counter controls">
+      <p class="count-label" id="count-label">Count</p>
+      <output class="count" id="count" aria-labelledby="count-label" aria-live="polite" aria-atomic="true">0</output>
+
+      <div class="controls">
+        <button class="btn btn-sign" id="decrement" type="button" aria-label="Decrease count (Arrow Down)">−</button>
+        <button class="btn btn-reset" id="reset" type="button" aria-label="Reset count to zero (R)">Reset</button>
+        <button class="btn btn-sign" id="increment" type="button" aria-label="Increase count (Arrow Up)">+</button>
+      </div>
+
+      <p class="hint">Keyboard: <kbd>↑</kbd> increment &middot; <kbd>↓</kbd> decrement &middot; <kbd>R</kbd> reset</p>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

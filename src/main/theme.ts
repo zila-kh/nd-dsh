@@ -159,9 +159,9 @@ export class ThemeService {
       const settings = JSON.parse(readFileSync(this.settingsPath, 'utf8')) as PersistedSettings
       if (settings.surface && VALID_SURFACES.includes(settings.surface)) return settings.surface
     } catch {
-      // Missing or unreadable settings fall back to the official DeepSeek UI.
+      // Missing or unreadable settings keep ND as the primary coding surface.
     }
-    return 'dsh'
+    return 'workbench'
   }
 
   private readPermissionMode(): string {

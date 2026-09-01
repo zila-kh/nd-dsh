@@ -76,7 +76,12 @@ export class DshSurfaceController {
   }
 
   async reload(): Promise<void> {
-    await this.load()
+    if (!this.targetUrl) return
+    if (!this.loaded) {
+      await this.load()
+      return
+    }
+    this.view.webContents.reload()
   }
 
   setBackgroundColor(color: string): void {

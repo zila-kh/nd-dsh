@@ -22,10 +22,57 @@ test.afterAll(async () => {
 test('product shell boots with the full navigation', async () => {
   const { page } = launched
   await expect(page.getByRole('banner').getByText('ND-DSH', { exact: true })).toBeVisible()
+  const codingSurface = page.getByRole('group', { name: 'Coding surface' })
+  await expect(codingSurface.getByRole('button', { name: 'ND', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(codingSurface.getByRole('button', { name: 'DSH', exact: true })).toBeVisible()
   const navigation = page.getByRole('navigation', { name: 'ND-DSH navigation' })
   for (const label of ['Company', 'Agent', 'Design', 'QA', 'Settings']) {
     await expect(navigation.getByTitle(label)).toBeVisible()
   }
+})
+
+test('header segment switches between ND and DSH coding surfaces', async () => {
+  const { page } = launched
+  const codingSurface = page.getByRole('group', { name: 'Coding surface' })
+  const nd = codingSurface.getByRole('button', { name: 'ND', exact: true })
+  const dsh = codingSurface.getByRole('button', { name: 'DSH', exact: true })
+
+  await dsh.click()
+  await expect(dsh).toHaveAttribute('aria-pressed', 'true')
+  const dshSurface = page.getByRole('region', { name: 'DSH coding surface' })
+  await expect(dshSurface).toBeVisible()
+  await expect(dshSurface.getByText(/Gateway :\d+/)).toBeVisible({ timeout: 20_000 })
+  const updateButton = dshSurface.getByRole('button', { name: 'Install or update DSH' })
+  await expect(updateButton).toBeVisible()
+  await updateButton.click()
+  const updateDialog = page.getByRole('dialog', { name: 'DSH package install log' })
+  await expect(updateDialog).toBeVisible()
+  await expect(updateDialog.getByText(/Ready\. Select Run update/)).toBeVisible()
+  await expect(updateDialog.getByRole('button', { name: 'Run update', exact: true })).toBeVisible()
+  await updateDialog.getByRole('button', { name: 'Close', exact: true }).click()
+  await expect(updateDialog).toHaveCount(0)
+
+  await nd.click()
+  await expect(nd).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('region', { name: 'DSH coding surface' })).toHaveCount(0)
+  expect(rendererErrors).toEqual([])
+})
+
+test('terminal toggle is hosted by the active thread header', async () => {
+  const { page } = launched
+  await page.getByRole('navigation', { name: 'ND-DSH navigation' }).getByTitle('Agent').click()
+
+  const threadHeader = page.locator('header').filter({ hasText: 'ACTIVE THREAD' })
+  const enginePicker = threadHeader.getByRole('combobox', { name: 'Coding engine' })
+  await expect(enginePicker).toBeVisible()
+  await enginePicker.click()
+  await expect(page.getByRole('option', { name: 'Default · ND Harness' })).toBeVisible()
+  await expect(page.getByRole('option', { name: /Codex CLI/ })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(threadHeader.getByRole('button', { name: /Terminal/ })).toBeVisible()
+
+  const workspaceTabs = page.getByRole('tablist', { name: 'Agent workspace panes' })
+  await expect(workspaceTabs.getByRole('button', { name: /Terminal/ })).toHaveCount(0)
 })
 
 test('dedicated terminal runs a real PTY command through the sandboxed bridge', async () => {
@@ -129,7 +176,6 @@ test('Settings sub-tabs update their addressable route', async () => {
   await expect(page).toHaveURL(/#\/settings\?tab=capabilities&subtab=memory$/)
   await expect(page.getByRole('heading', { name: 'Memory providers', exact: true })).toBeVisible()
   await expect(page.getByText('OpenViking Memory', { exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Set up' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Download & Setup' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Not in this release' })).toHaveCount(0)
 

@@ -24,15 +24,31 @@ export function projectRoot(): string {
   return app.getAppPath()
 }
 
+/** User-managed published DSH package installation owned by ND. */
+export function managedHarnessRoot(): string {
+  return resolve(process.env.ND_DSH_MANAGED_RUNTIME_ROOT ?? join(app.getPath('userData'), 'runtimes/dsh'))
+}
+
 export function harnessRoot(): string {
-  return resolve(process.env.ND_DSH_HARNESS_ROOT ?? join(projectRoot(), 'vendor/deepseek-harness'))
+  if (process.env.ND_DSH_HARNESS_ROOT) return resolve(process.env.ND_DSH_HARNESS_ROOT)
+  const publishedRuntimeCandidates = [
+    managedHarnessRoot(),
+    join(projectRoot(), '.nd-dsh/runtime/dsh'),
+  ]
+  for (const managed of publishedRuntimeCandidates) {
+    if (existsSync(join(managed, 'node_modules/@deepseek-ai/dsh/lib/bin.js'))) return managed
+  }
+  return resolve(join(projectRoot(), 'vendor/deepseek-harness'))
 }
 
 /** The dsh CLI launcher bin: boots the `web` profile the desktop shells. */
 export function harnessCliBinPath(): string {
   const root = harnessRoot()
   const sourceEntry = join(root, 'apps/cli/lib/bin.js')
-  return existsSync(sourceEntry) ? sourceEntry : join(root, 'lib/bin.js')
+  if (existsSync(sourceEntry)) return sourceEntry
+  const deployedEntry = join(root, 'lib/bin.js')
+  if (existsSync(deployedEntry)) return deployedEntry
+  return join(root, 'node_modules/@deepseek-ai/dsh/lib/bin.js')
 }
 
 /** ND-DSH's patch overlay applied on top of the web profile. */

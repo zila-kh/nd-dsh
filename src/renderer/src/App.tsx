@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import { toast } from 'sonner'
-import type { BrowserState, ExternalElementPickView, HarnessStatus, InspectScope, ThemeMode, ThemeState, WorkspaceFile, WorkspaceState } from '../../shared/contracts'
+import type { BrowserState, DshSurface, DshViewState, ExternalElementPickView, HarnessStatus, InspectScope, SurfaceState, ThemeMode, ThemeState, WorkspaceFile, WorkspaceState } from '../../shared/contracts'
 import type { OrganizationSnapshot } from '../../shared/organization'
 import { BrowserPane } from './components/BrowserPane'
 import { Button } from './components/ui/button'
@@ -10,9 +10,10 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 import { Input } from './components/ui/input'
 import { Badge } from './components/ui/badge'
 import { Toaster } from './components/ui/sonner'
-import { ChatPanel, type ChatPanelHandle } from './components/ChatPanel'
+import { ChatPanel } from './components/ChatPanel'
 import { DesignView } from './components/DesignView'
 import { DiffView } from './components/DiffView'
+import { DshCodingSurface } from './components/DshCodingSurface'
 import { EditorPane } from './components/EditorPane'
 import { Explorer } from './components/Explorer'
 import { BrowserIcon, CameraIcon, CompanyIcon, CrosshairIcon, ExternalIcon, FileIcon, MonitorIcon, PencilIcon, QualityIcon, SettingsIcon, SidebarToggleIcon, SparkIcon } from './components/Icons'
@@ -108,6 +109,8 @@ export default function App() {
   const [orgState, setOrgState] = useState<OrganizationSnapshot | null>(null)
   const [browserState, setBrowserState] = useState<BrowserState | null>(null)
   const [harnessStatus, setHarnessStatus] = useState<HarnessStatus | null>(null)
+  const [surface, setSurface] = useState<DshSurface>('workbench')
+  const [dshView, setDshView] = useState<DshViewState | null>(null)
   const [selectedFile, setSelectedFile] = useState<WorkspaceFile | null>(null)
   const [openFileTabs, setOpenFileTabs] = useState<WorkspaceFile[]>([])
   const [activeDiff, setActiveDiff] = useState<{ relativePath: string; staged: boolean } | null>(null)
@@ -120,8 +123,6 @@ export default function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(settingsTabFromLocation)
   const [settingsSubTabs, setSettingsSubTabs] = useState<SettingsSubTabs>(settingsSubTabsFromLocation)
   const [agentPane, setAgentPane] = useState<AgentPane>('files')
-  const chatPanelRef = useRef<ChatPanelHandle | null>(null)
-  const [terminalState, setTerminalState] = useState<{ open: boolean; enabled: boolean }>({ open: false, enabled: false })
   const [sessionsCollapsed, setSessionsCollapsed] = useState(false)
   const [workspaceCollapsed, setWorkspaceCollapsed] = useState(false)
   const [externalPrompt, setExternalPrompt] = useState<{ id: string; text: string } | null>(null)
@@ -135,6 +136,7 @@ export default function App() {
   const [inspectScope, setInspectScope] = useState<InspectScope>(() => isFloatOverlay ? 'external' : 'self')
   const [pendingPick, setPendingPick] = useState<{ element: ExternalElementPickView; targetTitle: string; shortName: string; hover: string; pickId?: string; hasShot?: boolean } | null>(null)
   const [pendingAppInspect, setPendingAppInspect] = useState<{ displayLabel: string; width: number; height: number; copiedToClipboard: boolean; scope: InspectScope } | null>(null)
+  const inspectOverlayVisible = pendingPick !== null || pendingAppInspect !== null
   const [elementAttachmentVersion, setElementAttachmentVersion] = useState(0)
   const appInspectTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
 
@@ -379,10 +381,11 @@ export default function App() {
       window.ndDsh.workspace.state().then(setWorkspace),
       window.ndDsh.browser.state().then(setBrowserState),
       window.ndDsh.harness.status().then(setHarnessStatus),
+      window.ndDsh.surface.state().then((state) => {
+        setSurface(state.surface)
+        setDshView(state.view)
+      }),
     ]).catch((cause) => notify(errorMessage(cause)))
-
-    void window.ndDsh.surface.set('workbench').catch((cause) => notify(errorMessage(cause)))
-    void window.ndDsh.dshView.setVisible(false).catch(() => undefined)
 
     const offWorkspace = window.ndDsh.workspace.onState((next) => {
       setWorkspace(next)
@@ -392,10 +395,17 @@ export default function App() {
     })
     const offBrowser = window.ndDsh.browser.onState(setBrowserState)
     const offHarness = window.ndDsh.harness.onStatus(setHarnessStatus)
+    const offDshView = window.ndDsh.dshView.onState(setDshView)
+    const offSurface = window.ndDsh.surface.onChanged((state: SurfaceState) => {
+      setSurface(state.surface)
+      setDshView(state.view)
+    })
     return () => {
       offWorkspace()
       offBrowser()
       offHarness()
+      offDshView()
+      offSurface()
       void window.ndDsh.browser.setVisible(false).catch(() => undefined)
       void window.ndDsh.dshView.setVisible(false).catch(() => undefined)
     }
@@ -452,6 +462,16 @@ export default function App() {
 
   const selectTheme = (mode: ThemeMode): void => {
     void window.ndDsh.theme.set(mode).then(setTheme).catch((cause) => notify(errorMessage(cause)))
+  }
+
+  const selectSurface = (next: DshSurface): void => {
+    if (next === surface) return
+    void window.ndDsh.surface.set(next)
+      .then((state) => {
+        setSurface(state.surface)
+        setDshView(state.view)
+      })
+      .catch((cause) => notify(errorMessage(cause)))
   }
 
   const changeWorkspace = (next: WorkspaceState): void => {
@@ -629,6 +649,40 @@ export default function App() {
               <SidebarToggleIcon collapsed={sessionsCollapsed} />
             </TitlebarIconButton>
             <span className="grid size-6 shrink-0 place-items-center rounded-[7px] border border-primary/30 bg-primary/10 text-sm font-extrabold tracking-[0.08em] text-primary">ND</span>
+            <div
+              role="group"
+              aria-label="Coding surface"
+              className="app-no-drag flex h-7 shrink-0 items-center rounded-lg border border-border-soft bg-inset p-[2px] shadow-[inset_0_1px_2px_rgba(0,0,0,0.18)]"
+            >
+              <button
+                type="button"
+                aria-pressed={surface === 'workbench'}
+                className={cn(
+                  'grid h-[22px] min-w-[32px] place-items-center rounded-md border px-1.5 text-[9px] font-extrabold tracking-[0.08em] transition-[color,background-color,border-color,box-shadow]',
+                  surface === 'workbench'
+                    ? 'border-primary/25 bg-primary/12 text-primary shadow-[0_1px_3px_rgba(0,0,0,0.2)]'
+                    : 'border-transparent text-faint hover:bg-accent hover:text-foreground',
+                )}
+                title="Use the ND coding workbench"
+                onClick={() => selectSurface('workbench')}
+              >
+                ND
+              </button>
+              <button
+                type="button"
+                aria-pressed={surface === 'dsh'}
+                className={cn(
+                  'grid h-[22px] min-w-[36px] place-items-center rounded-md border px-1.5 text-[9px] font-extrabold tracking-[0.08em] transition-[color,background-color,border-color,box-shadow]',
+                  surface === 'dsh'
+                    ? 'border-primary/25 bg-primary/12 text-primary shadow-[0_1px_3px_rgba(0,0,0,0.2)]'
+                    : 'border-transparent text-faint hover:bg-accent hover:text-foreground',
+                )}
+                title="Use the DSH coding surface"
+                onClick={() => selectSurface('dsh')}
+              >
+                DSH
+              </button>
+            </div>
             <div className="flex min-w-0 flex-col">
               <strong className="text-[15px] tracking-[0.06em] text-strong">ND-DSH</strong>
               <span className="overflow-hidden text-xs text-faint text-ellipsis whitespace-nowrap">
@@ -747,12 +801,13 @@ export default function App() {
       </header>
 
       <main className="relative min-h-0 min-w-0 overflow-hidden bg-surface-0">
-        {view !== 'settings' ? (
+        {surface === 'dsh' ? (
+          <DshCodingSurface active inspectOverlayVisible={inspectOverlayVisible} state={dshView} onNotify={notify} />
+        ) : view !== 'settings' ? (
           <Group orientation="horizontal" className="h-full w-full">
             <Panel className="flex min-w-0 flex-col overflow-hidden" defaultSize={580} minSize={sessionsCollapsed ? CHAT_MIN_PX_SIDEBAR_COLLAPSED : CHAT_MIN_PX}>
               <ChatPanel
                 key={workspace?.root ?? 'workspace-loading'}
-                ref={chatPanelRef}
                 status={harnessStatus}
                 {...(workspace?.projectName || workspace?.name ? { workspaceName: workspace.projectName ?? workspace.name } : {})}
                 sessionProjectScope={{ activeProjectId: project?.id, sessionProjects: runSessionProjects }}
@@ -772,7 +827,6 @@ export default function App() {
                 externalPrompt={externalPrompt}
                 onExternalPromptConsumed={() => setExternalPrompt(null)}
                 elementAttachmentVersion={elementAttachmentVersion}
-                onTerminalStateChange={setTerminalState}
               />
             </Panel>
             <Separator
@@ -796,20 +850,6 @@ export default function App() {
                     <button className={paneTabClasses(agentPane === 'browser')} onClick={() => setAgentPane('browser')}>
                       <BrowserIcon />
                       <span>Browser</span>
-                    </button>
-                    <button
-                      type="button"
-                      disabled={!terminalState.enabled}
-                      className={cn(
-                        'ml-auto flex h-6 items-center gap-1 rounded-md border px-1.5 font-mono text-[9px] transition-colors disabled:opacity-40',
-                        terminalState.open
-                          ? 'border-primary/25 bg-primary/[0.08] text-primary'
-                          : 'border-border-soft text-faint hover:bg-accent hover:text-foreground'
-                      )}
-                      title="Toggle this chat's isolated terminal (Ctrl/Cmd + Backtick)"
-                      onClick={() => chatPanelRef.current?.toggleTerminal()}
-                    >
-                      <span>&gt;_</span><span>Terminal</span>
                     </button>
                   </div>
                   <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">

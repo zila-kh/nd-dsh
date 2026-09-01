@@ -27,6 +27,7 @@ extraResources:
     to: scripts
     filter:
       - external-inspect-mcp.mjs
+      - install-harness-runtime.mjs
       - nd-extension-mcp.mjs
       - nd-extension-runtime.mjs
   - from: node_modules/agent-browser

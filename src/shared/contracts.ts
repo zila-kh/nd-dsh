@@ -290,6 +290,16 @@ export interface DshViewState {
   port?: number
 }
 
+export interface DshUpstreamUpdateResult {
+  updated: true
+  message: string
+}
+
+export interface DshUpstreamUpdateLogEntry {
+  stream: 'stdout' | 'stderr'
+  chunk: string
+}
+
 export interface SurfaceState {
   surface: DshSurface
   view: DshViewState
@@ -631,6 +641,8 @@ export interface DesktopApi {
     setBounds(bounds: BrowserBounds): Promise<void>
     setVisible(visible: boolean): Promise<void>
     reload(): Promise<void>
+    updateUpstream(): Promise<DshUpstreamUpdateResult>
+    onUpdateLog(listener: (entry: DshUpstreamUpdateLogEntry) => void): () => void
     onState(listener: (state: DshViewState) => void): () => void
   }
   theme: {
@@ -714,6 +726,8 @@ export const IPC = {
   dshViewSetBounds: 'dsh-view:set-bounds',
   dshViewSetVisible: 'dsh-view:set-visible',
   dshViewReload: 'dsh-view:reload',
+  dshViewUpdateUpstream: 'dsh-view:update-upstream',
+  dshViewUpdateLogEvent: 'dsh-view:update-log-event',
   dshViewStateEvent: 'dsh-view:state-event',
   themeState: 'theme:state',
   themeSet: 'theme:set',

@@ -21,10 +21,11 @@ export class CodingEngineRegistry {
     const harnessReady = existsSync(harnessCliBinPath())
       && existsSync(dshPatchPath())
       && existsSync(presetSourceDir())
-    const codexReady = harnessReady && existsSync(join(
-      harnessRoot(),
-      'packages/subagent/subagent-codex/lib/index.js',
-    ))
+    const root = harnessRoot()
+    const codexReady = harnessReady && [
+      join(root, 'packages/subagent/subagent-codex/lib/index.js'),
+      join(root, 'node_modules/@deepseek-ai/dsh-subagent-codex/lib/index.js'),
+    ].some((entry) => existsSync(entry))
     // The direct engine needs only the pinned Codex CLI payload; it does not
     // depend on the ND runtime bootstrap.
     const codexCliReady = codexBinPath() !== undefined

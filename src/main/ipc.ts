@@ -1,10 +1,12 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, screen, shell, type IpcMainInvokeEvent } from 'electron'
+import { spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { CAPABILITIES_IPC, type CapabilityKind, type CapabilityProviderStatus, type CapabilitySubjectType } from '../shared/capabilities.js'
 import type { BrowserBounds, DshSurface, HarnessRunOptions, InspectScope, ModelProvider, QaSuiteId, ThemeMode } from '../shared/contracts.js'
 import { IPC } from '../shared/contracts.js'
 import { EXTENSIONS_IPC } from '../shared/extensions.js'
-import { projectRoot } from './app-paths.js'
+import { managedHarnessRoot, projectRoot } from './app-paths.js'
 import { capturePrimaryDisplay, captureSelfWindow } from './capture/app-capture.js'
 import { describePick, ExternalElementStage, formatExternalElementContext, pickElementInExternalApp, RecentPickStore, type ExternalPick } from './capture/external-inspect.js'
 import type { BrowserController } from './browser/browser-controller.js'
@@ -403,6 +405,17 @@ export function registerIpc(deps: IpcDependencies): () => void {
   handle(IPC.dshViewSetBounds, (_event, value) => deps.dshSurface.setBounds(asBounds(value)))
   handle(IPC.dshViewSetVisible, (_event, visible) => deps.dshSurface.setVisible(Boolean(visible)))
   handle(IPC.dshViewReload, () => deps.dshSurface.reload())
+  let dshUpdateInFlight: Promise<{ updated: true; message: string }> | null = null
+  handle(IPC.dshViewUpdateUpstream, () => {
+    if (!dshUpdateInFlight) {
+      dshUpdateInFlight = runDshPackageUpdate((stream, chunk) => {
+        if (!deps.window.isDestroyed()) {
+          deps.window.webContents.send(IPC.dshViewUpdateLogEvent, { stream, chunk })
+        }
+      }).finally(() => { dshUpdateInFlight = null })
+    }
+    return dshUpdateInFlight
+  })
 
   handle(IPC.themeState, () => deps.theme.state())
   handle(IPC.themeSet, (_event, value) => deps.theme.set(asThemeMode(value)))
@@ -445,6 +458,63 @@ export function registerIpc(deps: IpcDependencies): () => void {
     disposeExtensionIpc()
     for (const channel of channels) ipcMain.removeHandler(channel)
   }
+}
+
+const MAX_DSH_UPDATE_OUTPUT = 32_000
+
+function runDshPackageUpdate(onLog: (stream: 'stdout' | 'stderr', chunk: string) => void): Promise<{ updated: true; message: string }> {
+  const root = projectRoot()
+  const script = app.isPackaged
+    ? join(process.resourcesPath, 'scripts', 'install-harness-runtime.mjs')
+    : join(root, 'scripts', 'install-harness-runtime.mjs')
+  if (!existsSync(script)) {
+    return Promise.reject(new Error('The published DSH package installer is unavailable in this installation.'))
+  }
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [script], {
+      cwd: root,
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: '1',
+        NO_COLOR: '1',
+        ND_DSH_MANAGED_RUNTIME_ROOT: managedHarnessRoot(),
+      },
+      shell: false,
+      windowsHide: true,
+    })
+    let stdout = ''
+    let stderr = ''
+    const append = (current: string, chunk: Buffer | string): string =>
+      `${current}${String(chunk)}`.slice(-MAX_DSH_UPDATE_OUTPUT)
+    child.stdout.on('data', (chunk: Buffer | string) => {
+      const text = String(chunk)
+      stdout = append(stdout, text)
+      onLog('stdout', text)
+    })
+    child.stderr.on('data', (chunk: Buffer | string) => {
+      const text = String(chunk)
+      stderr = append(stderr, text)
+      onLog('stderr', text)
+    })
+    child.once('error', reject)
+    child.once('close', (code) => {
+      const output = `${stdout}\n${stderr}`.trim()
+      const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+      if (code !== 0) {
+        const detail = lines.find((line) => line.startsWith('Error: '))?.slice('Error: '.length) ?? lines.at(-1)
+        reject(new Error(detail || `DSH upstream update exited with code ${String(code)}.`))
+        return
+      }
+      const summary = lines.find((line) => line.startsWith('DSH package installed'))
+      resolve({
+        updated: true,
+        message: summary
+          ? `${summary} Restart ND-DSH to use it.`
+          : 'Published DSH package installed. Restart ND-DSH to use it.',
+      })
+    })
+  })
 }
 
 function assertTrustedSender(event: IpcMainInvokeEvent, window: BrowserWindow): void {

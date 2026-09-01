@@ -18,6 +18,9 @@ const MIN_HEIGHT = 150, MAX_HEIGHT = 520, DEFAULT_HEIGHT = 250
 type LayoutBranch = 'first' | 'second'
 
 export function TerminalDock({ open, sessionId, cwd, onOpenChange, onError }: Props) {
+  // The terminal bridge is desktop-only. Keep the localhost UI preview usable
+  // when the node-pty-backed service is not available.
+  const terminalApi = typeof window.ndDshTerminal === 'undefined' ? null : window.ndDshTerminal
   const [state, setState] = useState<TerminalSessionState | null>(null)
   const [loading, setLoading] = useState(false)
   const [height, setHeight] = useState(() => clampHeight(Number(localStorage.getItem(HEIGHT_KEY)) || DEFAULT_HEIGHT))
@@ -27,60 +30,60 @@ export function TerminalDock({ open, sessionId, cwd, onOpenChange, onError }: Pr
 
   useEffect(() => {
     setState(null)
-    if (!open || !sessionId) return
+    if (!open || !sessionId || !terminalApi) return
     let alive = true
     setLoading(true)
-    void window.ndDshTerminal.state(sessionId).then(async (next) => {
-      if (next.terminals.length === 0) next = await window.ndDshTerminal.create({ sessionId, ...(cwd ? { cwd } : {}) })
+    void terminalApi.state(sessionId).then(async (next) => {
+      if (next.terminals.length === 0) next = await terminalApi.create({ sessionId, ...(cwd ? { cwd } : {}) })
       if (alive) setState(next)
     }).catch(fail).finally(() => { if (alive) setLoading(false) })
     return () => { alive = false }
-  }, [cwd, fail, open, sessionId])
+  }, [cwd, fail, open, sessionId, terminalApi])
 
   useEffect(() => {
-    if (!sessionId) return
-    const offState = window.ndDshTerminal.onState((event) => { if (event.sessionId === sessionId) setState(event.state) })
-    const offOutput = window.ndDshTerminal.onOutput((event) => {
+    if (!open || !sessionId || !terminalApi) return
+    const offState = terminalApi.onState((event) => { if (event.sessionId === sessionId) setState(event.state) })
+    const offOutput = terminalApi.onOutput((event) => {
       if (event.sessionId !== sessionId) return
       setState((current) => current ? { ...current, terminals: current.terminals.map((terminal) => terminal.id === event.terminalId && event.seq > terminal.outputSeq ? { ...terminal, outputSeq: event.seq, updatedAt: Date.now(), buffer: `${terminal.buffer}${event.data}`.slice(-512 * 1024) } : terminal) } : current)
     })
     return () => { offState(); offOutput() }
-  }, [sessionId])
+  }, [open, sessionId, terminalApi])
 
   const selectTerminal = useCallback(async (terminalId: string) => {
-    if (!sessionId || !state) return
+    if (!sessionId || !state || !terminalApi) return
     const visiblePane = paneForTerminal(state.layout, terminalId)
-    if (visiblePane) { await apply(window.ndDshTerminal.setLayout(sessionId, state.layout, visiblePane, terminalId)); return }
+    if (visiblePane) { await apply(terminalApi.setLayout(sessionId, state.layout, visiblePane, terminalId)); return }
     const paneId = state.activePaneId ?? firstPane(state.layout)
     const layout = paneId ? replacePane(state.layout, paneId, terminalId) : { type: 'leaf' as const, paneId: crypto.randomUUID(), terminalId }
-    await apply(window.ndDshTerminal.setLayout(sessionId, layout, paneId ?? firstPane(layout), terminalId))
-  }, [apply, sessionId, state])
+    await apply(terminalApi.setLayout(sessionId, layout, paneId ?? firstPane(layout), terminalId))
+  }, [apply, sessionId, state, terminalApi])
 
   const createTerminal = useCallback(async () => {
-    if (!sessionId) return
-    const created = await apply(window.ndDshTerminal.create({ sessionId, ...(cwd ? { cwd } : {}) }))
+    if (!sessionId || !terminalApi) return
+    const created = await apply(terminalApi.create({ sessionId, ...(cwd ? { cwd } : {}) }))
     if (!created?.activeTerminalId) return
     const paneId = created.activePaneId ?? firstPane(created.layout)
     const layout = paneId ? replacePane(created.layout, paneId, created.activeTerminalId) : { type: 'leaf' as const, paneId: crypto.randomUUID(), terminalId: created.activeTerminalId }
-    await apply(window.ndDshTerminal.setLayout(sessionId, layout, paneId ?? firstPane(layout), created.activeTerminalId))
-  }, [apply, cwd, sessionId])
+    await apply(terminalApi.setLayout(sessionId, layout, paneId ?? firstPane(layout), created.activeTerminalId))
+  }, [apply, cwd, sessionId, terminalApi])
 
   const split = useCallback(async (direction: TerminalSplitDirection) => {
-    if (!sessionId || !state) return
+    if (!sessionId || !state || !terminalApi) return
     const paneId = state.activePaneId ?? firstPane(state.layout)
     if (!paneId || !state.layout) { await createTerminal(); return }
-    const created = await apply(window.ndDshTerminal.create({ sessionId, ...(cwd ? { cwd } : {}) }))
+    const created = await apply(terminalApi.create({ sessionId, ...(cwd ? { cwd } : {}) }))
     if (!created?.activeTerminalId) return
     const newPane = crypto.randomUUID()
     const layout = splitPane(created.layout, paneId, { type: 'leaf', paneId: newPane, terminalId: created.activeTerminalId }, direction)
-    await apply(window.ndDshTerminal.setLayout(sessionId, layout, newPane, created.activeTerminalId))
-  }, [apply, createTerminal, cwd, sessionId, state])
+    await apply(terminalApi.setLayout(sessionId, layout, newPane, created.activeTerminalId))
+  }, [apply, createTerminal, cwd, sessionId, state, terminalApi])
 
   const persistSplitRatio = useCallback((path: readonly LayoutBranch[], ratio: number) => {
     if (!sessionId || !state?.layout) return
     const layout = updateSplitRatio(state.layout, path, ratio)
-    void apply(window.ndDshTerminal.setLayout(sessionId, layout, state.activePaneId, state.activeTerminalId))
-  }, [apply, sessionId, state])
+    if (terminalApi) void apply(terminalApi.setLayout(sessionId, layout, state.activePaneId, state.activeTerminalId))
+  }, [apply, sessionId, state, terminalApi])
 
   const active = state?.terminals.find((terminal) => terminal.id === state.activeTerminalId)
   const byId = useMemo(() => new Map(state?.terminals.map((terminal) => [terminal.id, terminal]) ?? []), [state?.terminals])

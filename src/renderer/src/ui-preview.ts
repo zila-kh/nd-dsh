@@ -456,7 +456,14 @@ const desktopApi: DesktopApi = {
     set: async (surface) => ({ surface, view: { ready: false, loading: false, title: 'UI preview', visible: false } }),
     onChanged: () => () => undefined,
   },
-  dshView: { setBounds: async () => undefined, setVisible: async () => undefined, reload: async () => undefined, onState: () => () => undefined },
+  dshView: {
+    setBounds: async () => undefined,
+    setVisible: async () => undefined,
+    reload: async () => undefined,
+    updateUpstream: async () => ({ updated: true, message: 'DSH upstream update is available in the desktop runtime.' }),
+    onUpdateLog: () => () => undefined,
+    onState: () => () => undefined,
+  },
   theme: {
     state: async () => theme,
     set: async (mode) => {

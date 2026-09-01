@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type KeyboardEvent, type ReactNode, type Ref, Fragment } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type KeyboardEvent, type ReactNode, Fragment } from 'react'
 import type {
   CodingEngineDescriptor,
   DshEventFrame,
@@ -51,6 +51,7 @@ import { cn } from '../lib/utils'
 import { TerminalDock } from './TerminalDock'
 import { ChangedFilesCard } from './ChangedFilesCard'
 import { MarkdownLite } from './MarkdownLite'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 
 interface ChatPanelProps {
   status: HarnessStatus | null
@@ -69,12 +70,7 @@ interface ChatPanelProps {
   onExternalPromptConsumed?(): void
   /** Bumped by the titlebar when a picked element is staged or removed. */
   elementAttachmentVersion?: number
-  /** Reports the session-terminal toggle state so the workbench can host the button. */
-  onTerminalStateChange?(state: { open: boolean; enabled: boolean }): void
 }
-
-/** Imperative surface for the workbench: the terminal toggle lives outside this panel. */
-export type ChatPanelHandle = { toggleTerminal(): void }
 
 const PERMISSION_MODES = [
   { id: 'read-only', label: 'Read only' },
@@ -115,7 +111,7 @@ function fileMentionTag(relativePath: string): string {
   return extension ? extension.toUpperCase().slice(0, 5) : 'FILE'
 }
 
-export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionProjectScope, projects, onSelectProject, onError, onOpenSettings, onOpenFile, externalPrompt, onExternalPromptConsumed, elementAttachmentVersion, onTerminalStateChange, ref }: ChatPanelProps & { ref?: Ref<ChatPanelHandle> }) {
+export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionProjectScope, projects, onSelectProject, onError, onOpenSettings, onOpenFile, externalPrompt, onExternalPromptConsumed, elementAttachmentVersion }: ChatPanelProps) {
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [terminalOpen, setTerminalOpen] = useState(false)
@@ -176,12 +172,6 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
     window.addEventListener('keydown', onShortcut)
     return () => window.removeEventListener('keydown', onShortcut)
   }, [activeSessionId])
-
-  useImperativeHandle(ref, () => ({ toggleTerminal: () => setTerminalOpen((open) => !open) }), [])
-
-  useEffect(() => {
-    onTerminalStateChange?.({ open: terminalOpen, enabled: Boolean(activeSessionId) })
-  }, [terminalOpen, activeSessionId, onTerminalStateChange])
 
   const activeSession = useMemo(() => sessions.find((s) => s.sessionId === activeSessionId) ?? null, [sessions, activeSessionId])
   const entries = useMemo(() => threads[activeSessionId ?? ''] ?? [], [threads, activeSessionId])
@@ -357,6 +347,15 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
       onError(cause instanceof Error ? cause.message : String(cause))
     }
   }, [onError])
+
+  const selectHeaderEngine = useCallback((engineId: string): void => {
+    if (engineId === activeEngineId) return
+    if (engineId === ND_HARNESS_ENGINE_ID) {
+      void handleNewSession()
+      return
+    }
+    startEngineDraft(engineId)
+  }, [activeEngineId, handleNewSession, startEngineDraft])
 
   useEffect(() => {
     void refreshSessions()
@@ -1024,6 +1023,43 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
+            <Select value={activeEngineId} onValueChange={selectHeaderEngine}>
+              <SelectTrigger
+                aria-label="Coding engine"
+                className="h-6 w-[122px] gap-1 rounded-md border-border-soft bg-transparent px-2 font-mono text-[9px] text-faint shadow-none hover:bg-accent hover:text-foreground"
+                title="Coding engine — selecting another engine starts a new chat"
+              >
+                <SelectValue placeholder="Default" />
+              </SelectTrigger>
+              <SelectContent align="end">
+                <SelectItem value={ND_HARNESS_ENGINE_ID}>Default · ND Harness</SelectItem>
+                {engines.filter((engine) => engine.id !== ND_HARNESS_ENGINE_ID).map((engine) => (
+                  <SelectItem
+                    key={engine.id}
+                    value={engine.id}
+                    disabled={!engine.available}
+                    title={engine.available ? engine.description : engine.unavailableReason ?? `${engine.name} is unavailable`}
+                  >
+                    {engine.name}{engine.available ? '' : ' · Unavailable'}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <button
+              type="button"
+              aria-pressed={terminalOpen}
+              disabled={!activeSessionId}
+              className={cn(
+                'flex h-6 items-center gap-1 rounded-md border px-1.5 font-mono text-[9px] transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+                terminalOpen
+                  ? 'border-primary/25 bg-primary/[0.08] text-primary'
+                  : 'border-border-soft text-faint hover:bg-accent hover:text-foreground',
+              )}
+              title="Toggle this chat's isolated terminal (Ctrl/Cmd + Backtick)"
+              onClick={() => setTerminalOpen((open) => !open)}
+            >
+              <span>&gt;_</span><span>Terminal</span>
+            </button>
             <span
               className={cn(
                 'inline-block size-2 rounded-full',

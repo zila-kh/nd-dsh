@@ -156,6 +156,12 @@ const api: DesktopApi = {
     setBounds: (bounds) => ipcRenderer.invoke(IPC.dshViewSetBounds, bounds),
     setVisible: (visible) => ipcRenderer.invoke(IPC.dshViewSetVisible, visible),
     reload: () => ipcRenderer.invoke(IPC.dshViewReload),
+    updateUpstream: () => ipcRenderer.invoke(IPC.dshViewUpdateUpstream),
+    onUpdateLog: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, entry: Parameters<typeof listener>[0]) => listener(entry)
+      ipcRenderer.on(IPC.dshViewUpdateLogEvent, handler)
+      return () => ipcRenderer.removeListener(IPC.dshViewUpdateLogEvent, handler)
+    },
     onState: (listener) => {
       const handler = (_event: Electron.IpcRendererEvent, state: Parameters<typeof listener>[0]) => listener(state)
       ipcRenderer.on(IPC.dshViewStateEvent, handler)
