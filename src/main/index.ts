@@ -138,7 +138,16 @@ async function createWindow(cdpPort: number): Promise<void> {
   const organizationStore = new OrganizationStore(join(userData, 'organization.json'))
   const interruptedRuns = await organizationStore.reconcileInterruptedRuns()
   if (interruptedRuns > 0) console.warn(`Recovered ${interruptedRuns} interrupted organization run(s) from the previous app session.`)
-  const projectWorkspace = new ProjectWorkspaceCoordinator(organizationStore, workspace, harness, workspaces)
+  const projectWorkspace = new ProjectWorkspaceCoordinator(
+    organizationStore,
+    workspace,
+    harness,
+    workspaces,
+    () => {
+      harness.refreshWorkspaceIdentity()
+      if (theme.surface() === 'dsh') harness.warmup()
+    },
+  )
   await projectWorkspace.initialize()
   // One durable routing store for every pluggable capability (engine, memory,
   // context) across agents, roles, and teams; engines resolve through it too.

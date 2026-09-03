@@ -47,7 +47,10 @@ export class DshSurfaceController {
   /** Point the surface at the runtime's loopback gateway URL (called on harness readiness). */
   setTarget(url: string): void {
     const parsed = new URL(url)
-    this.targetUrl = parsed.origin
+    const nextTargetUrl = parsed.origin
+    const targetChanged = this.targetUrl !== nextTargetUrl
+    this.targetUrl = nextTargetUrl
+    if (targetChanged) this.loaded = false
     this.stateValue = {
       ...this.stateValue,
       ready: true,
@@ -55,7 +58,7 @@ export class DshSurfaceController {
       ...(parsed.port ? { port: Number(parsed.port) } : {}),
     }
     this.emitState()
-    if (this.stateValue.visible) void this.load()
+    if (this.stateValue.visible && targetChanged) void this.load()
   }
 
   async setBounds(bounds: BrowserBounds): Promise<void> {

@@ -118,8 +118,11 @@ export interface WorkspaceState {
   binding?: WorkspaceBinding
   companyId?: string
   companyName?: string
+  companyMission?: string
   projectId?: string
   projectName?: string
+  projectObjective?: string
+  projectStatus?: string
   projectWorkspacePath?: string
   warning?: string
 }

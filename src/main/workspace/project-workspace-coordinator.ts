@@ -20,6 +20,7 @@ export class ProjectWorkspaceCoordinator {
     private readonly workspace: WorkspaceService,
     private readonly harness: HarnessService,
     private readonly workspaceRegistry?: WorkspaceRegistry,
+    private readonly onContextChanged?: () => void,
   ) {}
 
   state(): WorkspaceState {
@@ -42,9 +43,20 @@ export class ProjectWorkspaceCoordinator {
   }
 
   async afterOrganizationMutation(mutation: OrganizationMutation, state: OrganizationSnapshot): Promise<WorkspaceState> {
-    if (ACTIVE_CONTEXT_MUTATIONS.has(mutation.type)) return this.syncToOrganization(state, true)
-    if (mutation.type === 'project.update' && mutation.patch.workspacePath !== undefined && state.activeProjectId === mutation.id) {
-      return this.syncToOrganization(state, true)
+    if (ACTIVE_CONTEXT_MUTATIONS.has(mutation.type)) {
+      const next = await this.syncToOrganization(state, true)
+      this.onContextChanged?.()
+      return next
+    }
+    if (mutation.type === 'project.update' && state.activeProjectId === mutation.id) {
+      const next = await this.syncToOrganization(state, mutation.patch.workspacePath !== undefined)
+      this.onContextChanged?.()
+      return next
+    }
+    if (mutation.type === 'company.update' && state.activeCompanyId === mutation.id) {
+      const next = await this.syncToOrganization(state, false)
+      this.onContextChanged?.()
+      return next
     }
     return this.workspace.state()
   }
@@ -55,14 +67,18 @@ export class ProjectWorkspaceCoordinator {
     await this.harness.close()
     const selected = await this.workspace.pick()
     if (selected.root === previous.root) return this.workspace.state()
-    return this.bindSelectedRoot(selected.root)
+    const next = await this.bindSelectedRoot(selected.root)
+    this.onContextChanged?.()
+    return next
   }
 
   async setRoot(path: string): Promise<WorkspaceState> {
     await this.assertNoRunningOrganizationRun('change workspace')
     await this.harness.close()
     const selected = await this.workspace.setRoot(path)
-    return this.bindSelectedRoot(selected.root)
+    const next = await this.bindSelectedRoot(selected.root)
+    this.onContextChanged?.()
+    return next
   }
 
   list(relativePath?: string) {
@@ -93,9 +109,11 @@ export class ProjectWorkspaceCoordinator {
       ...(updatedProject ? {
         projectId: updatedProject.id,
         projectName: updatedProject.name,
+        projectObjective: updatedProject.objective,
+        projectStatus: updatedProject.status,
         projectWorkspacePath: root,
       } : {}),
-      ...(updatedCompany ? { companyId: updatedCompany.id, companyName: updatedCompany.name } : {}),
+      ...(updatedCompany ? { companyId: updatedCompany.id, companyName: updatedCompany.name, companyMission: updatedCompany.mission } : {}),
     })
   }
 
@@ -111,8 +129,11 @@ export class ProjectWorkspaceCoordinator {
         binding: 'unlinked',
         companyId: company.id,
         companyName: company.name,
+        companyMission: company.mission,
         projectId: project.id,
         projectName: project.name,
+        projectObjective: project.objective,
+        projectStatus: project.status,
         warning: `Project “${project.name}” has no workspace linked.`,
       })
     }
@@ -143,8 +164,11 @@ export class ProjectWorkspaceCoordinator {
           binding: 'missing',
           companyId: company.id,
           companyName: company.name,
+          companyMission: company.mission,
           projectId: project.id,
           projectName: project.name,
+          projectObjective: project.objective,
+          projectStatus: project.status,
           projectWorkspacePath: path,
           warning: `Project workspace is unavailable: ${path}`,
         })
@@ -157,8 +181,11 @@ export class ProjectWorkspaceCoordinator {
       binding: 'project',
       companyId: company.id,
       companyName: company.name,
+      companyMission: company.mission,
       projectId: project.id,
       projectName: project.name,
+      projectObjective: project.objective,
+      projectStatus: project.status,
       projectWorkspacePath: absolute,
     })
   }

@@ -43,6 +43,16 @@ export class WorkspaceService {
     return this.state()
   }
 
+  /** Whether the selected project has a usable folder for agent work. */
+  isUsable(): boolean {
+    return this.context.binding !== 'unlinked' && this.context.binding !== 'missing'
+  }
+
+  /** Fail closed instead of allowing a caller to use a stale previous root. */
+  assertUsable(): void {
+    this.assertWorkspaceAvailable()
+  }
+
   async pick(): Promise<WorkspaceState> {
     const result = await dialog.showOpenDialog({
       title: 'Open workspace',
@@ -117,6 +127,7 @@ export class WorkspaceService {
    * stays cheap on large trees.
    */
   async suggest(query: string): Promise<WorkspaceSuggestion[]> {
+    this.assertWorkspaceAvailable()
     const trimmed = query.trim().slice(0, 256)
     const entries = await this.suggestEntries()
     return rankFileSuggestions(entries, trimmed)

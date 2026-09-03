@@ -11,6 +11,7 @@ import type {
   UiAnnotation,
   UiTarget,
 } from '../../shared/contracts.js'
+import { appendWorkspaceContext, stripWorkspaceContext, workspaceContextForPersona } from '../../shared/workspace-context.js'
 import { dshPatchPath, harnessCliBinPath, harnessRoot, presetSourceDir, projectRoot } from '../app-paths.js'
 import type { BrowserController } from '../browser/browser-controller.js'
 import { formatExternalElementContext, type ExternalElementStage } from '../capture/external-inspect.js'
@@ -93,6 +94,7 @@ export class HarnessService {
     const cleaned = prompt.trim()
     if (!cleaned) throw new Error('Prompt cannot be empty')
     if (cleaned.length > 100_000) throw new Error('Prompt exceeds the 100,000 character limit')
+    this.workspace.assertUsable()
 
     // Provider and Token Saver policy edits are staged in ND settings and take
     // effect on the next prompt/session. Durable Harness sessions survive the
@@ -126,9 +128,10 @@ export class HarnessService {
     // Each staged pick may carry a cropped element screenshot; both the text
     // context block and those images join the turn's content.
     const stagedElements = this.externalElements.consumeAll()
+    const workspacePrompt = appendWorkspaceContext(cleaned, this.workspace.state())
     const browserPrompt = selectedUiTarget || selectedAnnotation
-      ? attachUiContext(cleaned, selectedUiTarget, selectedAnnotation)
-      : cleaned
+      ? attachUiContext(workspacePrompt, selectedUiTarget, selectedAnnotation)
+      : workspacePrompt
     const runtimePrompt = stagedElements.length > 0
       ? `${browserPrompt}\n\n${stagedElements.map((item) => formatExternalElementContext(item.pick, item.screenshot)).join('\n\n')}`
       : browserPrompt
@@ -166,6 +169,7 @@ export class HarnessService {
 
   /** Create a session on the workspace root (the deployment default preset applies). */
   async createSession(): Promise<string> {
+    this.workspace.assertUsable()
     const gateway = await this.ensureStarted(true)
     const { result } = await this.rpcWithRecovery(gateway, 'session.create', { cwd: this.workspace.state().root })
     if (!result.ok) throw new Error(rpcFailureMessage('session.create', result))
@@ -178,6 +182,13 @@ export class HarnessService {
 
   /** Whitelisted gateway call for read-oriented UI needs (sessions, models, presets…). */
   async gatewayRpc(method: string, payload?: unknown): Promise<GatewayRpcResult> {
+    // A project without a linked/available folder must not restart the runtime
+    // against the previous project's root. Returning an empty listing keeps the
+    // sidebar quiet; all session-mutating or session-reading calls fail closed.
+    if (!this.workspace.isUsable()) {
+      if (method === 'session.list') return { ok: true, value: { items: [] } }
+      this.workspace.assertUsable()
+    }
     // Creating a session is a launch-policy boundary just like run(): if the
     // Token Saver switch changed, rebuild the runtime before that new session.
     let started = await this.ensureStarted(method === 'session.create')
@@ -222,13 +233,24 @@ export class HarnessService {
 
   /** Boot the runtime eagerly. */
   warmup(): void {
+    if (!this.workspace.isUsable()) return
     void this.ensureStarted().catch((error) => {
       console.warn('ND-DSH runtime warmup failed:', error instanceof Error ? error.message : String(error))
     })
   }
 
+  /** Keep the embedded DSH workspace label aligned with ND's active project. */
+  refreshWorkspaceIdentity(): void {
+    if (!this.workspace.isUsable() || !this.gateway) return
+    void this.syncGatewayWorkspaceLabel(this.gateway, this.workspace.state().root)
+      .catch((error) => {
+        console.warn('ND-DSH workspace label refresh failed:', error instanceof Error ? error.message : String(error))
+      })
+  }
+
   /** Answer a pending approval or user question frame. */
   async respond(rpcId: string, value: unknown): Promise<void> {
+    this.workspace.assertUsable()
     const gateway = await this.ensureStarted()
     await gateway.respond(rpcId, value)
   }
@@ -348,6 +370,7 @@ export class HarnessService {
   }
 
   private async start(attempt = 0): Promise<GatewayClient> {
+    this.workspace.assertUsable()
     // close() marks the current child as expected-to-stop; a fresh child must
     // return to normal unexpected-exit detection.
     this.stopping = false
@@ -390,6 +413,7 @@ export class HarnessService {
       ND_DSH_EXTERNAL_INSPECT_ENTRY: join(projectRoot(), 'scripts', 'external-inspect-mcp.mjs'),
       DSH_HOME: dshHome,
       DSH_CWD: workspaceRoot,
+      ND_DSH_WORKSPACE_CONTEXT: workspaceContextForPersona(this.workspace.state()),
       DSH_PERMISSION_MODE: process.env.ND_DSH_PERMISSION_MODE ?? 'workspace-write',
       ...(app.isPackaged ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
     }
@@ -437,9 +461,35 @@ export class HarnessService {
     this.baseUrl = baseUrl
     this.providerRevisionAtStart = providerRevision
     this.tokenSaverEnabledAtStart = tokenSaverEnabled
+    await this.syncGatewayWorkspaceLabel(gateway, workspaceRoot)
     this.updateStatus('ready')
     this.onGatewayReady?.(baseUrl)
     return gateway
+  }
+
+  private async syncGatewayWorkspaceLabel(gateway: GatewayClient, workspaceRoot: string): Promise<void> {
+    const context = this.workspace.state()
+    const label = (context.projectName?.trim() || context.name.trim()).slice(0, 256)
+    if (!label) return
+
+    // Register the selected root before the embedded DSH client loads. The
+    // Host derives a workspace title from the directory basename, so ND then
+    // owns the title and replaces that folder-only label with the project.
+    const result = await gateway.rpc('workspace.create', { path: workspaceRoot })
+    if (!result.ok || !result.value || typeof result.value !== 'object') return
+    const matched = (result.value as { workspace?: unknown }).workspace
+    if (!matched || typeof matched !== 'object') return
+    const workspaceId = (matched as { workspaceId?: unknown }).workspaceId
+    if (typeof workspaceId !== 'string' || workspaceId.length === 0) return
+    if ((matched as { title?: unknown }).title === label) return
+
+    const renamed = await gateway.rpc('workspace.rename', {
+      workspaceId,
+      title: label,
+    })
+    if (!renamed.ok) {
+      console.warn(`ND-DSH could not rename workspace ${workspaceId} to ${JSON.stringify(label)}: ${renamed.error?.message ?? 'unknown error'}`)
+    }
   }
 
   /**
@@ -633,7 +683,7 @@ function sanitizeUiContextValue(value: unknown): unknown {
 
 function stripUiContext(value: string): string {
   const markerIndex = value.indexOf(UI_CONTEXT_MARKER)
-  return markerIndex >= 0 ? value.slice(0, markerIndex) : value
+  return stripWorkspaceContext(markerIndex >= 0 ? value.slice(0, markerIndex) : value)
 }
 
 function rpcFailureMessage(method: string, result: GatewayRpcResult): string {
