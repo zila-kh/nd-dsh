@@ -94,3 +94,22 @@ export function codexBinPath(): string | undefined {
     return undefined
   }
 }
+
+/**
+ * The Google Antigravity CLI binary. Antigravity is a user-installed
+ * first-party product ND cannot redistribute, so discovery is the developer
+ * override, then the official installer's documented per-OS location —
+ * never a host `PATH` scan. `ND_DSH_ANTIGRAVITY_BINARY` remains a
+ * developer-only override.
+ */
+export function antigravityBinPath(): string | undefined {
+  const override = process.env.ND_DSH_ANTIGRAVITY_BINARY
+  if (override) {
+    const resolved = resolve(override)
+    return existsSync(resolved) ? resolved : undefined
+  }
+  const defaultLocations = process.platform === 'win32'
+    ? [join(process.env.LOCALAPPDATA ?? '', 'agy', 'bin', 'agy.exe')]
+    : [join(process.env.HOME ?? '', '.local', 'bin', 'agy')]
+  return defaultLocations.map((entry) => resolve(entry)).find((entry) => existsSync(entry))
+}

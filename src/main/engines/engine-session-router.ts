@@ -1,15 +1,17 @@
 import type {
+  EngineModelOption,
   EngineSessionSummary,
   EngineSessionTranscript,
   HarnessRunOptions,
   HarnessRunResult,
   HarnessStatus,
 } from '../../shared/contracts.js'
-import { CODEX_CLI_ENGINE_ID, ND_HARNESS_ENGINE_ID } from '../../shared/coding-engines.js'
+import { ANTIGRAVITY_ENGINE_ID, CODEX_CLI_ENGINE_ID, ND_HARNESS_ENGINE_ID } from '../../shared/coding-engines.js'
 import type { ExtensionRouter } from '../extensions/extension-router.js'
 import { tokenSaverRuntime } from '../token-saver/token-saver-runtime.js'
 import type { WorkspaceService } from '../workspace/workspace-service.js'
 import { sessionInWorkspace } from '../workspace/path-utils.js'
+import type { AntigravityEngine } from './antigravity/antigravity-engine.js'
 import type { CodexCliEngine } from './codex/codex-cli-engine.js'
 import type { HarnessService } from '../harness/harness-service.js'
 
@@ -28,6 +30,7 @@ export class EngineSessionRouter {
     private readonly harness: HarnessService,
     private readonly codex: CodexCliEngine,
     private readonly workspace: WorkspaceService,
+    private readonly antigravity?: AntigravityEngine,
   ) {}
 
   setExtensionRouter(router: ExtensionRouter): void {
@@ -55,6 +58,13 @@ export class EngineSessionRouter {
         cwd: this.workspace.state().root,
       })
     }
+    if (requested === ANTIGRAVITY_ENGINE_ID && this.antigravity) {
+      return this.antigravity.run(optimizedPrompt, {
+        ...(options?.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
+        ...(options?.model !== undefined ? { model: options.model } : {}),
+        cwd: this.workspace.state().root,
+      })
+    }
     return this.harness.run(optimizedPrompt, options)
   }
 
@@ -67,6 +77,11 @@ export class EngineSessionRouter {
     const targetCwd = cwd ?? this.workspace.state().root
     if (engineId === CODEX_CLI_ENGINE_ID) {
       const sessionId = (await this.codex.createSession({ cwd: targetCwd })).sessionId
+      this.logicalEngineBySession.set(sessionId, engineId)
+      return { engineId, sessionId }
+    }
+    if (engineId === ANTIGRAVITY_ENGINE_ID && this.antigravity) {
+      const sessionId = (await this.antigravity.createSession({ cwd: targetCwd })).sessionId
       this.logicalEngineBySession.set(sessionId, engineId)
       return { engineId, sessionId }
     }
@@ -90,12 +105,17 @@ export class EngineSessionRouter {
       await this.codex.stop(sessionId)
       return
     }
+    if (engine === ANTIGRAVITY_ENGINE_ID && this.antigravity) {
+      await this.antigravity.stop(sessionId)
+      return
+    }
     const result = await this.harness.gatewayRpc('session.cancel', { sessionId })
     if (!result.ok) throw new Error(result.error?.message ?? 'Harness session.cancel failed')
   }
 
   /** Cancel pending turns on every engine; each keeps its runtime available. */
   async stop(): Promise<HarnessStatus> {
+    await this.antigravity?.stop()
     await this.codex.stop()
     return this.harness.stop()
   }
@@ -103,24 +123,37 @@ export class EngineSessionRouter {
   /** Approval/question answers are routed by who issued the rpcId. */
   respond(rpcId: string, value: unknown): Promise<void> {
     if (this.codex.handlesApproval(rpcId)) return this.codex.respond(rpcId, value)
+    if (this.antigravity?.handlesApproval(rpcId)) return this.antigravity.respond(rpcId, value)
     return this.harness.respond(rpcId, value)
   }
 
   sessions(): EngineSessionSummary[] {
     const workspaceRoot = this.workspace.state().root
-    return this.codex
-      .listSessions()
-      .filter((session) => sessionInWorkspace(workspaceRoot, session.cwd))
+    return [
+      ...this.antigravity?.listSessions() ?? [],
+      ...this.codex.listSessions(),
+    ].filter((session) => sessionInWorkspace(workspaceRoot, session.cwd))
   }
 
   transcript(sessionId: string): EngineSessionTranscript {
+    if (this.antigravity?.ownsSession(sessionId)) return this.antigravity.transcript(sessionId)
     return this.codex.transcript(sessionId)
+  }
+
+  /**
+   * Native model catalog for engines that expose one; engines whose model
+   * configuration has no ND-visible picker return an empty list.
+   */
+  async models(engineId: string): Promise<EngineModelOption[]> {
+    if (engineId === ANTIGRAVITY_ENGINE_ID && this.antigravity) return this.antigravity.listModels()
+    return []
   }
 
   private engineForSession(sessionId: string): string {
     const logical = this.logicalEngineBySession.get(sessionId)
     if (logical) return logical
     if (this.codex.ownsSession(sessionId)) return CODEX_CLI_ENGINE_ID
+    if (this.antigravity?.ownsSession(sessionId)) return ANTIGRAVITY_ENGINE_ID
     return ND_HARNESS_ENGINE_ID
   }
 }

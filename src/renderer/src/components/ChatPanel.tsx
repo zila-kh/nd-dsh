@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, ty
 import type {
   CodingEngineDescriptor,
   DshEventFrame,
+  EngineModelOption,
   EngineSessionSummary,
   ExternalElementAttachmentView,
   HarnessStatus,
@@ -12,7 +13,7 @@ import type {
   SessionSummary,
   WorkspaceSuggestion,
 } from '../../../shared/contracts'
-import { CODEX_CLI_ENGINE_ID, ND_HARNESS_ENGINE_ID } from '../../../shared/coding-engines'
+import { ANTIGRAVITY_ENGINE_ID, CODEX_CLI_ENGINE_ID, ND_HARNESS_ENGINE_ID } from '../../../shared/coding-engines'
 import { DisplayGroup, groupEntries, parseFileChanges, toolPreview } from '../../../shared/chat-grouping'
 import { filterSessionsInProjectScope, isSessionInProjectScope } from '../../../shared/session-project-scope'
 import { splitAssistantSegments, type ReviewVerdict } from '../../../shared/structured-output'
@@ -143,6 +144,14 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
   // Engine id for a chat that is drafted but not created yet; the session is
   // created by the first send (router-side), never via gateway session.create.
   const [draftEngineId, setDraftEngineId] = useState<string | null>(null)
+  // Dedicated terminal session that hosts the interactive `agy` TUI for native
+  // account switching (/logout); independent from per-chat terminals.
+  const [switchAccountTerminalOpen, setSwitchAccountTerminalOpen] = useState(false)
+  // Native model selection for engines that expose a catalog (Antigravity).
+  // `null` means "engine-native default": no model flag is sent at all.
+  const [engineModels, setEngineModels] = useState<EngineModelOption[]>([])
+  const [engineModel, setEngineModel] = useState<string | null>(null)
+  const [engineModelMenuOpen, setEngineModelMenuOpen] = useState(false)
   // Chat archival lives ND-side; the sidebar filters on it and each thread
   // card gets a hover menu that toggles it (harness and engine chats alike).
   const [showArchived, setShowArchived] = useState(false)
@@ -432,6 +441,27 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
     }
   }, [activeSessionId, engineSessionIds])
 
+  // Engines with a native model catalog (Antigravity) load it once per active
+  // engine; switching threads keeps the chosen slug until the engine changes.
+  useEffect(() => {
+    setEngineModelMenuOpen(false)
+    if (activeEngineId !== ANTIGRAVITY_ENGINE_ID) {
+      setEngineModels([])
+      return
+    }
+    let cancelled = false
+    void window.ndDsh.engines.models(ANTIGRAVITY_ENGINE_ID)
+      .then((options) => {
+        if (!cancelled) setEngineModels(options)
+      })
+      .catch(() => {
+        if (!cancelled) setEngineModels([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [activeEngineId])
+
   // Provider routes edited in settings (model removed/renamed, provider
   // disabled) must reach open chat threads: refetch the session's catalog so
   // the picker and its current-selection state stay in sync.
@@ -633,7 +663,12 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
     }
     if (frame.kind === 'agent-error' && frame.message) {
       const lastUserText = findLastUserPrompt(sessionId)
-      appendNotice(sessionId, describeAgentError(frame.message, currentRoute()), 'error', lastUserText)
+      // Quota errors on Antigravity threads are native-account limits; ND can
+      // only route the user to the CLI's own account switch (/logout).
+      const antigravityQuota = sessionId !== undefined
+        && engineSessions.some((session) => session.sessionId === sessionId && session.engineId === ANTIGRAVITY_ENGINE_ID)
+        && /quota/i.test(frame.message)
+      appendNotice(sessionId, describeAgentError(frame.message, currentRoute()), 'error', lastUserText, antigravityQuota)
     }
   }
 
@@ -645,11 +680,11 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
     return { provider: group?.name ?? current.provider, model: current.model }
   }
 
-  function appendNotice(sessionId: string | undefined, text: string, tone: 'info' | 'error' = 'info', retryPrompt?: string): void {
+  function appendNotice(sessionId: string | undefined, text: string, tone: 'info' | 'error' = 'info', retryPrompt?: string, switchAccount = false): void {
     if (!sessionId) return
     setThreads((current) => ({
       ...current,
-      [sessionId]: [...(current[sessionId] ?? []), { kind: 'notice', id: crypto.randomUUID(), text, tone, ...(retryPrompt ? { retryPrompt } : {}) }],
+      [sessionId]: [...(current[sessionId] ?? []), { kind: 'notice', id: crypto.randomUUID(), text, tone, ...(retryPrompt ? { retryPrompt } : {}), ...(switchAccount ? { switchAccount: true } : {}) }],
     }))
   }
 
@@ -697,6 +732,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
       setModelMenuOpen(false)
       setModelMenuPane('root')
       setPermissionMenuOpen(false)
+      setEngineModelMenuOpen(false)
       setContextMenuOpen(false)
       }
     }
@@ -713,10 +749,15 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
     // A drafted engine chat has no session yet: the first send creates it on
     // that engine (router-side); harness sends stay exactly as before.
     const draftEngine = activeSessionId === null ? draftEngineId : null
+    // Antigravity threads carry the picker's slug; every other engine keeps
+    // its native model configuration (no flag is sent).
+    const engineModelOption = activeEngineId === ANTIGRAVITY_ENGINE_ID && engineModel !== null
+      ? { model: engineModel }
+      : {}
     const options = activeSessionId !== null
-      ? { sessionId: activeSessionId }
+      ? { sessionId: activeSessionId, ...engineModelOption }
       : draftEngine !== null
-        ? { engineId: draftEngine }
+        ? { engineId: draftEngine, ...engineModelOption }
         : undefined
     try {
       const result = await window.ndDsh.harness.run(input, options)
@@ -744,9 +785,32 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
     }
   }
 
+  /**
+   * Antigravity authentication is native Google OAuth in the OS keyring, and
+   * its terms forbid third-party OAuth flows — so switching accounts means
+   * running the first-party `agy` TUI in an ND terminal, where `/logout`
+   * purges the keyring and the next login re-authenticates in the browser.
+   */
+  const openAntigravityAccountTerminal = useCallback(async (): Promise<void> => {
+    const terminalSession = 'antigravity-account'
+    try {
+      const existing = await window.ndDshTerminal.state(terminalSession)
+      if (existing.terminals.length === 0) {
+        const created = await window.ndDshTerminal.create({ sessionId: terminalSession, title: 'Antigravity account (agy)' })
+        const terminalId = created.terminals[0]?.id
+        if (terminalId) await window.ndDshTerminal.write(terminalSession, terminalId, 'agy\r')
+      }
+      setSwitchAccountTerminalOpen(true)
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }, [onError])
+
   const retry = async (retryPrompt: string): Promise<void> => {
     if (busy || !retryPrompt.trim()) return
-    const options = activeSessionId ? { sessionId: activeSessionId } : undefined
+    const options = activeSessionId
+      ? { sessionId: activeSessionId, ...(activeEngineId === ANTIGRAVITY_ENGINE_ID && engineModel !== null ? { model: engineModel } : {}) }
+      : undefined
     try {
       const result = await window.ndDsh.harness.run(retryPrompt, options)
       setActiveSessionId(result.sessionId)
@@ -1073,13 +1137,15 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
           </div>
         </header>
 
-        {!status?.sourceReady ? (
+        {/* Harness runtime health is a harness-thread concern; engine chats
+            authenticate natively and never route through ND providers. */}
+        {onHarnessThread && !status?.sourceReady ? (
           <div className="mx-3 mt-2.5 flex flex-col gap-[3px] rounded-[7px] border border-info/25 bg-info/[0.07] p-2.5 text-[9px] text-info">
             <strong>Harness not built</strong>
             <span>Run <code className="font-mono">pnpm bootstrap</code> once.</span>
           </div>
         ) : null}
-        {status?.sourceReady && status.apiKeyRequired && !status.apiKeyPresent ? (
+        {onHarnessThread && status?.sourceReady && status.apiKeyRequired && !status.apiKeyPresent ? (
           <div className="mx-3 mt-2.5 flex flex-col gap-[3px] rounded-[7px] border border-warning/25 bg-warning/10 p-2.5 text-[9px] text-warning">
             <div className="flex items-center justify-between gap-2">
               <strong>Provider credential missing</strong>
@@ -1102,7 +1168,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
           {entries.length === 0 && !busy ? (
             <div className="flex h-full flex-col items-center justify-center gap-1 p-5 text-center text-faint">
               <span className="mb-1.5 grid size-[46px] place-items-center rounded-xl border border-primary/30 bg-primary/10 text-primary [&_svg]:size-5"><SparkIcon /></span>
-              <h3 className="m-0 text-[13px] font-semibold text-soft">ND Agent</h3>
+              <h3 className="m-0 text-[13px] font-semibold text-soft">{onHarnessThread ? 'ND Agent' : activeEngineName}</h3>
               <p className="m-0 max-w-[300px] text-[9px]/[1.6]">Ask anything about this workspace — open files, inspect the browser, or plan company goals. Context used during the thread appears on the composer badge.</p>
             </div>
           ) : null}
@@ -1125,6 +1191,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
                     onAnswerApproval={answerApproval}
                     onRetry={retry}
                     onSwitchModel={() => { setModelMenuOpen(true); setModelMenuPane('root') }}
+                    onSwitchAccount={() => void openAntigravityAccountTerminal()}
                     {...(onOpenFile ? { onOpenFile } : {})}
                   />
                 )}
@@ -1161,7 +1228,13 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
           ) : null}
         </div>
 
-        <TerminalDock open={terminalOpen} sessionId={activeSessionId} {...(terminalCwd ? { cwd: terminalCwd } : {})} onOpenChange={setTerminalOpen} onError={onError} />
+        <TerminalDock
+          open={switchAccountTerminalOpen || terminalOpen}
+          sessionId={switchAccountTerminalOpen ? 'antigravity-account' : activeSessionId}
+          {...(switchAccountTerminalOpen || !terminalCwd ? {} : { cwd: terminalCwd })}
+          onOpenChange={switchAccountTerminalOpen ? setSwitchAccountTerminalOpen : setTerminalOpen}
+          onError={onError}
+        />
 
         <div className="mx-3 my-1.5 flex flex-col rounded-xl border border-border bg-surface-1 px-2.5 py-2 shadow-[0_4px_16px_rgba(0,0,0,0.18)]" ref={menuRef}>
           {elementChips.length > 0 ? (
@@ -1552,7 +1625,78 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
                   </div>
                 ) : null}
               </div>
-              </>) : null}
+              </>) : activeEngineId === ANTIGRAVITY_ENGINE_ID ? (
+              <div className="relative">
+                <button
+                  className="flex min-w-0 max-w-[135px] shrink items-center gap-1 rounded-md border border-border-soft bg-secondary px-1.5 py-[3px] text-[10px] text-soft transition-colors hover:border-border-strong hover:bg-accent hover:text-foreground [&_svg]:size-3 [&_svg]:shrink-0"
+                  title={engineModel ?? 'Antigravity keeps its own configured model'}
+                  onClick={() => {
+                    const nextOpen = !engineModelMenuOpen
+                    setEngineModelMenuOpen(nextOpen)
+                    setModelMenuOpen(false)
+                    setPermissionMenuOpen(false)
+                    closeMention()
+                  }}
+                >
+                  <span className="truncate font-medium">{engineModel ? compactModelLabel(engineModel) : 'Native model'}</span>
+                  <ChevronDownIcon />
+                </button>
+
+                {engineModelMenuOpen ? (
+                  <div
+                    className="absolute bottom-full right-0 z-[130] mb-1.5 w-[286px] overflow-hidden rounded-xl border border-border-strong bg-surface-1 p-1.5 shadow-[0_14px_40px_rgba(0,0,0,0.42)]"
+                    role="menu"
+                    aria-label="Antigravity model"
+                  >
+                    <div className="px-2 pb-1 pt-0.5 text-[8px] font-semibold uppercase tracking-[0.11em] text-fainter">Antigravity model</div>
+                    <div className="max-h-[310px] overflow-y-auto px-0.5 pb-0.5">
+                      <button
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={engineModel === null}
+                        className={cn(
+                          'flex w-full items-center justify-between gap-3 rounded-lg px-2.5 py-2 text-left transition-colors',
+                          engineModel === null ? 'bg-accent text-foreground' : 'text-soft hover:bg-accent hover:text-foreground',
+                        )}
+                        onClick={() => { setEngineModel(null); setEngineModelMenuOpen(false) }}
+                      >
+                        <span className="min-w-0">
+                          <span className="block truncate text-[11px] font-medium">Native default</span>
+                          <span className="block truncate font-mono text-[8px] text-fainter">whatever the CLI is configured with</span>
+                        </span>
+                        {engineModel === null ? <CheckIcon className="size-3.5 shrink-0 text-primary" /> : null}
+                      </button>
+                      {engineModels.map((model) => {
+                        const selected = engineModel === model.id
+                        return (
+                          <button
+                            type="button"
+                            role="menuitemradio"
+                            aria-checked={selected}
+                            className={cn(
+                              'flex w-full items-center justify-between gap-3 rounded-lg px-2.5 py-2 text-left transition-colors',
+                              selected ? 'bg-accent text-foreground' : 'text-soft hover:bg-accent hover:text-foreground',
+                            )}
+                            key={model.id}
+                            title={model.id}
+                            onClick={() => { setEngineModel(model.id); setEngineModelMenuOpen(false) }}
+                          >
+                            <span className="min-w-0">
+                              <span className="block truncate text-[11px] font-medium">{model.name ?? model.id}</span>
+                              {model.name ? <span className="block truncate font-mono text-[8px] text-fainter">{model.id}</span> : null}
+                            </span>
+                            {selected ? <CheckIcon className="size-3.5 shrink-0 text-primary" /> : null}
+                          </button>
+                        )
+                      })}
+                      {engineModels.length === 0 ? (
+                        <div className="px-2.5 py-2 text-[10px]/[1.4] text-faint">Model catalog is unavailable; Antigravity keeps its native configuration.</div>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+              ) : null}
 
               {busy ? (
                 <button
@@ -1760,12 +1904,13 @@ interface ThreadEntryViewProps {
   isLastAssistant?: boolean
   retryPrompt?: string
   onAnswerApproval?(entry: Extract<ThreadEntry, { kind: 'approval' }>, outcome: 'allowed-once' | 'rejected'): void
-  onOpenFile?(path: string): void
+  onOpenFile?(relativePath: string): void
   onRetry?(prompt: string): void
   onSwitchModel?(): void
+  onSwitchAccount?(): void
 }
 
-function ThreadEntryView({ entry, isLastAssistant, retryPrompt, onAnswerApproval, onOpenFile, onRetry, onSwitchModel }: ThreadEntryViewProps) {
+function ThreadEntryView({ entry, isLastAssistant, retryPrompt, onAnswerApproval, onOpenFile, onRetry, onSwitchModel, onSwitchAccount }: ThreadEntryViewProps) {
   switch (entry.kind) {
     case 'user':
       return (
@@ -1822,16 +1967,23 @@ function ThreadEntryView({ entry, isLastAssistant, retryPrompt, onAnswerApproval
         >
           <div className="mb-1 text-[9px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/70">Runtime</div>
           <div className={cn('whitespace-pre-wrap [overflow-wrap:anywhere] text-[11px]/[1.55]', entry.tone === 'error' ? 'text-destructive' : 'text-soft')}>{entry.text}</div>
-          {entry.tone === 'error' && entry.retryPrompt && onRetry ? (
+          {entry.switchAccount ? (
+            <div className="mt-1.5 text-[10px]/[1.45] text-muted-foreground/80">
+              Quota is native to your Antigravity account: wait for the reset, switch model, or click <span className="font-medium">Switch account</span> to run <code className="font-mono">agy</code> in a terminal and use <code className="font-mono">/logout</code> to sign in as another Google user.
+            </div>
+          ) : null}
+          {(entry.tone === 'error' && entry.retryPrompt && onRetry) || (entry.switchAccount && onSwitchAccount) ? (
             <div className="mt-2 flex items-center gap-2">
-              <button
-                type="button"
-                className="inline-flex items-center gap-1.5 rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-1 text-[11px] font-medium text-destructive transition-colors hover:bg-destructive/20 active:bg-destructive/25"
-                onClick={() => onRetry(entry.retryPrompt!)}
-              >
-                <RotateIcon className="size-3" />
-                Retry
-              </button>
+              {entry.tone === 'error' && entry.retryPrompt && onRetry ? (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-1 text-[11px] font-medium text-destructive transition-colors hover:bg-destructive/20 active:bg-destructive/25"
+                  onClick={() => onRetry(entry.retryPrompt!)}
+                >
+                  <RotateIcon className="size-3" />
+                  Retry
+                </button>
+              ) : null}
               {onSwitchModel ? (
                 <button
                   type="button"
@@ -1839,6 +1991,16 @@ function ThreadEntryView({ entry, isLastAssistant, retryPrompt, onAnswerApproval
                   onClick={onSwitchModel}
                 >
                   Switch Model
+                </button>
+              ) : null}
+              {entry.switchAccount && onSwitchAccount ? (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  title="Opens a terminal running the Antigravity CLI: type /logout, then sign in with another Google account"
+                  onClick={onSwitchAccount}
+                >
+                  Switch account
                 </button>
               ) : null}
             </div>

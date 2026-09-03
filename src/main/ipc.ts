@@ -241,6 +241,7 @@ export function registerIpc(deps: IpcDependencies): () => void {
     return items.map((item) => (archivedIds.has(item.sessionId) ? { ...item, archived: true } : item))
   })
   handle(IPC.enginesTranscript, (_event, value) => deps.engineRouter.transcript(asString(value, 'Session id', 128)))
+  handle(IPC.enginesModels, (_event, value) => deps.engineRouter.models(asString(value, 'Engine id', 64)))
   // Archival covers every chat thread (harness or engine-backed); the id list
   // returns so the renderer can reconcile its local copies.
   handle(IPC.sessionsSetArchived, (_event, sessionId, archived) =>

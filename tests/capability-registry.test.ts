@@ -59,7 +59,7 @@ async function registryFixture(
   const statusPath = join(dir, 'capability-statuses.json')
   const statuses = new CapabilityStatusStore(statusPath)
   const catalog = [
-    ...buildCodingEngineCatalog({ harnessReady: true, codexReady: false, codexCliReady: true }),
+    ...buildCodingEngineCatalog({ harnessReady: true, codexReady: false, codexCliReady: true, antigravityReady: false }),
     ...extraEngines,
   ]
   const engines: Pick<CodingEngineRegistry, 'list' | 'assign'> = {

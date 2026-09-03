@@ -6,7 +6,7 @@ import { buildCodingEngineCatalog, CODEX_CLI_ENGINE_ID, CODEX_ENGINE_ID, ND_HARN
 import { OrganizationOrchestrator } from '../src/main/organization/orchestrator.js'
 import { OrganizationStore } from '../src/main/organization/store.js'
 
-const CATALOG = buildCodingEngineCatalog({ harnessReady: true, codexReady: true, codexCliReady: true })
+const CATALOG = buildCodingEngineCatalog({ harnessReady: true, codexReady: true, codexCliReady: true, antigravityReady: true })
 
 function descriptor(id: string) {
   const found = CATALOG.find((engine) => engine.id === id)

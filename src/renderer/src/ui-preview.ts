@@ -95,7 +95,7 @@ let providers: ModelProvider[] = [
   { id: 'local-lab', name: 'Local Lab', enabled: false, baseUrl: 'http://127.0.0.1:11434/v1', apiFormat: 'openai-completions', apiKey: '', hasApiKey: false, models: [{ id: 'company-code-model', context: '32k' }] },
 ]
 
-const engines = buildCodingEngineCatalog({ harnessReady: true, codexReady: true, codexCliReady: true })
+const engines = buildCodingEngineCatalog({ harnessReady: true, codexReady: true, codexCliReady: true, antigravityReady: true })
 let assignments: Record<string, string> = { 'agent-pm': 'nd-harness', 'agent-builder': 'codex-cli', 'agent-reviewer': 'nd-harness' }
 
 const ADAPTER_SLOT_NOTE = 'Adapter slot reserved. The integration ships in an upcoming ND release; built-ins stay active meanwhile.'
@@ -383,6 +383,10 @@ const desktopApi: DesktopApi = {
     assign: async (agentId, engineId) => (assignments = { ...assignments, [agentId]: engineId }),
     sessions: async () => [],
     transcript: async (sessionId) => ({ sessionId, engineId: 'codex-cli', events: [] }),
+    models: async () => [
+      { id: 'gemini-3.1-pro-high', name: 'Gemini 3.1 Pro (High)' },
+      { id: 'gemini-3.8-flash-low', name: 'Gemini 3.8 Flash (Low)' },
+    ],
   },
   sessions: {
     setArchived: async (sessionId, archived) => {

@@ -282,6 +282,12 @@ export interface CodingEngineDescriptor {
   workerInstructions?: string
 }
 
+/** A model selectable for an engine's native configuration; empty name means display the id. */
+export interface EngineModelOption {
+  id: string
+  name?: string
+}
+
 export type DshSurface = 'dsh' | 'workbench'
 
 export interface DshViewState {
@@ -577,6 +583,8 @@ export interface DesktopApi {
     assign(agentId: string, engineId: string): Promise<Record<string, string>>
     sessions(): Promise<EngineSessionSummary[]>
     transcript(sessionId: string): Promise<EngineSessionTranscript>
+    /** Native model catalog for engines that expose one; empty for the rest. */
+    models(engineId: string): Promise<EngineModelOption[]>
   }
   sessions: {
     /** Archive or unarchive any chat thread (harness or engine-backed); resolves with the refreshed archived id list. */
@@ -747,6 +755,7 @@ export const IPC = {
   enginesAssign: 'engines:assign',
   enginesSessions: 'engines:sessions',
   enginesTranscript: 'engines:transcript',
+  enginesModels: 'engines:models',
   sessionsSetArchived: 'sessions:set-archived',
   captureInspectApp: 'capture:inspect-app',
   captureInspectElement: 'capture:inspect-element',

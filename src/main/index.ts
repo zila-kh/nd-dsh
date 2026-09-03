@@ -23,6 +23,7 @@ import { CapabilityRegistry } from './capabilities/capability-registry.js'
 import { CapabilityStatusStore } from './capabilities/capability-status-store.js'
 import { createHarnessSourceSetupAdapters } from './capabilities/harness-runtime-setup.js'
 import { ND_ORG_MEMORY_ID, ND_WORKSPACE_CONTEXT_ID } from '../shared/capabilities.js'
+import { AntigravityEngine } from './engines/antigravity/antigravity-engine.js'
 import { CodexCliEngine } from './engines/codex/codex-cli-engine.js'
 import { CodingEngineRegistry } from './engines/coding-engine-registry.js'
 import { EngineSessionRouter } from './engines/engine-session-router.js'
@@ -54,6 +55,7 @@ app.enableSandbox()
 let mainWindow: BrowserWindow | undefined
 let activeHarness: HarnessService | undefined
 let activeCodexEngine: CodexCliEngine | undefined
+let activeAntigravityEngine: AntigravityEngine | undefined
 let activeNdPencil: NdPencilController | undefined
 let activeTerminalManager: TerminalManager | undefined
 let shutdownStarted = false
@@ -134,7 +136,9 @@ async function createWindow(cdpPort: number): Promise<void> {
   const harness = new HarnessService(workspace, browser, providers, externalElements, sessionArchive)
   const codexEngine = new CodexCliEngine({ log: (line) => console.log(line) })
   activeCodexEngine = codexEngine
-  const engineRouter = new EngineSessionRouter(harness, codexEngine, workspace)
+  const antigravityEngine = new AntigravityEngine({ log: (line) => console.log(line) })
+  activeAntigravityEngine = antigravityEngine
+  const engineRouter = new EngineSessionRouter(harness, codexEngine, workspace, antigravityEngine)
   const organizationStore = new OrganizationStore(join(userData, 'organization.json'))
   const interruptedRuns = await organizationStore.reconcileInterruptedRuns()
   if (interruptedRuns > 0) console.warn(`Recovered ${interruptedRuns} interrupted organization run(s) from the previous app session.`)
@@ -288,6 +292,7 @@ async function createWindow(cdpPort: number): Promise<void> {
     },
   })
   codexEngine.setEmitter(dispatchEngineFrame)
+  antigravityEngine.setEmitter(dispatchEngineFrame)
 
   const rendererUrl = process.env.ELECTRON_RENDERER_URL || process.env.VITE_DEV_SERVER_URL
   const rendererFile = join(currentDirectory, '../renderer/index.html')
@@ -354,8 +359,10 @@ async function createWindow(cdpPort: number): Promise<void> {
     if (mainWindow === window) mainWindow = undefined
     if (activeHarness === harness) activeHarness = undefined
     if (activeCodexEngine === codexEngine) activeCodexEngine = undefined
+    if (activeAntigravityEngine === antigravityEngine) activeAntigravityEngine = undefined
     if (activeTerminalManager === terminalManager) { activeTerminalManager = undefined; beginTerminalClose(terminalManager) }
     beginCodexClose(codexEngine)
+    beginAntigravityClose(antigravityEngine)
     beginHarnessClose(harness)
   })
 }
@@ -386,6 +393,11 @@ app.on('before-quit', (event) => {
     const codexEngine = activeCodexEngine
     activeCodexEngine = undefined
     beginCodexClose(codexEngine)
+  }
+  if (activeAntigravityEngine) {
+    const antigravityEngine = activeAntigravityEngine
+    activeAntigravityEngine = undefined
+    beginAntigravityClose(antigravityEngine)
   }
   if (activeTerminalManager) {
     const terminalManager = activeTerminalManager
@@ -422,6 +434,10 @@ function beginHarnessClose(harness: HarnessService): void {
 
 function beginCodexClose(codexEngine: CodexCliEngine): void {
   trackClose(codexEngine.close().catch((error) => console.error('Failed to close the Codex engine cleanly:', error)))
+}
+
+function beginAntigravityClose(antigravityEngine: AntigravityEngine): void {
+  trackClose(antigravityEngine.close().catch((error) => console.error('Failed to close the Antigravity engine cleanly:', error)))
 }
 
 function beginTerminalClose(terminalManager: TerminalManager): void {

@@ -187,6 +187,11 @@ export async function pickElementInExternalApp(
       pick: { element, targetTitle: target.title ?? 'external Electron app' },
       ...(screenshot ? { screenshot } : {}),
     }
+  } catch (cause) {
+    // A dropping debugger socket or an eval-time CDP error must never crash
+    // the inspect turn. Surface it as an unreachable outcome so the caller can
+    // relay a readable message instead of swallowing an unhandled rejection.
+    return { kind: 'unreachable', message: cause instanceof Error ? cause.message : String(cause) }
   } finally {
     connection.close()
   }

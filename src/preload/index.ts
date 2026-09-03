@@ -72,6 +72,7 @@ const api: DesktopApi = {
     assign: (agentId, engineId) => ipcRenderer.invoke(IPC.enginesAssign, agentId, engineId),
     sessions: () => ipcRenderer.invoke(IPC.enginesSessions),
     transcript: (sessionId) => ipcRenderer.invoke(IPC.enginesTranscript, sessionId),
+    models: (engineId) => ipcRenderer.invoke(IPC.enginesModels, engineId),
   },
   sessions: {
     setArchived: (sessionId, archived) => ipcRenderer.invoke(IPC.sessionsSetArchived, sessionId, archived),
