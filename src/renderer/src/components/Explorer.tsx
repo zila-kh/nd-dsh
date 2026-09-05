@@ -17,9 +17,9 @@ interface ExplorerProps {
 type ExplorerTab = 'files' | 'search' | 'git'
 
 /**
- * Agent runs can create files outside React. Refresh only while the visible
- * Explorer is in use; focus/visibility events refresh immediately so a hidden
- * or background ND window does no repeated filesystem IPC work.
+ * Agent runs can create files outside React. Refresh filesystem state only
+ * while the visible Explorer is in use; focus/visibility recovery refreshes
+ * immediately, while CSS-hidden product surfaces perform no filesystem IPC.
  */
 const ROOT_REFRESH_INTERVAL_MS = 5_000
 
@@ -69,8 +69,9 @@ export function Explorer({ workspace, selectedPath, onWorkspaceChanged, onOpenFi
     let timer: ReturnType<typeof window.setTimeout> | undefined
     let disposed = false
 
-    const isVisible = (): boolean => (
-      document.visibilityState === 'visible'
+    const isDocumentVisible = (): boolean => document.visibilityState === 'visible'
+    const isExplorerVisible = (): boolean => (
+      isDocumentVisible()
       && Boolean(explorerRef.current?.getClientRects().length)
     )
 
@@ -79,12 +80,19 @@ export function Explorer({ workspace, selectedPath, onWorkspaceChanged, onOpenFi
       timer = undefined
     }
 
+    // Keep only a cheap visibility wake while another product surface hides
+    // Explorer. This avoids filesystem IPC yet guarantees polling resumes when
+    // CSS visibility changes without relying on a window focus event.
     const schedule = (): void => {
       cancelTimer()
-      if (disposed || !isVisible()) return
+      if (disposed || !isDocumentVisible()) return
       timer = window.setTimeout(() => {
-        if (!isVisible()) {
+        if (!isDocumentVisible()) {
           cancelTimer()
+          return
+        }
+        if (!isExplorerVisible()) {
+          schedule()
           return
         }
         void refresh().finally(schedule)
@@ -92,25 +100,30 @@ export function Explorer({ workspace, selectedPath, onWorkspaceChanged, onOpenFi
     }
 
     const refreshNow = (): void => {
-      if (!isVisible()) return
+      if (!isExplorerVisible()) {
+        schedule()
+        return
+      }
       cancelTimer()
       void refresh().finally(schedule)
     }
 
-    const onFocus = (): void => refreshNow()
-    const onVisibilityChange = (): void => {
-      if (isVisible()) refreshNow()
-      else cancelTimer()
+    const resume = (): void => {
+      if (!isDocumentVisible()) {
+        cancelTimer()
+        return
+      }
+      refreshNow()
     }
 
-    refreshNow()
-    window.addEventListener('focus', onFocus)
-    document.addEventListener('visibilitychange', onVisibilityChange)
+    resume()
+    window.addEventListener('focus', resume)
+    document.addEventListener('visibilitychange', resume)
     return () => {
       disposed = true
       cancelTimer()
-      window.removeEventListener('focus', onFocus)
-      document.removeEventListener('visibilitychange', onVisibilityChange)
+      window.removeEventListener('focus', resume)
+      document.removeEventListener('visibilitychange', resume)
     }
   }, [activeTab, refresh, workspace?.root])
 
