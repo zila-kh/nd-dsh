@@ -56,6 +56,7 @@ let mainWindow: BrowserWindow | undefined
 let activeHarness: HarnessService | undefined
 let activeCodexEngine: CodexCliEngine | undefined
 let activeAntigravityEngine: AntigravityEngine | undefined
+let activeEngineRouter: EngineSessionRouter | undefined
 let activeNdPencil: NdPencilController | undefined
 let activeTerminalManager: TerminalManager | undefined
 let shutdownStarted = false
@@ -133,12 +134,19 @@ async function createWindow(cdpPort: number): Promise<void> {
   const dshSurface = new DshSurfaceController(window)
   const externalElements = new ExternalElementStage()
   const recentPicks = new RecentPickStore()
+  const git = new GitService(workspace)
   const harness = new HarnessService(workspace, browser, providers, externalElements, sessionArchive)
   const codexEngine = new CodexCliEngine({ log: (line) => console.log(line) })
   activeCodexEngine = codexEngine
   const antigravityEngine = new AntigravityEngine({ log: (line) => console.log(line) })
   activeAntigravityEngine = antigravityEngine
-  const engineRouter = new EngineSessionRouter(harness, codexEngine, workspace, antigravityEngine)
+  const engineRouter = new EngineSessionRouter(harness, codexEngine, workspace, antigravityEngine, {
+    browser,
+    git,
+    storePath: join(userData, 'chatgpt-web-sessions.json'),
+    log: (line) => console.warn(line),
+  })
+  activeEngineRouter = engineRouter
   const organizationStore = new OrganizationStore(join(userData, 'organization.json'))
   const interruptedRuns = await organizationStore.reconcileInterruptedRuns()
   if (interruptedRuns > 0) console.warn(`Recovered ${interruptedRuns} interrupted organization run(s) from the previous app session.`)
@@ -185,7 +193,6 @@ async function createWindow(cdpPort: number): Promise<void> {
   await ndPencil.initialize()
   const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter, projectRuntime, capabilities)
   const approvalGate = new OrganizationApprovalGate(organizationStore, harness)
-  const git = new GitService(workspace)
   const qa = new QaService()
   qa.setProjectRoot(workspace.state().root)
   const disposeIpc = registerIpc({ window, preloadPath: preload, browser, dshSurface, engines, engineRouter, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, qa, sessionArchive, capabilities })
@@ -293,6 +300,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   })
   codexEngine.setEmitter(dispatchEngineFrame)
   antigravityEngine.setEmitter(dispatchEngineFrame)
+  engineRouter.setEmitter(dispatchEngineFrame)
 
   const rendererUrl = process.env.ELECTRON_RENDERER_URL || process.env.VITE_DEV_SERVER_URL
   const rendererFile = join(currentDirectory, '../renderer/index.html')
@@ -354,6 +362,7 @@ async function createWindow(cdpPort: number): Promise<void> {
     design.destroy()
     if (activeNdPencil === ndPencil) activeNdPencil = undefined
     void ndPencil.destroy()
+    if (activeEngineRouter === engineRouter) { activeEngineRouter = undefined; beginEngineRouterClose(engineRouter) }
     browser.destroy()
     dshSurface.destroy()
     if (mainWindow === window) mainWindow = undefined
@@ -399,6 +408,11 @@ app.on('before-quit', (event) => {
     activeAntigravityEngine = undefined
     beginAntigravityClose(antigravityEngine)
   }
+  if (activeEngineRouter) {
+    const engineRouter = activeEngineRouter
+    activeEngineRouter = undefined
+    beginEngineRouterClose(engineRouter)
+  }
   if (activeTerminalManager) {
     const terminalManager = activeTerminalManager
     activeTerminalManager = undefined
@@ -438,6 +452,10 @@ function beginCodexClose(codexEngine: CodexCliEngine): void {
 
 function beginAntigravityClose(antigravityEngine: AntigravityEngine): void {
   trackClose(antigravityEngine.close().catch((error) => console.error('Failed to close the Antigravity engine cleanly:', error)))
+}
+
+function beginEngineRouterClose(engineRouter: EngineSessionRouter): void {
+  trackClose(engineRouter.close().catch((error) => console.error('Failed to close the engine router cleanly:', error)))
 }
 
 function beginTerminalClose(terminalManager: TerminalManager): void {
