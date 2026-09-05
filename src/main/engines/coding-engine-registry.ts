@@ -54,20 +54,28 @@ export class CodingEngineRegistry {
   async assign(agentId: string, engineId: string): Promise<Record<string, string>> {
     const descriptor = this.list().find((engine) => engine.id === engineId)
     if (!descriptor) throw new Error(`Unknown coding engine: ${engineId}`)
-    if (!descriptor.available) throw new Error(descriptor.unavailableReason ?? `${descriptor.name} is unavailable`)
+    this.assertWorkerEngine(descriptor)
     await this.assignmentsStore.assign('agent', agentId, 'engine', engineId)
     return this.assignments()
   }
 
+  /** Organization workers require an engine with an actual ND workspace boundary. */
   assertAvailable(engineId: string): CodingEngineDescriptor {
     const descriptor = this.list().find((engine) => engine.id === engineId)
     if (!descriptor) throw new Error(`Unknown coding engine: ${engineId}`)
-    if (!descriptor.available) throw new Error(descriptor.unavailableReason ?? `${descriptor.name} is unavailable`)
+    this.assertWorkerEngine(descriptor)
     return descriptor
   }
 
   async resetToHarness(agentId: string): Promise<Record<string, string>> {
     await this.assignmentsStore.assign('agent', agentId, 'engine', ND_HARNESS_ENGINE_ID)
     return this.assignments()
+  }
+
+  private assertWorkerEngine(descriptor: CodingEngineDescriptor): void {
+    if (!descriptor.available) throw new Error(descriptor.unavailableReason ?? `${descriptor.name} is unavailable`)
+    if (!descriptor.capabilities.workspace) {
+      throw new Error(`${descriptor.name} is an interactive chat engine and cannot be assigned to organization workers until it supports isolated ND workspaces.`)
+    }
   }
 }
