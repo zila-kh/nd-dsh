@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type {
   DshEventFrame,
@@ -18,6 +18,8 @@ const MAX_TRANSCRIPT_EVENTS = 500
 const MAX_PROMPT_CHARS = 100_000
 const CHATGPT_READY_TIMEOUT_MS = 15_000
 const CHATGPT_TURN_TIMEOUT_MS = 10 * 60_000
+const CDP_CONNECT_TIMEOUT_MS = 5_000
+const CDP_CALL_TIMEOUT_MS = 15_000
 const TURN_POLL_MS = 350
 const REMOTE_POLL_MS = 2_000
 const BACKGROUND_WATCH_MS = 5_000
@@ -84,6 +86,7 @@ interface CdpResponse {
 interface PendingCdpCall {
   resolve: (value: unknown) => void
   reject: (error: Error) => void
+  timer: ReturnType<typeof setTimeout>
 }
 
 export interface ChatGptWebEngineOptions {
@@ -101,17 +104,19 @@ export function chatGptSyncBranchName(sessionId: string): string {
   return `nd/chat-${suffix.toLowerCase()}`
 }
 
-/** Never leak HTTPS userinfo credentials into a prompt sent to ChatGPT Web. */
+/** Never leak HTTPS credentials or credential-like URL metadata into a web prompt. */
 export function sanitizeRemoteForPrompt(remoteUrl: string): string {
   const trimmed = remoteUrl.trim()
   try {
     const parsed = new URL(trimmed)
-    if (parsed.username || parsed.password) {
-      parsed.username = ''
-      parsed.password = ''
-    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return trimmed
+    parsed.username = ''
+    parsed.password = ''
+    parsed.search = ''
+    parsed.hash = ''
     return parsed.toString()
   } catch {
+    // SCP-style SSH remotes such as git@github.com:owner/repo.git are not URLs.
     return trimmed
   }
 }
@@ -323,20 +328,25 @@ export class ChatGptWebEngine {
     if (session.cwd !== workspaceRoot) {
       throw new Error('This ChatGPT Web chat belongs to a different workspace. Reopen the chat from its original project before syncing Git.')
     }
-    await this.options.git.ensureBranch(session.branch)
-    const state = await this.options.git.refresh()
-    const remote = session.remote && state.remotes.includes(session.remote)
+
+    // Validate the shared remote before changing branches. A project that has
+    // not been configured for Git sync must fail without mutating its checkout.
+    const initialState = await this.options.git.refresh()
+    const remote = session.remote && initialState.remotes.includes(session.remote)
       ? session.remote
-      : state.remotes.includes('origin') ? 'origin' : state.remotes[0]
+      : initialState.remotes.includes('origin') ? 'origin' : initialState.remotes[0]
     if (!remote) throw new Error('ChatGPT Web Git sync requires a configured Git remote for this workspace.')
     const remoteUrl = await this.options.git.remoteUrl(remote)
     if (!remoteUrl) throw new Error(`Git remote ${remote} has no fetch/push URL.`)
+
+    await this.options.git.ensureBranch(session.branch)
     await this.options.git.pushBranch(remote, session.branch)
     const head = await this.options.git.head()
     if (!head) throw new Error('ChatGPT Web Git sync requires a committed Git HEAD before the first turn.')
     const remoteSha = await this.options.git.remoteBranchHead(remote, session.branch)
+    if (!remoteSha) throw new Error(`Git remote ${remote}/${session.branch} did not expose the pushed branch.`)
     session.remote = remote
-    if (remoteSha) session.lastRemoteSha = remoteSha
+    session.lastRemoteSha = remoteSha
     this.persistStore()
     return {
       remote,
@@ -614,10 +624,14 @@ export class ChatGptWebEngine {
   private persistStore(): void {
     const directory = dirname(this.options.storePath)
     mkdirSync(directory, { recursive: true })
-    const tmp = `${this.options.storePath}.tmp`
+    const tmp = `${this.options.storePath}.${process.pid}.${randomUUID()}.tmp`
     const payload: PersistedChatGptWebStore = { version: 1, sessions: [...this.sessions.values()] }
-    writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
-    renameSync(tmp, this.options.storePath)
+    try {
+      writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
+      renameSync(tmp, this.options.storePath)
+    } finally {
+      if (existsSync(tmp)) rmSync(tmp, { force: true })
+    }
   }
 }
 
@@ -633,6 +647,7 @@ class VisibleCdpConnection {
       const pending = this.pending.get(parsed.id)
       if (!pending) return
       this.pending.delete(parsed.id)
+      clearTimeout(pending.timer)
       if (parsed.error?.message) {
         pending.reject(new Error(parsed.error.message))
         return
@@ -645,7 +660,10 @@ class VisibleCdpConnection {
       pending.resolve(parsed.result?.result?.value)
     }
     socket.onclose = () => {
-      for (const pending of this.pending.values()) pending.reject(new Error('Visible browser CDP connection closed'))
+      for (const pending of this.pending.values()) {
+        clearTimeout(pending.timer)
+        pending.reject(new Error('Visible browser CDP connection closed'))
+      }
       this.pending.clear()
     }
   }
@@ -654,14 +672,17 @@ class VisibleCdpConnection {
     await browser.ensureAgentReady()
     const state = browser.state()
     if (!state.targetId) throw new Error('ND visible browser has no CDP target id')
-    const response = await fetch(`http://127.0.0.1:${state.cdpPort}/json/list`)
+    const response = await fetch(`http://127.0.0.1:${state.cdpPort}/json/list`, { signal: AbortSignal.timeout(CDP_CONNECT_TIMEOUT_MS) })
     if (!response.ok) throw new Error(`ND visible browser CDP target list failed (${response.status})`)
     const targets = await response.json() as CdpTarget[]
     const target = targets.find((candidate) => candidate.id === state.targetId)
     if (!target?.webSocketDebuggerUrl) throw new Error('ND visible browser target is not available through loopback CDP')
     const socket = new WebSocket(target.webSocketDebuggerUrl)
     await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('Timed out connecting to ND visible browser CDP')), 5_000)
+      const timer = setTimeout(() => {
+        try { socket.close() } catch { /* not open yet */ }
+        reject(new Error('Timed out connecting to ND visible browser CDP'))
+      }, CDP_CONNECT_TIMEOUT_MS)
       socket.onopen = () => {
         clearTimeout(timer)
         resolve()
@@ -676,21 +697,39 @@ class VisibleCdpConnection {
 
   async evaluate<T>(expression: string): Promise<T> {
     const id = this.nextId++
-    const promise = new Promise<unknown>((resolve, reject) => this.pending.set(id, { resolve, reject }))
-    this.socket.send(JSON.stringify({
-      id,
-      method: 'Runtime.evaluate',
-      params: {
-        expression,
-        returnByValue: true,
-        awaitPromise: true,
-        userGesture: true,
-      },
-    }))
+    const promise = new Promise<unknown>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id)
+        reject(new Error(`Visible browser CDP call timed out after ${CDP_CALL_TIMEOUT_MS}ms`))
+      }, CDP_CALL_TIMEOUT_MS)
+      this.pending.set(id, { resolve, reject, timer })
+    })
+    try {
+      this.socket.send(JSON.stringify({
+        id,
+        method: 'Runtime.evaluate',
+        params: {
+          expression,
+          returnByValue: true,
+          awaitPromise: true,
+          userGesture: true,
+        },
+      }))
+    } catch (error) {
+      const pending = this.pending.get(id)
+      if (pending) clearTimeout(pending.timer)
+      this.pending.delete(id)
+      throw error
+    }
     return await promise as T
   }
 
   close(): void {
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer)
+      pending.reject(new Error('Visible browser CDP connection closed'))
+    }
+    this.pending.clear()
     try { this.socket.close() } catch { /* already closed */ }
   }
 }
