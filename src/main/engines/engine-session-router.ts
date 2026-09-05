@@ -37,6 +37,8 @@ export class EngineSessionRouter {
   /** Logical engine ids for harness-backed sessions such as delegated Codex. */
   private readonly logicalEngineBySession = new Map<string, string>()
   private readonly chatGptWeb: ChatGptWebEngine | undefined
+  private readonly chatGptWebBrowser: BrowserController | undefined
+  private readonly chatGptWebLog: ((line: string) => void) | undefined
 
   constructor(
     private readonly harness: HarnessService,
@@ -46,6 +48,8 @@ export class EngineSessionRouter {
     chatGptWebRuntime?: ChatGptWebRuntime,
   ) {
     if (chatGptWebRuntime) {
+      this.chatGptWebBrowser = chatGptWebRuntime.browser
+      this.chatGptWebLog = chatGptWebRuntime.log
       this.chatGptWeb = new ChatGptWebEngine({
         browser: chatGptWebRuntime.browser,
         git: chatGptWebRuntime.git,
@@ -93,10 +97,23 @@ export class EngineSessionRouter {
       })
     }
     if (requested === CHATGPT_WEB_ENGINE_ID) {
-      return this.requireChatGptWeb().run(optimizedPrompt, {
+      const engine = this.requireChatGptWeb()
+      const browser = this.chatGptWebBrowser
+      const returnUrl = browser?.state().url
+      const result = await engine.run(optimizedPrompt, {
         ...(options?.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
         cwd: this.workspace.state().root,
       })
+      // ChatGPT temporarily owns the canonical visible browser while the turn
+      // is active. After a successful turn, restore the user's app preview so
+      // any Git fast-forward becomes visible immediately. On auth/setup errors
+      // leave ChatGPT visible so the user can fix the page and retry.
+      if (browser && returnUrl && !isChatGptUrl(returnUrl)) {
+        await browser.navigate(returnUrl).catch((error) => {
+          this.chatGptWebLog?.(`[chatgpt-web] could not restore previous browser URL: ${error instanceof Error ? error.message : String(error)}`)
+        })
+      }
+      return result
     }
     return this.harness.run(optimizedPrompt, options)
   }
@@ -214,5 +231,13 @@ export class EngineSessionRouter {
       throw new Error('ChatGPT Web is unavailable because ND did not initialize its visible-browser Git-sync runtime.')
     }
     return this.chatGptWeb
+  }
+}
+
+function isChatGptUrl(value: string): boolean {
+  try {
+    return new URL(value).origin === 'https://chatgpt.com'
+  } catch {
+    return false
   }
 }
