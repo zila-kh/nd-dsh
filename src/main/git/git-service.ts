@@ -196,11 +196,13 @@ export class GitService {
     }
   }
 
+  /** Renderer/prompt-safe remote metadata; actual Git commands continue using the remote name. */
   async remoteUrl(remote: string): Promise<string | null> {
     this.assertRemoteName(remote)
     const repoRoot = await this.requireRepoRoot()
     try {
-      return (await this.cli.exec(repoRoot, ['remote', 'get-url', remote])).stdout.trim() || null
+      const raw = (await this.cli.exec(repoRoot, ['remote', 'get-url', remote])).stdout.trim()
+      return raw ? this.sanitizeRemoteUrl(raw) : null
     } catch (error) {
       if (error instanceof GitError) return null
       throw error
@@ -240,7 +242,11 @@ export class GitService {
       const remoteHeadBefore = this.parseRemoteHead((await this.cli.exec(repoRoot, ['ls-remote', '--heads', remote, `refs/heads/${branch}`])).stdout)
       if (remoteHeadBefore && remoteHeadBefore !== localHead) {
         await this.cli.exec(repoRoot, ['fetch', remote, branch])
-        await this.cli.exec(repoRoot, ['merge', '--ff-only', 'FETCH_HEAD'])
+        try {
+          await this.cli.exec(repoRoot, ['merge', '--ff-only', 'FETCH_HEAD'])
+        } catch (error) {
+          throw this.divergedBranchError(remote, branch, error)
+        }
         localHead = (await this.cli.exec(repoRoot, ['rev-parse', 'HEAD'])).stdout.trim()
       }
 
@@ -276,7 +282,11 @@ export class GitService {
         })
       }
       await this.cli.exec(repoRoot, ['fetch', remote, branch])
-      await this.cli.exec(repoRoot, ['merge', '--ff-only', 'FETCH_HEAD'])
+      try {
+        await this.cli.exec(repoRoot, ['merge', '--ff-only', 'FETCH_HEAD'])
+      } catch (error) {
+        throw this.divergedBranchError(remote, branch, error)
+      }
     })
     return await this.refresh()
   }
@@ -465,6 +475,28 @@ export class GitService {
   private parseRemoteHead(output: string): string | null {
     const sha = output.trim().split(/\s+/)[0]
     return sha && /^[0-9a-f]{40,64}$/i.test(sha) ? sha : null
+  }
+
+  private sanitizeRemoteUrl(raw: string): string {
+    try {
+      const parsed = new URL(raw)
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return raw
+      parsed.username = ''
+      parsed.password = ''
+      parsed.search = ''
+      parsed.hash = ''
+      return parsed.toString()
+    } catch {
+      // SCP-style SSH remotes such as git@github.com:owner/repo.git are not URLs.
+      return raw
+    }
+  }
+
+  private divergedBranchError(remote: string, branch: string, error: unknown): GitError {
+    return new GitError({
+      message: `Refusing to sync ${branch}: local history and ${remote}/${branch} cannot be fast-forwarded safely. Resolve the divergence locally before continuing ChatGPT Web sync.`,
+      ...(error instanceof GitError && error.stderr ? { stderr: error.stderr } : {}),
+    })
   }
 }
 
