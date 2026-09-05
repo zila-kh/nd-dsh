@@ -9,6 +9,7 @@ import type { WorkspaceState } from '../src/shared/contracts.js'
 const ROOT = 'C:/workspaces/demo'
 const REPO_ROOT = 'C:/workspaces/demo'
 const LOCAL_SHA = '2222222222222222222222222222222222222222'
+const REMOTE_SHA = '3333333333333333333333333333333333333333'
 
 const COMMIT_LOG = [
   '1111111111111111111111111111111111111111',
@@ -37,10 +38,18 @@ const DIRTY_STATUS = [
   'R  renamed-new.txt\0renamed-old.txt',
 ].join('\0') + '\0'
 
+type FakeGitResponse = {
+  match: string[]
+  exitCode?: number
+  stdout?: string
+  stderr?: string
+  stdoutSequence?: string[]
+}
+
 /** Scripted stand-in for the git binary: each spawn records its argv and answers from `script`. */
 class FakeGit {
   readonly calls: Array<{ args: string[]; env: NodeJS.ProcessEnv | undefined }> = []
-  script: Array<{ match: string[]; exitCode?: number; stdout?: string; stderr?: string }> = []
+  script: FakeGitResponse[] = []
 
   spawn: GitSpawnFunction = (_path, args, options) => {
     const record = { args, env: options.env }
@@ -55,8 +64,10 @@ class FakeGit {
     child.stderr = stderr
     child.stdin = new PassThrough()
     process.nextTick(() => {
+      const sequenceOutput = response.stdoutSequence?.shift()
       if (response.stderr !== undefined) stderr.write(response.stderr)
-      if (response.stdout !== undefined) stdout.write(response.stdout)
+      if (sequenceOutput !== undefined) stdout.write(sequenceOutput)
+      else if (response.stdout !== undefined) stdout.write(response.stdout)
       stdout.end()
       stderr.end()
       emitter.emit('exit', response.exitCode ?? 0, null)
@@ -83,7 +94,7 @@ function createService(fake: FakeGit): GitService {
   return new GitService(workspace, { gitPath: '/fake/git', spawnProcess: fake.spawn })
 }
 
-function repositoryScript(): FakeGit['script'] {
+function repositoryScript(): FakeGitResponse[] {
   return [
     { match: ['rev-parse', '--show-toplevel'], stdout: `${REPO_ROOT}\n` },
     { match: ['status'], stdout: DIRTY_STATUS },
@@ -94,7 +105,7 @@ function repositoryScript(): FakeGit['script'] {
   ]
 }
 
-function cleanSessionBranchScript(branch = 'nd/chat-test'): FakeGit['script'] {
+function cleanSessionBranchScript(branch = 'nd/chat-test'): FakeGitResponse[] {
   return [
     { match: ['status'], stdout: '' },
     { match: ['symbolic-ref'], stdout: `${branch}\n` },
@@ -240,6 +251,47 @@ describe('GitService actions', () => {
 
     expect(fake.argsOf('push', '--set-upstream')).toEqual(['push', '--set-upstream', 'origin', 'nd/chat-test'])
     expect(fake.calls.filter((call) => call.args.includes('ls-remote'))).toHaveLength(2)
+  })
+
+  it('fast-forwards a stale local chat branch before pushing', async () => {
+    fake.script = [
+      { match: ['status'], stdout: '' },
+      { match: ['symbolic-ref'], stdout: 'nd/chat-test\n' },
+      { match: ['rev-parse', 'HEAD'], stdoutSequence: [`${LOCAL_SHA}\n`, `${REMOTE_SHA}\n`] },
+      { match: ['ls-remote'], stdoutSequence: [
+        `${REMOTE_SHA}\trefs/heads/nd/chat-test\n`,
+        `${REMOTE_SHA}\trefs/heads/nd/chat-test\n`,
+      ] },
+      ...repositoryScript(),
+    ]
+    const service = createService(fake)
+
+    await service.pushBranch('origin', 'nd/chat-test')
+
+    const fetchIndex = fake.calls.findIndex((call) => call.args[0] === 'fetch')
+    const mergeIndex = fake.calls.findIndex((call) => call.args[0] === 'merge')
+    const pushIndex = fake.calls.findIndex((call) => call.args[0] === 'push')
+    expect(fake.argsOf('fetch')).toEqual(['fetch', 'origin', 'nd/chat-test'])
+    expect(fake.argsOf('merge')).toEqual(['merge', '--ff-only', 'FETCH_HEAD'])
+    expect(fetchIndex).toBeGreaterThanOrEqual(0)
+    expect(mergeIndex).toBeGreaterThan(fetchIndex)
+    expect(pushIndex).toBeGreaterThan(mergeIndex)
+  })
+
+  it('refuses a diverged chat branch before any push', async () => {
+    fake.script = [
+      { match: ['status'], stdout: '' },
+      { match: ['symbolic-ref'], stdout: 'nd/chat-test\n' },
+      { match: ['rev-parse', 'HEAD'], stdout: `${LOCAL_SHA}\n` },
+      { match: ['ls-remote'], stdout: `${REMOTE_SHA}\trefs/heads/nd/chat-test\n` },
+      { match: ['merge'], exitCode: 1, stderr: 'fatal: Not possible to fast-forward, aborting.\n' },
+      ...repositoryScript(),
+    ]
+    const service = createService(fake)
+
+    await expect(service.pushBranch('origin', 'nd/chat-test')).rejects.toThrow(/fast-forward/i)
+    expect(fake.argsOf('fetch')).toEqual(['fetch', 'origin', 'nd/chat-test'])
+    expect(fake.argsOf('push', '--set-upstream')).toBeUndefined()
   })
 
   it('refuses to push a chat branch with uncommitted changes', async () => {
