@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WorkspaceEntry, WorkspaceState } from '../../../shared/contracts'
 import { FOLDER_ACCENT, fileAccent } from '../lib/file-accents'
 import { ChevronDownIcon, ChevronRightIcon, FileIcon, FilesIcon, FolderIcon, GitIcon, RotateIcon, SearchIcon } from './Icons'
@@ -16,8 +16,12 @@ interface ExplorerProps {
 
 type ExplorerTab = 'files' | 'search' | 'git'
 
-/** Agent runs create files outside React; the root listing follows along. */
-const ROOT_REFRESH_INTERVAL_MS = 4_000
+/**
+ * Agent runs can create files outside React. Refresh only while the visible
+ * Explorer is in use; focus/visibility events refresh immediately so a hidden
+ * or background ND window does no repeated filesystem IPC work.
+ */
+const ROOT_REFRESH_INTERVAL_MS = 5_000
 
 const tabButtonClasses = (active: boolean): string =>
   cn(
@@ -27,37 +31,78 @@ const tabButtonClasses = (active: boolean): string =>
       : 'hover:bg-accent/50 hover:text-soft',
   )
 
+function sameEntries(current: WorkspaceEntry[], next: WorkspaceEntry[]): boolean {
+  return current.length === next.length && current.every((entry, index) => {
+    const candidate = next[index]
+    return candidate?.name === entry.name
+      && candidate.relativePath === entry.relativePath
+      && candidate.kind === entry.kind
+  })
+}
+
 export function Explorer({ workspace, selectedPath, onWorkspaceChanged, onOpenFile, onOpenDiff, onError }: ExplorerProps) {
   const [rootEntries, setRootEntries] = useState<WorkspaceEntry[]>([])
   const [error, setError] = useState<string>()
   const [activeTab, setActiveTab] = useState<ExplorerTab>('files')
+  const refreshBusy = useRef(false)
 
   const refresh = useCallback(async () => {
+    // A slow network-mounted workspace must never stack list requests every
+    // interval. The next focus/visibility/timer tick will pick up fresh state.
+    if (refreshBusy.current) return
+    refreshBusy.current = true
     try {
-      setRootEntries(await window.ndDsh.workspace.list('.'))
+      const entries = await window.ndDsh.workspace.list('.')
+      setRootEntries((current) => sameEntries(current, entries) ? current : entries)
       setError(undefined)
     } catch {
       // Transient failures (a mid-switch workspace) keep the last good listing.
+    } finally {
+      refreshBusy.current = false
     }
   }, [])
 
   useEffect(() => {
-    if (workspace) void refresh()
-  }, [refresh, workspace?.root])
+    if (!workspace || activeTab !== 'files') return
 
-  useEffect(() => {
-    if (!workspace) return
-    const onFocus = (): void => { void refresh() }
-    const timer = setInterval(() => {
-      if (document.visibilityState !== 'visible') return
-      void refresh()
-    }, ROOT_REFRESH_INTERVAL_MS)
-    window.addEventListener('focus', onFocus)
-    return () => {
-      clearInterval(timer)
-      window.removeEventListener('focus', onFocus)
+    let timer: ReturnType<typeof window.setTimeout> | undefined
+    let disposed = false
+
+    const cancelTimer = (): void => {
+      if (timer !== undefined) window.clearTimeout(timer)
+      timer = undefined
     }
-  }, [refresh, workspace])
+
+    const schedule = (): void => {
+      cancelTimer()
+      if (disposed || document.visibilityState !== 'visible') return
+      timer = window.setTimeout(() => {
+        void refresh().finally(schedule)
+      }, ROOT_REFRESH_INTERVAL_MS)
+    }
+
+    const refreshNow = (): void => {
+      if (document.visibilityState !== 'visible') return
+      cancelTimer()
+      void refresh().finally(schedule)
+    }
+
+    const onFocus = (): void => refreshNow()
+    const onVisibilityChange = (): void => {
+      if (document.visibilityState === 'visible') refreshNow()
+      else cancelTimer()
+    }
+
+    refreshNow()
+    window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      disposed = true
+      cancelTimer()
+      window.removeEventListener('focus', onFocus)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [activeTab, refresh, workspace?.root])
 
   const pickWorkspace = async (): Promise<void> => {
     const next = await window.ndDsh.workspace.pick()
