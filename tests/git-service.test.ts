@@ -8,6 +8,7 @@ import type { WorkspaceState } from '../src/shared/contracts.js'
 
 const ROOT = 'C:/workspaces/demo'
 const REPO_ROOT = 'C:/workspaces/demo'
+const LOCAL_SHA = '2222222222222222222222222222222222222222'
 
 const COMMIT_LOG = [
   '1111111111111111111111111111111111111111',
@@ -90,6 +91,16 @@ function repositoryScript(): FakeGit['script'] {
     { match: ['for-each-ref'], stdout: 'main\x00origin/main\x00[ahead 2]\nfeature\x00\x00\n' },
     { match: ['log'], stdout: COMMIT_LOG },
     { match: ['config', '--local'], stdout: REMOTE_CONFIG },
+  ]
+}
+
+function cleanSessionBranchScript(branch = 'nd/chat-test'): FakeGit['script'] {
+  return [
+    { match: ['status'], stdout: '' },
+    { match: ['symbolic-ref'], stdout: `${branch}\n` },
+    { match: ['rev-parse', 'HEAD'], stdout: `${LOCAL_SHA}\n` },
+    { match: ['ls-remote'], stdout: `${LOCAL_SHA}\trefs/heads/${branch}\n` },
+    ...repositoryScript(),
   ]
 }
 
@@ -209,6 +220,57 @@ describe('GitService actions', () => {
 
     await expect(service.createBranch('-evil')).rejects.toThrow(/not a valid branch name/)
     expect(fake.calls.some((call) => call.args.includes('-evil'))).toBe(false)
+  })
+
+  it('refuses to create or switch a chat branch while the worktree is dirty', async () => {
+    fake.script = repositoryScript()
+    const service = createService(fake)
+    await service.refresh()
+
+    await expect(service.ensureBranch('nd/chat-safe')).rejects.toThrow(/uncommitted changes/i)
+    expect(fake.argsOf('checkout', '-b')).toBeUndefined()
+  })
+
+  it('pushes a clean chat branch and verifies the remote head', async () => {
+    fake.script = cleanSessionBranchScript()
+    const service = createService(fake)
+    await service.refresh()
+
+    await service.pushBranch('origin', 'nd/chat-test')
+
+    expect(fake.argsOf('push', '--set-upstream')).toEqual(['push', '--set-upstream', 'origin', 'nd/chat-test'])
+    expect(fake.calls.filter((call) => call.args.includes('ls-remote'))).toHaveLength(2)
+  })
+
+  it('refuses to push a chat branch with uncommitted changes', async () => {
+    fake.script = [
+      { match: ['symbolic-ref'], stdout: 'nd/chat-test\n' },
+      ...repositoryScript(),
+    ]
+    const service = createService(fake)
+
+    await expect(service.pushBranch('origin', 'nd/chat-test')).rejects.toThrow(/uncommitted changes/i)
+    expect(fake.argsOf('push', '--set-upstream')).toBeUndefined()
+  })
+
+  it('fast-forwards a clean chat branch using fetch plus merge --ff-only', async () => {
+    fake.script = cleanSessionBranchScript()
+    const service = createService(fake)
+    await service.refresh()
+
+    await service.fastForwardBranch('origin', 'nd/chat-test')
+
+    expect(fake.argsOf('fetch')).toEqual(['fetch', 'origin', 'nd/chat-test'])
+    expect(fake.argsOf('merge')).toEqual(['merge', '--ff-only', 'FETCH_HEAD'])
+  })
+
+  it('reads an exact remote branch head without mutating the repository', async () => {
+    fake.script = cleanSessionBranchScript()
+    const service = createService(fake)
+
+    await expect(service.remoteBranchHead('origin', 'nd/chat-test')).resolves.toBe(LOCAL_SHA)
+    expect(fake.argsOf('fetch')).toBeUndefined()
+    expect(fake.argsOf('merge')).toBeUndefined()
   })
 
   it('pushes and pulls through the repository root', async () => {
