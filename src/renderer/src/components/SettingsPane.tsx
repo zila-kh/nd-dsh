@@ -65,6 +65,33 @@ const THEME_OPTIONS: { mode: ThemeMode; label: string; Icon: typeof SunIcon }[] 
   { mode: 'dark', label: 'Dark', Icon: MoonIcon },
 ]
 
+function betaDiagnostics(
+  appInfo: AppInfo | null,
+  workspace: WorkspaceState | null,
+  harness: HarnessStatus | null,
+  browser: BrowserState | null,
+): string {
+  const lines = [
+    'ND-DSH Beta Diagnostics',
+    `Captured: ${new Date().toISOString()}`,
+    `App: ${appInfo ? `${appInfo.name} ${appInfo.version}` : 'unknown'}`,
+    `Platform: ${appInfo?.platform ?? 'unknown'}`,
+    `Runtime state: ${harness?.state ?? 'unknown'}`,
+    `Runtime source ready: ${harness?.sourceReady ? 'yes' : 'no'}`,
+    `Provider: ${harness?.provider || 'unknown'}`,
+    `Model: ${harness?.model || 'unknown'}`,
+    `Credential status: ${harness?.apiKeyRequired ? (harness.apiKeyPresent ? 'configured' : 'required-missing') : 'not-required'}`,
+    `Browser bridge: ${browser?.agentBrowser ?? 'unknown'}`,
+    `Browser loading: ${browser?.loading ? 'yes' : 'no'}`,
+    `Workspace binding: ${workspace?.binding ?? 'unknown'}`,
+    `Project linked: ${workspace?.projectId ? 'yes' : 'no'}`,
+  ]
+  if (harness?.error) lines.push(`Runtime error: ${harness.error.slice(0, 500)}`)
+  if (browser?.agentBrowserError) lines.push(`Browser bridge error: ${browser.agentBrowserError.slice(0, 500)}`)
+  lines.push('', 'Privacy: credentials, session ids, workspace paths, project names, and current browser URLs are intentionally omitted.')
+  return lines.join('\n')
+}
+
 export function SettingsPane({
   theme,
   onSelectTheme,
@@ -83,6 +110,7 @@ export function SettingsPane({
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null)
   const [pathDraft, setPathDraft] = useState('')
   const [internalSubTab, setInternalSubTab] = useState<GeneralSubTab>(generalSubTabFromLocation)
+  const [diagnosticsCopied, setDiagnosticsCopied] = useState(false)
 
   const activeSubTab = propSubTab ?? internalSubTab
   const handleSelectSubTab = (selected: GeneralSubTab): void => {
@@ -119,6 +147,16 @@ export function SettingsPane({
       onWorkspaceChanged(await window.ndDsh.workspace.setRoot(path))
     } catch (cause) {
       onError(errorMessage(cause))
+    }
+  }
+
+  const copyDiagnostics = async (): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(betaDiagnostics(appInfo, workspace, harness, browser))
+      setDiagnosticsCopied(true)
+      window.setTimeout(() => setDiagnosticsCopied(false), 2_000)
+    } catch (cause) {
+      onError(`Could not copy diagnostics: ${errorMessage(cause)}`)
     }
   }
 
@@ -337,6 +375,13 @@ export function SettingsPane({
                           <strong className={rowTitle}>Project root</strong>
                           <span className={rowPathText} title={appInfo?.projectRoot}>{appInfo?.projectRoot || '—'}</span>
                         </div>
+                      </SettingsRow>
+                      <SettingsRow>
+                        <div className={rowStack}>
+                          <strong className={rowTitle}>Beta diagnostics</strong>
+                          <span className={rowDesc}>Copy runtime health for a bug report without credentials, session IDs, paths, project names, or browser URLs.</span>
+                        </div>
+                        <SettingsButton onClick={() => void copyDiagnostics()}>{diagnosticsCopied ? 'Copied' : 'Copy diagnostics'}</SettingsButton>
                       </SettingsRow>
                     </div>
                   </SettingsSection>
