@@ -10,6 +10,7 @@ test-results/
 .sessions/
 .nd-dsh/
 artifacts/
+.pnpm-store/
 
 # Keep project skills tracked while ignoring local DSH runtime state.
 .dsh/*
