@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { buildCodingEngineCatalog, ANTIGRAVITY_ENGINE_ID, CODEX_CLI_ENGINE_ID, CODEX_ENGINE_ID, ND_HARNESS_ENGINE_ID } from '../src/shared/coding-engines.js'
+import {
+  ANTIGRAVITY_ENGINE_ID,
+  CHATGPT_WEB_ENGINE_ID,
+  CODEX_CLI_ENGINE_ID,
+  CODEX_ENGINE_ID,
+  ND_HARNESS_ENGINE_ID,
+  buildCodingEngineCatalog,
+  chatGptWebEngineDescriptor,
+  workerAssignableCodingEngines,
+} from '../src/shared/coding-engines.js'
 
 describe('coding engine catalog', () => {
   it('keeps model providers separate from the product-owned coding engine registry', () => {
@@ -9,6 +18,21 @@ describe('coding engine catalog', () => {
     expect(engines.find((engine) => engine.id === CODEX_ENGINE_ID)?.integration).toBe('delegated')
     expect(engines.find((engine) => engine.id === CODEX_CLI_ENGINE_ID)?.integration).toBe('primary')
     expect(engines.find((engine) => engine.id === ANTIGRAVITY_ENGINE_ID)?.integration).toBe('primary')
+  })
+
+  it('keeps browser-only ChatGPT Web interactive instead of worker-assignable', () => {
+    const chatGpt = chatGptWebEngineDescriptor()
+    expect(chatGpt.id).toBe(CHATGPT_WEB_ENGINE_ID)
+    expect(chatGpt.available).toBe(true)
+    expect(chatGpt.capabilities.browser).toBe(true)
+    expect(chatGpt.capabilities.workspace).toBe(false)
+
+    const workers = workerAssignableCodingEngines([
+      ...buildCodingEngineCatalog({ harnessReady: true, codexReady: true, codexCliReady: true, antigravityReady: true }),
+      chatGpt,
+    ])
+    expect(workers.map((engine) => engine.id)).not.toContain(CHATGPT_WEB_ENGINE_ID)
+    expect(workers.map((engine) => engine.id)).toContain(ND_HARNESS_ENGINE_ID)
   })
 
   it('advertises only capabilities ND actually wires for the delegated Codex adapter', () => {

@@ -5,6 +5,8 @@ import { createServer } from 'node:net'
 import { dirname, join } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { ND_ORG_MEMORY_ID, ND_WORKSPACE_CONTEXT_ID } from '../shared/capabilities.js'
+import { workerAssignableCodingEngines } from '../shared/coding-engines.js'
 import { IPC, type DshEventFrame } from '../shared/contracts.js'
 import { DESIGN_IPC } from '../shared/design.js'
 import { ORGANIZATION_IPC } from '../shared/organization.js'
@@ -12,17 +14,16 @@ import { TERMINAL_IPC } from '../shared/terminal.js'
 import { projectRoot } from './app-paths.js'
 import { BrowserController } from './browser/browser-controller.js'
 import { DEFAULT_BROWSER_URL } from './browser/browser-url.js'
+import { CapabilityAssignmentStore } from './capabilities/capability-assignment-store.js'
+import { CapabilityRegistry } from './capabilities/capability-registry.js'
+import { CapabilityStatusStore } from './capabilities/capability-status-store.js'
+import { createHarnessSourceSetupAdapters } from './capabilities/harness-runtime-setup.js'
 import { ExternalElementStage, RecentPickStore } from './capture/external-inspect.js'
 import { DesignService } from './design/design-service.js'
 import { registerDesignIpc } from './design/ipc.js'
 import { NdPencilController } from './design/nd-pencil-controller.js'
 import { DshSurfaceController } from './dsh/dsh-surface.js'
 import { pickFreePort } from './dsh/gateway-client.js'
-import { CapabilityAssignmentStore } from './capabilities/capability-assignment-store.js'
-import { CapabilityRegistry } from './capabilities/capability-registry.js'
-import { CapabilityStatusStore } from './capabilities/capability-status-store.js'
-import { createHarnessSourceSetupAdapters } from './capabilities/harness-runtime-setup.js'
-import { ND_ORG_MEMORY_ID, ND_WORKSPACE_CONTEXT_ID } from '../shared/capabilities.js'
 import { AntigravityEngine } from './engines/antigravity/antigravity-engine.js'
 import { CodexCliEngine } from './engines/codex/codex-cli-engine.js'
 import { CodingEngineRegistry } from './engines/coding-engine-registry.js'
@@ -56,6 +57,7 @@ let mainWindow: BrowserWindow | undefined
 let activeHarness: HarnessService | undefined
 let activeCodexEngine: CodexCliEngine | undefined
 let activeAntigravityEngine: AntigravityEngine | undefined
+let activeEngineRouter: EngineSessionRouter | undefined
 let activeNdPencil: NdPencilController | undefined
 let activeTerminalManager: TerminalManager | undefined
 let shutdownStarted = false
@@ -133,12 +135,19 @@ async function createWindow(cdpPort: number): Promise<void> {
   const dshSurface = new DshSurfaceController(window)
   const externalElements = new ExternalElementStage()
   const recentPicks = new RecentPickStore()
+  const git = new GitService(workspace)
   const harness = new HarnessService(workspace, browser, providers, externalElements, sessionArchive)
   const codexEngine = new CodexCliEngine({ log: (line) => console.log(line) })
   activeCodexEngine = codexEngine
   const antigravityEngine = new AntigravityEngine({ log: (line) => console.log(line) })
   activeAntigravityEngine = antigravityEngine
-  const engineRouter = new EngineSessionRouter(harness, codexEngine, workspace, antigravityEngine)
+  const engineRouter = new EngineSessionRouter(harness, codexEngine, workspace, antigravityEngine, {
+    browser,
+    git,
+    storePath: join(userData, 'chatgpt-web-sessions.json'),
+    log: (line) => console.warn(line),
+  })
+  activeEngineRouter = engineRouter
   const organizationStore = new OrganizationStore(join(userData, 'organization.json'))
   const interruptedRuns = await organizationStore.reconcileInterruptedRuns()
   if (interruptedRuns > 0) console.warn(`Recovered ${interruptedRuns} interrupted organization run(s) from the previous app session.`)
@@ -155,12 +164,17 @@ async function createWindow(cdpPort: number): Promise<void> {
   await projectWorkspace.initialize()
   // One durable routing store for every pluggable capability (engine, memory,
   // context) across agents, roles, and teams; engines resolve through it too.
-  // Built here so backing-service probes can close over the live services.
+  // Interactive browser-only engines stay in the chat catalog but are excluded
+  // from organization capability assignment until they expose ND workspaces.
   const capabilityAssignments = new CapabilityAssignmentStore(join(userData, 'capability-assignments.json'))
   const capabilityStatuses = new CapabilityStatusStore(join(userData, 'capability-statuses.json'))
   const engines = new CodingEngineRegistry(capabilityAssignments)
+  const workerEngines: Pick<CodingEngineRegistry, 'list' | 'assign'> = {
+    list: () => workerAssignableCodingEngines(engines.list()),
+    assign: (agentId, engineId) => engines.assign(agentId, engineId),
+  }
   const capabilitySetupAdapters = createHarnessSourceSetupAdapters()
-  const capabilities = new CapabilityRegistry(capabilityAssignments, engines, capabilityStatuses, {
+  const capabilities = new CapabilityRegistry(capabilityAssignments, workerEngines, capabilityStatuses, {
     [ND_ORG_MEMORY_ID]: async () => { await organizationStore.state() },
     [ND_WORKSPACE_CONTEXT_ID]: async () => {
       const state = workspace.state()
@@ -185,7 +199,6 @@ async function createWindow(cdpPort: number): Promise<void> {
   await ndPencil.initialize()
   const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter, projectRuntime, capabilities)
   const approvalGate = new OrganizationApprovalGate(organizationStore, harness)
-  const git = new GitService(workspace)
   const qa = new QaService()
   qa.setProjectRoot(workspace.state().root)
   const disposeIpc = registerIpc({ window, preloadPath: preload, browser, dshSurface, engines, engineRouter, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, qa, sessionArchive, capabilities })
@@ -293,6 +306,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   })
   codexEngine.setEmitter(dispatchEngineFrame)
   antigravityEngine.setEmitter(dispatchEngineFrame)
+  engineRouter.setEmitter(dispatchEngineFrame)
 
   const rendererUrl = process.env.ELECTRON_RENDERER_URL || process.env.VITE_DEV_SERVER_URL
   const rendererFile = join(currentDirectory, '../renderer/index.html')
@@ -354,6 +368,7 @@ async function createWindow(cdpPort: number): Promise<void> {
     design.destroy()
     if (activeNdPencil === ndPencil) activeNdPencil = undefined
     void ndPencil.destroy()
+    if (activeEngineRouter === engineRouter) { activeEngineRouter = undefined; beginEngineRouterClose(engineRouter) }
     browser.destroy()
     dshSurface.destroy()
     if (mainWindow === window) mainWindow = undefined
@@ -399,6 +414,11 @@ app.on('before-quit', (event) => {
     activeAntigravityEngine = undefined
     beginAntigravityClose(antigravityEngine)
   }
+  if (activeEngineRouter) {
+    const engineRouter = activeEngineRouter
+    activeEngineRouter = undefined
+    beginEngineRouterClose(engineRouter)
+  }
   if (activeTerminalManager) {
     const terminalManager = activeTerminalManager
     activeTerminalManager = undefined
@@ -438,6 +458,10 @@ function beginCodexClose(codexEngine: CodexCliEngine): void {
 
 function beginAntigravityClose(antigravityEngine: AntigravityEngine): void {
   trackClose(antigravityEngine.close().catch((error) => console.error('Failed to close the Antigravity engine cleanly:', error)))
+}
+
+function beginEngineRouterClose(engineRouter: EngineSessionRouter): void {
+  trackClose(engineRouter.close().catch((error) => console.error('Failed to close the engine router cleanly:', error)))
 }
 
 function beginTerminalClose(terminalManager: TerminalManager): void {
