@@ -45,6 +45,7 @@ export function Explorer({ workspace, selectedPath, onWorkspaceChanged, onOpenFi
   const [error, setError] = useState<string>()
   const [activeTab, setActiveTab] = useState<ExplorerTab>('files')
   const refreshBusy = useRef(false)
+  const explorerRef = useRef<HTMLElement | null>(null)
 
   const refresh = useCallback(async () => {
     // A slow network-mounted workspace must never stack list requests every
@@ -68,6 +69,11 @@ export function Explorer({ workspace, selectedPath, onWorkspaceChanged, onOpenFi
     let timer: ReturnType<typeof window.setTimeout> | undefined
     let disposed = false
 
+    const isVisible = (): boolean => (
+      document.visibilityState === 'visible'
+      && Boolean(explorerRef.current?.getClientRects().length)
+    )
+
     const cancelTimer = (): void => {
       if (timer !== undefined) window.clearTimeout(timer)
       timer = undefined
@@ -75,21 +81,25 @@ export function Explorer({ workspace, selectedPath, onWorkspaceChanged, onOpenFi
 
     const schedule = (): void => {
       cancelTimer()
-      if (disposed || document.visibilityState !== 'visible') return
+      if (disposed || !isVisible()) return
       timer = window.setTimeout(() => {
+        if (!isVisible()) {
+          cancelTimer()
+          return
+        }
         void refresh().finally(schedule)
       }, ROOT_REFRESH_INTERVAL_MS)
     }
 
     const refreshNow = (): void => {
-      if (document.visibilityState !== 'visible') return
+      if (!isVisible()) return
       cancelTimer()
       void refresh().finally(schedule)
     }
 
     const onFocus = (): void => refreshNow()
     const onVisibilityChange = (): void => {
-      if (document.visibilityState === 'visible') refreshNow()
+      if (isVisible()) refreshNow()
       else cancelTimer()
     }
 
@@ -110,7 +120,7 @@ export function Explorer({ workspace, selectedPath, onWorkspaceChanged, onOpenFi
   }
 
   return (
-    <aside className="flex h-full min-h-0 flex-col overflow-hidden bg-sidebar">
+    <aside ref={explorerRef} className="flex h-full min-h-0 flex-col overflow-hidden bg-sidebar">
       <header className="flex h-[38px] shrink-0 items-center justify-between border-b border-border-soft bg-sidebar px-2.5">
         <span className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground">
           {activeTab === 'files' ? 'EXPLORER' : activeTab === 'search' ? 'SEARCH' : 'SOURCE CONTROL'}
