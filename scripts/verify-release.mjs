@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, statSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { dirname, extname, join, resolve } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
@@ -33,6 +33,12 @@ if (/\n\s*- from: package\.json\b/.test(extraResourcesConfig)) {
   throw new Error('electron-builder.yml must not exclude package.json from app.asar via extraResources')
 }
 
+// Development UI previews intentionally contain fake companies/sessions for
+// isolated visual work. Production builds must tree-shake that entire branch;
+// scan the built renderer whenever it exists so a future import change cannot
+// silently ship preview data into the desktop product.
+verifyProductionRendererIsolation()
+
 if (!configOnly) {
   const requiredFiles = [
     '.release/release-manifest.json',
@@ -60,6 +66,35 @@ if (!configOnly) {
 }
 
 console.log(configOnly ? 'Release packaging configuration verified.' : 'Release runtime inputs verified.')
+
+function verifyProductionRendererIsolation() {
+  const outputRoot = join(root, 'out', 'renderer')
+  if (!existsSync(outputRoot)) return
+  const forbidden = [
+    'preview-session',
+    'C:/workspace/nd-product',
+    'Northstar Digital',
+    'sha256-openviking010hashplaceholder',
+    'sha256-graphify100hashplaceholder',
+  ]
+  for (const path of walkFiles(outputRoot)) {
+    if (!['.html', '.js', '.mjs'].includes(extname(path))) continue
+    const content = readFileSync(path, 'utf8')
+    for (const marker of forbidden) {
+      if (content.includes(marker)) throw new Error(`Production renderer contains development preview marker ${JSON.stringify(marker)} in ${path}`)
+    }
+  }
+}
+
+function walkFiles(directory) {
+  const files = []
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name)
+    if (entry.isDirectory()) files.push(...walkFiles(path))
+    else if (entry.isFile()) files.push(path)
+  }
+  return files
+}
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, 'utf8'))
