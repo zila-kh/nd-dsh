@@ -1,5 +1,3 @@
-import { app } from 'electron'
-import { join } from 'node:path'
 import type {
   DshEventFrame,
   EngineModelOption,
@@ -10,16 +8,23 @@ import type {
   HarnessStatus,
 } from '../../shared/contracts.js'
 import { ANTIGRAVITY_ENGINE_ID, CHATGPT_WEB_ENGINE_ID, CODEX_CLI_ENGINE_ID, ND_HARNESS_ENGINE_ID } from '../../shared/coding-engines.js'
-import type { ExtensionRouter } from '../extensions/extension-router.js'
-import { GitService } from '../git/git-service.js'
-import { tokenSaverRuntime } from '../token-saver/token-saver-runtime.js'
-import type { WorkspaceService } from '../workspace/workspace-service.js'
-import { sessionInWorkspace } from '../workspace/path-utils.js'
 import type { BrowserController } from '../browser/browser-controller.js'
+import type { ExtensionRouter } from '../extensions/extension-router.js'
+import type { GitService } from '../git/git-service.js'
+import type { HarnessService } from '../harness/harness-service.js'
+import { tokenSaverRuntime } from '../token-saver/token-saver-runtime.js'
+import { sessionInWorkspace } from '../workspace/path-utils.js'
+import type { WorkspaceService } from '../workspace/workspace-service.js'
 import type { AntigravityEngine } from './antigravity/antigravity-engine.js'
 import { ChatGptWebEngine } from './chatgpt-web/chatgpt-web-engine.js'
 import type { CodexCliEngine } from './codex/codex-cli-engine.js'
-import type { HarnessService } from '../harness/harness-service.js'
+
+export interface ChatGptWebRuntime {
+  browser: BrowserController
+  git: GitService
+  storePath: string
+  log?: (line: string) => void
+}
 
 /**
  * The single dispatch point between renderer-facing run/respond/stop calls and
@@ -31,37 +36,33 @@ export class EngineSessionRouter {
   private extensions: ExtensionRouter | undefined
   /** Logical engine ids for harness-backed sessions such as delegated Codex. */
   private readonly logicalEngineBySession = new Map<string, string>()
-  private readonly chatGptWeb: ChatGptWebEngine
+  private readonly chatGptWeb: ChatGptWebEngine | undefined
 
   constructor(
     private readonly harness: HarnessService,
     private readonly codex: CodexCliEngine,
     private readonly workspace: WorkspaceService,
     private readonly antigravity?: AntigravityEngine,
+    chatGptWebRuntime?: ChatGptWebRuntime,
   ) {
-    // HarnessService already owns the canonical visible BrowserController.
-    // Reuse that exact instance rather than launching or embedding a second
-    // browser; the cast is confined to this adapter boundary until the common
-    // engine runtime context becomes an explicit constructor contract.
-    const browser = (harness as unknown as { browser: BrowserController }).browser
-    this.chatGptWeb = new ChatGptWebEngine({
-      browser,
-      git: new GitService(workspace),
-      workspace,
-      storePath: join(app.getPath('userData'), 'chatgpt-web-sessions.json'),
-      log: (line) => console.warn(line),
-    })
-    // The harness already owns ND's canonical engine-event fan-out. Resolve it
-    // lazily at event time because index.ts attaches listeners after this router
-    // is constructed.
-    this.chatGptWeb.setEmitter((frame: DshEventFrame) => {
-      const emit = (this.harness as unknown as { onEvent?: (event: DshEventFrame) => void }).onEvent
-      emit?.(frame)
-    })
+    if (chatGptWebRuntime) {
+      this.chatGptWeb = new ChatGptWebEngine({
+        browser: chatGptWebRuntime.browser,
+        git: chatGptWebRuntime.git,
+        workspace,
+        storePath: chatGptWebRuntime.storePath,
+        ...(chatGptWebRuntime.log ? { log: chatGptWebRuntime.log } : {}),
+      })
+    }
   }
 
   setExtensionRouter(router: ExtensionRouter): void {
     this.extensions = router
+  }
+
+  /** Every direct engine emits through the same ND organization/renderer fan-out. */
+  setEmitter(emit: (frame: DshEventFrame) => void): void {
+    this.chatGptWeb?.setEmitter(emit)
   }
 
   async run(prompt: string, options?: HarnessRunOptions): Promise<HarnessRunResult> {
@@ -92,7 +93,7 @@ export class EngineSessionRouter {
       })
     }
     if (requested === CHATGPT_WEB_ENGINE_ID) {
-      return this.chatGptWeb.run(optimizedPrompt, {
+      return this.requireChatGptWeb().run(optimizedPrompt, {
         ...(options?.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
         cwd: this.workspace.state().root,
       })
@@ -118,7 +119,7 @@ export class EngineSessionRouter {
       return { engineId, sessionId }
     }
     if (engineId === CHATGPT_WEB_ENGINE_ID) {
-      const sessionId = (await this.chatGptWeb.createSession({ cwd: targetCwd })).sessionId
+      const sessionId = (await this.requireChatGptWeb().createSession({ cwd: targetCwd })).sessionId
       this.logicalEngineBySession.set(sessionId, engineId)
       return { engineId, sessionId }
     }
@@ -147,7 +148,7 @@ export class EngineSessionRouter {
       return
     }
     if (engine === CHATGPT_WEB_ENGINE_ID) {
-      await this.chatGptWeb.stop(sessionId)
+      await this.requireChatGptWeb().stop(sessionId)
       return
     }
     const result = await this.harness.gatewayRpc('session.cancel', { sessionId })
@@ -156,31 +157,36 @@ export class EngineSessionRouter {
 
   /** Cancel pending turns on every engine; each keeps its runtime available. */
   async stop(): Promise<HarnessStatus> {
-    await this.chatGptWeb.stop()
+    await this.chatGptWeb?.stop()
     await this.antigravity?.stop()
     await this.codex.stop()
     return this.harness.stop()
+  }
+
+  /** Release router-owned resources without double-closing the other engines. */
+  async close(): Promise<void> {
+    await this.chatGptWeb?.close()
   }
 
   /** Approval/question answers are routed by who issued the rpcId. */
   respond(rpcId: string, value: unknown): Promise<void> {
     if (this.codex.handlesApproval(rpcId)) return this.codex.respond(rpcId, value)
     if (this.antigravity?.handlesApproval(rpcId)) return this.antigravity.respond(rpcId, value)
-    if (this.chatGptWeb.handlesApproval(rpcId)) return this.chatGptWeb.respond(rpcId, value)
+    if (this.chatGptWeb?.handlesApproval(rpcId)) return this.chatGptWeb.respond(rpcId, value)
     return this.harness.respond(rpcId, value)
   }
 
   sessions(): EngineSessionSummary[] {
     const workspaceRoot = this.workspace.state().root
     return [
-      ...this.chatGptWeb.listSessions(),
+      ...this.chatGptWeb?.listSessions() ?? [],
       ...this.antigravity?.listSessions() ?? [],
       ...this.codex.listSessions(),
     ].filter((session) => sessionInWorkspace(workspaceRoot, session.cwd))
   }
 
   transcript(sessionId: string): EngineSessionTranscript {
-    if (this.chatGptWeb.ownsSession(sessionId)) return this.chatGptWeb.transcript(sessionId)
+    if (this.chatGptWeb?.ownsSession(sessionId)) return this.chatGptWeb.transcript(sessionId)
     if (this.antigravity?.ownsSession(sessionId)) return this.antigravity.transcript(sessionId)
     return this.codex.transcript(sessionId)
   }
@@ -197,9 +203,16 @@ export class EngineSessionRouter {
   private engineForSession(sessionId: string): string {
     const logical = this.logicalEngineBySession.get(sessionId)
     if (logical) return logical
-    if (this.chatGptWeb.ownsSession(sessionId)) return CHATGPT_WEB_ENGINE_ID
+    if (this.chatGptWeb?.ownsSession(sessionId)) return CHATGPT_WEB_ENGINE_ID
     if (this.codex.ownsSession(sessionId)) return CODEX_CLI_ENGINE_ID
     if (this.antigravity?.ownsSession(sessionId)) return ANTIGRAVITY_ENGINE_ID
     return ND_HARNESS_ENGINE_ID
+  }
+
+  private requireChatGptWeb(): ChatGptWebEngine {
+    if (!this.chatGptWeb) {
+      throw new Error('ChatGPT Web is unavailable because ND did not initialize its visible-browser Git-sync runtime.')
+    }
+    return this.chatGptWeb
   }
 }
