@@ -102,11 +102,18 @@ export class EngineSessionRouter {
         throw new Error('ChatGPT Web and ND Harness share the visible browser. Finish the active ND Harness turn before starting ChatGPT Web.')
       }
       const engine = this.requireChatGptWeb()
+      const workspaceRoot = this.workspace.state().root
+      if (options?.sessionId) {
+        const session = engine.listSessions().find((candidate) => candidate.sessionId === options.sessionId)
+        if (session?.cwd && session.cwd !== workspaceRoot) {
+          throw new Error('This ChatGPT Web chat belongs to a different project workspace. Reopen that project before continuing the chat.')
+        }
+      }
       const browser = this.chatGptWebBrowser
       const returnUrl = browser?.state().url
       const result = await engine.run(optimizedPrompt, {
         ...(options?.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
-        cwd: this.workspace.state().root,
+        cwd: workspaceRoot,
       })
       // ChatGPT temporarily owns the canonical visible browser while the turn
       // is active. After a successful turn, restore the user's app preview so
