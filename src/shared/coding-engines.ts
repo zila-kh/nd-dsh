@@ -1,6 +1,7 @@
 import type { CodingEngineDescriptor } from './contracts.js'
 
 export const ND_HARNESS_ENGINE_ID = 'nd-harness'
+export const CHATGPT_WEB_ENGINE_ID = 'chatgpt-web'
 export const CODEX_ENGINE_ID = 'codex'
 export const CODEX_CLI_ENGINE_ID = 'codex-cli'
 export const ANTIGRAVITY_ENGINE_ID = 'antigravity'
@@ -10,6 +11,34 @@ export interface CodingEngineAvailability {
   codexReady: boolean
   codexCliReady: boolean
   antigravityReady: boolean
+}
+
+export function chatGptWebEngineDescriptor(): CodingEngineDescriptor {
+  return {
+    id: CHATGPT_WEB_ENGINE_ID,
+    name: 'ChatGPT Web',
+    integration: 'primary',
+    available: true,
+    description: 'Chat through the signed-in ChatGPT website in ND\'s visible browser. Conversation state stays on ChatGPT; code synchronizes through a safe per-chat Git branch on the project remote.',
+    capabilities: {
+      workspace: false,
+      filesystem: false,
+      shell: false,
+      browser: true,
+      skills: false,
+      mcp: false,
+      modelProviderRouting: false,
+      humanApprovals: false,
+      streaming: false,
+      persistentSessions: true,
+    },
+    workerInstructions: '\nExecution engine: ChatGPT Web with Git sync. Conversation transport is the signed-in ChatGPT website in ND\'s visible browser; local code transport is the session-owned Git branch. Do not assume direct ND filesystem or shell tools exist inside ChatGPT. Require actual remote commits before claiming code synchronized. Never push directly to main or master.\n',
+  }
+}
+
+/** Organization workers need a real ND workspace boundary; browser-only chat adapters stay interactive. */
+export function workerAssignableCodingEngines(engines: readonly CodingEngineDescriptor[]): CodingEngineDescriptor[] {
+  return engines.filter((engine) => engine.capabilities.workspace)
 }
 
 /**
