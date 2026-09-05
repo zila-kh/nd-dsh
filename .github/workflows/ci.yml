@@ -42,3 +42,24 @@ jobs:
         run: corepack pnpm build
       - name: Desktop smoke tests
         run: xvfb-run --auto-servernum corepack pnpm e2e
+
+  windows-package:
+    runs-on: windows-latest
+    timeout-minutes: 55
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Enable Corepack
+        run: corepack enable
+      - name: Install desktop dependencies
+        run: corepack pnpm install --frozen-lockfile
+      - name: Build unpacked Windows beta
+        run: corepack pnpm dist:win:dir
