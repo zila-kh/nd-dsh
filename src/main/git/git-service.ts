@@ -480,7 +480,6 @@ export class GitService {
   private sanitizeRemoteUrl(raw: string): string {
     try {
       const parsed = new URL(raw)
-      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return raw
       parsed.username = ''
       parsed.password = ''
       parsed.search = ''
