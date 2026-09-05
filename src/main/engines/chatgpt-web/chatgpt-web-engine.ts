@@ -104,12 +104,11 @@ export function chatGptSyncBranchName(sessionId: string): string {
   return `nd/chat-${suffix.toLowerCase()}`
 }
 
-/** Never leak HTTPS credentials or credential-like URL metadata into a web prompt. */
+/** Never leak credentials or credential-like URL metadata into a web prompt. */
 export function sanitizeRemoteForPrompt(remoteUrl: string): string {
   const trimmed = remoteUrl.trim()
   try {
     const parsed = new URL(trimmed)
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return trimmed
     parsed.username = ''
     parsed.password = ''
     parsed.search = ''
@@ -282,10 +281,10 @@ export class ChatGptWebEngine {
   async stop(sessionId?: string): Promise<void> {
     const targets = sessionId === undefined
       ? [...this.sessions.values()].filter((session) => session.running)
-      : [this.sessions.get(sessionId)].filter((session): session is StoredChatGptWebSession => session !== undefined)
+      : [this.sessions.get(sessionId)].filter((session): session is StoredChatGptWebSession => session?.running === true)
     for (const session of targets) {
       this.activeTurns.get(session.sessionId)?.abort()
-      if (!this.browserMatchesSession(session)) continue
+      if (!this.browserMayHostSession(session)) continue
       try {
         const cdp = await VisibleCdpConnection.connect(this.options.browser)
         try {
@@ -329,8 +328,8 @@ export class ChatGptWebEngine {
       throw new Error('This ChatGPT Web chat belongs to a different workspace. Reopen the chat from its original project before syncing Git.')
     }
 
-    // Validate the shared remote before changing branches. A project that has
-    // not been configured for Git sync must fail without mutating its checkout.
+    // Validate the shared remote and committed HEAD before changing branches.
+    // A project that is not ready for Git sync must fail without mutating its checkout.
     const initialState = await this.options.git.refresh()
     const remote = session.remote && initialState.remotes.includes(session.remote)
       ? session.remote
@@ -338,6 +337,9 @@ export class ChatGptWebEngine {
     if (!remote) throw new Error('ChatGPT Web Git sync requires a configured Git remote for this workspace.')
     const remoteUrl = await this.options.git.remoteUrl(remote)
     if (!remoteUrl) throw new Error(`Git remote ${remote} has no fetch/push URL.`)
+    if (!await this.options.git.head()) {
+      throw new Error('ChatGPT Web Git sync requires at least one local commit before the first turn.')
+    }
 
     await this.options.git.ensureBranch(session.branch)
     await this.options.git.pushBranch(remote, session.branch)
@@ -591,8 +593,10 @@ export class ChatGptWebEngine {
     return session
   }
 
-  private browserMatchesSession(session: StoredChatGptWebSession): boolean {
-    return session.conversationUrl !== undefined && sameConversationUrl(this.options.browser.state().url, session.conversationUrl)
+  private browserMayHostSession(session: StoredChatGptWebSession): boolean {
+    const currentUrl = this.options.browser.state().url
+    if (!isChatGptPageUrl(currentUrl)) return false
+    return session.conversationUrl === undefined || sameConversationUrl(currentUrl, session.conversationUrl)
   }
 
   private emitFrame(frame: DshEventFrame): void {
@@ -744,6 +748,14 @@ function domTurnKey(turn: ChatGptDomTurn, index: number): string {
 
 function trimArray<T>(values: T[], limit: number): T[] {
   return values.length <= limit ? values : values.slice(values.length - limit)
+}
+
+function isChatGptPageUrl(value: string): boolean {
+  try {
+    return new URL(value).origin === 'https://chatgpt.com'
+  } catch {
+    return false
+  }
 }
 
 function isChatGptConversationUrl(value: string): boolean {
