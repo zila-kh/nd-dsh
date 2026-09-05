@@ -1,0 +1,731 @@
+import { createHash, randomUUID } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
+import type {
+  DshEventFrame,
+  EngineSessionSummary,
+  EngineSessionTranscript,
+  SessionEventEnvelope,
+} from '../../../shared/contracts.js'
+import { CHATGPT_WEB_ENGINE_ID } from '../../../shared/coding-engines.js'
+import type { BrowserController } from '../../browser/browser-controller.js'
+import type { GitService } from '../../git/git-service.js'
+import type { WorkspaceService } from '../../workspace/workspace-service.js'
+
+const CHATGPT_HOME_URL = 'https://chatgpt.com/'
+const TRANSCRIPT_EVENT_TYPES = new Set(['user/message', 'assistant/message', 'agent/reasoning'])
+const MAX_TRANSCRIPT_EVENTS = 500
+const MAX_PROMPT_CHARS = 100_000
+const CHATGPT_READY_TIMEOUT_MS = 15_000
+const CHATGPT_TURN_TIMEOUT_MS = 10 * 60_000
+const TURN_POLL_MS = 350
+const REMOTE_POLL_MS = 2_000
+const BACKGROUND_WATCH_MS = 5_000
+const BACKGROUND_REMOTE_POLL_MS = 10_000
+
+interface StoredChatGptWebSession {
+  sessionId: string
+  conversationUrl?: string
+  cwd?: string
+  title: string
+  createdAt: number
+  updatedAt: number
+  running: boolean
+  sequence: number
+  transcript: SessionEventEnvelope[]
+  seenTurnKeys: string[]
+  sentPromptHashes: string[]
+  branch: string
+  remote?: string
+  lastRemoteSha?: string
+}
+
+interface PersistedChatGptWebStore {
+  version: 1
+  sessions: StoredChatGptWebSession[]
+}
+
+interface ChatGptDomTurn {
+  role: 'user' | 'assistant'
+  text: string
+}
+
+interface ChatGptDomSnapshot {
+  url: string
+  title: string
+  composer: boolean
+  busy: boolean
+  complete: boolean
+  turns: ChatGptDomTurn[]
+}
+
+export interface ChatGptGitContext {
+  remote: string
+  remoteUrl: string
+  branch: string
+  head: string
+  dirty: boolean
+}
+
+interface CdpTarget {
+  id?: string
+  webSocketDebuggerUrl?: string
+}
+
+interface CdpResponse {
+  id?: number
+  result?: {
+    result?: { value?: unknown }
+    exceptionDetails?: { text?: string; exception?: { description?: string } }
+  }
+  error?: { message?: string }
+}
+
+interface PendingCdpCall {
+  resolve: (value: unknown) => void
+  reject: (error: Error) => void
+}
+
+export interface ChatGptWebEngineOptions {
+  browser: BrowserController
+  git: GitService
+  workspace: WorkspaceService
+  storePath: string
+  log?: (line: string) => void
+}
+
+/** Stable, Git-safe branch name derived from one ND engine session. */
+export function chatGptSyncBranchName(sessionId: string): string {
+  const suffix = sessionId.replace(/^chatgpt-web-/, '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 10)
+    || createHash('sha256').update(sessionId).digest('hex').slice(0, 10)
+  return `nd/chat-${suffix.toLowerCase()}`
+}
+
+/** Never leak HTTPS userinfo credentials into a prompt sent to ChatGPT Web. */
+export function sanitizeRemoteForPrompt(remoteUrl: string): string {
+  const trimmed = remoteUrl.trim()
+  try {
+    const parsed = new URL(trimmed)
+    if (parsed.username || parsed.password) {
+      parsed.username = ''
+      parsed.password = ''
+    }
+    return parsed.toString()
+  } catch {
+    return trimmed
+  }
+}
+
+export function compileChatGptGitPrompt(prompt: string, context: ChatGptGitContext): string {
+  return [
+    '<nd-git-sync>',
+    `Remote: ${sanitizeRemoteForPrompt(context.remoteUrl)}`,
+    `Remote name: ${context.remote}`,
+    `Branch: ${context.branch}`,
+    `Expected local HEAD: ${context.head}`,
+    `Local working tree: ${context.dirty ? 'dirty (uncommitted local changes are NOT on the remote)' : 'clean'}`,
+    '',
+    'Use this Git branch as the shared code transport for this ND chat.',
+    `Before editing, read/pull the latest ${context.remote}/${context.branch}.`,
+    `If your connected ChatGPT coding/Git tools allow writes, commit and push completed code changes to ${context.remote}/${context.branch}.`,
+    'Never push this task directly to main or master.',
+    'If you do not have a writable Git/coding tool in ChatGPT, say that clearly and do not claim code was pushed.',
+    '</nd-git-sync>',
+    '',
+    prompt,
+  ].join('\n')
+}
+
+/**
+ * ChatGPT Web is a conversation transport, not a second local harness. It
+ * drives ND's already-visible browser target over the loopback CDP endpoint;
+ * code moves through the user's Git remote and GitService remains the only
+ * local mutation authority.
+ */
+export class ChatGptWebEngine {
+  private readonly sessions = new Map<string, StoredChatGptWebSession>()
+  private readonly activeTurns = new Map<string, AbortController>()
+  private readonly remoteCheckedAt = new Map<string, number>()
+  private onEvent: ((frame: DshEventFrame) => void) | undefined
+  private watcherBusy = false
+  private readonly watchTimer: ReturnType<typeof setInterval>
+
+  constructor(private readonly options: ChatGptWebEngineOptions) {
+    this.loadStore()
+    this.watchTimer = setInterval(() => { void this.watchTick() }, BACKGROUND_WATCH_MS)
+    this.watchTimer.unref?.()
+  }
+
+  setEmitter(emit: (frame: DshEventFrame) => void): void {
+    this.onEvent = emit
+  }
+
+  ownsSession(sessionId: string): boolean {
+    return this.sessions.has(sessionId)
+  }
+
+  handlesApproval(_rpcId: string): boolean {
+    return false
+  }
+
+  async respond(rpcId: string, _value: unknown): Promise<void> {
+    throw new Error(`Unknown ${CHATGPT_WEB_ENGINE_ID} approval: ${rpcId}`)
+  }
+
+  listSessions(): EngineSessionSummary[] {
+    return [...this.sessions.values()]
+      .sort((left, right) => right.updatedAt - left.updatedAt)
+      .map((session) => ({
+        sessionId: session.sessionId,
+        engineId: CHATGPT_WEB_ENGINE_ID,
+        title: session.title,
+        ...(session.cwd === undefined ? {} : { cwd: session.cwd }),
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+        running: session.running,
+      }))
+  }
+
+  transcript(sessionId: string): EngineSessionTranscript {
+    const session = this.requireSession(sessionId)
+    return { sessionId, engineId: CHATGPT_WEB_ENGINE_ID, events: [...session.transcript] }
+  }
+
+  async createSession(input: { cwd?: string } = {}): Promise<{ sessionId: string }> {
+    const sessionId = `chatgpt-web-${randomUUID()}`
+    const now = Date.now()
+    const session: StoredChatGptWebSession = {
+      sessionId,
+      ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
+      title: 'New ChatGPT Web chat',
+      createdAt: now,
+      updatedAt: now,
+      running: false,
+      sequence: 0,
+      transcript: [],
+      seenTurnKeys: [],
+      sentPromptHashes: [],
+      branch: chatGptSyncBranchName(sessionId),
+    }
+    this.sessions.set(sessionId, session)
+    this.persistStore()
+    this.emitFrame({ kind: 'session-added', sessionId, meta: { engineId: CHATGPT_WEB_ENGINE_ID } })
+    return { sessionId }
+  }
+
+  async run(prompt: string, input: { sessionId?: string; cwd?: string } = {}): Promise<{ sessionId: string }> {
+    const cleaned = prompt.trim()
+    if (!cleaned) throw new Error('Prompt cannot be empty')
+    if (cleaned.length > MAX_PROMPT_CHARS) throw new Error(`Prompt exceeds the ${MAX_PROMPT_CHARS.toLocaleString()} character limit`)
+
+    let session = input.sessionId === undefined ? undefined : this.sessions.get(input.sessionId)
+    if (input.sessionId !== undefined && !session) throw new Error(`Unknown ${CHATGPT_WEB_ENGINE_ID} session: ${input.sessionId}`)
+    if (!session) {
+      const created = await this.createSession({ cwd: input.cwd ?? this.options.workspace.state().root })
+      session = this.sessions.get(created.sessionId)
+    }
+    if (!session) throw new Error(`${CHATGPT_WEB_ENGINE_ID} session could not be created`)
+    if (session.running) throw new Error('This ChatGPT Web chat already has an active turn')
+    if ([...this.sessions.values()].some((candidate) => candidate.running && candidate.sessionId !== session.sessionId)) {
+      throw new Error('ChatGPT Web uses ND\'s single visible browser pane. Finish the active ChatGPT Web turn before starting another one.')
+    }
+
+    session.cwd = input.cwd ?? session.cwd ?? this.options.workspace.state().root
+    const abort = new AbortController()
+    this.activeTurns.set(session.sessionId, abort)
+    session.running = true
+    session.updatedAt = Date.now()
+    this.persistStore()
+    this.emitFrame({ kind: 'session-status', sessionId: session.sessionId, running: true })
+
+    try {
+      const cdp = await this.openBoundConversation(session)
+      try {
+        const before = await this.captureSnapshot(cdp)
+        this.importUnseenTurns(session, before)
+        const gitContext = await this.prepareGit(session)
+        const compiledPrompt = compileChatGptGitPrompt(cleaned, gitContext)
+        const baselineAssistantCount = before.turns.filter((turn) => turn.role === 'assistant').length
+        await this.submitPrompt(cdp, compiledPrompt)
+        this.recordUserMessage(session, cleaned)
+        this.rememberSentPrompt(session, compiledPrompt)
+        if (session.title === 'New ChatGPT Web chat') session.title = cleaned.slice(0, 80)
+        const completed = await this.waitForAssistant(cdp, session, baselineAssistantCount, abort.signal)
+        this.captureConversationUrl(session, completed.url)
+        const assistant = [...completed.turns].reverse().find((turn) => turn.role === 'assistant')
+        if (!assistant?.text.trim()) throw new Error('ChatGPT Web completed without a readable assistant message')
+        this.recordAssistantMessage(session, assistant.text.trim())
+        this.markAllTurnsSeen(session, completed)
+        await this.syncRemoteIfChanged(session, true)
+        return { sessionId: session.sessionId }
+      } finally {
+        cdp.close()
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      this.emitFrame({ kind: 'agent-error', sessionId: session.sessionId, message })
+      throw error
+    } finally {
+      this.activeTurns.delete(session.sessionId)
+      session.running = false
+      session.updatedAt = Date.now()
+      this.persistStore()
+      this.emitFrame({ kind: 'session-status', sessionId: session.sessionId, running: false })
+    }
+  }
+
+  async stop(sessionId?: string): Promise<void> {
+    const targets = sessionId === undefined
+      ? [...this.sessions.values()].filter((session) => session.running)
+      : [this.sessions.get(sessionId)].filter((session): session is StoredChatGptWebSession => session !== undefined)
+    for (const session of targets) {
+      this.activeTurns.get(session.sessionId)?.abort()
+      if (!this.browserMatchesSession(session)) continue
+      try {
+        const cdp = await VisibleCdpConnection.connect(this.options.browser)
+        try {
+          await cdp.evaluate<boolean>(`(() => { const button = document.querySelector('button[data-testid="stop-button"]'); if (!(button instanceof HTMLElement)) return false; button.click(); return true })()`)
+        } finally {
+          cdp.close()
+        }
+      } catch {
+        // Local cancellation remains authoritative even when the page changed.
+      }
+    }
+  }
+
+  async close(): Promise<void> {
+    clearInterval(this.watchTimer)
+    for (const controller of this.activeTurns.values()) controller.abort()
+    this.activeTurns.clear()
+    for (const session of this.sessions.values()) session.running = false
+    this.persistStore()
+  }
+
+  private async openBoundConversation(session: StoredChatGptWebSession): Promise<VisibleCdpConnection> {
+    const targetUrl = session.conversationUrl ?? CHATGPT_HOME_URL
+    const currentUrl = this.options.browser.state().url
+    if (!sameConversationUrl(currentUrl, targetUrl)) await this.options.browser.navigate(targetUrl)
+    await this.options.browser.ensureAgentReady()
+    const cdp = await VisibleCdpConnection.connect(this.options.browser)
+    const deadline = Date.now() + CHATGPT_READY_TIMEOUT_MS
+    while (Date.now() < deadline) {
+      const snapshot = await this.captureSnapshot(cdp)
+      if (snapshot.composer) return cdp
+      await sleep(250)
+    }
+    cdp.close()
+    throw new Error('ChatGPT Web is open in ND\'s visible Browser pane, but the composer is unavailable. Sign in to chatgpt.com there, then resend this message.')
+  }
+
+  private async prepareGit(session: StoredChatGptWebSession): Promise<ChatGptGitContext> {
+    const workspaceRoot = this.options.workspace.state().root
+    if (session.cwd !== workspaceRoot) {
+      throw new Error('This ChatGPT Web chat belongs to a different workspace. Reopen the chat from its original project before syncing Git.')
+    }
+    await this.options.git.ensureBranch(session.branch)
+    const state = await this.options.git.refresh()
+    const remote = session.remote && state.remotes.includes(session.remote)
+      ? session.remote
+      : state.remotes.includes('origin') ? 'origin' : state.remotes[0]
+    if (!remote) throw new Error('ChatGPT Web Git sync requires a configured Git remote for this workspace.')
+    const remoteUrl = await this.options.git.remoteUrl(remote)
+    if (!remoteUrl) throw new Error(`Git remote ${remote} has no fetch/push URL.`)
+    await this.options.git.pushBranch(remote, session.branch)
+    const head = await this.options.git.head()
+    if (!head) throw new Error('ChatGPT Web Git sync requires a committed Git HEAD before the first turn.')
+    const remoteSha = await this.options.git.remoteBranchHead(remote, session.branch)
+    session.remote = remote
+    if (remoteSha) session.lastRemoteSha = remoteSha
+    this.persistStore()
+    return {
+      remote,
+      remoteUrl,
+      branch: session.branch,
+      head,
+      dirty: await this.options.git.hasUncommittedChanges(),
+    }
+  }
+
+  private async submitPrompt(cdp: VisibleCdpConnection, prompt: string): Promise<void> {
+    const source = JSON.stringify(prompt)
+    const result = await cdp.evaluate<{ ok: boolean; reason?: string }>(`(async () => {
+      const composerSelector = '[data-testid="prompt-textarea"], #prompt-textarea, [contenteditable="true"][data-lexical-editor="true"]';
+      const composer = document.querySelector(composerSelector);
+      if (!(composer instanceof HTMLElement)) return { ok: false, reason: 'composer-missing' };
+      const text = ${source};
+      composer.focus();
+      if (composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement) {
+        const proto = composer instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+        setter?.call(composer, text);
+        composer.dispatchEvent(new Event('input', { bubbles: true }));
+      } else {
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(composer);
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+        document.execCommand('delete');
+        if (!document.execCommand('insertText', false, text)) composer.textContent = text;
+        composer.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+      }
+      for (let index = 0; index < 50; index += 1) {
+        const form = composer.closest('form');
+        const button = form?.querySelector('button[data-testid="send-button"], button[aria-label*="Send"], button[type="submit"]')
+          ?? document.querySelector('button[data-testid="send-button"], button[aria-label*="Send"]');
+        if (button instanceof HTMLButtonElement && !button.disabled && button.getAttribute('aria-disabled') !== 'true') {
+          button.click();
+          return { ok: true };
+        }
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      return { ok: false, reason: 'send-button-unavailable' };
+    })()`)
+    if (!result?.ok) throw new Error(`ChatGPT Web could not send the message (${result?.reason ?? 'unknown composer state'}). Reload ChatGPT and retry.`)
+  }
+
+  private async waitForAssistant(
+    cdp: VisibleCdpConnection,
+    session: StoredChatGptWebSession,
+    baselineAssistantCount: number,
+    signal: AbortSignal,
+  ): Promise<ChatGptDomSnapshot> {
+    const deadline = Date.now() + CHATGPT_TURN_TIMEOUT_MS
+    let stableText = ''
+    let stableCount = 0
+    let lastRemotePoll = 0
+    while (Date.now() < deadline) {
+      if (signal.aborted) throw new Error('ChatGPT Web turn was stopped.')
+      const snapshot = await this.captureSnapshot(cdp)
+      this.captureConversationUrl(session, snapshot.url)
+      const assistants = snapshot.turns.filter((turn) => turn.role === 'assistant')
+      const latest = assistants.at(-1)?.text.trim() ?? ''
+      if (assistants.length > baselineAssistantCount && latest) {
+        if (latest === stableText) stableCount += 1
+        else {
+          stableText = latest
+          stableCount = 0
+        }
+        if ((snapshot.complete || (!snapshot.busy && stableCount >= 2)) && !snapshot.busy) return snapshot
+      }
+      if (Date.now() - lastRemotePoll >= REMOTE_POLL_MS) {
+        lastRemotePoll = Date.now()
+        await this.syncRemoteIfChanged(session, false).catch((error) => {
+          this.options.log?.(`[chatgpt-web] remote sync deferred: ${error instanceof Error ? error.message : String(error)}`)
+        })
+      }
+      await sleep(TURN_POLL_MS)
+    }
+    throw new Error('ChatGPT Web turn exceeded the 10 minute completion deadline.')
+  }
+
+  private async captureSnapshot(cdp: VisibleCdpConnection): Promise<ChatGptDomSnapshot> {
+    return cdp.evaluate<ChatGptDomSnapshot>(`(() => {
+      const composerSelector = '[data-testid="prompt-textarea"], #prompt-textarea, [contenteditable="true"][data-lexical-editor="true"]';
+      const nodes = Array.from(document.querySelectorAll('[data-testid^="conversation-turn-"]'));
+      const turns = [];
+      for (const node of nodes) {
+        const declared = node.getAttribute('data-turn') || node.getAttribute('data-message-author-role');
+        const owned = node.querySelector('[data-message-author-role]');
+        const role = declared || owned?.getAttribute('data-message-author-role');
+        if (role !== 'user' && role !== 'assistant') continue;
+        const root = owned instanceof HTMLElement ? owned : node;
+        const text = root instanceof HTMLElement ? root.innerText.trim() : '';
+        if (text) turns.push({ role, text });
+      }
+      const assistants = nodes.filter(node => {
+        const declared = node.getAttribute('data-turn') || node.getAttribute('data-message-author-role');
+        const owned = node.querySelector('[data-message-author-role="assistant"]');
+        return declared === 'assistant' || owned !== null;
+      });
+      const lastAssistant = assistants.at(-1);
+      return {
+        url: location.href,
+        title: document.title,
+        composer: document.querySelector(composerSelector) !== null,
+        busy: document.querySelector('button[data-testid="stop-button"]') !== null,
+        complete: lastAssistant?.querySelector('button[data-testid="copy-turn-action-button"]') !== null,
+        turns,
+      };
+    })()`)
+  }
+
+  private async syncRemoteIfChanged(session: StoredChatGptWebSession, announce: boolean): Promise<void> {
+    if (!session.remote || !session.lastRemoteSha) return
+    if (session.cwd !== this.options.workspace.state().root) return
+    const state = this.options.git.current
+    if (state.branch !== session.branch) return
+    const remoteSha = await this.options.git.remoteBranchHead(session.remote, session.branch)
+    if (!remoteSha || remoteSha === session.lastRemoteSha) return
+    await this.options.git.fastForwardBranch(session.remote, session.branch)
+    session.lastRemoteSha = remoteSha
+    session.updatedAt = Date.now()
+    this.persistStore()
+    if (announce) this.recordReasoning(session, `Git sync fast-forwarded ${session.remote}/${session.branch} to ${remoteSha.slice(0, 8)}. Local preview files are up to date.`)
+  }
+
+  private importUnseenTurns(session: StoredChatGptWebSession, snapshot: ChatGptDomSnapshot): void {
+    const seen = new Set(session.seenTurnKeys)
+    const sent = new Set(session.sentPromptHashes)
+    let changed = false
+    snapshot.turns.forEach((turn, index) => {
+      const key = domTurnKey(turn, index)
+      if (seen.has(key)) return
+      if (turn.role === 'user' && sent.has(hashText(turn.text))) {
+        seen.add(key)
+        changed = true
+        return
+      }
+      if (turn.role === 'user') this.recordUserMessage(session, turn.text)
+      else this.recordAssistantMessage(session, turn.text)
+      seen.add(key)
+      changed = true
+    })
+    if (changed) {
+      session.seenTurnKeys = trimArray([...seen], 500)
+      this.captureConversationUrl(session, snapshot.url)
+      this.persistStore()
+    }
+  }
+
+  private markAllTurnsSeen(session: StoredChatGptWebSession, snapshot: ChatGptDomSnapshot): void {
+    session.seenTurnKeys = trimArray(snapshot.turns.map((turn, index) => domTurnKey(turn, index)), 500)
+    this.persistStore()
+  }
+
+  private rememberSentPrompt(session: StoredChatGptWebSession, prompt: string): void {
+    session.sentPromptHashes = trimArray([...session.sentPromptHashes, hashText(prompt)], 100)
+    this.persistStore()
+  }
+
+  private captureConversationUrl(session: StoredChatGptWebSession, url: string): void {
+    if (!isChatGptConversationUrl(url) || session.conversationUrl === url) return
+    session.conversationUrl = url
+    this.persistStore()
+  }
+
+  private async watchTick(): Promise<void> {
+    if (this.watcherBusy) return
+    this.watcherBusy = true
+    try {
+      const currentUrl = this.options.browser.state().url
+      const visibleSession = [...this.sessions.values()].find((session) => session.conversationUrl !== undefined && sameConversationUrl(currentUrl, session.conversationUrl))
+      if (visibleSession && !visibleSession.running) {
+        try {
+          const cdp = await VisibleCdpConnection.connect(this.options.browser)
+          try {
+            this.importUnseenTurns(visibleSession, await this.captureSnapshot(cdp))
+          } finally {
+            cdp.close()
+          }
+        } catch (error) {
+          this.options.log?.(`[chatgpt-web] visible conversation sync skipped: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      }
+
+      const now = Date.now()
+      for (const session of this.sessions.values()) {
+        if (session.running || !session.remote || !session.lastRemoteSha) continue
+        if (session.cwd !== this.options.workspace.state().root) continue
+        if (this.options.git.current.branch !== session.branch) continue
+        if (now - (this.remoteCheckedAt.get(session.sessionId) ?? 0) < BACKGROUND_REMOTE_POLL_MS) continue
+        this.remoteCheckedAt.set(session.sessionId, now)
+        await this.syncRemoteIfChanged(session, true).catch((error) => {
+          this.options.log?.(`[chatgpt-web] background remote sync skipped: ${error instanceof Error ? error.message : String(error)}`)
+        })
+      }
+    } finally {
+      this.watcherBusy = false
+    }
+  }
+
+  private recordUserMessage(session: StoredChatGptWebSession, text: string): void {
+    this.recordEnvelope(session, {
+      type: 'user/message',
+      data: { message: { role: 'user', content: [{ type: 'text', text }] } },
+    })
+  }
+
+  private recordAssistantMessage(session: StoredChatGptWebSession, text: string): void {
+    this.recordEnvelope(session, {
+      type: 'assistant/message',
+      data: { message: { role: 'assistant', content: [{ type: 'text', text }] } },
+    })
+  }
+
+  private recordReasoning(session: StoredChatGptWebSession, text: string): void {
+    this.recordEnvelope(session, { type: 'agent/reasoning', data: { text } })
+  }
+
+  private recordEnvelope(session: StoredChatGptWebSession, partial: { type: string; data?: unknown }): void {
+    session.sequence += 1
+    session.updatedAt = Date.now()
+    const envelope: SessionEventEnvelope = {
+      type: partial.type,
+      seq: session.sequence,
+      time: session.updatedAt,
+      ...(partial.data === undefined ? {} : { data: partial.data }),
+    }
+    if (TRANSCRIPT_EVENT_TYPES.has(envelope.type)) {
+      session.transcript.push(envelope)
+      if (session.transcript.length > MAX_TRANSCRIPT_EVENTS) session.transcript.splice(0, session.transcript.length - MAX_TRANSCRIPT_EVENTS)
+    }
+    this.persistStore()
+    this.emitFrame({ kind: 'session-event', sessionId: session.sessionId, event: envelope })
+  }
+
+  private requireSession(sessionId: string): StoredChatGptWebSession {
+    const session = this.sessions.get(sessionId)
+    if (!session) throw new Error(`Unknown ${CHATGPT_WEB_ENGINE_ID} session: ${sessionId}`)
+    return session
+  }
+
+  private browserMatchesSession(session: StoredChatGptWebSession): boolean {
+    return session.conversationUrl !== undefined && sameConversationUrl(this.options.browser.state().url, session.conversationUrl)
+  }
+
+  private emitFrame(frame: DshEventFrame): void {
+    this.onEvent?.(frame)
+  }
+
+  private loadStore(): void {
+    if (!existsSync(this.options.storePath)) return
+    try {
+      const parsed = JSON.parse(readFileSync(this.options.storePath, 'utf8')) as Partial<PersistedChatGptWebStore>
+      if (parsed.version !== 1 || !Array.isArray(parsed.sessions)) return
+      for (const candidate of parsed.sessions) {
+        if (!candidate || typeof candidate !== 'object') continue
+        const session = candidate as StoredChatGptWebSession
+        if (typeof session.sessionId !== 'string' || !session.sessionId.startsWith('chatgpt-web-')) continue
+        if (typeof session.branch !== 'string' || !session.branch) session.branch = chatGptSyncBranchName(session.sessionId)
+        session.running = false
+        session.transcript = Array.isArray(session.transcript) ? session.transcript.slice(-MAX_TRANSCRIPT_EVENTS) : []
+        session.seenTurnKeys = Array.isArray(session.seenTurnKeys) ? session.seenTurnKeys.slice(-500) : []
+        session.sentPromptHashes = Array.isArray(session.sentPromptHashes) ? session.sentPromptHashes.slice(-100) : []
+        session.sequence = Number.isSafeInteger(session.sequence) ? session.sequence : session.transcript.at(-1)?.seq ?? 0
+        this.sessions.set(session.sessionId, session)
+      }
+    } catch (error) {
+      this.options.log?.(`[chatgpt-web] ignoring unreadable session store: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  private persistStore(): void {
+    const directory = dirname(this.options.storePath)
+    mkdirSync(directory, { recursive: true })
+    const tmp = `${this.options.storePath}.tmp`
+    const payload: PersistedChatGptWebStore = { version: 1, sessions: [...this.sessions.values()] }
+    writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
+    renameSync(tmp, this.options.storePath)
+  }
+}
+
+class VisibleCdpConnection {
+  private nextId = 1
+  private readonly pending = new Map<number, PendingCdpCall>()
+
+  private constructor(private readonly socket: WebSocket) {
+    socket.onmessage = (event) => {
+      let parsed: CdpResponse
+      try { parsed = JSON.parse(String(event.data)) as CdpResponse } catch { return }
+      if (parsed.id === undefined) return
+      const pending = this.pending.get(parsed.id)
+      if (!pending) return
+      this.pending.delete(parsed.id)
+      if (parsed.error?.message) {
+        pending.reject(new Error(parsed.error.message))
+        return
+      }
+      const exception = parsed.result?.exceptionDetails
+      if (exception) {
+        pending.reject(new Error(exception.exception?.description ?? exception.text ?? 'CDP Runtime.evaluate failed'))
+        return
+      }
+      pending.resolve(parsed.result?.result?.value)
+    }
+    socket.onclose = () => {
+      for (const pending of this.pending.values()) pending.reject(new Error('Visible browser CDP connection closed'))
+      this.pending.clear()
+    }
+  }
+
+  static async connect(browser: BrowserController): Promise<VisibleCdpConnection> {
+    await browser.ensureAgentReady()
+    const state = browser.state()
+    if (!state.targetId) throw new Error('ND visible browser has no CDP target id')
+    const response = await fetch(`http://127.0.0.1:${state.cdpPort}/json/list`)
+    if (!response.ok) throw new Error(`ND visible browser CDP target list failed (${response.status})`)
+    const targets = await response.json() as CdpTarget[]
+    const target = targets.find((candidate) => candidate.id === state.targetId)
+    if (!target?.webSocketDebuggerUrl) throw new Error('ND visible browser target is not available through loopback CDP')
+    const socket = new WebSocket(target.webSocketDebuggerUrl)
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Timed out connecting to ND visible browser CDP')), 5_000)
+      socket.onopen = () => {
+        clearTimeout(timer)
+        resolve()
+      }
+      socket.onerror = () => {
+        clearTimeout(timer)
+        reject(new Error('Could not connect to ND visible browser CDP'))
+      }
+    })
+    return new VisibleCdpConnection(socket)
+  }
+
+  async evaluate<T>(expression: string): Promise<T> {
+    const id = this.nextId++
+    const promise = new Promise<unknown>((resolve, reject) => this.pending.set(id, { resolve, reject }))
+    this.socket.send(JSON.stringify({
+      id,
+      method: 'Runtime.evaluate',
+      params: {
+        expression,
+        returnByValue: true,
+        awaitPromise: true,
+        userGesture: true,
+      },
+    }))
+    return await promise as T
+  }
+
+  close(): void {
+    try { this.socket.close() } catch { /* already closed */ }
+  }
+}
+
+function hashText(value: string): string {
+  return createHash('sha256').update(value.trim()).digest('hex')
+}
+
+function domTurnKey(turn: ChatGptDomTurn, index: number): string {
+  return `${index}:${turn.role}:${hashText(turn.text)}`
+}
+
+function trimArray<T>(values: T[], limit: number): T[] {
+  return values.length <= limit ? values : values.slice(values.length - limit)
+}
+
+function isChatGptConversationUrl(value: string): boolean {
+  try {
+    const url = new URL(value)
+    return url.origin === 'https://chatgpt.com' && /(^|\/)c\//.test(url.pathname)
+  } catch {
+    return false
+  }
+}
+
+function sameConversationUrl(left: string, right: string): boolean {
+  try {
+    const a = new URL(left)
+    const b = new URL(right)
+    return a.origin === b.origin && a.pathname === b.pathname
+  } catch {
+    return left === right
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
