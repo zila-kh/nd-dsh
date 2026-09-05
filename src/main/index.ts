@@ -5,6 +5,8 @@ import { createServer } from 'node:net'
 import { dirname, join } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { ND_ORG_MEMORY_ID, ND_WORKSPACE_CONTEXT_ID } from '../shared/capabilities.js'
+import { workerAssignableCodingEngines } from '../shared/coding-engines.js'
 import { IPC, type DshEventFrame } from '../shared/contracts.js'
 import { DESIGN_IPC } from '../shared/design.js'
 import { ORGANIZATION_IPC } from '../shared/organization.js'
@@ -12,17 +14,16 @@ import { TERMINAL_IPC } from '../shared/terminal.js'
 import { projectRoot } from './app-paths.js'
 import { BrowserController } from './browser/browser-controller.js'
 import { DEFAULT_BROWSER_URL } from './browser/browser-url.js'
+import { CapabilityAssignmentStore } from './capabilities/capability-assignment-store.js'
+import { CapabilityRegistry } from './capabilities/capability-registry.js'
+import { CapabilityStatusStore } from './capabilities/capability-status-store.js'
+import { createHarnessSourceSetupAdapters } from './capabilities/harness-runtime-setup.js'
 import { ExternalElementStage, RecentPickStore } from './capture/external-inspect.js'
 import { DesignService } from './design/design-service.js'
 import { registerDesignIpc } from './design/ipc.js'
 import { NdPencilController } from './design/nd-pencil-controller.js'
 import { DshSurfaceController } from './dsh/dsh-surface.js'
 import { pickFreePort } from './dsh/gateway-client.js'
-import { CapabilityAssignmentStore } from './capabilities/capability-assignment-store.js'
-import { CapabilityRegistry } from './capabilities/capability-registry.js'
-import { CapabilityStatusStore } from './capabilities/capability-status-store.js'
-import { createHarnessSourceSetupAdapters } from './capabilities/harness-runtime-setup.js'
-import { ND_ORG_MEMORY_ID, ND_WORKSPACE_CONTEXT_ID } from '../shared/capabilities.js'
 import { AntigravityEngine } from './engines/antigravity/antigravity-engine.js'
 import { CodexCliEngine } from './engines/codex/codex-cli-engine.js'
 import { CodingEngineRegistry } from './engines/coding-engine-registry.js'
@@ -163,12 +164,17 @@ async function createWindow(cdpPort: number): Promise<void> {
   await projectWorkspace.initialize()
   // One durable routing store for every pluggable capability (engine, memory,
   // context) across agents, roles, and teams; engines resolve through it too.
-  // Built here so backing-service probes can close over the live services.
+  // Interactive browser-only engines stay in the chat catalog but are excluded
+  // from organization capability assignment until they expose ND workspaces.
   const capabilityAssignments = new CapabilityAssignmentStore(join(userData, 'capability-assignments.json'))
   const capabilityStatuses = new CapabilityStatusStore(join(userData, 'capability-statuses.json'))
   const engines = new CodingEngineRegistry(capabilityAssignments)
+  const workerEngines: Pick<CodingEngineRegistry, 'list' | 'assign'> = {
+    list: () => workerAssignableCodingEngines(engines.list()),
+    assign: (agentId, engineId) => engines.assign(agentId, engineId),
+  }
   const capabilitySetupAdapters = createHarnessSourceSetupAdapters()
-  const capabilities = new CapabilityRegistry(capabilityAssignments, engines, capabilityStatuses, {
+  const capabilities = new CapabilityRegistry(capabilityAssignments, workerEngines, capabilityStatuses, {
     [ND_ORG_MEMORY_ID]: async () => { await organizationStore.state() },
     [ND_WORKSPACE_CONTEXT_ID]: async () => {
       const state = workspace.state()
