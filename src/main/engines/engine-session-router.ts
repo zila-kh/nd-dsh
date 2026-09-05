@@ -97,6 +97,10 @@ export class EngineSessionRouter {
       })
     }
     if (requested === CHATGPT_WEB_ENGINE_ID) {
+      const harnessState = this.harness.status().state
+      if (harnessState === 'running' || harnessState === 'starting') {
+        throw new Error('ChatGPT Web and ND Harness share the visible browser. Finish the active ND Harness turn before starting ChatGPT Web.')
+      }
       const engine = this.requireChatGptWeb()
       const browser = this.chatGptWebBrowser
       const returnUrl = browser?.state().url
@@ -114,6 +118,9 @@ export class EngineSessionRouter {
         })
       }
       return result
+    }
+    if (this.chatGptWeb?.listSessions().some((session) => session.running)) {
+      throw new Error('ND Harness and ChatGPT Web share the visible browser. Finish the active ChatGPT Web turn before starting ND Harness.')
     }
     return this.harness.run(optimizedPrompt, options)
   }
