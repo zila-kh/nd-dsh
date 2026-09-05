@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { DshViewState } from '../../../shared/contracts'
+import type { DshViewState, HarnessStatus } from '../../../shared/contracts'
 import { ExternalIcon, ReloadIcon } from './Icons'
 import { BridgePill } from './bridge-pill'
 
@@ -23,6 +23,7 @@ export function DshCodingSurface({ active, inspectOverlayVisible = false, state,
   const surfaceRef = useRef<HTMLDivElement>(null)
   const updateLogRef = useRef<HTMLPreElement>(null)
   const uiPreview = window.ndDshRuntimeMode === 'ui-preview'
+  const [runtimeStatus, setRuntimeStatus] = useState<HarnessStatus | null>(null)
   const [updating, setUpdating] = useState(false)
   const [updateLogOpen, setUpdateLogOpen] = useState(false)
   const [updateLog, setUpdateLog] = useState('')
@@ -30,6 +31,35 @@ export function DshCodingSurface({ active, inspectOverlayVisible = false, state,
   // Native WebContentsViews always composite above renderer DOM. Yield the
   // view briefly so inspect result dialogs and their controls stay reachable.
   const nativeViewVisible = shouldShowDshNativeView(active, inspectOverlayVisible || updateLogOpen)
+  const runtimeError = runtimeStatus?.state === 'error'
+    ? runtimeStatus.error || 'The DSH runtime failed to start.'
+    : runtimeStatus && !runtimeStatus.sourceReady
+      ? 'The DSH runtime is not bootstrapped. Install/update DSH or run pnpm bootstrap from a source checkout.'
+      : undefined
+
+  useEffect(() => {
+    let disposed = false
+    void window.ndDsh.harness.status()
+      .then((status) => { if (!disposed) setRuntimeStatus(status) })
+      .catch((cause) => {
+        if (!disposed) setRuntimeStatus({
+          state: 'error',
+          sourceReady: false,
+          apiKeyPresent: false,
+          apiKeyRequired: false,
+          provider: '',
+          model: '',
+          error: cause instanceof Error ? cause.message : String(cause),
+        })
+      })
+    const off = window.ndDsh.harness.onStatus((status) => {
+      if (!disposed) setRuntimeStatus(status)
+    })
+    return () => {
+      disposed = true
+      off()
+    }
+  }, [])
 
   useEffect(() => {
     const host = surfaceRef.current
@@ -110,8 +140,8 @@ export function DshCodingSurface({ active, inspectOverlayVisible = false, state,
     <section className="flex h-full w-full min-h-0 min-w-0 flex-col bg-background" aria-label="DSH coding surface">
       <div className="flex h-[39px] shrink-0 items-center gap-2 border-b border-border-soft bg-secondary px-2">
         <strong className="text-[11px] tracking-[0.04em] text-strong">DSH coding</strong>
-        <BridgePill state={state?.ready ? 'ready' : 'binding'} className="ml-1 py-1">
-          {state?.ready ? `Gateway :${state.port ?? ''}` : 'Starting runtime'}
+        <BridgePill state={runtimeError ? 'unavailable' : state?.ready ? 'ready' : 'binding'} className="ml-1 py-1" title={runtimeError}>
+          {runtimeError ? 'Runtime error' : state?.ready ? `Gateway :${state.port ?? ''}` : 'Starting runtime'}
         </BridgePill>
         <button
           type="button"
@@ -124,15 +154,15 @@ export function DshCodingSurface({ active, inspectOverlayVisible = false, state,
           {updating ? 'Updating…' : 'Install / update DSH'}
         </button>
         <span
-          role={updateFeedback ? 'status' : undefined}
-          className={updateFeedback?.error
+          role={runtimeError || updateFeedback ? 'status' : undefined}
+          className={runtimeError || updateFeedback?.error
             ? 'min-w-0 flex-1 truncate font-mono text-[9px] text-destructive'
             : updateFeedback
               ? 'min-w-0 flex-1 truncate font-mono text-[9px] text-primary'
               : 'min-w-0 flex-1 truncate font-mono text-[9px] text-faint'}
-          title={updateFeedback?.message ?? state?.title ?? 'DeepSeek route'}
+          title={runtimeError ?? updateFeedback?.message ?? state?.title ?? 'DeepSeek route'}
         >
-          {updateFeedback?.message ?? state?.title ?? 'DeepSeek route'}
+          {runtimeError ?? updateFeedback?.message ?? state?.title ?? 'DeepSeek route'}
         </span>
         <button
           type="button"
@@ -207,9 +237,15 @@ export function DshCodingSurface({ active, inspectOverlayVisible = false, state,
         </div>
       ) : null}
       <div ref={surfaceRef} className="relative min-h-0 min-w-0 flex-1 bg-surface-0">
-        <div className="absolute inset-0 grid place-items-center text-xs text-faint">
+        <div className="absolute inset-0 grid place-items-center px-6 text-xs text-faint">
           {inspectOverlayVisible ? (
             <span>DSH coding remains active while the inspection result is open.</span>
+          ) : runtimeError ? (
+            <div role="alert" className="max-w-[640px] rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-left">
+              <strong className="block text-sm text-destructive">DSH runtime unavailable</strong>
+              <p className="mb-0 mt-2 break-words text-[11px]/[1.55] text-muted-foreground">{runtimeError}</p>
+              <p className="mb-0 mt-2 text-[10px]/[1.5] text-faint">Use Install / update DSH above for the managed runtime, or run <code className="font-mono text-soft">pnpm bootstrap</code> when developing from source.</p>
+            </div>
           ) : (
             <div className="flex flex-col items-center gap-3">
               <div className="size-[34px] animate-spin rounded-full border border-border-strong border-t-primary" />
