@@ -307,7 +307,9 @@ export class ChatGptWebEngine {
   }
 
   private async openBoundConversation(session: StoredChatGptWebSession): Promise<VisibleCdpConnection> {
-    const targetUrl = session.conversationUrl ?? CHATGPT_HOME_URL
+    const targetUrl = session.conversationUrl && isChatGptConversationUrl(session.conversationUrl)
+      ? session.conversationUrl
+      : CHATGPT_HOME_URL
     const currentUrl = this.options.browser.state().url
     if (!sameConversationUrl(currentUrl, targetUrl)) await this.options.browser.navigate(targetUrl)
     await this.options.browser.ensureAgentReady()
@@ -327,6 +329,10 @@ export class ChatGptWebEngine {
     if (session.cwd !== workspaceRoot) {
       throw new Error('This ChatGPT Web chat belongs to a different workspace. Reopen the chat from its original project before syncing Git.')
     }
+
+    // The branch is derived from the ND session id and is never trusted from
+    // persisted state. This keeps a corrupt/tampered store from targeting main.
+    session.branch = chatGptSyncBranchName(session.sessionId)
 
     // Validate the shared remote and committed HEAD before changing branches.
     // A project that is not ready for Git sync must fail without mutating its checkout.
@@ -612,7 +618,8 @@ export class ChatGptWebEngine {
         if (!candidate || typeof candidate !== 'object') continue
         const session = candidate as StoredChatGptWebSession
         if (typeof session.sessionId !== 'string' || !session.sessionId.startsWith('chatgpt-web-')) continue
-        if (typeof session.branch !== 'string' || !session.branch) session.branch = chatGptSyncBranchName(session.sessionId)
+        session.branch = chatGptSyncBranchName(session.sessionId)
+        if (typeof session.conversationUrl !== 'string' || !isChatGptConversationUrl(session.conversationUrl)) delete session.conversationUrl
         session.running = false
         session.transcript = Array.isArray(session.transcript) ? session.transcript.slice(-MAX_TRANSCRIPT_EVENTS) : []
         session.seenTurnKeys = Array.isArray(session.seenTurnKeys) ? session.seenTurnKeys.slice(-500) : []
