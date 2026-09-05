@@ -28,6 +28,12 @@ jobs:
         run: corepack enable
       - name: Install desktop dependencies
         run: corepack pnpm install --frozen-lockfile
+      - name: Prepare Harness runtime
+        run: |
+          corepack pnpm --dir vendor/deepseek-harness install --frozen-lockfile
+          corepack pnpm --dir vendor/deepseek-harness run build:lib:host
+        env:
+          CI: 'true'
       - name: Verify repository invariants
         run: corepack pnpm verify
       - name: Verify release packaging configuration
