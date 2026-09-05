@@ -90,6 +90,7 @@ export class GitService {
         try {
           await this.cli.exec(repoRoot, ['reset', '-q', 'HEAD', '--', ...chunk])
         } catch (error) {
+          // Before the first commit there is no HEAD to reset against; unstage via the index instead.
           if (error instanceof GitError && /unknown revision|bad revision|ambiguous argument/.test(error.stderr ?? '')) {
             await this.cli.exec(repoRoot, ['rm', '-q', '--cached', '-r', '--', ...chunk])
           } else {
@@ -137,6 +138,7 @@ export class GitService {
     }
     if (this.snapshot.untracked.some((change) => change.path === path)) {
       try {
+        // `diff --no-index` exits 1 whenever the files differ; stdout still carries the patch.
         const result = await this.cli.exec(repoRoot, ['diff', '--no-index', '--', '/dev/null', path])
         return result.stdout
       } catch (error) {
@@ -161,24 +163,24 @@ export class GitService {
     return await this.refresh()
   }
 
+  /**
+   * Select the session-owned branch without ever carrying uncommitted work
+   * across branches. ChatGPT Web must start from one exact committed Git state.
+   */
   async ensureBranch(name: string): Promise<GitStatusSnapshot> {
     this.assertBranchName(name)
     const repoRoot = await this.requireRepoRoot()
     if (await this.currentBranch(repoRoot) === name) return await this.refresh()
     await this.runExclusive(async () => {
-      const existing = (await this.cli.exec(repoRoot, ['branch', '--list', name])).stdout.trim().length > 0
-      if (existing) {
-        const status = await this.cli.status(repoRoot)
-        if (status.stdout.length > 0) {
-          throw new GitError({
-            message: `Refusing to switch to ${name} while the worktree has uncommitted changes. Commit or stash them first.`,
-            gitErrorCode: GitErrorCodes.DirtyWorkTree,
-          })
-        }
-        await this.cli.exec(repoRoot, ['checkout', name])
-      } else {
-        await this.cli.exec(repoRoot, ['checkout', '-b', name])
+      const status = await this.cli.status(repoRoot)
+      if (status.stdout.length > 0) {
+        throw new GitError({
+          message: `Refusing to switch to ${name} while the worktree has uncommitted changes. Commit or stash them first.`,
+          gitErrorCode: GitErrorCodes.DirtyWorkTree,
+        })
       }
+      const existing = (await this.cli.exec(repoRoot, ['branch', '--list', name])).stdout.trim().length > 0
+      await this.cli.exec(repoRoot, existing ? ['checkout', name] : ['checkout', '-b', name])
     })
     return await this.refresh()
   }
@@ -210,11 +212,44 @@ export class GitService {
     return (await this.cli.status(repoRoot)).stdout.length > 0
   }
 
+  /**
+   * Publish a session branch only from a clean worktree. If the remote branch
+   * already moved (for example ChatGPT pushed while ND was closed), fetch it
+   * first and require a fast-forward merge. Divergence therefore fails before
+   * any push instead of surfacing as a destructive recovery problem later.
+   */
   async pushBranch(remote: string, branch: string): Promise<GitStatusSnapshot> {
     this.assertRemoteName(remote)
     this.assertBranchName(branch)
     const repoRoot = await this.requireRepoRoot()
-    await this.runExclusive(() => this.cli.exec(repoRoot, ['push', '--set-upstream', remote, branch]))
+    await this.runExclusive(async () => {
+      const current = await this.currentBranch(repoRoot)
+      if (current !== branch) {
+        throw new GitError({ message: `Refusing to push ${branch}: the active branch is ${current ?? 'detached HEAD'}.` })
+      }
+      const status = await this.cli.status(repoRoot)
+      if (status.stdout.length > 0) {
+        throw new GitError({
+          message: `Refusing to sync ${branch} while the worktree has uncommitted changes. Commit or stash them first.`,
+          gitErrorCode: GitErrorCodes.DirtyWorkTree,
+        })
+      }
+      let localHead = (await this.cli.exec(repoRoot, ['rev-parse', 'HEAD'])).stdout.trim()
+      if (!localHead) throw new GitError({ message: `Cannot push ${branch}: the repository has no committed HEAD.` })
+
+      const remoteHeadBefore = this.parseRemoteHead((await this.cli.exec(repoRoot, ['ls-remote', '--heads', remote, `refs/heads/${branch}`])).stdout)
+      if (remoteHeadBefore && remoteHeadBefore !== localHead) {
+        await this.cli.exec(repoRoot, ['fetch', remote, branch])
+        await this.cli.exec(repoRoot, ['merge', '--ff-only', 'FETCH_HEAD'])
+        localHead = (await this.cli.exec(repoRoot, ['rev-parse', 'HEAD'])).stdout.trim()
+      }
+
+      await this.cli.exec(repoRoot, ['push', '--set-upstream', remote, branch])
+      const confirmedRemoteHead = this.parseRemoteHead((await this.cli.exec(repoRoot, ['ls-remote', '--heads', remote, `refs/heads/${branch}`])).stdout)
+      if (!confirmedRemoteHead || confirmedRemoteHead !== localHead) {
+        throw new GitError({ message: `Git reported a successful push, but ${remote}/${branch} does not match local HEAD.` })
+      }
+    })
     return await this.refresh()
   }
 
@@ -223,8 +258,7 @@ export class GitService {
     this.assertBranchName(branch)
     const repoRoot = await this.requireRepoRoot()
     const result = await this.cli.exec(repoRoot, ['ls-remote', '--heads', remote, `refs/heads/${branch}`])
-    const sha = result.stdout.trim().split(/\s+/)[0]
-    return sha && /^[0-9a-f]{40,64}$/i.test(sha) ? sha : null
+    return this.parseRemoteHead(result.stdout)
   }
 
   async fastForwardBranch(remote: string, branch: string): Promise<GitStatusSnapshot> {
@@ -310,6 +344,7 @@ export class GitService {
         timestamp: Date.now(),
       }
     } catch (error) {
+      // A corrupt repository or missing git binary still renders the panel; the snapshot stays empty.
       console.warn('Git status snapshot failed:', error instanceof Error ? error.message : String(error))
       return empty
     }
@@ -338,6 +373,7 @@ export class GitService {
       const result = await this.cli.exec(root, ['symbolic-ref', '--short', 'HEAD'])
       return result.stdout.trim() || null
     } catch {
+      // Detached HEAD or an unborn branch.
       return null
     }
   }
@@ -353,6 +389,8 @@ export class GitService {
     const conflicts: GitFileChange[] = []
 
     for (const entry of parser.status) {
+      // Upstream parser convention: for `R NEW\0OLD\0` entries, `rename` holds the
+      // new path and `path` the original. ND contracts want path = current path.
       const change: GitFileChange = {
         path: entry.rename ?? entry.path,
         originalPath: entry.rename ? entry.path : undefined,
@@ -395,6 +433,7 @@ export class GitService {
       const result = await this.cli.log(root, HEAD_LOG_LIMIT)
       return parseGitCommits(result.stdout).map(toCommitInfo)
     } catch (error) {
+      // An unborn repository has no commits yet.
       if (error instanceof GitError && /does not have any commits yet|bad revision/.test(error.stderr ?? '')) return []
       throw error
     }
@@ -421,6 +460,11 @@ export class GitService {
     if (!/^[\w.-]{1,128}$/.test(name) || name.startsWith('-')) {
       throw new GitError({ message: `'${name}' is not a valid Git remote name.` })
     }
+  }
+
+  private parseRemoteHead(output: string): string | null {
+    const sha = output.trim().split(/\s+/)[0]
+    return sha && /^[0-9a-f]{40,64}$/i.test(sha) ? sha : null
   }
 }
 
