@@ -24,6 +24,7 @@ export function DshCodingSurface({ active, inspectOverlayVisible = false, state,
   const updateLogRef = useRef<HTMLPreElement>(null)
   const uiPreview = window.ndDshRuntimeMode === 'ui-preview'
   const [runtimeStatus, setRuntimeStatus] = useState<HarnessStatus | null>(null)
+  const [statusReadError, setStatusReadError] = useState<string>()
   const [updating, setUpdating] = useState(false)
   const [updateLogOpen, setUpdateLogOpen] = useState(false)
   const [updateLog, setUpdateLog] = useState('')
@@ -31,29 +32,30 @@ export function DshCodingSurface({ active, inspectOverlayVisible = false, state,
   // Native WebContentsViews always composite above renderer DOM. Yield the
   // view briefly so inspect result dialogs and their controls stay reachable.
   const nativeViewVisible = shouldShowDshNativeView(active, inspectOverlayVisible || updateLogOpen)
-  const runtimeError = runtimeStatus?.state === 'error'
-    ? runtimeStatus.error || 'The DSH runtime failed to start.'
-    : runtimeStatus && !runtimeStatus.sourceReady
-      ? 'The DSH runtime is not bootstrapped. Install/update DSH or run pnpm bootstrap from a source checkout.'
-      : undefined
+  const runtimeError = statusReadError
+    ?? (runtimeStatus?.state === 'error'
+      ? runtimeStatus.error || 'The DSH runtime failed to start.'
+      : runtimeStatus && !runtimeStatus.sourceReady
+        ? 'The DSH runtime is not bootstrapped. Install/update DSH or run pnpm bootstrap from a source checkout.'
+        : undefined)
 
   useEffect(() => {
     let disposed = false
     void window.ndDsh.harness.status()
-      .then((status) => { if (!disposed) setRuntimeStatus(status) })
+      .then((status) => {
+        if (!disposed) {
+          setRuntimeStatus(status)
+          setStatusReadError(undefined)
+        }
+      })
       .catch((cause) => {
-        if (!disposed) setRuntimeStatus({
-          state: 'error',
-          sourceReady: false,
-          apiKeyPresent: false,
-          apiKeyRequired: false,
-          provider: '',
-          model: '',
-          error: cause instanceof Error ? cause.message : String(cause),
-        })
+        if (!disposed) setStatusReadError(cause instanceof Error ? cause.message : String(cause))
       })
     const off = window.ndDsh.harness.onStatus((status) => {
-      if (!disposed) setRuntimeStatus(status)
+      if (!disposed) {
+        setRuntimeStatus(status)
+        setStatusReadError(undefined)
+      }
     })
     return () => {
       disposed = true
