@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { CodingEngineDescriptor } from '../../shared/contracts.js'
-import { buildCodingEngineCatalog, ND_HARNESS_ENGINE_ID } from '../../shared/coding-engines.js'
+import { buildCodingEngineCatalog, chatGptWebEngineDescriptor, ND_HARNESS_ENGINE_ID } from '../../shared/coding-engines.js'
 import { antigravityBinPath, codexBinPath, dshPatchPath, harnessCliBinPath, harnessRoot, presetSourceDir } from '../app-paths.js'
 import type { CapabilityAssignmentStore } from '../capabilities/capability-assignment-store.js'
 
@@ -30,7 +30,10 @@ export class CodingEngineRegistry {
     // depend on the ND runtime bootstrap.
     const codexCliReady = codexBinPath() !== undefined
     const antigravityReady = antigravityBinPath() !== undefined
-    return buildCodingEngineCatalog({ harnessReady, codexReady, codexCliReady, antigravityReady })
+    return [
+      ...buildCodingEngineCatalog({ harnessReady, codexReady, codexCliReady, antigravityReady }),
+      chatGptWebEngineDescriptor(),
+    ]
   }
 
   /** Legacy view: agent id → engine id for agents explicitly off the default. */
