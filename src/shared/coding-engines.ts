@@ -36,6 +36,11 @@ export function chatGptWebEngineDescriptor(): CodingEngineDescriptor {
   }
 }
 
+/** Organization workers need a real ND workspace boundary; browser-only chat adapters stay interactive. */
+export function workerAssignableCodingEngines(engines: readonly CodingEngineDescriptor[]): CodingEngineDescriptor[] {
+  return engines.filter((engine) => engine.capabilities.workspace)
+}
+
 /**
  * Product-owned engine catalog. Runtime probes decide availability; the
  * descriptors themselves stay independent from Electron and vendor packages.
