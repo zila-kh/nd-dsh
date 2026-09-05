@@ -2,14 +2,21 @@ name: ci
 
 on:
   push:
+    branches:
+      - main
   pull_request:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 35
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,6 +30,12 @@ jobs:
         run: corepack enable
       - name: Install desktop dependencies
         run: corepack pnpm install --frozen-lockfile
+      - name: Prepare Harness runtime
+        run: |
+          corepack pnpm --dir vendor/deepseek-harness install --frozen-lockfile
+          corepack pnpm --dir vendor/deepseek-harness run build:lib:host
+        env:
+          CI: 'true'
       - name: Verify repository invariants
         run: corepack pnpm verify
       - name: Verify release packaging configuration
@@ -33,5 +46,26 @@ jobs:
         run: corepack pnpm test
       - name: Build desktop
         run: corepack pnpm build
+      - name: Verify production renderer isolation
+        run: corepack pnpm release:verify -- --config-only
       - name: Desktop smoke tests
         run: xvfb-run --auto-servernum corepack pnpm e2e
+
+  windows-package:
+    runs-on: windows-latest
+    timeout-minutes: 55
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Enable Corepack
+        run: corepack enable
+      - name: Install desktop dependencies
+        run: corepack pnpm install --frozen-lockfile
+      - name: Build unpacked Windows beta
+        run: corepack pnpm dist:win:dir

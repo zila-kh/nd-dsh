@@ -16,13 +16,22 @@ const pencilBuildScript = join(root, 'scripts', 'build-nd-pencil.mjs')
 const pencilBinaryName = process.platform === 'win32' ? 'op-host-web-server.exe' : 'op-host-web-server'
 const pencilBinary = join(root, 'resources', 'nd-pencil', 'bin', pencilBinaryName)
 const corepack = process.platform === 'win32' ? 'corepack.cmd' : 'corepack'
+const harnessEnv = { ...process.env, CI: 'true' }
 
 assertInsideRoot(stageRoot)
 await requireFile(join(harnessSource, 'package.json'), 'Harness source manifest')
 await requireFile(join(harnessSource, 'pnpm-lock.yaml'), 'Harness lockfile')
 
+// Release staging must work from a clean checkout after only the root install.
+// The Harness is a git submodule rather than a pnpm workspace member, so its
+// own frozen dependency graph must be installed before any source build or
+// deploy operation. CI=true is the upstream-supported way to skip git-hook
+// installation inside submodule worktrees.
+console.log('\nInstalling the Harness release dependency graph...')
+await run(corepack, ['pnpm', '--dir', harnessSource, 'install', '--frozen-lockfile'], root, harnessEnv)
+
 console.log('\nBuilding the Harness host runtime...')
-await run(corepack, ['pnpm', '--dir', harnessSource, 'run', 'build:lib:host'], root)
+await run(corepack, ['pnpm', '--dir', harnessSource, 'run', 'build:lib:host'], root, harnessEnv)
 
 console.log('\nCreating the portable Harness production closure...')
 await fs.rm(harnessOutput, { recursive: true, force: true })
@@ -94,10 +103,10 @@ async function deploy(packageName, destination, productionOnly) {
     'pnpm', '--dir', harnessSource, '--ignore-scripts',
     '--filter', packageName, ...(productionOnly ? ['--prod'] : []),
     'deploy', '--legacy', destination,
-  ], root)
+  ], root, harnessEnv)
 }
 
-function run(command, args, cwd) {
+function run(command, args, cwd, env = process.env) {
   console.log(`> ${command} ${args.join(' ')}`)
   return new Promise((resolvePromise, reject) => {
     const child = spawn(command, args, {
@@ -105,7 +114,7 @@ function run(command, args, cwd) {
       stdio: 'inherit',
       windowsHide: true,
       shell: needsWindowsShell(command),
-      env: process.env,
+      env,
     })
     child.once('error', reject)
     child.once('close', (code) => {

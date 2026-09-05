@@ -41,7 +41,9 @@ test('header segment switches between ND and DSH coding surfaces', async () => {
   await expect(dsh).toHaveAttribute('aria-pressed', 'true')
   const dshSurface = page.getByRole('region', { name: 'DSH coding surface' })
   await expect(dshSurface).toBeVisible()
-  await expect(dshSurface.getByText(/Gateway :\d+/)).toBeVisible({ timeout: 20_000 })
+  // A clean CI machine has to boot the real vendored Harness before this can
+  // appear; allow cold-start headroom without substituting a fake gateway.
+  await expect(dshSurface.getByText(/Gateway :\d+/)).toBeVisible({ timeout: 60_000 })
   const updateButton = dshSurface.getByRole('button', { name: 'Install or update DSH' })
   await expect(updateButton).toBeVisible()
   await updateButton.click()
@@ -55,6 +57,52 @@ test('header segment switches between ND and DSH coding surfaces', async () => {
   await nd.click()
   await expect(nd).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByRole('region', { name: 'DSH coding surface' })).toHaveCount(0)
+  expect(rendererErrors).toEqual([])
+})
+
+test('real Harness gateway creates and reads a chat session', async () => {
+  const { page } = launched
+  const probe = await page.evaluate(async () => {
+    const workspace = await window.ndDsh.workspace.state()
+    const created = await window.ndDsh.dsh.rpc('session.create', { cwd: workspace.root })
+    if (!created.ok) {
+      const status = await window.ndDsh.harness.status()
+      return {
+        state: status.state,
+        createdOk: false,
+        historyOk: false,
+        sessionId: '',
+        error: created.error?.message ?? 'session.create failed',
+      }
+    }
+
+    const sessionId = (created.value as { sessionId?: unknown } | undefined)?.sessionId
+    if (typeof sessionId !== 'string' || !sessionId) {
+      const status = await window.ndDsh.harness.status()
+      return {
+        state: status.state,
+        createdOk: false,
+        historyOk: false,
+        sessionId: '',
+        error: 'session.create returned no session id',
+      }
+    }
+
+    const history = await window.ndDsh.dsh.rpc('session.history', { sessionId })
+    const status = await window.ndDsh.harness.status()
+    return {
+      state: status.state,
+      createdOk: true,
+      historyOk: history.ok,
+      sessionId,
+      error: history.ok ? '' : history.error?.message ?? 'session.history failed',
+    }
+  })
+
+  expect(probe.state).not.toBe('error')
+  expect(probe.createdOk, probe.error).toBe(true)
+  expect(probe.sessionId).not.toBe('')
+  expect(probe.historyOk, probe.error).toBe(true)
   expect(rendererErrors).toEqual([])
 })
 
