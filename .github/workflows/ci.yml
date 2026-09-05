@@ -44,6 +44,8 @@ jobs:
         run: corepack pnpm test
       - name: Build desktop
         run: corepack pnpm build
+      - name: Verify production renderer isolation
+        run: corepack pnpm release:verify -- --config-only
       - name: Desktop smoke tests
         run: xvfb-run --auto-servernum corepack pnpm e2e
 
