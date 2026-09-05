@@ -90,7 +90,6 @@ export class GitService {
         try {
           await this.cli.exec(repoRoot, ['reset', '-q', 'HEAD', '--', ...chunk])
         } catch (error) {
-          // Before the first commit there is no HEAD to reset against; unstage via the index instead.
           if (error instanceof GitError && /unknown revision|bad revision|ambiguous argument/.test(error.stderr ?? '')) {
             await this.cli.exec(repoRoot, ['rm', '-q', '--cached', '-r', '--', ...chunk])
           } else {
@@ -138,7 +137,6 @@ export class GitService {
     }
     if (this.snapshot.untracked.some((change) => change.path === path)) {
       try {
-        // `diff --no-index` exits 1 whenever the files differ; stdout still carries the patch.
         const result = await this.cli.exec(repoRoot, ['diff', '--no-index', '--', '/dev/null', path])
         return result.stdout
       } catch (error) {
@@ -160,6 +158,92 @@ export class GitService {
     this.assertBranchName(name)
     const repoRoot = await this.requireRepoRoot()
     await this.runExclusive(() => this.cli.exec(repoRoot, ['checkout', '-b', name]))
+    return await this.refresh()
+  }
+
+  async ensureBranch(name: string): Promise<GitStatusSnapshot> {
+    this.assertBranchName(name)
+    const repoRoot = await this.requireRepoRoot()
+    if (await this.currentBranch(repoRoot) === name) return await this.refresh()
+    await this.runExclusive(async () => {
+      const existing = (await this.cli.exec(repoRoot, ['branch', '--list', name])).stdout.trim().length > 0
+      if (existing) {
+        const status = await this.cli.status(repoRoot)
+        if (status.stdout.length > 0) {
+          throw new GitError({
+            message: `Refusing to switch to ${name} while the worktree has uncommitted changes. Commit or stash them first.`,
+            gitErrorCode: GitErrorCodes.DirtyWorkTree,
+          })
+        }
+        await this.cli.exec(repoRoot, ['checkout', name])
+      } else {
+        await this.cli.exec(repoRoot, ['checkout', '-b', name])
+      }
+    })
+    return await this.refresh()
+  }
+
+  async head(): Promise<string | null> {
+    const repoRoot = await this.requireRepoRoot()
+    try {
+      const value = (await this.cli.exec(repoRoot, ['rev-parse', 'HEAD'])).stdout.trim()
+      return value || null
+    } catch (error) {
+      if (error instanceof GitError && /unknown revision|bad revision|ambiguous argument|does not have any commits yet/i.test(error.stderr ?? '')) return null
+      throw error
+    }
+  }
+
+  async remoteUrl(remote: string): Promise<string | null> {
+    this.assertRemoteName(remote)
+    const repoRoot = await this.requireRepoRoot()
+    try {
+      return (await this.cli.exec(repoRoot, ['remote', 'get-url', remote])).stdout.trim() || null
+    } catch (error) {
+      if (error instanceof GitError) return null
+      throw error
+    }
+  }
+
+  async hasUncommittedChanges(): Promise<boolean> {
+    const repoRoot = await this.requireRepoRoot()
+    return (await this.cli.status(repoRoot)).stdout.length > 0
+  }
+
+  async pushBranch(remote: string, branch: string): Promise<GitStatusSnapshot> {
+    this.assertRemoteName(remote)
+    this.assertBranchName(branch)
+    const repoRoot = await this.requireRepoRoot()
+    await this.runExclusive(() => this.cli.exec(repoRoot, ['push', '--set-upstream', remote, branch]))
+    return await this.refresh()
+  }
+
+  async remoteBranchHead(remote: string, branch: string): Promise<string | null> {
+    this.assertRemoteName(remote)
+    this.assertBranchName(branch)
+    const repoRoot = await this.requireRepoRoot()
+    const result = await this.cli.exec(repoRoot, ['ls-remote', '--heads', remote, `refs/heads/${branch}`])
+    const sha = result.stdout.trim().split(/\s+/)[0]
+    return sha && /^[0-9a-f]{40,64}$/i.test(sha) ? sha : null
+  }
+
+  async fastForwardBranch(remote: string, branch: string): Promise<GitStatusSnapshot> {
+    this.assertRemoteName(remote)
+    this.assertBranchName(branch)
+    const repoRoot = await this.requireRepoRoot()
+    await this.runExclusive(async () => {
+      const current = await this.currentBranch(repoRoot)
+      if (current !== branch) throw new GitError({ message: `Refusing to sync ${branch}: the active branch is ${current ?? 'detached HEAD'}.` })
+      const status = await this.cli.status(repoRoot)
+      if (status.stdout.length > 0) {
+        throw new GitError({
+          message: `Refusing to fast-forward ${branch} while the worktree has uncommitted changes.`,
+          gitErrorCode: GitErrorCodes.DirtyWorkTree,
+        })
+      }
+      await this.cli.exec(repoRoot, ['fetch', remote, branch])
+      await this.cli.exec(repoRoot, ['merge', '--ff-only', 'FETCH_HEAD'])
+    })
     return await this.refresh()
   }
 
@@ -226,7 +310,6 @@ export class GitService {
         timestamp: Date.now(),
       }
     } catch (error) {
-      // A corrupt repository or missing git binary still renders the panel; the snapshot stays empty.
       console.warn('Git status snapshot failed:', error instanceof Error ? error.message : String(error))
       return empty
     }
@@ -255,7 +338,6 @@ export class GitService {
       const result = await this.cli.exec(root, ['symbolic-ref', '--short', 'HEAD'])
       return result.stdout.trim() || null
     } catch {
-      // Detached HEAD or an unborn branch.
       return null
     }
   }
@@ -271,8 +353,6 @@ export class GitService {
     const conflicts: GitFileChange[] = []
 
     for (const entry of parser.status) {
-      // Upstream parser convention: for `R NEW\0OLD\0` entries, `rename` holds the
-      // new path and `path` the original. ND contracts want path = current path.
       const change: GitFileChange = {
         path: entry.rename ?? entry.path,
         originalPath: entry.rename ? entry.path : undefined,
@@ -315,7 +395,6 @@ export class GitService {
       const result = await this.cli.log(root, HEAD_LOG_LIMIT)
       return parseGitCommits(result.stdout).map(toCommitInfo)
     } catch (error) {
-      // An unborn repository has no commits yet.
       if (error instanceof GitError && /does not have any commits yet|bad revision/.test(error.stderr ?? '')) return []
       throw error
     }
@@ -335,6 +414,12 @@ export class GitService {
   private assertBranchName(name: string): void {
     if (!/^[\w.\-/]{1,256}$/.test(name) || name.startsWith('-') || name.endsWith('.lock') || name.includes('..')) {
       throw new GitError({ message: `'${name}' is not a valid branch name.`, gitErrorCode: GitErrorCodes.InvalidBranchName })
+    }
+  }
+
+  private assertRemoteName(name: string): void {
+    if (!/^[\w.-]{1,128}$/.test(name) || name.startsWith('-')) {
+      throw new GitError({ message: `'${name}' is not a valid Git remote name.` })
     }
   }
 }
