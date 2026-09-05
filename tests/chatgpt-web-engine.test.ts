@@ -11,8 +11,9 @@ describe('ChatGPT Web Git sync helpers', () => {
     expect(chatGptSyncBranchName('chatgpt-web-ABC-123_def')).toBe(chatGptSyncBranchName('chatgpt-web-ABC-123_def'))
   })
 
-  it('removes HTTPS credentials before repository metadata enters a web prompt', () => {
+  it('removes HTTP(S) credentials and URL metadata before repository data enters a web prompt', () => {
     expect(sanitizeRemoteForPrompt('https://user:secret@github.com/acme/demo.git')).toBe('https://github.com/acme/demo.git')
+    expect(sanitizeRemoteForPrompt('https://user:secret@github.com/acme/demo.git?token=oops#private')).toBe('https://github.com/acme/demo.git')
     expect(sanitizeRemoteForPrompt('git@github.com:acme/demo.git')).toBe('git@github.com:acme/demo.git')
   })
 
