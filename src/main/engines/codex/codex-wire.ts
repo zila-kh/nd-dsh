@@ -1,4 +1,5 @@
 import type { Readable, Writable } from 'node:stream'
+import type { EngineModelOption } from '../../../shared/contracts.js'
 
 /**
  * ND-owned JSON-RPC line client for the official Codex app-server stdio
@@ -46,6 +47,7 @@ export class CodexAppServerWire {
   private readonly pending = new Map<number, PendingRequest>()
   private buffer = ''
   private closed = false
+  private readonly nativeModels = new Map<string, string>()
 
   constructor(
     private readonly input: Readable,
@@ -59,14 +61,14 @@ export class CodexAppServerWire {
     this.output.on('error', (error: Error) => this.fail(error))
   }
 
-  start(): void {
-    void this.request('initialize', {
+  async start(): Promise<void> {
+    await this.request('initialize', {
       clientInfo: { name: 'nd-dsh', title: 'ND-DSH', version: '0.0.1' },
       capabilities: { experimentalApi: false, requestAttestation: false },
     }).then((result) => {
       asRecord(result, 'initialize response')
       this.send({ method: 'initialized' })
-    }, (error: Error) => this.fail(error))
+    }, (error: Error) => { this.fail(error); throw error })
   }
 
   /** Create a thread and return its id. */
@@ -76,13 +78,43 @@ export class CodexAppServerWire {
       ephemeral: false,
     }), 'thread/start response')
     const thread = asRecord(response.thread, 'thread/start thread')
-    return asText(thread.id, 'thread/start thread id')
+    const threadId = asText(thread.id, 'thread/start thread id')
+    if (typeof response.model === 'string' && response.model) this.nativeModels.set(threadId, response.model)
+    return threadId
+  }
+
+  /** Discover picker-visible model slugs using the native paginated catalog. */
+  async listModels(): Promise<EngineModelOption[]> {
+    const models = new Map<string, EngineModelOption>()
+    const cursors = new Set<string>()
+    let cursor: string | undefined
+    do {
+      const response = asRecord(await this.request('model/list', {
+        limit: 100, includeHidden: false, ...(cursor === undefined ? {} : { cursor }),
+      }), 'model/list response')
+      if (!Array.isArray(response.data)) throw new Error('Codex app-server returned an invalid model list')
+      for (const item of response.data) {
+        if (!isObject(item) || item.hidden === true) continue
+        const id = asText(item.model, 'model slug')
+        models.set(id, { id, ...(typeof item.displayName === 'string' && item.displayName ? { name: item.displayName } : {}) })
+      }
+      cursor = typeof response.nextCursor === 'string' && response.nextCursor ? response.nextCursor : undefined
+      if (cursor !== undefined) {
+        if (cursors.has(cursor)) throw new Error('Codex model catalog repeated a page cursor')
+        cursors.add(cursor)
+      }
+    } while (cursor !== undefined)
+    return [...models.values()]
   }
 
   /** Submit one text-only user turn and return the turn id. */
-  async startTurn(threadId: string, texts: readonly string[]): Promise<string> {
+  async startTurn(threadId: string, texts: readonly string[], selectedModel?: string): Promise<string> {
+    // turn/start overrides persist; explicitly restore the original native
+    // model when the picker returns to Native default.
+    const model = selectedModel ?? this.nativeModels.get(threadId)
     const response = asRecord(await this.request('turn/start', {
       threadId,
+      ...(model === undefined ? {} : { model }),
       input: texts.map((text) => ({ type: 'text', text, text_elements: [] })),
     }), 'turn/start response')
     const turn = asRecord(response.turn, 'turn/start turn')
@@ -102,6 +134,7 @@ export class CodexAppServerWire {
       pending.reject(new Error('Codex app-server connection closed'))
     }
     this.pending.clear()
+    this.nativeModels.clear()
   }
 
   private consume(chunk: string): void {

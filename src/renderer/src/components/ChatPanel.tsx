@@ -1,3 +1,4 @@
+import { foldEvent, foldHistory, type HistoryEventEnvelope } from '../../../shared/chat-events'
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type KeyboardEvent, type ReactNode, Fragment } from 'react'
 import type {
   CodingEngineDescriptor,
@@ -79,8 +80,6 @@ const PERMISSION_MODES = [
   { id: 'danger-full-access', label: 'Full access' },
 ] as const
 
-const RESULT_MAX_CHARS = 2_000
-
 /** Stable fallback so the project-scope memos keep a consistent dependency. */
 const EMPTY_SESSION_PROJECTS: Readonly<Record<string, string>> = {}
 
@@ -147,10 +146,10 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
   // Dedicated terminal session that hosts the interactive `agy` TUI for native
   // account switching (/logout); independent from per-chat terminals.
   const [switchAccountTerminalOpen, setSwitchAccountTerminalOpen] = useState(false)
-  // Native model selection for engines that expose a catalog (Antigravity).
-  // `null` means "engine-native default": no model flag is sent at all.
+  // Native model selection for engines that expose a catalog.
+  // `null` asks the adapter to use its native configured default.
   const [engineModels, setEngineModels] = useState<EngineModelOption[]>([])
-  const [engineModel, setEngineModel] = useState<string | null>(null)
+  const [engineModelSelections, setEngineModelSelections] = useState<Record<string, string | null>>({})
   const [engineModelMenuOpen, setEngineModelMenuOpen] = useState(false)
   // Chat archival lives ND-side; the sidebar filters on it and each thread
   // card gets a hover menu that toggles it (harness and engine chats alike).
@@ -209,6 +208,11 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
       ? draftEngineId
       : ND_HARNESS_ENGINE_ID
   const onHarnessThread = activeEngineId === ND_HARNESS_ENGINE_ID
+  const supportsEngineModels = activeEngineId === ANTIGRAVITY_ENGINE_ID || activeEngineId === CODEX_CLI_ENGINE_ID
+  const engineModel = engineModelSelections[activeEngineId] ?? null
+  const setEngineModel = (model: string | null): void => {
+    setEngineModelSelections((current) => ({ ...current, [activeEngineId]: model }))
+  }
   const activeEngineName = engines.find((engine) => engine.id === activeEngineId)?.name ?? 'Codex CLI'
   // Extra chat engines come straight from the catalog; unavailable ones never render.
   const chatEngines = useMemo(() => engines.filter((engine) => engine.available && engine.id !== ND_HARNESS_ENGINE_ID), [engines])
@@ -441,16 +445,16 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
     }
   }, [activeSessionId, engineSessionIds])
 
-  // Engines with a native model catalog (Antigravity) load it once per active
-  // engine; switching threads keeps the chosen slug until the engine changes.
+  // Engines with a native model catalog load it once per active
+  // engine; each engine keeps its own selection when switching between them.
   useEffect(() => {
     setEngineModelMenuOpen(false)
-    if (activeEngineId !== ANTIGRAVITY_ENGINE_ID) {
-      setEngineModels([])
+    setEngineModels([])
+    if (!supportsEngineModels) {
       return
     }
     let cancelled = false
-    void window.ndDsh.engines.models(ANTIGRAVITY_ENGINE_ID)
+    void window.ndDsh.engines.models(activeEngineId)
       .then((options) => {
         if (!cancelled) setEngineModels(options)
       })
@@ -460,7 +464,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
     return () => {
       cancelled = true
     }
-  }, [activeEngineId])
+  }, [activeEngineId, supportsEngineModels])
 
   // Provider routes edited in settings (model removed/renamed, provider
   // disabled) must reach open chat threads: refetch the session's catalog so
@@ -724,7 +728,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
   }
   useEffect(() => {
     if (atBottom) scrollToEnd(false)
-  }, [entries.length, atBottom])
+  }, [entries, atBottom])
 
   useEffect(() => {
     const handleOutsideClick = (event: MouseEvent): void => {
@@ -749,9 +753,8 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
     // A drafted engine chat has no session yet: the first send creates it on
     // that engine (router-side); harness sends stay exactly as before.
     const draftEngine = activeSessionId === null ? draftEngineId : null
-    // Antigravity threads carry the picker's slug; every other engine keeps
-    // its native model configuration (no flag is sent).
-    const engineModelOption = activeEngineId === ANTIGRAVITY_ENGINE_ID && engineModel !== null
+    // Direct engines receive only their own selected model slug.
+    const engineModelOption = supportsEngineModels && engineModel !== null
       ? { model: engineModel }
       : {}
     const options = activeSessionId !== null
@@ -767,10 +770,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
         void refreshEngineSessions()
       }
       void refreshElementChips()
-      setThreads((current) => ({
-        ...current,
-        [result.sessionId]: [...(current[result.sessionId] ?? []), { kind: 'user', id: crypto.randomUUID(), text: input }],
-      }))
+      // User messages arrive through session events, including on retry.
       if (!sessions.some((s) => s.sessionId === result.sessionId)) void refreshSessions()
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : String(cause))
@@ -809,16 +809,13 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
   const retry = async (retryPrompt: string): Promise<void> => {
     if (busy || !retryPrompt.trim()) return
     const options = activeSessionId
-      ? { sessionId: activeSessionId, ...(activeEngineId === ANTIGRAVITY_ENGINE_ID && engineModel !== null ? { model: engineModel } : {}) }
+      ? { sessionId: activeSessionId, ...(supportsEngineModels && engineModel !== null ? { model: engineModel } : {}) }
       : undefined
     try {
       const result = await window.ndDsh.harness.run(retryPrompt, options)
       setActiveSessionId(result.sessionId)
       void refreshElementChips()
-      setThreads((current) => ({
-        ...current,
-        [result.sessionId]: [...(current[result.sessionId] ?? []), { kind: 'user', id: crypto.randomUUID(), text: retryPrompt }],
-      }))
+      // User messages arrive through session events, including on retry.
       if (!sessions.some((s) => s.sessionId === result.sessionId)) void refreshSessions()
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : String(cause))
@@ -1080,7 +1077,9 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
               >
                 {activeSession
                   ? sessionTitle(activeSession)
-                  : draftEngineId !== null
+                  : activeEngineSession
+                    ? activeEngineSession.title
+                    : draftEngineId !== null
                     ? `New ${activeEngineName} chat`
                     : 'No session'}
               </strong>
@@ -1625,11 +1624,11 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
                   </div>
                 ) : null}
               </div>
-              </>) : activeEngineId === ANTIGRAVITY_ENGINE_ID ? (
+              </>) : supportsEngineModels ? (
               <div className="relative">
                 <button
                   className="flex min-w-0 max-w-[135px] shrink items-center gap-1 rounded-md border border-border-soft bg-secondary px-1.5 py-[3px] text-[10px] text-soft transition-colors hover:border-border-strong hover:bg-accent hover:text-foreground [&_svg]:size-3 [&_svg]:shrink-0"
-                  title={engineModel ?? 'Antigravity keeps its own configured model'}
+                  title={engineModel ?? `${activeEngineName} keeps its own configured model`}
                   onClick={() => {
                     const nextOpen = !engineModelMenuOpen
                     setEngineModelMenuOpen(nextOpen)
@@ -1646,9 +1645,9 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
                   <div
                     className="absolute bottom-full right-0 z-[130] mb-1.5 w-[286px] overflow-hidden rounded-xl border border-border-strong bg-surface-1 p-1.5 shadow-[0_14px_40px_rgba(0,0,0,0.42)]"
                     role="menu"
-                    aria-label="Antigravity model"
+                    aria-label={`${activeEngineName} model`}
                   >
-                    <div className="px-2 pb-1 pt-0.5 text-[8px] font-semibold uppercase tracking-[0.11em] text-fainter">Antigravity model</div>
+                    <div className="px-2 pb-1 pt-0.5 text-[8px] font-semibold uppercase tracking-[0.11em] text-fainter">{activeEngineName} model</div>
                     <div className="max-h-[310px] overflow-y-auto px-0.5 pb-0.5">
                       <button
                         type="button"
@@ -1690,7 +1689,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
                         )
                       })}
                       {engineModels.length === 0 ? (
-                        <div className="px-2.5 py-2 text-[10px]/[1.4] text-faint">Model catalog is unavailable; Antigravity keeps its native configuration.</div>
+                        <div className="px-2.5 py-2 text-[10px]/[1.4] text-faint">Model catalog is unavailable; {activeEngineName} keeps its native configuration.</div>
                       ) : null}
                     </div>
                   </div>
@@ -2417,124 +2416,6 @@ function QuestionCard({ entry }: { entry: Extract<ThreadEntry, { kind: 'question
       )}
     </article>
   )
-}
-
-// ── session event fold ────────────────────────────────────────────────────────
-
-interface HistoryEventEnvelope {
-  type: string
-  seq: number
-  data?: unknown
-}
-
-function foldHistory(events: HistoryEventEnvelope[]): ThreadEntry[] {
-  const entries: ThreadEntry[] = []
-  for (const envelope of events) {
-    if (!envelope) continue
-    foldEventInto(entries, envelope)
-  }
-  return entries
-}
-
-function foldEvent(entries: ThreadEntry[], envelope: HistoryEventEnvelope): ThreadEntry[] {
-  const next = [...entries]
-  foldEventInto(next, envelope)
-  return next
-}
-
-function foldEventInto(entries: ThreadEntry[], envelope: HistoryEventEnvelope): void {
-  const data = (envelope.data ?? {}) as Record<string, unknown>
-  switch (envelope.type) {
-    case 'user/message': {
-      const text = messageText(data.message)
-      if (!text) return
-      const last = entries.at(-1)
-      if (last?.kind === 'user' && last.text === text) return
-      entries.push({ kind: 'user', id: crypto.randomUUID(), text })
-      return
-    }
-    case 'assistant/chunk': {
-      const text = messageText(data.chunk)
-      if (!text) return
-      const last = entries.at(-1)
-      if (last?.kind === 'assistant' && last.streaming) {
-        last.text = `${last.text}${text}`
-      } else {
-        entries.push({ kind: 'assistant', id: crypto.randomUUID(), text, streaming: true })
-      }
-      return
-    }
-    case 'assistant/message': {
-      const text = messageText(data.message)
-      if (text === undefined) return
-      const last = entries.at(-1)
-      if (last?.kind === 'assistant' && last.streaming) {
-        last.text = text
-        last.streaming = false
-      } else {
-        entries.push({ kind: 'assistant', id: crypto.randomUUID(), text })
-      }
-      return
-    }
-    case 'agent/reasoning': {
-      const text = typeof data.text === 'string' ? data.text : ''
-      if (!text) return
-      const last = entries.at(-1)
-      if (last?.kind === 'reasoning' && last.text.length < 4000) {
-        last.text = `${last.text}\n${text}`
-      } else {
-        entries.push({ kind: 'reasoning', id: crypto.randomUUID(), text })
-      }
-      return
-    }
-    case 'tool/call': {
-      const callId = typeof data.callId === 'string' ? data.callId : undefined
-      const name = typeof data.name === 'string' ? data.name : 'tool'
-      entries.push({ kind: 'tool', id: crypto.randomUUID(), ...(callId === undefined ? {} : { callId }), name, args: data.arguments, status: 'running' })
-      return
-    }
-    case 'tool/result': {
-      const runningIndex = entries.findIndex((entry) => entry.kind === 'tool' && entry.status === 'running')
-      const text = messageText(data.message) ?? ''
-      const summary = typeof data.error === 'string' ? `Error: ${data.error}` : text.slice(0, RESULT_MAX_CHARS)
-      if (runningIndex === -1) {
-        entries.push({ kind: 'tool', id: crypto.randomUUID(), name: 'tool', status: typeof data.error === 'string' ? 'error' : 'done', result: summary })
-      } else {
-        const entry = entries[runningIndex]
-        if (entry?.kind === 'tool') {
-          entry.status = typeof data.error === 'string' ? 'error' : 'done'
-          entry.result = summary
-        }
-      }
-      return
-    }
-    case 'todo/write': {
-      const todos = Array.isArray(data.todos) ? data.todos as unknown as TodoItem[] : []
-      const last = entries.at(-1)
-      if (last?.kind === 'todo') last.items = todos
-      else entries.push({ kind: 'todo', id: crypto.randomUUID(), items: todos })
-      return
-    }
-    default:
-      // turn/step markers, request headers, compaction records, and plugin
-      // events stay out of the surface; the trajectory view owns those.
-      return
-  }
-}
-
-function messageText(message: unknown): string | undefined {
-  if (!message || typeof message !== 'object') return undefined
-  const record = message as Record<string, unknown>
-  if (typeof record.content === 'string') return record.content
-  if (!Array.isArray(record.content)) return undefined
-  const parts: string[] = []
-  for (const block of record.content) {
-    if (block && typeof block === 'object' && (block as Record<string, unknown>).type === 'text') {
-      const text = (block as Record<string, unknown>).text
-      if (typeof text === 'string') parts.push(text)
-    }
-  }
-  return parts.length > 0 ? parts.join('\n') : undefined
 }
 
 function collectChangedFiles(entries: ThreadEntry[]): string[] {

@@ -4,6 +4,9 @@ import { afterAll, describe, expect, it } from 'vitest'
 import type { ChildProcess } from 'node:child_process'
 import { AntigravityEngine } from '../src/main/engines/antigravity/antigravity-engine.js'
 import type { DshEventFrame } from '../src/shared/contracts.js'
+import { foldHistory, foldEvent } from '../src/shared/chat-events.js'
+import type { ThreadEntry } from '../src/shared/chat-types.js'
+import { appendWorkspaceContext } from '../src/shared/workspace-context.js'
 
 /**
  * Scripted stand-in for the `agy --output-format stream-json --input-format
@@ -103,6 +106,132 @@ async function makeEngine() {
 }
 
 describe('AntigravityEngine', () => {
+  it('sends project context to the CLI while keeping it out of the chat and title', async () => {
+    const { engine, spawned } = await makeEngine()
+    try {
+      const prompt = appendWorkspaceContext('project about?', {
+        root: '/workspace/examples', name: 'examples', projectName: 'Blog News',
+        projectObjective: 'Publish community stories.',
+      })
+      const { sessionId } = await engine.createSession({ cwd: '/workspace/examples' })
+      const runPromise = engine.run(prompt, { sessionId })
+      await flush()
+      expect(spawned[0]!.prompts[0]?.message.content).toBe(prompt)
+      spawned[0]!.completeTurn('Blog News publishes community stories.')
+      await runPromise
+      expect(engine.listSessions()[0]?.title).toBe('project about?')
+      expect(engine.transcript(sessionId).events[0]?.data).toEqual({
+        message: { role: 'user', content: [{ type: 'text', text: 'project about?' }] },
+      })
+    } finally {
+      await engine.close()
+    }
+  })
+
+  it('records a repeated response step and its final result once per turn', async () => {
+    const { engine, spawned, frames } = await makeEngine()
+    try {
+      const { sessionId } = await engine.createSession()
+      for (let turn = 0; turn < 2; turn++) {
+        const runPromise = engine.run('hi', { sessionId })
+        await flush()
+        const fake = spawned[0]!
+        fake.step(1, { state: 'ACTIVE', step_type: 'agent_response', text_delta: 'Hello!' })
+        fake.step(1, { state: 'DONE', step_type: 'agent_response', text_delta: 'Hello!' })
+        fake.completeTurn('Hello!\n')
+        await runPromise
+      }
+      const events = frames.flatMap((frame) => frame.kind === 'session-event' && frame.event && frame.event.type !== 'assistant/chunk' ? [frame.event] : [])
+      expect(events.map((event) => event.type)).toEqual([
+        'user/message', 'assistant/message', 'user/message', 'assistant/message',
+      ])
+      expect(engine.transcript(sessionId).events).toEqual(events)
+    } finally {
+      await engine.close()
+    }
+  })
+
+  it('preserves identical responses from distinct steps', async () => {
+    const { engine, spawned } = await makeEngine()
+    try {
+      const { sessionId } = await engine.createSession()
+      const runPromise = engine.run('check both', { sessionId })
+      await flush()
+      spawned[0]!.step(1, { state: 'DONE', step_type: 'agent_response', text_delta: 'Done.' })
+      spawned[0]!.step(2, { state: 'DONE', step_type: 'agent_response', text_delta: 'Done.' })
+      spawned[0]!.completeTurn('Done.')
+      await runPromise
+      expect(engine.transcript(sessionId).events.filter((event) => event.type === 'assistant/message')).toHaveLength(2)
+    } finally {
+      await engine.close()
+    }
+  })
+
+  it('streams a multi-part answer as one bubble and restores the same complete answer', async () => {
+    const { engine, spawned, frames } = await makeEngine()
+    try {
+      const { sessionId } = await engine.createSession()
+      const runPromise = engine.run('what is project about?', { sessionId })
+      await flush()
+      spawned[0]!.step(1, { state: 'ACTIVE', step_type: 'agent_response', text_delta: 'The project' })
+      spawned[0]!.step(1, { state: 'ACTIVE', step_type: 'agent_response', text_delta: ' ' })
+      spawned[0]!.step(1, { state: 'ACTIVE', step_type: 'agent_response', text_delta: 'manages agents.' })
+      spawned[0]!.step(1, { state: 'DONE', step_type: 'agent_response' })
+      spawned[0]!.completeTurn('The project manages agents.\n')
+      await runPromise
+      const events = frames.flatMap((frame) => frame.kind === 'session-event' && frame.event ? [frame.event] : [])
+      const live = events.reduce<ThreadEntry[]>((entries, event) => foldEvent(entries, event), [])
+      const restored = foldHistory(engine.transcript(sessionId).events)
+      for (const entries of [live, restored]) {
+        expect(entries).toHaveLength(2)
+        expect(entries[1]).toMatchObject({ kind: 'assistant', text: 'The project manages agents.' })
+      }
+      expect(live[1]).toMatchObject({ streaming: false })
+    } finally {
+      await engine.close()
+    }
+  })
+
+  it('surfaces a denied file read instead of silently succeeding without a reply', async () => {
+    const { engine, spawned, frames } = await makeEngine()
+    try {
+      const { sessionId } = await engine.createSession({ cwd: '/project/examples' })
+      const runPromise = engine.run('what is project about?', { sessionId })
+      const rejected = expect(runPromise).rejects.toThrow(/without a reply.*permission check failed/)
+      await flush()
+      spawned[0]!.step(6, { state: 'ACTIVE', step_type: 'tool', tool_name: 'view_file', tool_info: { parameters: { AbsolutePath: '/project/README.md' } } })
+      spawned[0]!.step(6, { state: 'ERROR', step_type: 'tool', tool_name: 'view_file', tool_info: { error: { message: 'permission check failed: user denied read_file(/project/README.md)' } } })
+      spawned[0]!.completeTurn('')
+      await rejected
+      expect(engine.listSessions()[0]?.running).toBe(false)
+      expect(frames.some((frame) => frame.kind === 'agent-error' && frame.message?.includes('user denied read_file'))).toBe(true)
+      expect(foldHistory(engine.transcript(sessionId).events)[1]).toMatchObject({
+        kind: 'tool', name: 'view_file', status: 'error', result: expect.stringContaining('user denied read_file'),
+      })
+      // The next turn can recover, without carrying forward the prior failure.
+      const retry = engine.run('hi', { sessionId })
+      await flush()
+      spawned[0]!.completeTurn('Hello!')
+      await expect(retry).resolves.toEqual({ sessionId })
+    } finally {
+      await engine.close()
+    }
+  })
+
+  it('reports an empty successful result as a missing reply', async () => {
+    const { engine, spawned } = await makeEngine()
+    try {
+      const { sessionId } = await engine.createSession()
+      const runPromise = engine.run('hi', { sessionId })
+      const rejected = expect(runPromise).rejects.toThrow('without a reply')
+      await flush()
+      spawned[0]!.completeTurn('')
+      await rejected
+    } finally {
+      await engine.close()
+    }
+  })
+
   it('creates a session, streams a turn into shared frames, and settles cleanly', async () => {
     const { engine, spawned, frames } = await makeEngine()
     try {
