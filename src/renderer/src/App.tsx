@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import type { BrowserState, DshSurface, DshViewState, ExternalElementPickView, HarnessStatus, InspectScope, SurfaceState, ThemeMode, ThemeState, WorkspaceFile, WorkspaceState } from '../../shared/contracts'
 import type { OrganizationSnapshot } from '../../shared/organization'
 import { BrowserPane } from './components/BrowserPane'
+import { ProjectGitControls } from './components/ProjectGitControls'
 import { Button } from './components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select'
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from './components/ui/dialog'
@@ -124,6 +125,7 @@ export default function App() {
   const [settingsSubTabs, setSettingsSubTabs] = useState<SettingsSubTabs>(settingsSubTabsFromLocation)
   const [agentPane, setAgentPane] = useState<AgentPane>('files')
   const [sessionsCollapsed, setSessionsCollapsed] = useState(false)
+  const [gitEditable, setGitEditable] = useState(false)
   const [workspaceCollapsed, setWorkspaceCollapsed] = useState(false)
   const [externalPrompt, setExternalPrompt] = useState<{ id: string; text: string } | null>(null)
   const [theme, setTheme] = useState<ThemeState | null>(null)
@@ -633,7 +635,9 @@ export default function App() {
   }
 
   return (
-    <div className={cn('grid h-full w-full select-none bg-[radial-gradient(circle_at_35%_-20%,var(--bg-glow),transparent_35%)]', uiPreview ? 'grid-rows-[25px_auto_minmax(0,1fr)]' : 'grid-rows-[auto_minmax(0,1fr)]')}>
+    // Text stays selectable everywhere (chat transcripts, editor code):
+    // the shell deliberately does not set `select-none`.
+    <div className={cn('grid h-full w-full bg-[radial-gradient(circle_at_35%_-20%,var(--bg-glow),transparent_35%)]', uiPreview ? 'grid-rows-[25px_auto_minmax(0,1fr)]' : 'grid-rows-[auto_minmax(0,1fr)]')}>
       {uiPreview ? (
         <aside className="flex items-center justify-center border-b border-warning/25 bg-warning/10 px-3 text-[10px] font-bold tracking-[0.08em] text-warning">
           UI PREVIEW · DEVELOPMENT FIXTURES · ACTIONS ARE SIMULATED · LAUNCH ELECTRON FOR REAL RUNTIME FEATURES
@@ -740,6 +744,7 @@ export default function App() {
               <Button variant="outline" size="xs" className="h-6 rounded-md px-2 text-xs" onClick={() => { setView('company'); setCompanyView('operations') }}>
                 Manage
               </Button>
+              {workspace?.root ? <ProjectGitControls key={`${workspace.projectId ?? 'workspace'}:${workspace.root}:${workspace.binding ?? 'standalone'}`} root={workspace.root} editable={gitEditable} workspaceBinding={workspace.binding} onError={notify} /> : null}
             </div>
           ) : null}
         </div>
@@ -809,6 +814,7 @@ export default function App() {
               <ChatPanel
                 key={workspace?.root ?? 'workspace-loading'}
                 status={harnessStatus}
+                onGitEditableChange={setGitEditable}
                 {...(workspace?.projectName || workspace?.name ? { workspaceName: workspace.projectName ?? workspace.name } : {})}
                 sessionProjectScope={{ activeProjectId: project?.id, sessionProjects: runSessionProjects }}
                 {...(companyProjects.length ? {
@@ -837,7 +843,7 @@ export default function App() {
             </Separator>
             <Panel className="relative min-h-0 min-w-0 overflow-hidden bg-surface-0" minSize={WORKSPACE_MIN_PX}>
               <section aria-hidden={view !== 'company'} className={cn('absolute inset-0 overflow-hidden', view === 'company' ? 'block' : 'hidden')}>
-                <OrganizationDashboard workspace={workspace} onOpenDeepSeek={() => setView('agent')} onError={notify} companyView={companyView} onCompanyViewChange={setCompanyView} />
+                <OrganizationDashboard workspace={workspace} onOpenDeepSeek={() => setView('agent')} onAskAgent={askAgent} onError={notify} companyView={companyView} onCompanyViewChange={setCompanyView} />
               </section>
 
               <section aria-hidden={view !== 'agent'} className={cn('absolute inset-0 overflow-hidden', view === 'agent' && !workspaceCollapsed ? 'flex' : 'hidden')}>

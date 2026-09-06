@@ -125,6 +125,33 @@ export function MarkdownLite({ text, className, onOpenFile }: { text: string; cl
                 <InlineText text={block.text} {...(onOpenFile ? { onOpenFile } : {})} />
               </blockquote>
             )
+          case 'table':
+            return (
+              <div key={index} className="my-1 overflow-x-auto rounded-md border border-border-soft">
+                <table className="w-full min-w-[280px] border-collapse text-left text-[11px]">
+                  <thead className="bg-surface-1 text-[10px] font-semibold text-soft">
+                    <tr>
+                      {block.headers.map((header, headerIndex) => (
+                        <th key={headerIndex} className="border-b border-border-soft px-2 py-1.5 align-top">
+                          <InlineText text={header} {...(onOpenFile ? { onOpenFile } : {})} />
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {block.rows.map((row, rowIndex) => (
+                      <tr key={rowIndex} className="border-b border-border-soft last:border-b-0">
+                        {row.map((cell, cellIndex) => (
+                          <td key={cellIndex} className="px-2 py-1.5 align-top text-foreground/90">
+                            <InlineText text={cell} {...(onOpenFile ? { onOpenFile } : {})} />
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )
           default:
             return (
               <div key={index} className="whitespace-pre-wrap [overflow-wrap:anywhere] text-[12.5px]/[1.7] text-foreground/90">

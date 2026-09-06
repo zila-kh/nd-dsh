@@ -1,5 +1,6 @@
 import { app } from 'electron'
 import { spawn, type ChildProcess } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { existsSync, promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import type {
@@ -21,6 +22,7 @@ import type { SessionArchiveStore } from '../sessions/session-archive-store.js'
 import { tokenSaverRuntime } from '../token-saver/token-saver-runtime.js'
 import { ensureProfilePluginLinks } from './profile-plugin-links.js'
 import { scopeSessionListPayload } from './session-scope.js'
+import { SessionEventHub } from './session-event-hub.js'
 import type { WorkspaceService } from '../workspace/workspace-service.js'
 
 const COMPAT_DEFAULT_PROVIDER = 'deepseek-official'
@@ -53,6 +55,7 @@ export class HarnessService {
   private onStatusChanged?: (status: HarnessStatus) => void
   private onEvent?: (frame: DshEventFrame) => void
   private onGatewayReady?: (url: string) => void
+  private readonly eventHub = new SessionEventHub((frame) => this.handleEvent(frame))
 
   constructor(
     private readonly workspace: WorkspaceService,
@@ -103,6 +106,13 @@ export class HarnessService {
     const sessionId = options?.sessionId?.trim() || this.activeSessionId || await this.createSession()
     this.activeSessionId = sessionId
     this.canceledSessions.delete(sessionId)
+    // Adopt the session's live journal before admitting the turn, so every
+    // event of this prompt streams instead of landing inside a snapshot that
+    // is adopted silently. Degraded to a warning: the turn still runs and
+    // completes via the status flips.
+    await this.eventHub.ensure(sessionId).catch((cause) => {
+      console.warn(`ND-DSH session event stream unavailable for ${sessionId}:`, cause instanceof Error ? cause.message : String(cause))
+    })
 
     const activeGateway = this.gateway ?? gateway
     const targetProvider = options?.provider ?? this.statusValue.provider
@@ -150,13 +160,25 @@ export class HarnessService {
       })),
     ]
 
-    const promptRpc = await this.rpcWithRecovery(this.gateway ?? gateway, 'session.prompt', { sessionId, mode: 'queue', content })
+    // The pinned runtime's prompt boundary requires a client-minted request
+    // identity that it persists on the accepted user message as its rpcId.
+    const promptRpc = await this.rpcWithRecovery(this.gateway ?? gateway, 'session.prompt', {
+      requestId: randomUUID(),
+      sessionId,
+      mode: 'queue',
+      content,
+    })
     let result = promptRpc.result
     // The pinned Harness rejects unsupported image modalities before publishing
     // the user event. Retrying text-only preserves the annotation geometry and
     // source references for text-only routes without duplicating a turn.
     if (!result.ok && images.length > 0 && isUnsupportedImageResult(result)) {
-      result = (await this.rpcWithRecovery(promptRpc.gateway, 'session.prompt', { sessionId, mode: 'queue', content: textContent })).result
+      result = (await this.rpcWithRecovery(promptRpc.gateway, 'session.prompt', {
+        requestId: randomUUID(),
+        sessionId,
+        mode: 'queue',
+        content: textContent,
+      })).result
     }
     if (!result.ok) throw new Error(rpcFailureMessage('session.prompt', result))
 
@@ -205,6 +227,16 @@ export class HarnessService {
     ) {
       await this.close()
       started = await this.ensureStarted()
+    }
+    if (method === 'session.history') {
+      // The 0.1.2 runtime line removed session.history; remote-face runtimes
+      // are served from the live follow journal instead. Legacy runtimes keep
+      // the pass-through RPC below.
+      const sessionId = (payload as { sessionId?: unknown } | undefined)?.sessionId
+      if (this.eventHub.active && typeof sessionId === 'string' && sessionId) {
+        const maxMessages = (payload as { maxMessages?: unknown } | undefined)?.maxMessages
+        return sanitizeHistoryResult(await this.eventHub.read(sessionId, typeof maxMessages === 'number' ? maxMessages : 50))
+      }
     }
     const { result } = await this.rpcWithRecovery(started, method, payload)
     if (method === 'session.history') return sanitizeHistoryResult(result)
@@ -288,6 +320,7 @@ export class HarnessService {
   /** Tear down the runtime subprocess (app shutdown / workspace change / provider refresh). */
   async close(): Promise<void> {
     this.stopping = true
+    this.eventHub.detach()
     const child = this.child
     const gateway = this.gateway
     this.child = undefined
@@ -336,9 +369,21 @@ export class HarnessService {
     }
     if (this.gateway) return this.gateway
     if (this.startPromise) return this.startPromise
-    this.startPromise = this.start().finally(() => {
-      this.startPromise = undefined
-    })
+    this.startPromise = this.start()
+      .catch(async (cause: unknown) => {
+        const stoppedExternally = this.stopping
+        const error = cause instanceof Error ? cause : new Error(String(cause))
+
+        // A child can be alive without ever exposing a usable HTTP/RPC
+        // gateway. Tear that partial launch down before clearing startPromise
+        // so a later retry cannot inherit the failed process or its port.
+        await this.close()
+        if (!stoppedExternally) this.updateStatus('error', error.message)
+        throw error
+      })
+      .finally(() => {
+        this.startPromise = undefined
+      })
     return this.startPromise
   }
 
@@ -434,7 +479,12 @@ export class HarnessService {
     if (child.stdout) child.stdout.setEncoding('utf8')
     if (child.stderr) child.stderr.setEncoding('utf8')
 
+    const baseUrl = `http://127.0.0.1:${port}`
     let childError = ''
+    let childOutput = ''
+    child.stdout?.on('data', (chunk: string) => {
+      childOutput = `${childOutput}${chunk}`.slice(-16_384)
+    })
     child.stderr?.on('data', (chunk: string) => {
       childError = `${childError}${chunk}`.slice(-16_384)
     })
@@ -449,21 +499,30 @@ export class HarnessService {
       this.updateStatus(wasExpected ? 'stopped' : 'error', wasExpected ? undefined : reason)
     })
 
-    const baseUrl = `http://127.0.0.1:${port}`
-    await this.waitUntilReady(child, baseUrl, () => childError)
-    const gateway = new GatewayClient(baseUrl)
+    const rootStatus = await this.waitUntilReady(child, baseUrl, () => childError)
+    let authenticatedUrl = rootStatus === 401
+      ? await this.waitForAuthenticatedUrl(child, baseUrl, () => childOutput, () => childError)
+      : undefined
+    let gateway = authenticatedUrl
+      ? await GatewayClient.authenticate(authenticatedUrl)
+      : new GatewayClient(baseUrl)
     // The static frontend becomes reachable before the /api route tree has
     // finished mounting. Do not mistake that short-lived HTTP 404 for a port
     // collision and kill the healthy child before it can accept session RPCs.
-    await this.waitUntilGatewayReady(child, gateway, () => childError)
+    await this.waitUntilGatewayReady(child, gateway, () => childError, async () => {
+      authenticatedUrl = await this.waitForAuthenticatedUrl(child, baseUrl, () => childOutput, () => childError)
+      gateway = await GatewayClient.authenticate(authenticatedUrl)
+      return gateway
+    })
     gateway.openEvents((frame) => this.handleEvent(frame))
     this.gateway = gateway
     this.baseUrl = baseUrl
+    this.eventHub.attach(gateway)
     this.providerRevisionAtStart = providerRevision
     this.tokenSaverEnabledAtStart = tokenSaverEnabled
     await this.syncGatewayWorkspaceLabel(gateway, workspaceRoot)
     this.updateStatus('ready')
-    this.onGatewayReady?.(baseUrl)
+    this.onGatewayReady?.(authenticatedUrl ?? baseUrl)
     return gateway
   }
 
@@ -497,13 +556,16 @@ export class HarnessService {
    * before the listener binds, so stdout alone proves nothing; polling is the
    * only trustworthy signal.
    */
-  private async waitUntilReady(child: ChildProcess, baseUrl: string, getChildError: () => string): Promise<void> {
+  private async waitUntilReady(child: ChildProcess, baseUrl: string, getChildError: () => string): Promise<number> {
     const deadline = Date.now() + READY_TIMEOUT_MS
     while (Date.now() < deadline) {
       if (child.exitCode !== null) break
       try {
         const response = await fetch(baseUrl, { signal: AbortSignal.timeout(2_000) })
-        if (response.status < 500) return
+        // 404 is an intermediate state while the route tree mounts. Current
+        // authenticated DSH releases intentionally answer the clean root with
+        // 401 until their printed launch URL performs the cookie exchange.
+        if ((response.status >= 200 && response.status < 400) || response.status === 401) return response.status
       } catch {
         // Not accepting connections yet.
       }
@@ -513,17 +575,41 @@ export class HarnessService {
     throw new Error(`Runtime did not become ready within the timeout${err ? `: ${err}` : ''}`)
   }
 
-  /** Wait until the already-listening web runtime has mounted its RPC routes. */
-  private async waitUntilGatewayReady(child: ChildProcess, gateway: GatewayClient, getChildError: () => string): Promise<void> {
+  private async waitForAuthenticatedUrl(
+    child: ChildProcess,
+    baseUrl: string,
+    getOutput: () => string,
+    getChildError: () => string,
+  ): Promise<string> {
     const deadline = Date.now() + READY_TIMEOUT_MS
+    while (Date.now() < deadline) {
+      if (child.exitCode !== null) break
+      const url = dshWebUrl(getOutput(), baseUrl)
+      if (url) return url
+      await new Promise((resolve) => setTimeout(resolve, READY_POLL_MS))
+    }
+    const err = getChildError().trim()
+    throw new Error(`Runtime did not provide its authenticated web URL within the timeout${err ? `: ${err}` : ''}`)
+  }
+
+  /** Wait until the already-listening web runtime has mounted its RPC routes. */
+  private async waitUntilGatewayReady(child: ChildProcess, gateway: GatewayClient, getChildError: () => string, authenticate?: () => Promise<GatewayClient>): Promise<void> {
+    const deadline = Date.now() + READY_TIMEOUT_MS
+    let lastError = ''
     while (Date.now() < deadline) {
       if (child.exitCode !== null) break
       const identity = await gateway.rpc('session.list')
       if (identity.ok) return
+      lastError = identity.error?.message ?? ''
+      if (identity.error?.code === 'gateway-http' && lastError.endsWith('HTTP 401') && authenticate) {
+        gateway = await authenticate()
+        authenticate = undefined
+        continue
+      }
       await new Promise((resolve) => setTimeout(resolve, READY_POLL_MS))
     }
     const err = getChildError().trim()
-    throw new Error(`Runtime gateway did not become ready within the timeout${err ? `: ${err}` : ''}`)
+    throw new Error(`Runtime gateway did not become ready within the timeout${lastError ? `: ${lastError}` : ''}${err ? `: ${err}` : ''}`)
   }
 
   private handleEvent(frame: DshEventFrame): void {
@@ -570,6 +656,23 @@ function providerRequiresCredential(provider: { baseUrl: string } | undefined): 
   } catch {
     return true
   }
+}
+
+/** Extract only the loopback URL for the port ND assigned to this child. */
+export function dshWebUrl(output: string, expectedBaseUrl: string): string | undefined {
+  const expectedOrigin = new URL(expectedBaseUrl).origin
+  const matches = output.matchAll(/dsh web:\s+(https?:\/\/[^\s()]+)/g)
+  for (const match of matches) {
+    const candidate = match[1]
+    if (!candidate) continue
+    try {
+      const url = new URL(candidate)
+      if (url.origin === expectedOrigin) return url.toString()
+    } catch {
+      // Ignore partial lines while stdout is still streaming.
+    }
+  }
+  return undefined
 }
 
 function attachUiContext(prompt: string, target?: UiTarget, annotation?: UiAnnotation): string {

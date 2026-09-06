@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ModelProvider, SessionModels } from '../src/shared/contracts.js'
-import { resolveModelSelectionDisplay } from '../src/renderer/src/lib/model-selection.js'
+import { isVisionModel, resolveModelSelectionDisplay } from '../src/renderer/src/lib/model-selection.js'
 
 const providers: ModelProvider[] = [
   {
@@ -41,5 +41,47 @@ describe('model selection display', () => {
 
   it('does not invent a vendor when nothing is configured', () => {
     expect(resolveModelSelectionDisplay(null, null, [], 'idle').label).toBe('No model configured')
+  })
+})
+
+describe('vision capability lookup', () => {
+  const visionProviders: ModelProvider[] = [
+    {
+      id: 'mimo-route',
+      name: 'Mimo',
+      enabled: true,
+      baseUrl: 'https://mimo.example/v1',
+      apiFormat: 'OpenAI compatible (/v1/chat/completions)',
+      apiKey: '',
+      models: [
+        { id: 'mimo-v2.5', context: '1M', inputTypes: ['text', 'image'] },
+        { id: 'mimo-text', context: '128K', inputTypes: ['text'] },
+      ],
+    },
+  ]
+
+  it('marks only models whose provider record declares image input', () => {
+    expect(isVisionModel(visionProviders, 'mimo-route', 'mimo-v2.5')).toBe(true)
+    expect(isVisionModel(visionProviders, 'mimo-route', 'mimo-text')).toBe(false)
+  })
+
+  it('stays text-only for unknown routes and models', () => {
+    expect(isVisionModel(visionProviders, 'unknown-route', 'mimo-v2.5')).toBe(false)
+    expect(isVisionModel(visionProviders, 'mimo-route', 'gone')).toBe(false)
+    expect(isVisionModel([], 'mimo-route', 'mimo-v2.5')).toBe(false)
+  })
+
+  it('resolves the direct DeepSeek compat route to the ND record', () => {
+    const deepseekProviders: ModelProvider[] = [{
+      id: 'deepseek',
+      name: 'DeepSeek',
+      enabled: true,
+      baseUrl: '',
+      apiFormat: 'OpenAI compatible (/v1/chat/completions)',
+      apiKey: '',
+      models: [{ id: 'deepseek-vision', context: '128K', inputTypes: ['text', 'image'] }],
+    }]
+    expect(isVisionModel(deepseekProviders, 'deepseek-official', 'deepseek-vision')).toBe(true)
+    expect(isVisionModel(deepseekProviders, 'deepseek', 'deepseek-vision')).toBe(true)
   })
 })

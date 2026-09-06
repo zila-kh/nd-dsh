@@ -17,6 +17,7 @@ export type MarkdownBlock =
   | { kind: 'bullet-list'; items: string[] }
   | { kind: 'ordered-list'; items: string[] }
   | { kind: 'quote'; text: string }
+  | { kind: 'table'; headers: string[]; rows: string[][] }
   | { kind: 'paragraph'; text: string }
 
 const FENCE_OPEN = /^```(\w*)\s*$/
@@ -24,6 +25,14 @@ const HEADING = /^(#{1,3})\s+(.*)$/
 const BULLET = /^[-*]\s+(.*)$/
 const ORDERED = /^\d+[.)]\s+(.*)$/
 const QUOTE = /^>\s?(.*)$/
+const TABLE_SEPARATOR = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*$/
+
+function tableCells(line: string): string[] {
+  const trimmed = line.trim()
+  const withoutOuterPipes = trimmed.startsWith('|') ? trimmed.slice(1) : trimmed
+  const content = withoutOuterPipes.endsWith('|') ? withoutOuterPipes.slice(0, -1) : withoutOuterPipes
+  return content.split('|').map((cell) => cell.trim())
+}
 
 /** Tokenize one line's inline markdown: `code`, **bold**, *italic*. */
 export function tokenizeInline(text: string): InlineToken[] {
@@ -103,6 +112,24 @@ export function parseMarkdownBlocks(source: string): MarkdownBlock[] {
       }
       blocks.push({ kind: 'quote', text: body.join(' ') })
       continue
+    }
+    if (i + 1 < lines.length && line.includes('|') && TABLE_SEPARATOR.test((lines[i + 1] ?? '').trim())) {
+      const headers = tableCells(line)
+      const separatorCells = tableCells(lines[i + 1] ?? '')
+      if (headers.length > 0 && headers.length === separatorCells.length) {
+        const rows: string[][] = []
+        i += 2
+        while (i < lines.length) {
+          const current = lines[i] ?? ''
+          if (!current.trim() || !current.includes('|')) break
+          const cells = tableCells(current)
+          if (cells.length !== headers.length) break
+          rows.push(cells)
+          i++
+        }
+        blocks.push({ kind: 'table', headers, rows })
+        continue
+      }
     }
     if (!line.trim()) {
       i++

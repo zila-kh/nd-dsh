@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { CodingEngineDescriptor } from '../../shared/contracts.js'
 import { buildCodingEngineCatalog, chatGptWebEngineDescriptor, ND_HARNESS_ENGINE_ID } from '../../shared/coding-engines.js'
-import { antigravityBinPath, codexBinPath, dshPatchPath, harnessCliBinPath, harnessRoot, presetSourceDir } from '../app-paths.js'
+import { antigravityBinPath, claudeBinPath, codexBinPath, cursorBinPath, dshPatchPath, harnessCliBinPath, harnessRoot, piBinPath, presetSourceDir, zcodeBinPath } from '../app-paths.js'
 import type { CapabilityAssignmentStore } from '../capabilities/capability-assignment-store.js'
 
 /**
@@ -30,8 +30,21 @@ export class CodingEngineRegistry {
     // depend on the ND runtime bootstrap.
     const codexCliReady = codexBinPath() !== undefined
     const antigravityReady = antigravityBinPath() !== undefined
+    const zcodeCliReady = zcodeBinPath() !== undefined
+    const piCodingReady = piBinPath() !== undefined
+    const cursorCliReady = cursorBinPath() !== undefined
+    const claudeCodeCliReady = claudeBinPath() !== undefined
     return [
-      ...buildCodingEngineCatalog({ harnessReady, codexReady, codexCliReady, antigravityReady }),
+      ...buildCodingEngineCatalog({
+        harnessReady,
+        codexReady,
+        codexCliReady,
+        antigravityReady,
+        zcodeCliReady,
+        piCodingReady,
+        cursorCliReady,
+        claudeCodeCliReady,
+      }),
       chatGptWebEngineDescriptor(),
     ]
   }

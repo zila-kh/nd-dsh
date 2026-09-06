@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   ChatGptWebEngine,
   chatGptSyncBranchName,
@@ -10,6 +10,80 @@ import {
 } from '../src/main/engines/chatgpt-web/chatgpt-web-engine.js'
 
 describe('ChatGPT Web Git sync helpers', () => {
+  it('keeps chats without a remote independent of Git and preserves the selected branch for Git chats', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'nd-chatgpt-optional-'))
+    let remotes: string[] = []
+    const git = { refresh: async () => ({ remotes, branch: 'feature/readable' }), remoteUrl: async () => 'https://example.com/repo.git', head: async () => 'abc', ensureBranch: vi.fn(async () => {}), pushBranch: vi.fn(async () => {}), remoteBranchHead: async () => 'abc', hasUncommittedChanges: async () => false }
+    const engine = new ChatGptWebEngine({ browser: {} as never, workspace: { state: () => ({ root: '/workspace' }) } as never, git: git as never, storePath: join(directory, 'sessions.json') })
+    const internals = engine as unknown as { sessions: Map<string, { transcript: Array<{ type: string }> }>; prepareGit: (session: unknown, signal: AbortSignal) => Promise<{ branch: string } | null> }
+    try {
+      const { sessionId } = await engine.createSession({ cwd: '/workspace' })
+      const session = internals.sessions.get(sessionId)!
+      expect(await internals.prepareGit(session, new AbortController().signal)).toBeNull()
+      expect(git.pushBranch).not.toHaveBeenCalled()
+      session.transcript.push({ type: 'user/message' })
+      remotes = ['origin']
+      expect(await internals.prepareGit(session, new AbortController().signal)).toBeNull()
+      const next = await engine.createSession({ cwd: '/workspace' })
+      expect(await internals.prepareGit(internals.sessions.get(next.sessionId), new AbortController().signal)).toMatchObject({ branch: 'feature/readable' })
+      expect(git.ensureBranch).toHaveBeenCalledWith('feature/readable')
+    } finally { await engine.close(); rmSync(directory, { recursive: true, force: true }) }
+  })
+  it.each(['opening', 'branch', 'composer'])('stops before further side effects during %s', async (stage) => {
+    const directory = mkdtempSync(join(tmpdir(), 'nd-chatgpt-cancel-'))
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let entered!: () => void
+    const reached = new Promise<void>((resolve) => { entered = resolve })
+    const pause = async () => { entered(); await gate }
+    const git = {
+      refresh: async () => ({ remotes: ['origin'] }),
+      remoteUrl: async () => 'https://example.com/repo.git', head: async () => 'abc',
+      ensureBranch: vi.fn(async () => { if (stage === 'branch') await pause() }),
+      pushBranch: vi.fn(async () => {}), remoteBranchHead: async () => 'abc',
+      hasUncommittedChanges: async () => false,
+    }
+    const engine = new ChatGptWebEngine({ browser: { state: () => ({ url: 'about:blank' }) } as never,
+      workspace: { state: () => ({ root: '/workspace' }) } as never, git: git as never,
+      storePath: join(directory, 'sessions.json') })
+    const cdp = { close: vi.fn(), evaluate: vi.fn(async () => { await pause(); return { ok: true } }) }
+    const internals = engine as unknown as {
+      openBoundConversation: () => Promise<typeof cdp>
+      captureSnapshot: () => Promise<unknown>
+    }
+    internals.openBoundConversation = async () => { if (stage === 'opening') await pause(); return cdp }
+    internals.captureSnapshot = async () => ({ url: 'https://chatgpt.com/', turns: [], busy: false })
+    try {
+      const { sessionId } = await engine.createSession({ cwd: '/workspace' })
+      const run = engine.run('hello', { sessionId })
+      const rejected = expect(run).rejects.toThrow('stopped')
+      await reached
+      await engine.stop(sessionId)
+      release()
+      await rejected
+      if (stage !== 'composer') expect(git.pushBranch).not.toHaveBeenCalled()
+      expect(cdp.evaluate).toHaveBeenCalledTimes(stage === 'composer' ? 1 : 0)
+      expect(cdp.close).toHaveBeenCalledOnce()
+      expect(engine.listSessions()[0]?.running).toBe(false)
+    } finally { release(); await engine.close(); rmSync(directory, { recursive: true, force: true }) }
+  })
+
+  it('imports only the completed browser reply, once', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'nd-chatgpt-stream-'))
+    const engine = new ChatGptWebEngine({ browser: {} as never, git: {} as never, workspace: {} as never, storePath: join(directory, 'sessions.json') })
+    const internals = engine as unknown as { sessions: Map<string, unknown>; importUnseenTurns: (session: unknown, snapshot: unknown) => void }
+    try {
+      const { sessionId } = await engine.createSession({ cwd: '/workspace' })
+      const session = internals.sessions.get(sessionId)
+      for (const [text, busy] of [['Hello', true], ['Hello world', true], ['Hello world!', false], ['Hello world!', false]] as const) {
+        internals.importUnseenTurns(session, { url: 'https://chatgpt.com/c/test', busy, turns: [{ role: 'assistant', text }] })
+      }
+      const events = engine.transcript(sessionId).events
+      expect(events).toHaveLength(1)
+      expect(events[0]?.data).toEqual({ message: { role: 'assistant', content: [{ type: 'text', text: 'Hello world!' }] } })
+    } finally { await engine.close(); rmSync(directory, { recursive: true, force: true }) }
+  })
+
   it('derives a stable safe branch from the ND chat id', () => {
     const branch = chatGptSyncBranchName('chatgpt-web-ABC-123_def')
     expect(branch).toBe('nd/chat-abc123def')
@@ -60,7 +134,7 @@ describe('ChatGPT Web Git sync helpers', () => {
           transcript: [],
           seenTurnKeys: [],
           sentPromptHashes: [],
-          branch: 'main',
+          branch: '--invalid',
         }],
       }), 'utf8')
 

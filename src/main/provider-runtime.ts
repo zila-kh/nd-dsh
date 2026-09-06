@@ -1,11 +1,14 @@
 import { createHash } from 'node:crypto'
 import type { ModelProvider } from '../shared/contracts.js'
+import { parseModelTokenLimit } from '../shared/provider-models.js'
 
 export type HarnessProviderProtocol = 'openai-completions' | 'openai-responses' | 'anthropic-messages'
 
 export interface HarnessPiAiModelProfile {
   id: string
   contextWindow?: number
+  maxTokens?: number
+  input?: Array<'text' | 'image'>
 }
 
 export interface HarnessPiAiProviderProfile {
@@ -75,7 +78,12 @@ export function buildProviderRuntime(providers: readonly ModelProvider[]): Provi
         const id = item.id.trim()
         if (!id) return undefined
         const contextWindow = parseContextWindow(item.context)
-        return { id, ...(contextWindow ? { contextWindow } : {}) }
+        return {
+          id,
+          ...(contextWindow ? { contextWindow } : {}),
+          ...(item.maxOutputTokens === undefined ? {} : { maxTokens: item.maxOutputTokens }),
+          ...(item.inputTypes === undefined ? {} : { input: [...item.inputTypes] }),
+        }
       })
       .filter((item): item is HarnessPiAiModelProfile => item !== undefined)
 
@@ -119,16 +127,7 @@ export function protocolFromApiFormat(value: string): HarnessProviderProtocol | 
 
 /** Convert UI context labels such as 128K / 1M into Harness numeric metadata. */
 export function parseContextWindow(value: string): number | undefined {
-  const normalized = value.trim().replaceAll(',', '')
-  if (!normalized) return undefined
-  const match = /^(\d+(?:\.\d+)?)\s*([kKmM])?$/.exec(normalized)
-  if (!match) return undefined
-  const amount = Number(match[1])
-  if (!Number.isFinite(amount) || amount <= 0) return undefined
-  const suffix = match[2]?.toLowerCase()
-  const multiplier = suffix === 'm' ? 1_000_000 : suffix === 'k' ? 1_000 : 1
-  const result = Math.round(amount * multiplier)
-  return Number.isSafeInteger(result) && result > 0 ? result : undefined
+  return parseModelTokenLimit(value)
 }
 
 function normalizeBaseUrl(value: string, route: string): string | undefined {

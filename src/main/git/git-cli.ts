@@ -433,6 +433,7 @@ export interface GitExecutionResult {
 export interface GitExecOptions {
   input?: string
   env?: Record<string, string>
+  timeoutMs?: number
 }
 
 /**
@@ -499,7 +500,7 @@ export class GitCli {
       child.stdin?.end()
     }
 
-    const buffered = await this.buffer(child)
+    const buffered = await this.buffer(child, options.timeoutMs)
 
     if (this.onOutput) {
       this.onOutput(`> git ${args.join(' ')} [${Date.now() - startedAt}ms]\n`)
@@ -544,15 +545,20 @@ export class GitCli {
     return this.spawnProcess(this.path, args, spawnOptions)
   }
 
-  private buffer(child: ChildProcess): Promise<GitExecutionResult> {
+  private buffer(child: ChildProcess, timeoutMs?: number): Promise<GitExecutionResult> {
     return new Promise((resolve, reject) => {
       const stdout: Buffer[] = []
       const stderr: Buffer[] = []
+      const timer = timeoutMs === undefined ? undefined : setTimeout(() => {
+        reject(new Error('Git operation timed out. Please try again.'))
+        child.kill()
+      }, timeoutMs)
 
       child.stdout?.on('data', (chunk: Buffer) => stdout.push(chunk))
       child.stderr?.on('data', (chunk: Buffer) => stderr.push(chunk))
-      child.on('error', reject)
+      child.on('error', (error) => { clearTimeout(timer); reject(error) })
       child.on('exit', (exitCode) => {
+        clearTimeout(timer)
         resolve({
           exitCode: exitCode ?? -1,
           stdout: Buffer.concat(stdout).toString('utf8'),

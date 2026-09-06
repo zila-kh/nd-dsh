@@ -289,6 +289,19 @@ export class EngineSessionRouter {
     return []
   }
 
+  /**
+   * Restart the ZCode app-server child so the next turn picks up freshly
+   * written CLI config (model provider). Native sessions are durable and
+   * resume by id, but a turn in flight is never interrupted: when any ZCode
+   * session is running the restart is deferred to the next write or app
+   * launch, which is fine because the config only gates session creation.
+   */
+  async restartZcodeRuntime(): Promise<void> {
+    const zcode = this.zcode
+    if (!zcode || zcode.listSessions().some((session) => session.running)) return
+    await zcode.close()
+  }
+
   private engineForSession(sessionId: string): string {
     const logical = this.logicalEngineBySession.get(sessionId)
     if (logical) return logical

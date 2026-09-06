@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { DshViewState, HarnessStatus } from '../../../shared/contracts'
 import { ExternalIcon, ReloadIcon } from './Icons'
 import { BridgePill } from './bridge-pill'
+import { useNativeViewOcclusion } from '../lib/use-native-view-occlusion'
 
 interface DshCodingSurfaceProps {
   active: boolean
@@ -20,6 +21,7 @@ export function shouldShowDshNativeView(active: boolean, inspectOverlayVisible: 
  * visible rectangle and exposes narrow reload/open-external controls.
  */
 export function DshCodingSurface({ active, inspectOverlayVisible = false, state, onNotify }: DshCodingSurfaceProps) {
+  const occluded = useNativeViewOcclusion()
   const surfaceRef = useRef<HTMLDivElement>(null)
   const updateLogRef = useRef<HTMLPreElement>(null)
   const uiPreview = window.ndDshRuntimeMode === 'ui-preview'
@@ -28,10 +30,12 @@ export function DshCodingSurface({ active, inspectOverlayVisible = false, state,
   const [updating, setUpdating] = useState(false)
   const [updateLogOpen, setUpdateLogOpen] = useState(false)
   const [updateLog, setUpdateLog] = useState('')
+  const [updateSucceeded, setUpdateSucceeded] = useState(false)
+  const [restarting, setRestarting] = useState(false)
   const [updateFeedback, setUpdateFeedback] = useState<{ message: string; error: boolean } | null>(null)
   // Native WebContentsViews always composite above renderer DOM. Yield the
   // view briefly so inspect result dialogs and their controls stay reachable.
-  const nativeViewVisible = shouldShowDshNativeView(active, inspectOverlayVisible || updateLogOpen)
+  const nativeViewVisible = shouldShowDshNativeView(active, inspectOverlayVisible || updateLogOpen || occluded)
   const runtimeError = statusReadError
     ?? (runtimeStatus?.state === 'error'
       ? runtimeStatus.error || 'The DSH runtime failed to start.'
@@ -105,17 +109,21 @@ export function DshCodingSurface({ active, inspectOverlayVisible = false, state,
   const updateUpstream = (): void => {
     if (updating) return
     setUpdating(true)
+    setUpdateSucceeded(false)
+    setRestarting(false)
     setUpdateLog('> Install @deepseek-ai/dsh@latest\n')
     setUpdateFeedback(null)
     void window.ndDsh.dshView.updateUpstream()
       .then((result) => {
         setUpdateLog((current) => `${current}\n[ND] ${result.message}\n`)
+        setUpdateSucceeded(true)
         setUpdateFeedback({ message: result.message, error: false })
         onNotify(result.message)
       })
       .catch((cause) => {
         const message = cause instanceof Error ? cause.message : String(cause)
         setUpdateLog((current) => `${current}\n[error] ${message}\n`)
+        setUpdateSucceeded(false)
         setUpdateFeedback({ message, error: true })
         onNotify(message)
       })
@@ -137,6 +145,15 @@ export function DshCodingSurface({ active, inspectOverlayVisible = false, state,
     const timeout = window.setTimeout(() => setUpdateFeedback(null), 12_000)
     return () => window.clearTimeout(timeout)
   }, [updateFeedback])
+
+  const restartNd = (): void => {
+    if (!updateSucceeded || restarting) return
+    setRestarting(true)
+    void window.ndDsh.app.restart().catch((cause) => {
+      setRestarting(false)
+      onNotify(cause instanceof Error ? cause.message : String(cause))
+    })
+  }
 
   return (
     <section className="flex h-full w-full min-h-0 min-w-0 flex-col bg-background" aria-label="DSH coding surface">
@@ -226,14 +243,26 @@ export function DshCodingSurface({ active, inspectOverlayVisible = false, state,
               >
                 {updating || updateLog ? 'Close' : 'Cancel'}
               </button>
-              <button
-                type="button"
-                disabled={updating}
-                className="rounded-md border border-primary/30 bg-primary/15 px-3 py-1.5 text-[10px] font-medium text-primary transition-colors hover:bg-primary/25 disabled:cursor-wait disabled:opacity-50"
-                onClick={updateUpstream}
-              >
-                {updating ? 'Updating…' : updateLog ? 'Run update again' : 'Run update'}
-              </button>
+              {updateSucceeded ? (
+                <button
+                  type="button"
+                  disabled={restarting}
+                  className="rounded-md border border-primary/30 bg-primary px-3 py-1.5 text-[10px] font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-wait disabled:opacity-50"
+                  onClick={restartNd}
+                  title="Restart ND so the updated DSH package takes effect"
+                >
+                  {restarting ? 'Restarting…' : 'Restart ND'}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={updating}
+                  className="rounded-md border border-primary/30 bg-primary/15 px-3 py-1.5 text-[10px] font-medium text-primary transition-colors hover:bg-primary/25 disabled:cursor-wait disabled:opacity-50"
+                  onClick={updateUpstream}
+                >
+                  {updating ? 'Updating…' : updateLog ? 'Run update again' : 'Run update'}
+                </button>
+              )}
             </footer>
           </div>
         </div>

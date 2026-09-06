@@ -1,7 +1,7 @@
-import { BrowserWindow, WebContentsView, session, type Rectangle } from 'electron'
+import { app, BrowserWindow, WebContentsView, session, type Rectangle } from 'electron'
 import type { BrowserBounds, BrowserState, UiAnnotation, UiTarget } from '../../shared/contracts.js'
 import { AgentBrowserClient } from './agent-browser-client.js'
-import { DEFAULT_BROWSER_URL, isAllowedBrowserUrl, normalizeBrowserUrl } from './browser-url.js'
+import { DEFAULT_BROWSER_URL, isAllowedBrowserUrl, normalizeBrowserUrl, sanitizeBrowserUserAgent } from './browser-url.js'
 import { UiAnnotator, type UiAnnotationImage } from './ui-annotator.js'
 import { UiInspector } from './ui-inspector.js'
 
@@ -50,6 +50,10 @@ export class BrowserController {
         allowRunningInsecureContent: false,
       },
     })
+    // ChatGPT and other sites only need a normal Chromium browser identity.
+    // Do not expose the desktop runtime name through HTTP User-Agent or
+    // navigator.userAgent; the page still has no Node/Electron bridge.
+    this.view.webContents.setUserAgent(sanitizeBrowserUserAgent(app.userAgentFallback))
     this.window.contentView.addChildView(this.view)
     this.view.setBounds({ x: 0, y: 0, width: 0, height: 0 })
     this.view.setVisible(false)

@@ -6,6 +6,8 @@ import { CAPABILITIES_IPC, type CapabilityKind, type CapabilityProviderStatus, t
 import type { BrowserBounds, DshSurface, HarnessRunOptions, InspectScope, ModelProvider, QaSuiteId, ThemeMode } from '../shared/contracts.js'
 import { IPC } from '../shared/contracts.js'
 import { EXTENSIONS_IPC } from '../shared/extensions.js'
+import type { OrganizationSnapshot } from '../shared/organization.js'
+import { WORKFLOW_PLUGINS_IPC } from '../shared/workflow-plugins.js'
 import { managedHarnessRoot, projectRoot } from './app-paths.js'
 import { capturePrimaryDisplay, captureSelfWindow } from './capture/app-capture.js'
 import { describePick, ExternalElementStage, formatExternalElementContext, pickElementInExternalApp, RecentPickStore, type ExternalPick } from './capture/external-inspect.js'
@@ -14,6 +16,8 @@ import type { CapabilityRegistry } from './capabilities/capability-registry.js'
 import type { DshSurfaceController } from './dsh/dsh-surface.js'
 import type { CodingEngineRegistry } from './engines/coding-engine-registry.js'
 import type { EngineSessionRouter } from './engines/engine-session-router.js'
+import { readZcodeCliConfig, writeZcodeCliConfig } from './engines/zcode/zcode-config.js'
+import type { ZcodeCliConfigUpdate } from '../shared/zcode-config.js'
 import { ExtensionDemoService } from './extensions/extension-demo-service.js'
 import { registerExtensionIpc } from './extensions/ipc.js'
 import { ExtensionRouter } from './extensions/extension-router.js'
@@ -24,6 +28,9 @@ import type { ProviderStore } from './providers.js'
 import type { QaService } from './qa/qa-service.js'
 import type { SessionArchiveStore } from './sessions/session-archive-store.js'
 import type { ThemeService } from './theme.js'
+import { WorkflowPluginStore } from './workflows/workflow-plugin-store.js'
+import { registerWorkflowIpc } from './workflows/ipc.js'
+import { WorkflowService } from './workflows/workflow-service.js'
 import type { ProjectWorkspaceCoordinator } from './workspace/project-workspace-coordinator.js'
 import type { WorkspaceRegistry } from './workspace/workspace-registry.js'
 
@@ -46,6 +53,8 @@ interface IpcDependencies {
   git: GitService
   qa: QaService
   sessionArchive: SessionArchiveStore
+  /** Read-only organization state used to resolve project ownership for workflow plugins. */
+  organizationStore: { state(): Promise<OrganizationSnapshot> }
 }
 
 type Handler = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown | Promise<unknown>
@@ -102,6 +111,16 @@ export function registerIpc(deps: IpcDependencies): () => void {
     if (!deps.window.isDestroyed()) deps.window.webContents.send(EXTENSIONS_IPC.changedEvent, extensions)
   })
 
+  // External workflow plugins: reviewed packages install on demand, bind
+  // explicitly to a company/project, and mirror repository board state. ND
+  // owns identity and authorization; plugins only report read-only state.
+  const workflowPluginStore = new WorkflowPluginStore(join(app.getPath('userData'), 'agent-workflow-plugins.json'))
+  const workflowService = new WorkflowService({ store: workflowPluginStore, organization: deps.organizationStore })
+  const disposeWorkflowIpc = registerWorkflowIpc(deps.window, workflowService)
+  workflowPluginStore.setOnChanged((state) => {
+    if (!deps.window.isDestroyed()) deps.window.webContents.send(WORKFLOW_PLUGINS_IPC.changedEvent, state)
+  })
+
   let floatWindow: BrowserWindow | null = null
 
   const FLOAT_PILL_WIDTH = 170
@@ -140,6 +159,10 @@ export function registerIpc(deps: IpcDependencies): () => void {
     platform: process.platform,
     projectRoot: projectRoot(),
   }))
+  handle(IPC.appRestart, () => {
+    app.relaunch()
+    app.quit()
+  })
 
   const setFloatMode = async (_event: IpcMainInvokeEvent, enabled: unknown): Promise<{ float: boolean }> => {
     if (enabled === true) {
@@ -242,6 +265,15 @@ export function registerIpc(deps: IpcDependencies): () => void {
   })
   handle(IPC.enginesTranscript, (_event, value) => deps.engineRouter.transcript(asString(value, 'Session id', 128)))
   handle(IPC.enginesModels, (_event, value) => deps.engineRouter.models(asString(value, 'Engine id', 64)))
+  // ZCode CLI model-provider config (its own ~/.zcode/cli/config.json). A
+  // successful write restarts the ZCode app-server child when idle so the
+  // next turn runs against the saved provider without an app restart.
+  handle(IPC.zcodeConfigRead, () => readZcodeCliConfig())
+  handle(IPC.zcodeConfigWrite, async (_event, value) => {
+    const snapshot = await writeZcodeCliConfig(asZcodeConfigUpdate(value))
+    await deps.engineRouter.restartZcodeRuntime()
+    return snapshot
+  })
   // Archival covers every chat thread (harness or engine-backed); the id list
   // returns so the renderer can reconcile its local copies.
   handle(IPC.sessionsSetArchived, (_event, sessionId, archived) =>
@@ -438,6 +470,8 @@ export function registerIpc(deps: IpcDependencies): () => void {
   handle(IPC.providersTestCompletion, (_event, providerId) => deps.providers.testCompletion(asString(providerId, 'Provider id', 256)))
 
   handle(IPC.gitState, () => deps.git.current)
+  handle(IPC.gitConnectGitHub, (_event, root, name, url) => runGit(() => deps.git.connectGitHub(asString(root, 'Workspace root', 4096), asString(name, 'Remote name', 128), asString(url, 'Remote URL', 4096))))
+  handle(IPC.gitConfigureRemote, (_event, root, name, url) => runGit(() => deps.git.configureRemote(asString(root, 'Workspace root', 4096), asString(name, 'Remote name', 128), asString(url, 'Remote URL', 4096))))
   handle(IPC.gitRefresh, () => runGit(() => deps.git.refresh()))
   handle(IPC.gitStage, (_event, paths) => runGit(() => deps.git.stage(asPathList(paths))))
   handle(IPC.gitUnstage, (_event, paths) => runGit(() => deps.git.unstage(asPathList(paths))))
@@ -457,6 +491,8 @@ export function registerIpc(deps: IpcDependencies): () => void {
   return () => {
     extensionStore.setOnChanged(undefined)
     disposeExtensionIpc()
+    workflowPluginStore.setOnChanged(undefined)
+    disposeWorkflowIpc()
     for (const channel of channels) ipcMain.removeHandler(channel)
   }
 }
@@ -696,6 +732,34 @@ function asRunOptions(value: unknown): HarnessRunOptions {
     ...(typeof engineId === 'string' ? { engineId: engineId.trim() } : {}),
     ...(typeof provider === 'string' ? { provider: provider.trim() } : {}),
     ...(typeof model === 'string' ? { model: model.trim() } : {}),
+  }
+}
+
+/** Structural pre-check for a ZCode config write; the writer validates semantics. */
+function asZcodeConfigUpdate(value: unknown): ZcodeCliConfigUpdate {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('ZCode config update must be an object')
+  const record = value as Record<string, unknown>
+  if (!Array.isArray(record.providers)) throw new Error('ZCode config update needs a provider list')
+  if (record.providers.length > 32) throw new Error('At most 32 providers are supported')
+  const providers = record.providers.map((entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error('Every provider entry must be an object')
+    const provider = entry as Record<string, unknown>
+    if (typeof provider.id !== 'string' || !provider.id.trim()) throw new Error('Provider id is required')
+    if (!Array.isArray(provider.models)) throw new Error(`Provider "${provider.id}" needs a model list`)
+    return provider as unknown as ZcodeCliConfigUpdate['providers'][number]
+  })
+  const readReference = (key: string): string | undefined => {
+    const raw = record[key]
+    if (raw === undefined) return undefined
+    if (typeof raw !== 'string' || !raw.trim() || raw.length > 256) throw new Error(`${key} must be a provider/model reference`)
+    return raw
+  }
+  const mainModel = readReference('mainModel')
+  const liteModel = readReference('liteModel')
+  return {
+    providers,
+    ...(mainModel !== undefined ? { mainModel } : {}),
+    ...(liteModel !== undefined ? { liteModel } : {}),
   }
 }
 

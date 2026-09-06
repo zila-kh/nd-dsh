@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { WorkspaceEntry, WorkspaceState } from '../../../shared/contracts'
+import type { WorkspaceEntry, WorkspaceState, WorkspaceSuggestion } from '../../../shared/contracts'
 import { FOLDER_ACCENT, fileAccent } from '../lib/file-accents'
 import { ChevronDownIcon, ChevronRightIcon, FileIcon, FilesIcon, FolderIcon, GitIcon, RotateIcon, SearchIcon } from './Icons'
 import { SourceControlPanel } from './SourceControlPanel'
@@ -44,8 +44,12 @@ export function Explorer({ workspace, selectedPath, onWorkspaceChanged, onOpenFi
   const [rootEntries, setRootEntries] = useState<WorkspaceEntry[]>([])
   const [error, setError] = useState<string>()
   const [activeTab, setActiveTab] = useState<ExplorerTab>('files')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<WorkspaceSuggestion[]>([])
+  const [searching, setSearching] = useState(false)
   const refreshBusy = useRef(false)
   const explorerRef = useRef<HTMLElement | null>(null)
+  const searchInputRef = useRef<HTMLInputElement | null>(null)
 
   const refresh = useCallback(async () => {
     // A slow network-mounted workspace must never stack list requests every
@@ -127,6 +131,44 @@ export function Explorer({ workspace, selectedPath, onWorkspaceChanged, onOpenFi
     }
   }, [activeTab, refresh, workspace?.root])
 
+  useEffect(() => {
+    const focusSearch = (): void => searchInputRef.current?.focus()
+    const onShortcut = (event: KeyboardEvent): void => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'k') return
+      event.preventDefault()
+      setActiveTab('search')
+      window.setTimeout(focusSearch, 0)
+    }
+    window.addEventListener('keydown', onShortcut)
+    return () => window.removeEventListener('keydown', onShortcut)
+  }, [])
+
+  useEffect(() => {
+    if (activeTab === 'search') searchInputRef.current?.focus()
+  }, [activeTab])
+
+  useEffect(() => {
+    if (activeTab !== 'search') return
+    const query = searchQuery.trim()
+    if (!query || !workspace) {
+      setSearchResults([])
+      setSearching(false)
+      return
+    }
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      setSearching(true)
+      void window.ndDsh.workspace.suggest(query)
+        .then((results) => { if (!cancelled) setSearchResults(results) })
+        .catch(() => { if (!cancelled) setSearchResults([]) })
+        .finally(() => { if (!cancelled) setSearching(false) })
+    }, 120)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [activeTab, searchQuery, workspace?.root])
+
   const pickWorkspace = async (): Promise<void> => {
     const next = await window.ndDsh.workspace.pick()
     onWorkspaceChanged(next)
@@ -186,9 +228,38 @@ export function Explorer({ workspace, selectedPath, onWorkspaceChanged, onOpenFi
       )}
 
       {activeTab === 'search' && (
-        <div className="flex flex-1 flex-col gap-1 p-3">
-          <strong className="text-xs font-semibold text-soft">Search files</strong>
-          <p className="text-[10px] leading-relaxed text-faint">Use ⌘K or type to search across workspace.</p>
+        <div className="flex min-h-0 flex-1 flex-col gap-2 p-2.5">
+          <div className="relative">
+            <SearchIcon className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-faint" />
+            <input
+              ref={searchInputRef}
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search files"
+              aria-label="Search files"
+              className="h-7 w-full rounded-md border border-border-strong bg-background pl-7 pr-2 text-xs text-foreground outline-none placeholder:text-faint focus:border-primary/50"
+            />
+          </div>
+          {!workspace ? <p className="m-0 px-1 text-[10px] leading-relaxed text-faint">Open a workspace to search files.</p> : null}
+          {workspace && !searchQuery.trim() ? <p className="m-0 px-1 text-[10px] leading-relaxed text-faint">Type a filename or folder to search. Press Ctrl/Cmd+K from anywhere to focus.</p> : null}
+          {searching ? <div className="px-1 text-[10px] text-faint">Searching…</div> : null}
+          {!searching && searchQuery.trim() && searchResults.length === 0 ? <div className="px-1 text-[10px] text-faint">No matching files.</div> : null}
+          <div className="min-h-0 flex-1 overflow-auto">
+            {searchResults.map((entry) => (
+              <button
+                key={entry.relativePath}
+                type="button"
+                disabled={entry.kind === 'directory'}
+                onClick={() => onOpenFile(entry.relativePath)}
+                className="flex w-full items-center gap-2 rounded px-1.5 py-1.5 text-left text-xs text-soft transition-colors hover:bg-accent/50 hover:text-foreground disabled:cursor-default disabled:hover:bg-transparent"
+                title={entry.relativePath}
+              >
+                {entry.kind === 'directory' ? <FolderIcon className="size-3 shrink-0" style={{ color: FOLDER_ACCENT }} /> : <FileIcon className="size-3 shrink-0" style={{ color: fileAccent(entry.relativePath) }} />}
+                <span className="min-w-0 flex-1 truncate">{entry.relativePath}</span>
+                <span className="shrink-0 text-[9px] uppercase tracking-wide text-fainter">{entry.kind}</span>
+              </button>
+            ))}
+          </div>
         </div>
       )}
 

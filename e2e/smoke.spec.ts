@@ -1,6 +1,20 @@
+// The evaluate callbacks in this spec run in the renderer with the trusted
+// preload attached; that preload API is not type-exported yet, so the narrow
+// surface these probes touch is declared below. `window` itself needs the
+// DOM lib.
+/// <reference lib="dom" />
+
 import { expect, test } from '@playwright/test'
 import type { TerminalDesktopApi } from '../src/shared/terminal.js'
 import { closeApp, launchApp, type LaunchedApp } from './fixtures.js'
+
+type RendererWindow = {
+  ndDsh: {
+    workspace: { state(): Promise<{ root: string }> }
+    dsh: { rpc(method: string, params?: unknown): Promise<{ ok: boolean; value?: unknown; error?: { message?: string } }> }
+    harness: { status(): Promise<{ state: string }> }
+  }
+}
 
 test.describe.configure({ mode: 'serial' })
 
@@ -63,10 +77,13 @@ test('header segment switches between ND and DSH coding surfaces', async () => {
 test('real Harness gateway creates and reads a chat session', async () => {
   const { page } = launched
   const probe = await page.evaluate(async () => {
-    const workspace = await window.ndDsh.workspace.state()
-    const created = await window.ndDsh.dsh.rpc('session.create', { cwd: workspace.root })
+    // This callback runs in the renderer, so the trusted preload API is only
+    // reachable through `window` here; module-scope helpers do not exist there.
+    const api = window as unknown as RendererWindow
+    const workspace = await api.ndDsh.workspace.state()
+    const created = await api.ndDsh.dsh.rpc('session.create', { cwd: workspace.root })
     if (!created.ok) {
-      const status = await window.ndDsh.harness.status()
+      const status = await api.ndDsh.harness.status()
       return {
         state: status.state,
         createdOk: false,
@@ -78,7 +95,7 @@ test('real Harness gateway creates and reads a chat session', async () => {
 
     const sessionId = (created.value as { sessionId?: unknown } | undefined)?.sessionId
     if (typeof sessionId !== 'string' || !sessionId) {
-      const status = await window.ndDsh.harness.status()
+      const status = await api.ndDsh.harness.status()
       return {
         state: status.state,
         createdOk: false,
@@ -88,8 +105,8 @@ test('real Harness gateway creates and reads a chat session', async () => {
       }
     }
 
-    const history = await window.ndDsh.dsh.rpc('session.history', { sessionId })
-    const status = await window.ndDsh.harness.status()
+    const history = await api.ndDsh.dsh.rpc('session.history', { sessionId })
+    const status = await api.ndDsh.harness.status()
     return {
       state: status.state,
       createdOk: true,

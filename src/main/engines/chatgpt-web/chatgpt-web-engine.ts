@@ -40,6 +40,7 @@ interface StoredChatGptWebSession {
   branch: string
   remote?: string
   lastRemoteSha?: string
+  gitMode?: 'none' | 'sync'
 }
 
 interface PersistedChatGptWebStore {
@@ -243,14 +244,17 @@ export class ChatGptWebEngine {
     this.emitFrame({ kind: 'session-status', sessionId: session.sessionId, running: true })
 
     try {
-      const cdp = await this.openBoundConversation(session)
+      const cdp = await this.openBoundConversation(session, abort.signal)
       try {
+        assertTurnActive(abort.signal)
         const before = await this.captureSnapshot(cdp)
+        assertTurnActive(abort.signal)
         this.importUnseenTurns(session, before)
-        const gitContext = await this.prepareGit(session)
-        const compiledPrompt = compileChatGptGitPrompt(cleaned, gitContext)
+        const gitContext = await this.prepareGit(session, abort.signal)
+        const compiledPrompt = gitContext ? compileChatGptGitPrompt(cleaned, gitContext) : cleaned
         const baselineAssistantCount = before.turns.filter((turn) => turn.role === 'assistant').length
-        await this.submitPrompt(cdp, compiledPrompt)
+        assertTurnActive(abort.signal)
+        await this.submitPrompt(cdp, compiledPrompt, abort.signal)
         this.recordUserMessage(session, cleaned)
         this.rememberSentPrompt(session, compiledPrompt)
         if (session.title === 'New ChatGPT Web chat') session.title = cleaned.slice(0, 80)
@@ -306,49 +310,73 @@ export class ChatGptWebEngine {
     this.persistStore()
   }
 
-  private async openBoundConversation(session: StoredChatGptWebSession): Promise<VisibleCdpConnection> {
+  private async openBoundConversation(session: StoredChatGptWebSession, signal: AbortSignal): Promise<VisibleCdpConnection> {
+    assertTurnActive(signal)
     const targetUrl = session.conversationUrl && isChatGptConversationUrl(session.conversationUrl)
       ? session.conversationUrl
       : CHATGPT_HOME_URL
     const currentUrl = this.options.browser.state().url
     if (!sameConversationUrl(currentUrl, targetUrl)) await this.options.browser.navigate(targetUrl)
+    assertTurnActive(signal)
     await this.options.browser.ensureAgentReady()
+    assertTurnActive(signal)
     const cdp = await VisibleCdpConnection.connect(this.options.browser)
-    const deadline = Date.now() + CHATGPT_READY_TIMEOUT_MS
-    while (Date.now() < deadline) {
-      const snapshot = await this.captureSnapshot(cdp)
-      if (snapshot.composer) return cdp
-      await sleep(250)
+    try {
+      const deadline = Date.now() + CHATGPT_READY_TIMEOUT_MS
+      while (Date.now() < deadline) {
+        assertTurnActive(signal)
+        const snapshot = await this.captureSnapshot(cdp)
+        assertTurnActive(signal)
+        if (snapshot.composer) return cdp
+        await sleep(250)
+      }
+      throw new Error('ChatGPT Web is open in ND\'s visible Browser pane, but the composer is unavailable. Sign in to chatgpt.com there, then resend this message.')
+    } catch (error) {
+      cdp.close()
+      throw error
     }
-    cdp.close()
-    throw new Error('ChatGPT Web is open in ND\'s visible Browser pane, but the composer is unavailable. Sign in to chatgpt.com there, then resend this message.')
   }
 
-  private async prepareGit(session: StoredChatGptWebSession): Promise<ChatGptGitContext> {
+  private async prepareGit(session: StoredChatGptWebSession, signal: AbortSignal): Promise<ChatGptGitContext | null> {
+    assertTurnActive(signal)
     const workspaceRoot = this.options.workspace.state().root
     if (session.cwd !== workspaceRoot) {
       throw new Error('This ChatGPT Web chat belongs to a different workspace. Reopen the chat from its original project before syncing Git.')
     }
 
-    // The branch is derived from the ND session id and is never trusted from
-    // persisted state. This keeps a corrupt/tampered store from targeting main.
-    session.branch = chatGptSyncBranchName(session.sessionId)
-
     // Validate the shared remote and committed HEAD before changing branches.
     // A project that is not ready for Git sync must fail without mutating its checkout.
     const initialState = await this.options.git.refresh()
+    assertTurnActive(signal)
+    const started = session.transcript.some((event) => event.type === 'user/message')
+    // Git is optional for every project. This also repairs sessions created
+    // before project Git became root-scoped: a nested project must not inherit
+    // its parent's remote and then fail during Web sync.
+    if (initialState.remotes.length === 0) {
+      session.gitMode = 'none'
+      delete session.remote
+      delete session.lastRemoteSha
+      return null
+    }
+    if (started && session.gitMode === 'none') return null
+    if (!started && initialState.branch) session.branch = initialState.branch
+    session.gitMode = 'sync'
     const remote = session.remote && initialState.remotes.includes(session.remote)
       ? session.remote
       : initialState.remotes.includes('origin') ? 'origin' : initialState.remotes[0]
     if (!remote) throw new Error('ChatGPT Web Git sync requires a configured Git remote for this workspace.')
     const remoteUrl = await this.options.git.remoteUrl(remote)
+    assertTurnActive(signal)
     if (!remoteUrl) throw new Error(`Git remote ${remote} has no fetch/push URL.`)
     if (!await this.options.git.head()) {
       throw new Error('ChatGPT Web Git sync requires at least one local commit before the first turn.')
     }
 
+    assertTurnActive(signal)
     await this.options.git.ensureBranch(session.branch)
+    assertTurnActive(signal)
     await this.options.git.pushBranch(remote, session.branch)
+    assertTurnActive(signal)
     const head = await this.options.git.head()
     if (!head) throw new Error('ChatGPT Web Git sync requires a committed Git HEAD before the first turn.')
     const remoteSha = await this.options.git.remoteBranchHead(remote, session.branch)
@@ -365,7 +393,8 @@ export class ChatGptWebEngine {
     }
   }
 
-  private async submitPrompt(cdp: VisibleCdpConnection, prompt: string): Promise<void> {
+  private async submitPrompt(cdp: VisibleCdpConnection, prompt: string, signal: AbortSignal): Promise<void> {
+    assertTurnActive(signal)
     const source = JSON.stringify(prompt)
     const result = await cdp.evaluate<{ ok: boolean; reason?: string }>(`(async () => {
       const composerSelector = '[data-testid="prompt-textarea"], #prompt-textarea, [contenteditable="true"][data-lexical-editor="true"]';
@@ -388,19 +417,27 @@ export class ChatGptWebEngine {
         if (!document.execCommand('insertText', false, text)) composer.textContent = text;
         composer.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
       }
-      for (let index = 0; index < 50; index += 1) {
-        const form = composer.closest('form');
+      return { ok: true };
+    })()`)
+    if (!result?.ok) throw new Error('ChatGPT Web composer is unavailable.')
+    for (let index = 0; index < 50; index += 1) {
+      assertTurnActive(signal)
+      const sent = await cdp.evaluate<boolean>(`(() => {
+        const composer = document.querySelector('[data-testid="prompt-textarea"], #prompt-textarea, [contenteditable="true"][data-lexical-editor="true"]');
+        const form = composer?.closest('form');
         const button = form?.querySelector('button[data-testid="send-button"], button[aria-label*="Send"], button[type="submit"]')
           ?? document.querySelector('button[data-testid="send-button"], button[aria-label*="Send"]');
         if (button instanceof HTMLButtonElement && !button.disabled && button.getAttribute('aria-disabled') !== 'true') {
           button.click();
-          return { ok: true };
+          return true;
         }
-        await new Promise(resolve => setTimeout(resolve, 100));
-      }
-      return { ok: false, reason: 'send-button-unavailable' };
-    })()`)
-    if (!result?.ok) throw new Error(`ChatGPT Web could not send the message (${result?.reason ?? 'unknown composer state'}). Reload ChatGPT and retry.`)
+        return false;
+      })()`)
+      if (sent) return
+      await sleep(100)
+    }
+    assertTurnActive(signal)
+    throw new Error('ChatGPT Web could not send the message (send-button-unavailable). Reload ChatGPT and retry.')
   }
 
   private async waitForAssistant(
@@ -484,6 +521,9 @@ export class ChatGptWebEngine {
   }
 
   private importUnseenTurns(session: StoredChatGptWebSession, snapshot: ChatGptDomSnapshot): void {
+    // Browser-originated turns may still be streaming even when ND has no
+    // active turn. Import only settled snapshots, never partial reply text.
+    if (snapshot.busy) return
     const seen = new Set(session.seenTurnKeys)
     const sent = new Set(session.sentPromptHashes)
     let changed = false
@@ -618,7 +658,7 @@ export class ChatGptWebEngine {
         if (!candidate || typeof candidate !== 'object') continue
         const session = candidate as StoredChatGptWebSession
         if (typeof session.sessionId !== 'string' || !session.sessionId.startsWith('chatgpt-web-')) continue
-        session.branch = chatGptSyncBranchName(session.sessionId)
+        if (typeof session.branch !== 'string' || !/^[\w][\w.\-/]{0,255}$/.test(session.branch) || session.branch.includes('..') || session.branch.endsWith('.lock')) session.branch = chatGptSyncBranchName(session.sessionId)
         if (typeof session.conversationUrl !== 'string' || !isChatGptConversationUrl(session.conversationUrl)) delete session.conversationUrl
         session.running = false
         session.transcript = Array.isArray(session.transcript) ? session.transcript.slice(-MAX_TRANSCRIPT_EVENTS) : []
@@ -782,6 +822,10 @@ function sameConversationUrl(left: string, right: string): boolean {
   } catch {
     return left === right
   }
+}
+
+function assertTurnActive(signal: AbortSignal): void {
+  if (signal.aborted) throw new Error('ChatGPT Web turn was stopped.')
 }
 
 function sleep(ms: number): Promise<void> {

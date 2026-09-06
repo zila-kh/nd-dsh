@@ -3,6 +3,7 @@ import type { BrowserState } from '../../../shared/contracts'
 import { ArrowLeftIcon, ArrowRightIcon, CameraIcon, ContextIcon, ExternalIcon, PencilIcon, ReloadIcon } from './Icons'
 import { BridgePill } from './bridge-pill'
 import { cn } from '../lib/utils'
+import { useNativeViewOcclusion } from '../lib/use-native-view-occlusion'
 
 interface BrowserTab {
   id: number
@@ -31,6 +32,8 @@ const activeIconButtonClasses = cn(
 )
 
 export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneProps) {
+  const occluded = useNativeViewOcclusion()
+  const nativeViewVisible = active && !occluded
   const uiPreview = window.ndDshRuntimeMode === 'ui-preview'
   const surfaceRef = useRef<HTMLDivElement>(null)
   const addressFocused = useRef(false)
@@ -115,7 +118,7 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
   }, [active, onError])
 
   useEffect(() => {
-    void window.ndDsh.browser.setVisible(active)
+    void window.ndDsh.browser.setVisible(nativeViewVisible)
       .catch((cause) => onError(cause instanceof Error ? cause.message : String(cause)))
     if (active) {
       requestAnimationFrame(() => {
@@ -129,7 +132,7 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
     return () => {
       void window.ndDsh.browser.setVisible(false).catch(() => undefined)
     }
-  }, [active, onError])
+  }, [active, nativeViewVisible, onError])
 
   const navigate = async (): Promise<void> => {
     try {

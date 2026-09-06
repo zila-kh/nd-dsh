@@ -14,6 +14,7 @@ export class DshSurfaceController {
   private stateValue: DshViewState
   private onStateChanged?: (state: DshViewState) => void
   private targetUrl: string | undefined
+  private loadUrl: string | undefined
   private loaded = false
 
   constructor(private readonly window: BrowserWindow) {
@@ -48,8 +49,10 @@ export class DshSurfaceController {
   setTarget(url: string): void {
     const parsed = new URL(url)
     const nextTargetUrl = parsed.origin
-    const targetChanged = this.targetUrl !== nextTargetUrl
+    const nextLoadUrl = parsed.toString()
+    const targetChanged = this.targetUrl !== nextTargetUrl || this.loadUrl !== nextLoadUrl
     this.targetUrl = nextTargetUrl
+    this.loadUrl = nextLoadUrl
     if (targetChanged) this.loaded = false
     this.stateValue = {
       ...this.stateValue,
@@ -103,10 +106,13 @@ export class DshSurfaceController {
   }
 
   private async load(): Promise<void> {
-    if (!this.targetUrl || this.loaded) return
+    if (!this.loadUrl || this.loaded) return
     this.loaded = true
     try {
-      await this.view.webContents.loadURL(this.targetUrl)
+      // New DSH releases mint their HttpOnly browser cookie by redirecting
+      // this tokenized root URL to a clean `/`. The token never enters state
+      // sent to the renderer; state.url remains the loopback origin above.
+      await this.view.webContents.loadURL(this.loadUrl)
     } catch {
       this.loaded = false
     }

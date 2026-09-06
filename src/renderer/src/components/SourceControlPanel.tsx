@@ -108,12 +108,16 @@ export function SourceControlPanel({ workspace, onOpenFile, onOpenDiff, onError 
     setBranchFormOpen(false)
   }
 
-  if (!state?.repoRoot) {
+  const exactRepo = state?.repoRoot !== null && state?.repoRoot !== undefined && workspace?.root !== undefined
+    ? sameWorkspacePath(state.repoRoot, workspace.root)
+    : false
+
+  if (!state || !exactRepo) {
     return (
       <div className="flex h-full w-full min-h-0 flex-col overflow-hidden">
         <div className="flex flex-1 flex-col gap-1 p-3">
           <strong className="text-xs font-semibold text-soft">Source Control</strong>
-          <p className="text-[10px] leading-relaxed text-faint">This folder is not inside a Git repository.</p>
+          <p className="text-[10px] leading-relaxed text-faint">{state?.repoRoot ? 'This project folder is inside another Git repository. Connect Git from the project header to create a dedicated repository here.' : 'This folder is not inside a Git repository.'}</p>
         </div>
         <UpstreamCredit />
       </div>
@@ -235,6 +239,11 @@ export function SourceControlPanel({ workspace, onOpenFile, onOpenDiff, onError 
       <UpstreamCredit />
     </div>
   )
+}
+
+function sameWorkspacePath(left: string, right: string): boolean {
+  const normalize = (value: string): string => value.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase()
+  return normalize(left) === normalize(right)
 }
 
 function ChangeRow({ change, kind, armed, onOpen, onStage, onUnstage, onDiscard, onOpenFile }: {

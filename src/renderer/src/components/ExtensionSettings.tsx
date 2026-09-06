@@ -11,6 +11,7 @@ import {
 } from '../../../shared/extensions'
 import { cn } from '../lib/utils'
 import { SettingsButton, SettingsRow, SettingsSection, StatusChip, rowDesc, rowPathText, rowStack, rowTitle } from './settings-primitives'
+import { WorkflowPluginsCard } from './WorkflowPluginsCard'
 
 const SURFACE_ORDER: readonly AgentExtensionSurface[] = ['plugin', 'mcp', 'skill', 'command', 'hook', 'subagent', 'memory']
 
@@ -356,6 +357,8 @@ export function ExtensionSettings({ onError }: { onError(message: string): void 
             </button>
           </div>
         </div>
+
+        {surface === 'plugin' ? <WorkflowPluginsCard onError={onError} /> : null}
 
         <CatalogSection title="Installed" count={installed.length}>
           {busy === 'load' ? (

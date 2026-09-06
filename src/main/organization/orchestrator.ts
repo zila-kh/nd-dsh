@@ -312,14 +312,20 @@ export class OrganizationOrchestrator {
     const run = await this.store.runBySession(sessionId)
 
     if (frame.kind === 'session-event' && frame.event && run) {
-      if (frame.event.type === 'assistant/message') {
-        const text = messageText((frame.event.data as Record<string, unknown> | undefined)?.message)
-        if (text !== undefined) {
-          this.finalText.set(sessionId, text)
-          if (!this.structuredHandled.has(sessionId)) {
-            if (run.kind === 'pm-plan') await this.handlePlan(run.projectId, sessionId, text)
-            if (run.kind === 'task-review' && run.taskId) await this.handleReview(run.taskId, run.projectId, sessionId, text)
-          }
+      const data = frame.event.data as Record<string, unknown> | undefined
+      const text = frame.event.type === 'assistant/chunk'
+        ? messageText(data?.chunk)
+        : frame.event.type === 'assistant/message'
+          ? messageText(data?.message)
+          : undefined
+      if (text !== undefined) {
+        const accumulated = frame.event.type === 'assistant/chunk'
+          ? `${this.finalText.get(sessionId) ?? ''}${text}`
+          : text
+        this.finalText.set(sessionId, accumulated)
+        if (!this.structuredHandled.has(sessionId)) {
+          if (run.kind === 'pm-plan') await this.handlePlan(run.projectId, sessionId, accumulated)
+          if (run.kind === 'task-review' && run.taskId) await this.handleReview(run.taskId, run.projectId, sessionId, accumulated)
         }
       }
       return
@@ -791,11 +797,15 @@ function errorMessage(error: unknown): string {
 }
 
 function messageText(message: unknown): string | undefined {
+  if (typeof message === 'string') return message
   if (!message || typeof message !== 'object') return undefined
-  const content = (message as Record<string, unknown>).content
+  const record = message as Record<string, unknown>
+  if (typeof record.text === 'string') return record.text
+  if (record.delta && typeof record.delta === 'object') return messageText(record.delta)
+  const content = record.content
   if (typeof content === 'string') return content
   if (!Array.isArray(content)) return undefined
-  const parts = content.flatMap((block) => block && typeof block === 'object' && (block as Record<string, unknown>).type === 'text' && typeof (block as Record<string, unknown>).text === 'string' ? [(block as Record<string, string>).text] : [])
+  const parts = content.flatMap((block) => block && typeof block === 'object' && ['text', 'text-delta', 'output_text'].includes(String((block as Record<string, unknown>).type)) && typeof (block as Record<string, unknown>).text === 'string' ? [(block as Record<string, string>).text] : [])
   return parts.length ? parts.join('\n') : undefined
 }
 

@@ -1,8 +1,10 @@
-import { useEffect, useState, type FormEvent } from 'react'
-import type { ModelProvider, ProviderPingResult } from '../../../shared/contracts'
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import type { ModelProvider, ProviderModel, ProviderPingResult } from '../../../shared/contracts'
+import { parseModelTokenLimit } from '../../../shared/provider-models'
 import { BoxIcon, CheckIcon, EyeIcon, EyeOffIcon, PencilIcon, PlugIcon, PlusIcon, RotateIcon, TrashIcon } from './Icons'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 import { cn } from '../lib/utils'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog'
 
 interface ModelSettingsProps {
   onError(message: string): void
@@ -40,6 +42,14 @@ const PING_RESULT_COLORS: Record<ProviderPingResult['state'], string> = {
   unreachable: 'text-red-400',
 }
 
+interface ModelSettingsDraft {
+  sourceId: string
+  id: string
+  context: string
+  maxOutputTokens: string
+  inputTypes?: ProviderModel['inputTypes']
+}
+
 export function ModelSettings({ onError }: ModelSettingsProps) {
   const [providers, setProviders] = useState<ModelProvider[]>([])
   const [selectedId, setSelectedId] = useState('')
@@ -48,8 +58,7 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
   const [savingCredential, setSavingCredential] = useState(false)
   const [renamingProvider, setRenamingProvider] = useState(false)
   const [nameDraft, setNameDraft] = useState('')
-  const [editingModelId, setEditingModelId] = useState<string | null>(null)
-  const [modelDraft, setModelDraft] = useState('')
+  const [modelSettingsDraft, setModelSettingsDraft] = useState<ModelSettingsDraft | null>(null)
   const [editingContextModelId, setEditingContextModelId] = useState<string | null>(null)
   const [contextDraft, setContextDraft] = useState('')
   const [testing, setTesting] = useState(false)
@@ -164,17 +173,45 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
     updateSelected({ models: [...(selected?.models ?? []), { id: `model-${index}`, context: '128K' }] })
   }
 
-  const removeModel = (id: string): void => {
-    updateSelected({ models: (selected?.models ?? []).filter((model) => model.id !== id) })
+  const openModelSettings = (model: ProviderModel): void => {
+    setModelSettingsDraft({
+      sourceId: model.id,
+      id: model.id,
+      context: model.context,
+      maxOutputTokens: model.maxOutputTokens === undefined ? '' : String(model.maxOutputTokens),
+      ...(model.inputTypes === undefined ? {} : { inputTypes: [...model.inputTypes] }),
+    })
   }
 
-  const commitModelRename = (): void => {
-    if (editingModelId && modelDraft.trim()) {
-      updateSelected({
-        models: (selected?.models ?? []).map((model) => (model.id === editingModelId ? { ...model, id: modelDraft.trim() } : model)),
-      })
+  const setModelInputImage = (enabled: boolean): void => {
+    setModelSettingsDraft((current) => current === null ? current : {
+      ...current,
+      inputTypes: enabled ? ['text', 'image'] : ['text'],
+    })
+  }
+
+  const saveModelSettings = (): void => {
+    if (!selected || !modelSettingsDraft) return
+    const id = modelSettingsDraft.id.trim()
+    const context = modelSettingsDraft.context.trim()
+    const output = modelSettingsDraft.maxOutputTokens.trim()
+    if (!id) return onError('Model ID is required')
+    if (!context || parseModelTokenLimit(context) === undefined) return onError('Context window must be a positive token count, such as 128K or 1M')
+    if (selected.models.some((model) => model.id !== modelSettingsDraft.sourceId && model.id === id)) return onError(`A model named ${id} already exists`)
+    const maxOutputTokens = output ? parseModelTokenLimit(output) : undefined
+    if (output && maxOutputTokens === undefined) return onError('Max output tokens must be a positive token count')
+    const nextModel: ProviderModel = {
+      id,
+      context,
+      ...(modelSettingsDraft.inputTypes === undefined ? {} : { inputTypes: [...modelSettingsDraft.inputTypes] }),
+      ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
     }
-    setEditingModelId(null)
+    updateSelected({ models: selected.models.map((model) => model.id === modelSettingsDraft.sourceId ? nextModel : model) })
+    setModelSettingsDraft(null)
+  }
+
+  const removeModel = (id: string): void => {
+    updateSelected({ models: (selected?.models ?? []).filter((model) => model.id !== id) })
   }
 
   const commitContextEdit = (): void => {
@@ -397,19 +434,7 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
                   const pingRes = modelPing !== undefined && modelPing !== 'testing' ? modelPing : null
                   return (
                   <div className="flex items-center justify-between gap-2.5 rounded-[9px] border border-(--models-border) bg-(--models-bg) px-3 py-[9px]" key={model.id}>
-                    {editingModelId === model.id ? (
-                      <input
-                        className="h-[26px] w-[200px] rounded-md border border-(--models-border-2) bg-(--models-field) px-2 font-mono text-[12px] text-(--models-text) outline-none"
-                        value={modelDraft}
-                        autoFocus
-                        onChange={(event) => setModelDraft(event.target.value)}
-                        onBlur={commitModelRename}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') commitModelRename()
-                          if (event.key === 'Escape') setEditingModelId(null)
-                        }}
-                      />
-                    ) : <span className="min-w-0 truncate font-mono text-[12px]">{model.id}</span>}
+                    <span className="min-w-0 truncate font-mono text-[12px]">{model.id}</span>
                     <div className="flex shrink-0 items-center gap-0.5">
                       {/* Per-model ping result badge */}
                       {pingRes ? (
@@ -446,6 +471,7 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
                           }}
                         />
                       ) : <span className="rounded-full bg-(--models-field) px-2 py-0.5 text-[11px] text-(--models-muted)">{model.context}</span>}
+                      {model.inputTypes?.includes('image') ? <span className="rounded-full border border-(--models-green)/35 bg-(--models-green-soft) px-2 py-0.5 text-[11px] font-semibold text-(--models-green)" title="This model accepts image input">Vision</span> : null}
                       {/* Test this model's provider connection */}
                       <button
                         className={cn(miniIconButton, isTesting && 'text-(--models-green) opacity-70')}
@@ -461,7 +487,7 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
                             : <RotateIcon />}
                       </button>
                       <button className={miniIconButton} title="Edit model context" aria-label={`Edit context of ${model.id}`} onClick={() => { setContextDraft(model.context); setEditingContextModelId(model.id) }}><PlugIcon /></button>
-                      <button className={miniIconButton} title="Edit model id" aria-label={`Edit model ${model.id}`} onClick={() => { setModelDraft(model.id); setEditingModelId(model.id) }}><PencilIcon /></button>
+                      <button className={miniIconButton} title="Edit model settings" aria-label={`Edit settings for model ${model.id}`} onClick={() => openModelSettings(model)}><PencilIcon /></button>
                       <button className={cn(miniIconButton, 'hover:text-destructive')} title="Delete model" aria-label={`Delete model ${model.id}`} onClick={() => removeModel(model.id)}><TrashIcon /></button>
                     </div>
                   </div>
@@ -479,6 +505,45 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
           </div>
         )}
       </div>
+      <Dialog open={modelSettingsDraft !== null} onOpenChange={(open) => { if (!open) setModelSettingsDraft(null) }}>
+        <DialogContent className="models-scope max-h-[min(720px,calc(100vh-32px))] max-w-[560px] overflow-y-auto border-(--models-border-2) bg-(--models-surface) p-5 text-(--models-text)">
+          <DialogHeader>
+            <DialogTitle className="text-[17px]">Edit model settings</DialogTitle>
+            <DialogDescription className="text-[11px] text-(--models-muted)">Tell ND which content this model accepts. These capabilities are sent to the provider runtime for new sessions.</DialogDescription>
+          </DialogHeader>
+          {modelSettingsDraft ? (
+            <div className="grid gap-4">
+              <ModelSettingField label="Model ID">
+                <input autoFocus value={modelSettingsDraft.id} onChange={(event) => setModelSettingsDraft({ ...modelSettingsDraft, id: event.target.value })} className="h-9 w-full rounded-[8px] border border-(--models-border-2) bg-(--models-field) px-3 font-mono text-[13px] text-(--models-text) outline-none focus:border-(--models-green)" />
+              </ModelSettingField>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <ModelSettingField label="Context window" hint="Tokens, for example 128K or 1M">
+                  <input value={modelSettingsDraft.context} onChange={(event) => setModelSettingsDraft({ ...modelSettingsDraft, context: event.target.value })} className="h-9 w-full rounded-[8px] border border-(--models-border-2) bg-(--models-field) px-3 font-mono text-[13px] text-(--models-text) outline-none focus:border-(--models-green)" />
+                </ModelSettingField>
+                <ModelSettingField label="Max output tokens" hint="Optional capability limit">
+                  <input value={modelSettingsDraft.maxOutputTokens} placeholder="Provider default" onChange={(event) => setModelSettingsDraft({ ...modelSettingsDraft, maxOutputTokens: event.target.value })} className="h-9 w-full rounded-[8px] border border-(--models-border-2) bg-(--models-field) px-3 font-mono text-[13px] text-(--models-text) outline-none focus:border-(--models-green)" />
+                </ModelSettingField>
+              </div>
+              <ModelSettingField label="Input types" hint="Image input enables Vision and lets ND send screenshots or image attachments.">
+                <div className="flex flex-wrap gap-2">
+                  <CapabilityToggle label="Text" checked disabled detail="Required" />
+                  <CapabilityToggle label="Image" checked={modelSettingsDraft.inputTypes?.includes('image') ?? false} onChange={setModelInputImage} detail="Vision" />
+                  <CapabilityToggle label="Video" checked={false} disabled detail="Coming soon" />
+                  <CapabilityToggle label="PDF" checked={false} disabled detail="Coming soon" />
+                </div>
+              </ModelSettingField>
+              <ModelSettingField label="Output types">
+                <CapabilityToggle label="Text" checked disabled detail="Required" />
+              </ModelSettingField>
+              <p className="m-0 rounded-[8px] border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[11px]/[1.5] text-amber-400">Vision support depends on the configured endpoint accepting OpenAI image content. ND will fall back to text only when the endpoint explicitly rejects an image.</p>
+            </div>
+          ) : null}
+          <DialogFooter className="mt-1 flex-row justify-end gap-2">
+            <button type="button" className={scopeButton} onClick={() => setModelSettingsDraft(null)}>Cancel</button>
+            <button type="button" className="rounded-md bg-(--models-text) px-3 py-1.5 text-[12px] font-semibold text-(--models-bg) transition-opacity hover:opacity-85" onClick={saveModelSettings}>Save</button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   )
 }
@@ -502,4 +567,16 @@ function ProviderItem({ provider, selected, onSelect }: { provider: ModelProvide
 
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
+}
+
+function ModelSettingField({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+  return <div className="grid gap-1.5"><div><div className="text-[12px] font-medium text-(--models-muted)">{label}</div>{hint ? <div className="mt-0.5 text-[10px] text-(--models-faint)">{hint}</div> : null}</div>{children}</div>
+}
+
+function CapabilityToggle({ label, checked, disabled, detail, onChange }: { label: string; checked: boolean; disabled?: boolean; detail?: string; onChange?: (checked: boolean) => void }) {
+  return <label className={cn('flex min-w-[102px] items-center gap-2 rounded-[8px] border border-(--models-border-2) bg-(--models-field) px-3 py-2 text-[12px]', disabled ? 'cursor-default opacity-60' : 'cursor-pointer hover:border-(--models-green)')} title={disabled ? (detail === 'Coming soon' ? `${label} input is not supported yet` : `${label} is required`) : undefined}>
+    <input type="checkbox" checked={checked} disabled={disabled} onChange={(event) => onChange?.(event.target.checked)} className="size-4 accent-(--models-green)" />
+    <span>{label}</span>
+    {detail ? <span className="ml-auto text-[10px] text-(--models-faint)">{detail}</span> : null}
+  </label>
 }

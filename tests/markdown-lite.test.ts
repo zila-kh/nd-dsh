@@ -59,4 +59,10 @@ describe('parseMarkdownBlocks', () => {
       { kind: 'code', language: 'py', text: 'print(1)' },
     ])
   })
+
+  it('parses pipe tables into headers and rows', () => {
+    expect(parseMarkdownBlocks('| Name | Status |\n| --- | :---: |\n| API | **ready** |\n| UI | pending |')).toEqual([
+      { kind: 'table', headers: ['Name', 'Status'], rows: [['API', '**ready**'], ['UI', 'pending']] },
+    ])
+  })
 })

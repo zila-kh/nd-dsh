@@ -113,3 +113,95 @@ export function antigravityBinPath(): string | undefined {
     : [join(process.env.HOME ?? '', '.local', 'bin', 'agy')]
   return defaultLocations.map((entry) => resolve(entry)).find((entry) => existsSync(entry))
 }
+
+/**
+ * The ZCode CLI entry script bundled inside the official ZCode desktop
+ * installation. ZCode is a user-installed first-party product ND cannot
+ * redistribute, so discovery is the developer override, then the official
+ * installer's documented per-OS location — never a host `PATH` scan.
+ * `ND_DSH_ZCODE_BINARY` remains a developer-only override. The entry is a
+ * CommonJS bundle, so the engine runs it through the Electron Node runtime.
+ */
+export function zcodeBinPath(): string | undefined {
+  const override = process.env.ND_DSH_ZCODE_BINARY
+  if (override) {
+    const resolved = resolve(override)
+    return existsSync(resolved) ? resolved : undefined
+  }
+  const defaultLocations = process.platform === 'win32'
+    ? [join(process.env.LOCALAPPDATA ?? '', 'Programs', 'ZCode', 'resources', 'glm', 'zcode.cjs')]
+    : process.platform === 'darwin'
+      ? ['/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs']
+      : ['/opt/ZCode/resources/glm/zcode.cjs', '/usr/lib/zcode/resources/glm/zcode.cjs']
+  return defaultLocations.map((entry) => resolve(entry)).find((entry) => existsSync(entry))
+}
+
+/**
+ * The Claude Code CLI binary. Claude Code is a user-installed first-party
+ * product ND cannot redistribute, so discovery is the developer override,
+ * then the documented install locations (native installer and npm global
+ * bin), never a host `PATH` scan. `ND_DSH_CLAUDE_BINARY` remains a
+ * developer-only override.
+ */
+export function claudeBinPath(): string | undefined {
+  const override = process.env.ND_DSH_CLAUDE_BINARY
+  if (override) {
+    const resolved = resolve(override)
+    return existsSync(resolved) ? resolved : undefined
+  }
+  const home = process.env.USERPROFILE ?? process.env.HOME ?? ''
+  const npmBin = process.env.APPDATA ? join(process.env.APPDATA, 'npm') : join(home, '.npm-global', 'bin')
+  const defaultLocations = process.platform === 'win32'
+    ? [
+        join(home, '.local', 'bin', 'claude.exe'),
+        join(npmBin, 'claude.cmd'),
+        join(npmBin, 'claude'),
+      ]
+    : [join(home, '.local', 'bin', 'claude'), join(npmBin, 'claude')]
+  return defaultLocations.map((entry) => resolve(entry)).find((entry) => existsSync(entry))
+}
+
+/**
+ * The Cursor CLI binary (`cursor-agent`). Cursor is a user-installed
+ * first-party product ND cannot redistribute, so discovery is the developer
+ * override, then the documented install locations, never a host `PATH` scan.
+ * `ND_DSH_CURSOR_BINARY` remains a developer-only override.
+ */
+export function cursorBinPath(): string | undefined {
+  const override = process.env.ND_DSH_CURSOR_BINARY
+  if (override) {
+    const resolved = resolve(override)
+    return existsSync(resolved) ? resolved : undefined
+  }
+  const home = process.env.USERPROFILE ?? process.env.HOME ?? ''
+  const npmBin = process.env.APPDATA ? join(process.env.APPDATA, 'npm') : join(home, '.npm-global', 'bin')
+  const defaultLocations = process.platform === 'win32'
+    ? [
+        join(home, '.local', 'bin', 'cursor-agent.exe'),
+        join(home, '.local', 'bin', 'cursor-agent.cmd'),
+        join(npmBin, 'cursor-agent.cmd'),
+        join(npmBin, 'cursor-agent'),
+      ]
+    : [join(home, '.local', 'bin', 'cursor-agent'), '/usr/local/bin/cursor-agent', join(npmBin, 'cursor-agent')]
+  return defaultLocations.map((entry) => resolve(entry)).find((entry) => existsSync(entry))
+}
+
+/**
+ * The Pi coding agent CLI binary (`pi`, npm `@mariozechner/pi-coding-agent`
+ * and compatible forks such as Oh My Pi). Pi ships through npm, so discovery
+ * is the developer override, then the npm global bin locations, never a host
+ * `PATH` scan. `ND_DSH_PI_BINARY` remains a developer-only override.
+ */
+export function piBinPath(): string | undefined {
+  const override = process.env.ND_DSH_PI_BINARY
+  if (override) {
+    const resolved = resolve(override)
+    return existsSync(resolved) ? resolved : undefined
+  }
+  const home = process.env.USERPROFILE ?? process.env.HOME ?? ''
+  const npmBin = process.env.APPDATA ? join(process.env.APPDATA, 'npm') : join(home, '.npm-global', 'bin')
+  const defaultLocations = process.platform === 'win32'
+    ? [join(npmBin, 'pi.cmd'), join(npmBin, 'pi'), join(home, '.local', 'bin', 'pi.exe'), join(home, '.local', 'bin', 'pi')]
+    : [join(npmBin, 'pi'), join(home, '.local', 'bin', 'pi'), '/usr/local/bin/pi']
+  return defaultLocations.map((entry) => resolve(entry)).find((entry) => existsSync(entry))
+}

@@ -30,6 +30,7 @@ import {
 } from '../../shared/capabilities'
 import type { DesignDesktopApi, DesignFreeformState, DesignProjectState } from '../../shared/design'
 import type { OrganizationDesktopApi, OrganizationMutation, OrganizationSnapshot } from '../../shared/organization'
+import type { WorkflowPluginsDesktopApi } from '../../shared/workflow-plugins'
 
 type Listener<T> = (value: T) => void
 
@@ -95,7 +96,7 @@ let providers: ModelProvider[] = [
   { id: 'local-lab', name: 'Local Lab', enabled: false, baseUrl: 'http://127.0.0.1:11434/v1', apiFormat: 'openai-completions', apiKey: '', hasApiKey: false, models: [{ id: 'company-code-model', context: '32k' }] },
 ]
 
-const engines = buildCodingEngineCatalog({ harnessReady: true, codexReady: true, codexCliReady: true, antigravityReady: true })
+const engines = buildCodingEngineCatalog({ harnessReady: true, codexReady: true, codexCliReady: true, antigravityReady: true, zcodeCliReady: true, piCodingReady: true, cursorCliReady: true, claudeCodeCliReady: true })
 let assignments: Record<string, string> = { 'agent-pm': 'nd-harness', 'agent-builder': 'codex-cli', 'agent-reviewer': 'nd-harness' }
 
 const ADAPTER_SLOT_NOTE = 'Adapter slot reserved. The integration ships in an upcoming ND release; built-ins stay active meanwhile.'
@@ -323,7 +324,10 @@ const sessionHistory = [
 const archivedPreviewSessions = new Set<string>()
 
 const desktopApi: DesktopApi = {
-  app: { info: async () => ({ name: 'ND-DSH', version: '0.1.0-dev-preview', platform: 'web-preview', projectRoot: workspace.root }) },
+  app: {
+    info: async () => ({ name: 'ND-DSH', version: '0.1.0-dev-preview', platform: 'web-preview', projectRoot: workspace.root }),
+    restart: async () => undefined,
+  },
   capabilities: {
     providers: async () => capabilityProviders,
     assignments: async () => capabilityAssignments,
@@ -387,6 +391,45 @@ const desktopApi: DesktopApi = {
       { id: 'gemini-3.1-pro-high', name: 'Gemini 3.1 Pro (High)' },
       { id: 'gemini-3.8-flash-low', name: 'Gemini 3.8 Flash (Low)' },
     ],
+  },
+  zcodeConfig: {
+    read: async () => ({
+      path: '~/.zcode/cli/config.json',
+      exists: true,
+      mainModel: 'zai/glm-5.3',
+      providers: [
+        {
+          id: 'zai',
+          kind: 'anthropic' as const,
+          name: 'Z.ai',
+          baseURL: 'https://api.z.ai/api/anthropic',
+          apiKeySet: true,
+          apiKeyHint: 'sk-…f4a2',
+          models: [{ id: 'glm-5.3', name: 'GLM-5.3', contextWindow: 200_000 }],
+        },
+        {
+          id: 'deepseek',
+          kind: 'openai-compatible' as const,
+          name: 'DeepSeek',
+          baseURL: 'https://api.deepseek.com',
+          apiKeySet: false,
+          models: [{ id: 'deepseek-chat' }],
+        },
+      ],
+    }),
+    write: async (update) => ({
+      path: '~/.zcode/cli/config.json',
+      exists: true,
+      ...(update.mainModel !== undefined ? { mainModel: update.mainModel } : {}),
+      providers: update.providers.map((provider) => ({
+        id: provider.id,
+        kind: provider.kind,
+        ...(provider.name !== undefined ? { name: provider.name } : {}),
+        ...(provider.baseURL !== undefined ? { baseURL: provider.baseURL } : {}),
+        apiKeySet: provider.apiKey !== undefined,
+        models: provider.models,
+      })),
+    }),
   },
   sessions: {
     setArchived: async (sessionId, archived) => {
@@ -479,6 +522,8 @@ const desktopApi: DesktopApi = {
     onChanged: themeEvents.on,
   },
   git: {
+    connectGitHub: async () => { throw new Error('GitHub OAuth is available in the desktop app.') },
+    configureRemote: async (_root, name) => { git = { ...git, remotes: [...new Set([...git.remotes, name])] }; gitEvents.emit(git); return git },
     state: async () => git,
     refresh: async () => git,
     stage: async (paths) => { git = moveGit(paths, 'staged'); gitEvents.emit(git); return git },
@@ -541,10 +586,23 @@ const organizationApi: OrganizationDesktopApi = {
   onRuntimeChanged: () => () => undefined,
 }
 
+const workflowPluginsApi: WorkflowPluginsDesktopApi = {
+  list: async () => ({ version: 1, plugins: [], bindings: [], snapshots: [] }),
+  install: async () => ({ version: 1, plugins: [], bindings: [], snapshots: [] }),
+  remove: async () => ({ version: 1, plugins: [], bindings: [], snapshots: [] }),
+  detect: async () => [],
+  enable: async () => ({ version: 1, plugins: [], bindings: [], snapshots: [] }),
+  disable: async () => ({ version: 1, plugins: [], bindings: [], snapshots: [] }),
+  refresh: async () => ({ version: 1, plugins: [], bindings: [], snapshots: [] }),
+  snapshot: async () => ({}),
+  onChanged: () => () => undefined,
+}
+
 export function installDevelopmentUiPreview(): void {
   window.ndDsh = desktopApi
   window.ndDshDesign = designApi
   window.ndDshOrganization = organizationApi
+  window.ndDshWorkflowPlugins = workflowPluginsApi
   window.ndDshRuntimeMode = 'ui-preview'
 }
 

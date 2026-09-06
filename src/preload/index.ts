@@ -5,6 +5,14 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { CAPABILITIES_IPC, type CapabilityAssignmentSnapshot, type CapabilityKind, type CapabilitySubjectType } from '../shared/capabilities.js'
 import { IPC, type DesktopApi, type ModelProvider } from '../shared/contracts.js'
 import { EXTENSIONS_IPC, type AgentExtensionManifest, type ExtensionsDesktopApi } from '../shared/extensions.js'
+import {
+  WORKFLOW_PLUGINS_IPC,
+  type WorkflowDetectionPreview,
+  type WorkflowPluginInstallSource,
+  type WorkflowPluginsDesktopApi,
+  type WorkflowPluginsState,
+  type WorkflowProjectView,
+} from '../shared/workflow-plugins.js'
 
 const extensionsApi: ExtensionsDesktopApi = {
   list: () => ipcRenderer.invoke(EXTENSIONS_IPC.list),
@@ -20,8 +28,28 @@ const extensionsApi: ExtensionsDesktopApi = {
   },
 }
 
+const workflowPluginsApi: WorkflowPluginsDesktopApi = {
+  list: () => ipcRenderer.invoke(WORKFLOW_PLUGINS_IPC.list) as Promise<WorkflowPluginsState>,
+  install: (source: WorkflowPluginInstallSource) => ipcRenderer.invoke(WORKFLOW_PLUGINS_IPC.install, source) as Promise<WorkflowPluginsState>,
+  remove: (pluginId: string) => ipcRenderer.invoke(WORKFLOW_PLUGINS_IPC.remove, pluginId) as Promise<WorkflowPluginsState>,
+  detect: (companyId: string, projectId: string, pluginId?: string) =>
+    ipcRenderer.invoke(WORKFLOW_PLUGINS_IPC.detect, companyId, projectId, pluginId) as Promise<WorkflowDetectionPreview[]>,
+  enable: (companyId: string, projectId: string, pluginId: string) => ipcRenderer.invoke(WORKFLOW_PLUGINS_IPC.enable, companyId, projectId, pluginId) as Promise<WorkflowPluginsState>,
+  disable: (companyId: string, projectId: string, pluginId: string) => ipcRenderer.invoke(WORKFLOW_PLUGINS_IPC.disable, companyId, projectId, pluginId) as Promise<WorkflowPluginsState>,
+  refresh: (companyId: string, projectId: string) => ipcRenderer.invoke(WORKFLOW_PLUGINS_IPC.refresh, companyId, projectId) as Promise<WorkflowPluginsState>,
+  snapshot: (companyId: string, projectId: string) => ipcRenderer.invoke(WORKFLOW_PLUGINS_IPC.snapshot, companyId, projectId) as Promise<WorkflowProjectView>,
+  onChanged: (listener: (state: WorkflowPluginsState) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: WorkflowPluginsState) => listener(state)
+    ipcRenderer.on(WORKFLOW_PLUGINS_IPC.changedEvent, handler)
+    return () => ipcRenderer.removeListener(WORKFLOW_PLUGINS_IPC.changedEvent, handler)
+  },
+}
+
 const api: DesktopApi = {
-  app: { info: () => ipcRenderer.invoke(IPC.appInfo) },
+  app: {
+    info: () => ipcRenderer.invoke(IPC.appInfo),
+    restart: () => ipcRenderer.invoke(IPC.appRestart),
+  },
   capabilities: {
     providers: () => ipcRenderer.invoke(CAPABILITIES_IPC.providers),
     assignments: () => ipcRenderer.invoke(CAPABILITIES_IPC.assignments),
@@ -73,6 +101,10 @@ const api: DesktopApi = {
     sessions: () => ipcRenderer.invoke(IPC.enginesSessions),
     transcript: (sessionId) => ipcRenderer.invoke(IPC.enginesTranscript, sessionId),
     models: (engineId) => ipcRenderer.invoke(IPC.enginesModels, engineId),
+  },
+  zcodeConfig: {
+    read: () => ipcRenderer.invoke(IPC.zcodeConfigRead),
+    write: (update) => ipcRenderer.invoke(IPC.zcodeConfigWrite, update),
   },
   sessions: {
     setArchived: (sessionId, archived) => ipcRenderer.invoke(IPC.sessionsSetArchived, sessionId, archived),
@@ -179,6 +211,8 @@ const api: DesktopApi = {
     },
   },
   git: {
+    configureRemote: (root, name, url) => ipcRenderer.invoke(IPC.gitConfigureRemote, root, name, url),
+    connectGitHub: (root, name, url) => ipcRenderer.invoke(IPC.gitConnectGitHub, root, name, url),
     state: () => ipcRenderer.invoke(IPC.gitState),
     refresh: () => ipcRenderer.invoke(IPC.gitRefresh),
     stage: (relativePaths) => ipcRenderer.invoke(IPC.gitStage, relativePaths),
@@ -216,3 +250,4 @@ const api: DesktopApi = {
 
 contextBridge.exposeInMainWorld('ndDsh', api)
 contextBridge.exposeInMainWorld('ndDshExtensions', extensionsApi)
+contextBridge.exposeInMainWorld('ndDshWorkflowPlugins', workflowPluginsApi)
