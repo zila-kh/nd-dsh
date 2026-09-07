@@ -12,7 +12,7 @@ import type { EngineModelOption } from '../../../shared/contracts.js'
 export type JsonObject = Record<string, unknown>
 
 const REQUEST_TIMEOUT_MS = 120_000
-const LOGIN_TIMEOUT_MS = 5 * 60_000
+const LOGIN_TIMEOUT_MS = 10 * 60_000
 
 export interface CodexWireHandlers {
   /** Product notifications such as `turn/started`, `item/*`, `turn/completed`. */
