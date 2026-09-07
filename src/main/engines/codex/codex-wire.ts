@@ -61,6 +61,9 @@ export class CodexAppServerWire {
   private nextRequestId = 1
   private readonly pending = new Map<number, PendingRequest>()
   private readonly pendingLogins = new Map<string, PendingLogin>()
+  /** Login completion can race the promise continuation for login/start. */
+  private readonly completedLogins = new Map<string, LoginCompletion>()
+  private unclaimedLoginCompletion: LoginCompletion | undefined
   private buffer = ''
   private closed = false
   private readonly nativeModels = new Map<string, string>()
@@ -156,6 +159,8 @@ export class CodexAppServerWire {
       pending.reject(new Error('Codex app-server connection closed during ChatGPT sign-in'))
     }
     this.pendingLogins.clear()
+    this.completedLogins.clear()
+    this.unclaimedLoginCompletion = undefined
     this.nativeModels.clear()
   }
 
@@ -206,6 +211,16 @@ export class CodexAppServerWire {
   }
 
   private waitForLogin(loginId: string): Promise<LoginCompletion> {
+    const completed = this.completedLogins.get(loginId)
+    if (completed) {
+      this.completedLogins.delete(loginId)
+      return Promise.resolve(completed)
+    }
+    if (this.unclaimedLoginCompletion) {
+      const result = this.unclaimedLoginCompletion
+      this.unclaimedLoginCompletion = undefined
+      return Promise.resolve(result)
+    }
     if (this.pendingLogins.has(loginId)) throw new Error(`Codex ChatGPT login is already pending: ${loginId}`)
     return new Promise<LoginCompletion>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -218,24 +233,34 @@ export class CodexAppServerWire {
   }
 
   private resolveLogin(params: JsonObject): void {
-    const explicitId = typeof params.loginId === 'string' && params.loginId ? params.loginId : undefined
-    const loginId = explicitId ?? (this.pendingLogins.size === 1 ? this.pendingLogins.keys().next().value as string | undefined : undefined)
-    if (!loginId) return
-    const pending = this.pendingLogins.get(loginId)
-    if (!pending) return
-    this.pendingLogins.delete(loginId)
-    clearTimeout(pending.timer)
-    pending.resolve({
+    const result: LoginCompletion = {
       success: params.success === true,
       ...(typeof params.error === 'string' && params.error ? { error: params.error } : {}),
-    })
+    }
+    const explicitId = typeof params.loginId === 'string' && params.loginId ? params.loginId : undefined
+    const loginId = explicitId ?? (this.pendingLogins.size === 1 ? this.pendingLogins.keys().next().value as string | undefined : undefined)
+    if (!loginId) {
+      this.unclaimedLoginCompletion = result
+      return
+    }
+    const pending = this.pendingLogins.get(loginId)
+    if (!pending) {
+      this.completedLogins.set(loginId, result)
+      return
+    }
+    this.pendingLogins.delete(loginId)
+    clearTimeout(pending.timer)
+    pending.resolve(result)
   }
 
   private abandonLogin(loginId: string): void {
     const pending = this.pendingLogins.get(loginId)
-    if (!pending) return
-    clearTimeout(pending.timer)
-    this.pendingLogins.delete(loginId)
+    if (pending) {
+      clearTimeout(pending.timer)
+      this.pendingLogins.delete(loginId)
+    }
+    this.completedLogins.delete(loginId)
+    this.unclaimedLoginCompletion = undefined
   }
 
   private cancelLogin(loginId: string): void {
