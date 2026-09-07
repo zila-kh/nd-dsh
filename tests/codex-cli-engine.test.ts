@@ -7,7 +7,7 @@ import type { DshEventFrame } from '../src/shared/contracts.js'
 
 /**
  * Scripted stand-in for the official `codex app-server --stdio` child: answers
- * the fixed handshake/thread/turn requests and lets each test drive
+ * the fixed handshake/account/thread/turn requests and lets each test drive
  * notifications, approvals, and crashes over the same stdio wires.
  */
 class FakeAppServer {
@@ -18,11 +18,15 @@ class FakeAppServer {
   responses: Array<{ id: number; result?: unknown; error?: unknown }> = []
   threadCounter = 0
   turnCounter = 0
+  killCalls = 0
   lastThreadId?: string
   lastTurnId?: string
   private buffer = ''
 
-  constructor() {
+  constructor(private readonly accountResult: Record<string, unknown> = {
+    account: { type: 'chatgpt', email: 'test@example.com', planType: 'plus' },
+    requiresOpenaiAuth: true,
+  }) {
     this.stdin = new PassThrough()
     this.stdout = new PassThrough()
     const stderr = new PassThrough()
@@ -34,6 +38,7 @@ class FakeAppServer {
     base.exitCode = null
     base.signalCode = null
     base.kill = () => {
+      this.killCalls += 1
       queueMicrotask(() => this.child.emit('exit', null, 'SIGTERM'))
       return true
     }
@@ -62,6 +67,9 @@ class FakeAppServer {
     switch (message.method) {
       case 'initialize':
         this.respond(message.id, {})
+        break
+      case 'account/read':
+        this.respond(message.id, this.accountResult)
         break
       case 'model/list':
         this.respond(message.id, { data: [{ id: 'catalog-id', model: 'codex-test-model', displayName: 'Codex Test Model' }], nextCursor: null })
@@ -131,9 +139,9 @@ afterAll(() => {
   else process.env.ND_DSH_CODEX_BINARY = originalOverride
 })
 
-async function makeEngine() {
+async function makeEngine(accountResult?: Record<string, unknown>) {
   process.env.ND_DSH_CODEX_BINARY = process.execPath
-  const server = new FakeAppServer()
+  const server = new FakeAppServer(accountResult)
   const engine = new CodexCliEngine({
     log: () => {},
     spawnProcess: (() => server.child) as never,
@@ -159,6 +167,17 @@ describe('CodexCliEngine', () => {
     }
   })
 
+  it('cleans up the spawned app-server when the account startup handshake fails', async () => {
+    const { engine, server } = await makeEngine({ account: null, requiresOpenaiAuth: 'invalid' })
+    try {
+      await expect(engine.listModels()).rejects.toThrow(/invalid account\/read response/i)
+      await flush()
+      expect(server.killCalls).toBeGreaterThan(0)
+    } finally {
+      await engine.close()
+    }
+  })
+
   it('creates a session, streams a turn into shared frames, and settles cleanly', async () => {
     const { engine, server, frames } = await makeEngine()
     try {
@@ -166,6 +185,8 @@ describe('CodexCliEngine', () => {
       expect(sessionId).toMatch(/^codex-/)
       await flush()
 
+      const accountRead = server.requests.find((request) => request.method === 'account/read')
+      expect(accountRead?.params).toEqual({})
       const threadStart = server.requests.find((request) => request.method === 'thread/start')
       expect(threadStart?.params.cwd).toBe('/workspace')
       expect(threadStart?.params.approvalPolicy).toBe('on-request')
