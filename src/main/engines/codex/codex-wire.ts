@@ -165,7 +165,7 @@ export class CodexAppServerWire {
    * does not, opens the returned URL, then waits for app-server completion.
    */
   private async ensureChatGptAuthenticated(): Promise<void> {
-    const initial = await this.readAccount(true)
+    const initial = await this.readAccount()
     if (initial.account !== null && initial.account !== undefined) return
     if (initial.requiresOpenaiAuth !== true) return
 
@@ -184,20 +184,21 @@ export class CodexAppServerWire {
       await this.openAuthUrl(authUrl)
     } catch (error: unknown) {
       this.abandonLogin(loginId)
+      this.cancelLogin(loginId)
       throw error
     }
 
     const result = await completion
     if (!result.success) throw new Error(result.error ?? 'ChatGPT sign-in was not completed')
 
-    const authenticated = await this.readAccount(true)
+    const authenticated = await this.readAccount()
     if (authenticated.account === null || authenticated.account === undefined) {
       throw new Error('ChatGPT sign-in completed but Codex returned no authenticated account')
     }
   }
 
-  private async readAccount(refreshToken: boolean): Promise<JsonObject> {
-    const response = asRecord(await this.request('account/read', { refreshToken }), 'account/read response')
+  private async readAccount(): Promise<JsonObject> {
+    const response = asRecord(await this.request('account/read', {}), 'account/read response')
     if (typeof response.requiresOpenaiAuth !== 'boolean') {
       throw new Error('Codex app-server returned an invalid account/read response')
     }
@@ -209,6 +210,7 @@ export class CodexAppServerWire {
     return new Promise<LoginCompletion>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingLogins.delete(loginId)
+        this.cancelLogin(loginId)
         reject(new Error('ChatGPT sign-in timed out'))
       }, LOGIN_TIMEOUT_MS)
       this.pendingLogins.set(loginId, { resolve, reject, timer })
@@ -234,6 +236,10 @@ export class CodexAppServerWire {
     if (!pending) return
     clearTimeout(pending.timer)
     this.pendingLogins.delete(loginId)
+  }
+
+  private cancelLogin(loginId: string): void {
+    void this.request('account/login/cancel', { loginId }).catch(() => {})
   }
 
   private async openAuthUrl(value: string): Promise<void> {
