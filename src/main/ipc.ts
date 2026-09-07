@@ -8,7 +8,8 @@ import { IPC } from '../shared/contracts.js'
 import { EXTENSIONS_IPC } from '../shared/extensions.js'
 import type { OrganizationSnapshot } from '../shared/organization.js'
 import { WORKFLOW_PLUGINS_IPC } from '../shared/workflow-plugins.js'
-import { managedHarnessRoot, projectRoot } from './app-paths.js'
+import { managedHarnessRoot, projectRoot, presetSourceDir } from './app-paths.js'
+import { NdSkillService } from './skills/nd-skill-service.js'
 import { capturePrimaryDisplay, captureSelfWindow } from './capture/app-capture.js'
 import { describePick, ExternalElementStage, formatExternalElementContext, pickElementInExternalApp, RecentPickStore, type ExternalPick } from './capture/external-inspect.js'
 import type { BrowserController } from './browser/browser-controller.js'
@@ -106,6 +107,11 @@ export function registerIpc(deps: IpcDependencies): () => void {
   const extensionRouter = new ExtensionRouter(extensionStore, deps.engines, deps.providers)
   const extensionDemos = new ExtensionDemoService(extensionStore, deps.engines, deps.providers)
   deps.engineRouter.setExtensionRouter(extensionRouter)
+  const skills = new NdSkillService({ organization: deps.organizationStore, workspace: deps.projectWorkspace, bundledRoot: join(presetSourceDir(), 'nd-dsh', 'skills') })
+  deps.engineRouter.setSkillService(skills)
+  deps.engineRouter.setMessageStore(deps.sessionArchive)
+  handle(IPC.skillsDetail, (_event, selectionId) => skills.detail(asString(selectionId, 'Skill selection', 64)))
+  handle(IPC.skillsCatalog, (_event, projectId) => skills.catalog(projectId === null ? null : asString(projectId, 'Project id', 128)))
   const disposeExtensionIpc = registerExtensionIpc(deps.window, extensionStore, extensionRouter, extensionDemos)
   extensionStore.setOnChanged((extensions) => {
     if (!deps.window.isDestroyed()) deps.window.webContents.send(EXTENSIONS_IPC.changedEvent, extensions)
@@ -263,7 +269,7 @@ export function registerIpc(deps: IpcDependencies): () => void {
     if (archivedIds.size === 0) return items
     return items.map((item) => (archivedIds.has(item.sessionId) ? { ...item, archived: true } : item))
   })
-  handle(IPC.enginesTranscript, (_event, value) => deps.engineRouter.transcript(asString(value, 'Session id', 128)))
+  handle(IPC.enginesTranscript, (_event, value) => deps.engineRouter.restoreMessages(asString(value, 'Session id', 128), deps.engineRouter.transcript(asString(value, 'Session id', 128))))
   handle(IPC.enginesModels, (_event, value) => deps.engineRouter.models(asString(value, 'Engine id', 64)))
   // ZCode CLI model-provider config (its own ~/.zcode/cli/config.json). A
   // successful write restarts the ZCode app-server child when idle so the
@@ -278,6 +284,8 @@ export function registerIpc(deps: IpcDependencies): () => void {
   // returns so the renderer can reconcile its local copies.
   handle(IPC.sessionsSetArchived, (_event, sessionId, archived) =>
     deps.sessionArchive.setArchived(asString(sessionId, 'Session id', 128), archived === true))
+  handle(IPC.sessionsSetArchivedMany, (_event, sessionIds, archived) =>
+    deps.sessionArchive.setArchivedMany(asSessionIdList(sessionIds), archived === true))
 
   // External element inspection attaches to another Electron app's loopback
   // debug port and injects the picker via CDP Runtime.evaluate. Self-window
@@ -419,13 +427,18 @@ export function registerIpc(deps: IpcDependencies): () => void {
   handle(IPC.harnessStatus, () => deps.harness.status())
   handle(IPC.harnessRun, (_event, value, options) => deps.engineRouter.run(asString(value, 'Prompt', 100_000), asRunOptions(options)))
   handle(IPC.harnessStop, () => deps.engineRouter.stop())
+  handle(IPC.harnessStopSession, (_event, value) => deps.engineRouter.stopSession(asString(value, 'Session id', 128)))
   handle(IPC.harnessPermissionGet, () => deps.theme.permissionMode())
   handle(IPC.harnessPermissionSet, async (_event, value) => {
     const mode = deps.theme.setPermissionMode(asPermissionMode(value))
     return deps.harness.restartWithPermissionMode(mode)
   })
 
-  handle(IPC.dshRpc, (_event, method, payload) => deps.harness.gatewayRpc(asGatewayMethod(method), payload))
+  handle(IPC.dshRpc, async (_event, method, payload) => {
+    const result = await deps.harness.gatewayRpc(asGatewayMethod(method), payload)
+    const sessionId = (payload as { sessionId?: unknown } | undefined)?.sessionId
+    return method === 'session.history' && typeof sessionId === 'string' ? deps.engineRouter.restoreMessages(sessionId, result) : result
+  })
   handle(IPC.dshRespond, (_event, rpcId, value) => deps.engineRouter.respond(asString(rpcId, 'RPC id', 128), value))
 
   handle(IPC.surfaceState, () => ({ surface: deps.theme.surface(), view: deps.dshSurface.state() }))
@@ -603,6 +616,12 @@ function asPathList(value: unknown): string[] {
   return value.map((entry) => asString(entry, 'File path', 4_096))
 }
 
+function asSessionIdList(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new Error('A list of session ids is required')
+  if (value.length > 10_000) throw new Error('Too many session ids')
+  return value.map((entry) => asString(entry, 'Session id', 128))
+}
+
 function asQaSuite(value: unknown): QaSuiteId {
   if (value === 'unit' || value === 'e2e') return value
   if (typeof value === 'string' && /^script:[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$/.test(value)) return value as QaSuiteId
@@ -719,6 +738,10 @@ function asRunOptions(value: unknown): HarnessRunOptions {
   if (value === undefined || value === null) return {}
   if (typeof value !== 'object') throw new Error('Harness run options must be an object')
   const record = value as Record<string, unknown>
+  const skillSelectionId = record.skillSelectionId
+  if (skillSelectionId !== undefined && (typeof skillSelectionId !== 'string' || !/^[a-f0-9]{64}$/.test(skillSelectionId))) throw new Error('Invalid skill selection')
+  const skillScope = record.skillScope
+  if (skillScope !== undefined && (typeof skillScope !== 'string' || skillScope.length > 8_192)) throw new Error('Invalid skill scope')
   const sessionId = record.sessionId
   if (sessionId !== undefined && (typeof sessionId !== 'string' || !sessionId.trim() || sessionId.length > 128)) throw new Error('sessionId must be a short non-empty string')
   const engineId = record.engineId
@@ -728,6 +751,8 @@ function asRunOptions(value: unknown): HarnessRunOptions {
   const model = record.model
   if (model !== undefined && (typeof model !== 'string' || !model.trim() || model.length > 256)) throw new Error('model must be a short non-empty string')
   return {
+    ...(typeof skillScope === 'string' ? { skillScope } : {}),
+    ...(typeof skillSelectionId === 'string' ? { skillSelectionId } : {}),
     ...(typeof sessionId === 'string' ? { sessionId: sessionId.trim() } : {}),
     ...(typeof engineId === 'string' ? { engineId: engineId.trim() } : {}),
     ...(typeof provider === 'string' ? { provider: provider.trim() } : {}),

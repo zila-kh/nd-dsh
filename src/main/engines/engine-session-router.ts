@@ -63,7 +63,20 @@ export interface DirectWorkspaceEngine {
  * options or from which engine registered the session id.
  */
 export class EngineSessionRouter {
+  private messageStore: import('../sessions/session-archive-store.js').SessionArchiveStore | undefined
+
+  setMessageStore(store: import('../sessions/session-archive-store.js').SessionArchiveStore): void { this.messageStore = store }
+
+  async restoreMessages<T>(sessionId: string, value: T): Promise<T> {
+    return this.messageStore ? this.messageStore.restoreSkillMessages(sessionId, value) : value
+  }
+
   private extensions: ExtensionRouter | undefined
+  private skills: import('../skills/nd-skill-service.js').NdSkillService | undefined
+
+  setSkillService(service: import('../skills/nd-skill-service.js').NdSkillService): void {
+    this.skills = service
+  }
   /** Logical engine ids for harness-backed sessions such as delegated Codex. */
   private readonly logicalEngineBySession = new Map<string, string>()
   private readonly chatGptWeb: ChatGptWebEngine | undefined
@@ -138,13 +151,36 @@ export class EngineSessionRouter {
     const providerId = requested === ND_HARNESS_ENGINE_ID
       ? options?.provider ?? this.harness.status().provider
       : undefined
+    const directTarget = this.directEngines.get(requested)
+    if (directTarget && options?.sessionId) {
+      const session = directTarget.listSessions().find((item) => item.sessionId === options?.sessionId)
+      if (!session?.cwd || !sessionInWorkspace(this.workspace.state().root, session.cwd)) throw new Error('Session belongs to a different project workspace')
+    }
+    const skill = await this.skills?.prepare(prompt, options?.skillScope, options?.skillSelectionId)
+    if (skill && options?.sessionId && !directTarget && requested !== CHATGPT_WEB_ENGINE_ID) {
+      const result = await this.harness.gatewayRpc('session.list')
+      const items = (result.value as { items?: Array<{ sessionId?: string; cwd?: string }> } | undefined)?.items
+      const session = items?.find((item) => item.sessionId === options?.sessionId)
+      if (!result.ok || !session?.cwd || !sessionInWorkspace(this.workspace.state().root, session.cwd)) throw new Error('Skill session does not belong to the active workspace')
+    }
     const routedPrompt = this.extensions
-      ? await this.extensions.decoratePrompt(prompt, requested, providerId)
-      : prompt
+      ? await this.extensions.decoratePrompt(skill?.prompt ?? prompt, requested, providerId)
+      : skill?.prompt ?? prompt
     // Built-in Token Saver is deliberately applied at the common engine
     // boundary, after ND has added trusted extension context and before either
     // the Harness or direct engines receive the turn.
-    const optimizedPrompt = tokenSaverRuntime()?.optimize(routedPrompt, { kind: 'prompt' }).text ?? routedPrompt
+    const optimizedPrompt = skill ? routedPrompt : tokenSaverRuntime()?.optimize(routedPrompt, { kind: 'prompt' }).text ?? routedPrompt
+    if (skill) {
+      await this.skills!.assertScope(skill.scope)
+      if (skill.mention.selectionId) await this.skills!.detail(skill.mention.selectionId)
+    }
+    if (skill && this.messageStore) {
+      const sessionId = options?.sessionId ?? (await this.createSession(requested)).sessionId
+      options = { ...options, sessionId }
+      await this.skills!.assertScope(skill.scope)
+      await this.messageStore.rememberSkillMessage(sessionId, optimizedPrompt, prompt, skill.mention)
+      await this.messageStore.rememberSkillMessage(sessionId, appendWorkspaceContext(optimizedPrompt, this.workspace.state()), prompt, skill.mention)
+    }
     const direct = this.directEngines.get(requested)
     if (direct) {
       this.workspace.assertUsable()

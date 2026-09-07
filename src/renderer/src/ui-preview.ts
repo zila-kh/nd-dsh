@@ -324,6 +324,7 @@ const sessionHistory = [
 const archivedPreviewSessions = new Set<string>()
 
 const desktopApi: DesktopApi = {
+  skills: { detail: async () => { throw new Error('ND skills require the trusted desktop main process') }, catalog: async () => { throw new Error('ND skills require the trusted desktop main process') } },
   app: {
     info: async () => ({ name: 'ND-DSH', version: '0.1.0-dev-preview', platform: 'web-preview', projectRoot: workspace.root }),
     restart: async () => undefined,
@@ -437,6 +438,13 @@ const desktopApi: DesktopApi = {
       else archivedPreviewSessions.delete(sessionId)
       return [...archivedPreviewSessions]
     },
+    setArchivedMany: async (sessionIds, archived) => {
+      for (const sessionId of sessionIds) {
+        if (archived) archivedPreviewSessions.add(sessionId)
+        else archivedPreviewSessions.delete(sessionId)
+      }
+      return [...archivedPreviewSessions]
+    },
   },
   capture: {
     inspectApp: async () => ({ sessionId: 'preview-session', copiedToClipboard: false, width: innerWidth, height: innerHeight, displayLabel: 'UI preview' }),
@@ -489,6 +497,7 @@ const desktopApi: DesktopApi = {
       return { sessionId }
     },
     stop: async () => harness,
+    stopSession: async () => undefined,
     getPermissionMode: async () => 'ask',
     setPermissionMode: async (mode) => mode,
     onStatus: harnessEvents.on,

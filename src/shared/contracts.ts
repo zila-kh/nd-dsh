@@ -228,6 +228,9 @@ export interface HarnessRunImage {
 }
 
 export interface HarnessRunOptions {
+  /** Opaque ND catalog scope; checked again before skill dispatch. */
+  skillScope?: string
+  skillSelectionId?: string
   sessionId?: string
   engineId?: string
   provider?: string
@@ -582,6 +585,10 @@ export interface DesktopApi {
     testCompletion(providerId: string): Promise<ProviderPingResult>
     onChanged(listener: (providers: ModelProvider[]) => void): () => void
   }
+  skills: {
+    detail(selectionId: string): Promise<{ skill: import('./skill-catalog.js').SkillSuggestion; markdown: string }>
+    catalog(projectId: string | null): Promise<{ scope: string; skills: import('./skill-catalog.js').SkillSuggestion[] }>
+  }
   engines: {
     list(): Promise<CodingEngineDescriptor[]>
     assignments(): Promise<Record<string, string>>
@@ -604,6 +611,8 @@ export interface DesktopApi {
   sessions: {
     /** Archive or unarchive any chat thread (harness or engine-backed); resolves with the refreshed archived id list. */
     setArchived(sessionId: string, archived: boolean): Promise<string[]>
+    /** Archive or unarchive several chat threads atomically; resolves with the refreshed archived id list. */
+    setArchivedMany(sessionIds: string[], archived: boolean): Promise<string[]>
   }
   capture: {
     inspectApp(copyToClipboard: boolean, scope?: InspectScope): Promise<AppInspectResult>
@@ -649,6 +658,8 @@ export interface DesktopApi {
     status(): Promise<HarnessStatus>
     run(prompt: string, options?: HarnessRunOptions): Promise<HarnessRunResult>
     stop(): Promise<HarnessStatus>
+    /** Cancel one response without stopping other sessions or project servers. */
+    stopSession(sessionId: string): Promise<void>
     getPermissionMode(): Promise<string>
     setPermissionMode(mode: string): Promise<string>
     onStatus(listener: (status: HarnessStatus) => void): () => void
@@ -743,6 +754,7 @@ export const IPC = {
   harnessStatus: 'harness:status',
   harnessRun: 'harness:run',
   harnessStop: 'harness:stop',
+  harnessStopSession: 'harness:stop-session',
   harnessPermissionGet: 'harness:permission:get',
   harnessPermissionSet: 'harness:permission:set',
   harnessStatusEvent: 'harness:status-event',
@@ -768,6 +780,8 @@ export const IPC = {
   providersClearApiKey: 'providers:clear-api-key',
   providersPing: 'providers:ping',
   providersTestCompletion: 'providers:test-completion',
+  skillsCatalog: 'skills:catalog',
+  skillsDetail: 'skills:detail',
   enginesList: 'engines:list',
   enginesAssignments: 'engines:assignments',
   enginesAssign: 'engines:assign',
@@ -777,6 +791,7 @@ export const IPC = {
   zcodeConfigRead: 'zcode-config:read',
   zcodeConfigWrite: 'zcode-config:write',
   sessionsSetArchived: 'sessions:set-archived',
+  sessionsSetArchivedMany: 'sessions:set-archived-many',
   captureInspectApp: 'capture:inspect-app',
   captureInspectElement: 'capture:inspect-element',
   captureStageElement: 'capture:stage-element',

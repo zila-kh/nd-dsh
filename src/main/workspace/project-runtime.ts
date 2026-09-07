@@ -161,26 +161,26 @@ export class ProjectRuntimeService {
         this.child = undefined
         this.childProjectId = undefined
         this.childCwd = undefined
-        const cached = this.states.get(projectId)
-        if (!cached || cached.state !== 'ready') {
-          const stopped: ProjectRuntimeStatus = {
-            projectId,
-            state: 'stopped',
-            ...(base.targetUrl !== undefined ? { targetUrl: base.targetUrl } : {}),
-            ...(base.port !== undefined ? { port: base.port } : {}),
-            checkedAt: this.now(),
-            lastError: `${exitReason}${this.logTail(projectId)}`,
-          }
-          this.states.set(projectId, stopped)
-          this.emit(stopped)
+        const stopped: ProjectRuntimeStatus = {
+          projectId,
+          state: 'stopped',
+          ...(base.targetUrl !== undefined ? { targetUrl: base.targetUrl } : {}),
+          ...(base.port !== undefined ? { port: base.port } : {}),
+          checkedAt: this.now(),
+          lastError: `${exitReason}${this.logTail(projectId)}`,
         }
+        this.states.set(projectId, stopped)
+        this.emit(stopped)
       }
     })
 
     const deadline = this.now() + START_TIMEOUT_MS
     while (this.now() < deadline) {
+      if (this.child !== child) return this.status(projectId)
       if (exited) break
-      if (await this.probe(target.url, healthCheckPath(project))) {
+      const healthy = await this.probe(target.url, healthCheckPath(project))
+      if (this.child !== child) return this.status(projectId)
+      if (healthy) {
         const ready: ProjectRuntimeStatus = {
           ...base,
           state: 'ready',
@@ -196,6 +196,7 @@ export class ProjectRuntimeService {
       await sleep(START_POLL_MS)
     }
 
+    if (this.child !== child) return this.status(projectId)
     const failed: ProjectRuntimeStatus = {
       ...base,
       state: exited ? 'stopped' : 'unreachable',

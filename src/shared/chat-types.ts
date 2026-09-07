@@ -15,7 +15,7 @@ export interface AskQuestion {
 }
 
 export type ThreadEntry =
-  | { kind: 'user'; id: string; text: string }
+  | { kind: 'user'; id: string; text: string; skillMention?: import('./skill-catalog.js').SkillSuggestion }
   | { kind: 'assistant'; id: string; text: string; streaming?: boolean }
   | { kind: 'reasoning'; id: string; text: string }
   | { kind: 'tool'; id: string; callId?: string; name: string; args?: unknown; status: 'running' | 'done' | 'error'; result?: string }

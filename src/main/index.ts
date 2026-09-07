@@ -292,7 +292,14 @@ async function createWindow(cdpPort: number): Promise<void> {
   // Every engine's translated frames share one fan-out: the organization
   // orchestrator consumes run semantics, and the renderer sees the same
   // DshEventFrame vocabulary regardless of which engine produced it.
+  let rendererEventChain = Promise.resolve()
   const dispatchEngineFrame = (frame: DshEventFrame): void => {
+    rendererEventChain = rendererEventChain.then(async () => {
+      const restored = frame.sessionId ? await engineRouter.restoreMessages(frame.sessionId, frame) : frame
+      dispatchRestoredFrame(restored)
+    }).catch((error) => console.error('Chat event reconciliation failed:', error))
+  }
+  const dispatchRestoredFrame = (frame: DshEventFrame): void => {
     void organization.handleHarnessEvent(frame).catch((error) => {
       console.error('Organization event handling failed:', error)
     })

@@ -18,6 +18,22 @@ describe('tokenizeInline', () => {
     ])
   })
 
+  it('tokenizes markdown and bare HTTP(S) links', () => {
+    expect(tokenizeInline('[Open app](http://localhost:5174/) or https://example.com/docs.')).toEqual([
+      { kind: 'link', text: 'Open app', url: 'http://localhost:5174/' },
+      { kind: 'text', text: ' or ' },
+      { kind: 'link', text: 'https://example.com/docs', url: 'https://example.com/docs' },
+      { kind: 'text', text: '.' },
+    ])
+  })
+
+  it('keeps URLs inside code literal and rejects unsupported schemes', () => {
+    expect(tokenizeInline('`http://localhost:5174/` file:///tmp/x javascript:alert(1)')).toEqual([
+      { kind: 'code', text: 'http://localhost:5174/' },
+      { kind: 'text', text: ' file:///tmp/x javascript:alert(1)' },
+    ])
+  })
+
   it('keeps bold markers literal inside inline code', () => {
     const tokens = tokenizeInline('`**not bold**`')
     expect(tokens).toEqual([{ kind: 'code', text: '**not bold**' }])

@@ -14,12 +14,30 @@ const workspaceState: WorkspaceState = {
 
 function fixture() {
   const run = vi.fn(async () => ({ sessionId: 'session-1' }))
-  const direct = { run, listModels: async () => [{ id: 'native-model' }], ownsSession: (id: string) => id === 'session-1' }
-  const harness = { run: vi.fn(), status: () => ({}) }
+  const direct = { run, stop: vi.fn(), listModels: async () => [{ id: 'native-model' }], ownsSession: (id: string) => id === 'session-1' }
+  const harness = { run: vi.fn(), stop: vi.fn(), gatewayRpc: vi.fn(async () => ({ ok: true })), status: () => ({}) }
   const workspace = { state: () => workspaceState, assertUsable: vi.fn() }
   const router = new EngineSessionRouter(harness as never, direct as never, workspace as never, direct as never, undefined, direct as never, direct as never, direct as never, direct as never)
-  return { router, run, workspace, harness }
+  return { router, run, workspace, harness, direct }
 }
+
+describe('session-scoped cancellation', () => {
+  it('cancels only the requested harness session', async () => {
+    const { router, harness, direct } = fixture()
+    await router.stopSession('harness-session')
+    expect(harness.gatewayRpc).toHaveBeenCalledWith('session.cancel', { sessionId: 'harness-session' })
+    expect(harness.stop).not.toHaveBeenCalled()
+    expect(direct.stop).not.toHaveBeenCalled()
+  })
+
+  it('passes the session id to its owning direct adapter', async () => {
+    const { router, harness, direct } = fixture()
+    await router.stopSession('session-1')
+    expect(direct.stop).toHaveBeenCalledExactlyOnceWith('session-1')
+    expect(harness.gatewayRpc).not.toHaveBeenCalled()
+    expect(harness.stop).not.toHaveBeenCalled()
+  })
+})
 
 describe('direct engine workspace context', () => {
   it.each(['antigravity', 'codex-cli', 'zcode-cli', 'pi-coding', 'cursor-cli', 'claude-code-cli'])('routes the catalog and selected model for %s', async (engineId) => {

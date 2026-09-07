@@ -7,6 +7,7 @@
 
 export type InlineToken =
   | { kind: 'text'; text: string }
+  | { kind: 'link'; text: string; url: string }
   | { kind: 'code'; text: string }
   | { kind: 'bold'; text: string }
   | { kind: 'italic'; text: string }
@@ -34,19 +35,73 @@ function tableCells(line: string): string[] {
   return content.split('|').map((cell) => cell.trim())
 }
 
-/** Tokenize one line's inline markdown: `code`, **bold**, *italic*. */
+const MARKDOWN_LINK = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/y
+const BARE_URL = /https?:\/\/[^\s<>()]+/y
+const TRAILING_URL_PUNCTUATION = /[.,!?;:]+$/
+
+function trimBareUrl(value: string): string {
+  return value.replace(TRAILING_URL_PUNCTUATION, '')
+}
+
+function linkAt(text: string, cursor: number): { end: number; token: InlineToken } | undefined {
+  MARKDOWN_LINK.lastIndex = cursor
+  const markdown = MARKDOWN_LINK.exec(text)
+  if (markdown?.index === cursor) {
+    return { end: cursor + markdown[0].length, token: { kind: 'link', text: markdown[1]!, url: markdown[2]! } }
+  }
+  BARE_URL.lastIndex = cursor
+  const bare = BARE_URL.exec(text)
+  if (bare?.index === cursor) {
+    const url = trimBareUrl(bare[0])
+    if (url.length > 0) return { end: cursor + url.length, token: { kind: 'link', text: url, url } }
+  }
+  return undefined
+}
+
+/** Tokenize one line's inline markdown: links, `code`, **bold**, *italic*. */
 export function tokenizeInline(text: string): InlineToken[] {
   const tokens: InlineToken[] = []
-  // Non-greedy runs; backtick code wins so ** inside code stays literal.
-  const pattern = /`([^`]+)`|\*\*([^*]+)\*\*|\*([^*\s][^*]*)\*/g
+  // Scan left-to-right so code spans win over link-like text inside code.
+  let cursor = 0
+  let textStart = 0
+  const flushText = (end: number): void => {
+    if (textStart < end) tokens.push(...tokenizeEmphasis(text.slice(textStart, end)))
+  }
+  while (cursor < text.length) {
+    if (text[cursor] === '`') {
+      const end = text.indexOf('`', cursor + 1)
+      if (end >= 0) {
+        flushText(cursor)
+        tokens.push({ kind: 'code', text: text.slice(cursor + 1, end) })
+        cursor = end + 1
+        textStart = cursor
+        continue
+      }
+    }
+    const link = linkAt(text, cursor)
+    if (link) {
+      flushText(cursor)
+      tokens.push(link.token)
+      cursor = link.end
+      textStart = cursor
+      continue
+    }
+    cursor++
+  }
+  flushText(text.length)
+  return tokens.length > 0 ? tokens : [{ kind: 'text', text }]
+}
+
+function tokenizeEmphasis(text: string): InlineToken[] {
+  const tokens: InlineToken[] = []
+  const pattern = /\*\*([^*]+)\*\*|\*([^*\s][^*]*)\*/g
   let cursor = 0
   for (const match of text.matchAll(pattern)) {
     const start = match.index ?? 0
     if (start > cursor) tokens.push({ kind: 'text', text: text.slice(cursor, start) })
     cursor = start + match[0].length
-    if (match[1] !== undefined) tokens.push({ kind: 'code', text: match[1] })
-    else if (match[2] !== undefined) tokens.push({ kind: 'bold', text: match[2] })
-    else if (match[3] !== undefined) tokens.push({ kind: 'italic', text: match[3] })
+    if (match[1] !== undefined) tokens.push({ kind: 'bold', text: match[1] })
+    else if (match[2] !== undefined) tokens.push({ kind: 'italic', text: match[2] })
   }
   if (cursor < text.length) tokens.push({ kind: 'text', text: text.slice(cursor) })
   return tokens.length > 0 ? tokens : [{ kind: 'text', text }]

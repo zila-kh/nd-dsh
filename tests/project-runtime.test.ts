@@ -74,6 +74,50 @@ async function serviceFixture(options?: Partial<ProjectRuntimeOptions>): Promise
 }
 
 describe('ProjectRuntimeService', () => {
+  it('refuses to stop another project’s owned child', async () => {
+    const fixture = await serviceFixture()
+    await fixture.store.mutate({ type: 'project.update', id: fixture.projectId, patch: { startCommand: 'npm run dev' } })
+    const companyId = (await fixture.store.state()).companies[0]!.id
+    const state = await fixture.store.mutate({ type: 'project.create', companyId, name: 'Other', objective: 'Other app', workspacePath: fixture.workspaceRoot })
+    const otherId = state.projects.find((project) => project.id !== fixture.projectId)!.id
+    await fixture.service.start(fixture.projectId)
+    await fixture.service.stop(otherId)
+    expect(fixture.children[0]!.killed).toBe(false)
+    expect((await fixture.service.status(fixture.projectId)).pid).toBe(4242)
+    await fixture.service.dispose()
+  })
+
+  it('does not stop an externally managed target', async () => {
+    const fixture = await serviceFixture()
+    await fixture.service.check(fixture.projectId)
+    expect(await fixture.service.stop(fixture.projectId)).toMatchObject({ state: 'ready' })
+    expect((await fixture.service.status(fixture.projectId)).pid).toBeUndefined()
+    expect(fixture.children).toHaveLength(0)
+  })
+
+  it('clears ownership and ready state after the owned child exits', async () => {
+    const fixture = await serviceFixture()
+    await fixture.store.mutate({ type: 'project.update', id: fixture.projectId, patch: { startCommand: 'npm run dev' } })
+    await fixture.service.start(fixture.projectId)
+    fixture.children[0]!.process.kill()
+    expect(await fixture.service.status(fixture.projectId)).toMatchObject({ state: 'stopped' })
+    expect((await fixture.service.status(fixture.projectId)).pid).toBeUndefined()
+  })
+
+  it('does not restore ready after stop during an in-flight health probe', async () => {
+    let resolveProbe!: (value: { status: number }) => void
+    let probeStarted!: () => void
+    const started = new Promise<void>((resolve) => { probeStarted = resolve })
+    const fixture = await serviceFixture({ fetchFn: (() => { probeStarted(); return new Promise<{ status: number }>((resolve) => { resolveProbe = resolve }) }) as unknown as typeof fetch })
+    await fixture.store.mutate({ type: 'project.update', id: fixture.projectId, patch: { startCommand: 'npm run dev' } })
+    const starting = fixture.service.start(fixture.projectId)
+    await started
+    await fixture.service.stop(fixture.projectId)
+    resolveProbe({ status: 200 })
+    expect(await starting).toMatchObject({ state: 'stopped' })
+    expect(fixture.readyUrls).toEqual([])
+  })
+
   it('defaults the browser target to localhost:3000 instead of assuming an ND-DSH port', async () => {
     const fixture = await serviceFixture()
     const status = await fixture.service.status(fixture.projectId)

@@ -17,11 +17,25 @@ function looksLikeWorkspacePath(text: string): boolean {
 }
 
 /** Inline formatting: `code`, **bold**, *italic* → styled React nodes. */
-function InlineText({ text, onOpenFile }: { text: string; onOpenFile?: (path: string) => void }) {
+function InlineText({ text, onOpenFile, onOpenLink }: { text: string; onOpenFile?: (path: string) => void; onOpenLink?: (url: string) => void }) {
   const tokens = tokenizeInline(text)
   return (
     <>
       {tokens.map((token, index) => {
+        if (token.kind === 'link') {
+          if (!onOpenLink) return <span key={index}>{token.text}</span>
+          return (
+            <button
+              key={index}
+              type="button"
+              className="cursor-pointer text-primary underline decoration-primary/45 underline-offset-2 transition-colors hover:text-foreground"
+              title={`Open ${token.url} in Browser`}
+              onClick={() => onOpenLink(token.url)}
+            >
+              {token.text}
+            </button>
+          )
+        }
         if (token.kind === 'code') {
           if (onOpenFile && looksLikeWorkspacePath(token.text)) {
             return (
@@ -79,7 +93,7 @@ function CodeBlock({ language, text }: { language: string; text: string }) {
 }
 
 /** Chat-grade markdown renderer: block parser + inline tokens, no raw HTML. */
-export function MarkdownLite({ text, className, onOpenFile }: { text: string; className?: string; onOpenFile?: (path: string) => void }) {
+export function MarkdownLite({ text, className, onOpenFile, onOpenLink }: { text: string; className?: string; onOpenFile?: (path: string) => void; onOpenLink?: (url: string) => void }) {
   const blocks = parseMarkdownBlocks(text)
   return (
     <div className={cn('flex flex-col gap-1', className)}>
@@ -96,7 +110,7 @@ export function MarkdownLite({ text, className, onOpenFile }: { text: string; cl
                   block.level === 1 ? 'text-[13px]' : block.level === 2 ? 'text-[12px]' : 'text-[11.5px]',
                 )}
               >
-                <InlineText text={block.text} {...(onOpenFile ? { onOpenFile } : {})} />
+                <InlineText text={block.text} {...(onOpenFile ? { onOpenFile } : {})} {...(onOpenLink ? { onOpenLink } : {})} />
               </div>
             )
           case 'bullet-list':
@@ -122,7 +136,7 @@ export function MarkdownLite({ text, className, onOpenFile }: { text: string; cl
           case 'quote':
             return (
               <blockquote key={index} className="my-0.5 border-l-2 border-border-strong pl-2 text-[11.5px]/[1.6] text-faint">
-                <InlineText text={block.text} {...(onOpenFile ? { onOpenFile } : {})} />
+                <InlineText text={block.text} {...(onOpenFile ? { onOpenFile } : {})} {...(onOpenLink ? { onOpenLink } : {})} />
               </blockquote>
             )
           case 'table':
@@ -155,7 +169,7 @@ export function MarkdownLite({ text, className, onOpenFile }: { text: string; cl
           default:
             return (
               <div key={index} className="whitespace-pre-wrap [overflow-wrap:anywhere] text-[12.5px]/[1.7] text-foreground/90">
-                <InlineText text={block.text} {...(onOpenFile ? { onOpenFile } : {})} />
+                <InlineText text={block.text} {...(onOpenFile ? { onOpenFile } : {})} {...(onOpenLink ? { onOpenLink } : {})} />
               </div>
             )
         }

@@ -94,6 +94,7 @@ const api: DesktopApi = {
       return () => ipcRenderer.removeListener(IPC.providersChangedEvent, handler)
     },
   },
+  skills: { detail: (selectionId) => ipcRenderer.invoke(IPC.skillsDetail, selectionId), catalog: (projectId) => ipcRenderer.invoke(IPC.skillsCatalog, projectId) },
   engines: {
     list: () => ipcRenderer.invoke(IPC.enginesList),
     assignments: () => ipcRenderer.invoke(IPC.enginesAssignments),
@@ -108,6 +109,7 @@ const api: DesktopApi = {
   },
   sessions: {
     setArchived: (sessionId, archived) => ipcRenderer.invoke(IPC.sessionsSetArchived, sessionId, archived),
+    setArchivedMany: (sessionIds, archived) => ipcRenderer.invoke(IPC.sessionsSetArchivedMany, sessionIds, archived),
   },
   capture: {
     inspectApp: (copyToClipboard, scope) => ipcRenderer.invoke(IPC.captureInspectApp, copyToClipboard, scope),
@@ -159,6 +161,7 @@ const api: DesktopApi = {
     status: () => ipcRenderer.invoke(IPC.harnessStatus),
     run: (prompt, options) => ipcRenderer.invoke(IPC.harnessRun, prompt, options),
     stop: () => ipcRenderer.invoke(IPC.harnessStop),
+    stopSession: (sessionId) => ipcRenderer.invoke(IPC.harnessStopSession, sessionId),
     getPermissionMode: () => ipcRenderer.invoke(IPC.harnessPermissionGet),
     setPermissionMode: (mode) => ipcRenderer.invoke(IPC.harnessPermissionSet, mode),
     onStatus: (listener) => {

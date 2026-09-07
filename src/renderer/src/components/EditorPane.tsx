@@ -10,6 +10,7 @@ import { cn } from '../lib/utils'
 interface EditorPaneProps {
   file: WorkspaceFile | null
   onAgentPrompt?(prompt: string): void
+  onOpenLink?(url: string): void
   onError?(message: string): void
 }
 
@@ -31,7 +32,7 @@ function languageFromPath(path: string): string {
   return 'plaintext'
 }
 
-export function EditorPane({ file, onAgentPrompt, onError }: EditorPaneProps) {
+export function EditorPane({ file, onAgentPrompt, onOpenLink, onError }: EditorPaneProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [viewMode, setViewMode] = useState<'code' | 'preview'>('code')
 
@@ -123,7 +124,7 @@ export function EditorPane({ file, onAgentPrompt, onError }: EditorPaneProps) {
       </div>
       {viewMode === 'preview' && isMarkdown ? (
         <div className="min-h-0 flex-1 overflow-auto px-4 py-3 text-[12px]/[1.65]">
-          <MarkdownLite text={file.content} />
+          <MarkdownLite text={file.content} {...(onOpenLink ? { onOpenLink } : {})} />
         </div>
       ) : (
         <>

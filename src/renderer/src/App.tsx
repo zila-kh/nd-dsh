@@ -483,6 +483,16 @@ export default function App() {
     setActiveDiff(null)
   }
 
+  const openLink = async (url: string): Promise<void> => {
+    try {
+      setView('agent')
+      setAgentPane('browser')
+      await window.ndDsh.browser.navigate(url)
+    } catch (cause) {
+      notify(errorMessage(cause))
+    }
+  }
+
   const openFile = async (path: string): Promise<void> => {
     try {
       const file = await window.ndDsh.workspace.read(path)
@@ -830,6 +840,7 @@ export default function App() {
                 onError={notify}
                 onOpenSettings={openSettings}
                 onOpenFile={(path) => void openFile(path)}
+                onOpenLink={(url) => void openLink(url)}
                 externalPrompt={externalPrompt}
                 onExternalPromptConsumed={() => setExternalPrompt(null)}
                 elementAttachmentVersion={elementAttachmentVersion}
@@ -903,7 +914,7 @@ export default function App() {
                                   })}
                                 </div>
                               ) : null}
-                              <EditorPane file={selectedFile} onAgentPrompt={askAgent} onError={notify} />
+                              <EditorPane file={selectedFile} onAgentPrompt={askAgent} onOpenLink={(url) => void openLink(url)} onError={notify} />
                             </>
                           )}
                         </div>

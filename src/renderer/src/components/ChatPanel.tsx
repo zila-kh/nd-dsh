@@ -22,7 +22,9 @@ import type { ProjectPlanInput } from '../../../shared/organization'
 import type { AskQuestion, ThreadEntry, TodoItem } from '../lib/types'
 import { FOLDER_ACCENT, SKILL_ACCENT, fileExtensionOf, fileAccent } from '../lib/file-accents'
 import { applyMention, detectMentionTrigger } from '../../../shared/mentions'
+import { openSkillPicker, parseSkillCatalog, skillSelectionScope, type SkillSuggestion } from '../../../shared/skill-catalog'
 import { isVisionModel, resolveModelSelectionDisplay, type ModelCatalogState } from '../lib/model-selection'
+import { archiveableVisibleSessionIds } from '../../../shared/session-archive-selection'
 import { describeAgentError, type AgentErrorRoute } from '../lib/runtime-notices'
 import {
   ArchiveIcon,
@@ -51,15 +53,19 @@ import {
 } from './Icons'
 import { cn } from '../lib/utils'
 import { TerminalDock } from './TerminalDock'
+import { ProjectServerControl } from './ProjectServerControl'
 import { ChangedFilesCard } from './ChangedFilesCard'
 import { ChatContextPopover } from './ChatContextPopover'
 import { ZcodeModelConfigDialog } from './ZcodeModelConfigDialog'
 import { MarkdownLite } from './MarkdownLite'
+import { Button } from './ui/button'
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 
 interface ChatPanelProps {
   onGitEditableChange?(editable: boolean): void
+  onOpenLink?(url: string): void
   status: HarnessStatus | null
   workspaceName?: string
   sessionsCollapsed: boolean
@@ -96,11 +102,6 @@ const FS_WRITE_TOOL_NAMES = new Set(['fs_edit', 'fs_write', 'fs_write_text', 'fs
  */
 const ZCODE_MODEL_CONFIG_MISSING = /Model config is missing|explicit model provider/i
 
-interface SkillSuggestion {
-  name: string
-  description: string
-  whenToUse?: string
-}
 
 interface MentionItem {
   kind: 'skill' | 'file'
@@ -122,7 +123,7 @@ function fileMentionTag(relativePath: string): string {
   return extension ? extension.toUpperCase().slice(0, 5) : 'FILE'
 }
 
-export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionProjectScope, projects, onSelectProject, onError, onOpenSettings, onOpenFile, externalPrompt, onExternalPromptConsumed, elementAttachmentVersion, onGitEditableChange }: ChatPanelProps) {
+export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionProjectScope, projects, onSelectProject, onError, onOpenSettings, onOpenFile, onOpenLink, externalPrompt, onExternalPromptConsumed, elementAttachmentVersion, onGitEditableChange }: ChatPanelProps) {
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [terminalOpen, setTerminalOpen] = useState(false)
@@ -170,6 +171,8 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
   // card gets a hover menu that toggles it (harness and engine chats alike).
   const [showArchived, setShowArchived] = useState(false)
   const [sessionMenuId, setSessionMenuId] = useState<string | null>(null)
+  const [archiveAllIds, setArchiveAllIds] = useState<string[] | null>(null)
+  const [archivingAll, setArchivingAll] = useState(false)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -256,6 +259,10 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
       sessionProjects,
     ),
     [engineSessions, showArchived, activeProjectId, sessionProjects],
+  )
+  const archiveableIds = useMemo(
+    () => showArchived ? [] : archiveableVisibleSessionIds(visibleSessions, visibleEngineSessions, activeSessionId),
+    [showArchived, visibleSessions, visibleEngineSessions, activeSessionId],
   )
 
   const refreshSessions = useCallback(async (): Promise<void> => {
@@ -374,6 +381,21 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
       onError(cause instanceof Error ? cause.message : String(cause))
     }
   }, [onError, refreshEngineSessions, refreshSessions])
+
+  const confirmArchiveAll = useCallback(async (): Promise<void> => {
+    const ids = archiveAllIds
+    if (!ids || ids.length === 0 || archivingAll) return
+    setArchivingAll(true)
+    try {
+      await window.ndDsh.sessions.setArchivedMany(ids, true)
+      await Promise.all([refreshSessions(), refreshEngineSessions()])
+      setArchiveAllIds(null)
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setArchivingAll(false)
+    }
+  }, [archiveAllIds, archivingAll, onError, refreshEngineSessions, refreshSessions])
 
   /** Draft a chat on a non-harness engine; creation happens on first send. */
   const startEngineDraft = useCallback((engineId: string): void => {
@@ -568,7 +590,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
     onExternalPromptConsumed?.()
   }, [externalPrompt, onExternalPromptConsumed])
 
-  // Mention triggers: '/' lists skills from the runtime's session catalog,
+  // Mention triggers: '/' lists ND-owned skills scoped to the active project,
   // '@' lists workspace files. Escape dismisses the current token until it
   // changes, so the menu does not fight the typist.
   const mentionTrigger = useMemo(() => {
@@ -577,33 +599,34 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
     return prompt.slice(trigger.start, trigger.end) === mentionDismissed ? null : trigger
   }, [prompt, mentionCaret, mentionDismissed])
 
-  const skillsLoadedFor = useRef<string | null>(null)
+  const skillsScope = JSON.stringify([activeProjectId, activeEngineId, activeSessionId])
+  const [skillsOwner, setSkillsOwner] = useState<string | null>(null)
+  const [skillsRetry, setSkillsRetry] = useState(0)
+  const [skillCatalogScope, setSkillCatalogScope] = useState<string | undefined>()
+  const [composerSkill, setComposerSkill] = useState<SkillSuggestion | undefined>()
+  const selectedSkillScope = useRef<{ owner: string; scope: string; selectionId?: string } | null>(null)
   useEffect(() => {
-    if (mentionTrigger?.kind !== 'skill' || !activeSessionId) return
-    // The runtime skill catalog is a harness capability; engine chats have none.
-    if (engineSessionIds.has(activeSessionId)) {
-      setSkillsState('unavailable')
-      return
-    }
-    if (skillsLoadedFor.current === activeSessionId) return
-    skillsLoadedFor.current = activeSessionId
+    let cancelled = false
+    setSkillItems([])
+    setSkillsOwner(null)
+    setSkillsState('idle')
+    if (mentionTrigger?.kind !== 'skill') return
     setSkillsState('loading')
-    void window.ndDsh.dsh.rpc('skill.list', { sessionId: activeSessionId })
+    void window.ndDsh.skills.catalog(activeProjectId ?? null)
       .then((result) => {
-        const skills = result.ok ? ((result.value ?? {}) as { skills?: SkillSuggestion[] }).skills : undefined
-        if (!Array.isArray(skills)) throw new Error('skill.list returned no catalog')
-        setSkillItems(skills.map((skill) => ({
-          name: skill.name,
-          description: skill.description,
-          ...(typeof skill.whenToUse === 'string' && skill.whenToUse ? { whenToUse: skill.whenToUse } : {}),
-        })))
+        if (cancelled) return
+        setSkillItems(parseSkillCatalog(result))
+        setSkillCatalogScope(result.scope)
+        setSkillsOwner(skillsScope)
         setSkillsState('ready')
       })
       .catch(() => {
+        if (cancelled) return
         setSkillItems([])
         setSkillsState('unavailable')
       })
-  }, [mentionTrigger?.kind, activeSessionId, engineSessionIds])
+    return () => { cancelled = true }
+  }, [mentionTrigger?.kind, activeSessionId, activeProjectId, onHarnessThread, skillsRetry, skillsScope])
 
   useEffect(() => {
     if (mentionTrigger?.kind !== 'file') return
@@ -621,13 +644,14 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
     if (!mentionTrigger) return []
     if (mentionTrigger.kind === 'skill') {
       const needle = mentionTrigger.query.toLowerCase()
+      if (skillsOwner !== skillsScope || skillsState !== 'ready') return []
       return skillItems
         .filter((skill) => skill.name.toLowerCase().includes(needle))
         .slice(0, MENTION_MENU_LIMIT)
         .map((skill) => ({
           kind: 'skill' as const,
           insert: `/${skill.name}`,
-          label: skill.name,
+          label: skill.displayName ?? skill.name,
           tag: 'SKILL',
           hover: [skill.description, skill.whenToUse].filter(Boolean).join(' — '),
           accent: SKILL_ACCENT,
@@ -645,7 +669,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
         accent: file.kind === 'directory' ? FOLDER_ACCENT : fileAccent(file.relativePath),
         directory: file.kind === 'directory',
       }))
-  }, [mentionTrigger, skillItems, fileItems])
+  }, [mentionTrigger, skillItems, fileItems, onHarnessThread, skillsOwner, skillsScope, skillsState])
 
   useEffect(() => {
     setMentionIndex(0)
@@ -654,12 +678,18 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
   const acceptMention = useCallback((item: MentionItem): void => {
     const trigger = detectMentionTrigger(prompt, mentionCaret)
     if (!trigger) return
+    if (item.kind === 'skill') {
+      if (skillsOwner !== skillsScope || !skillCatalogScope) return
+      const skill = skillItems.find((candidate) => `/${candidate.name}` === item.insert)
+      setComposerSkill(skill)
+      selectedSkillScope.current = { owner: skillsScope, scope: skillCatalogScope, ...(skill?.selectionId ? { selectionId: skill.selectionId } : {}) }
+    }
     const next = applyMention(prompt, trigger, item.insert)
     setPrompt(next.value)
     setMentionCaret(next.caret)
     setMentionDismissed(null)
     requestAnimationFrame(() => textareaRef.current?.setSelectionRange(next.caret, next.caret))
-  }, [prompt, mentionCaret])
+  }, [prompt, mentionCaret, skillsOwner, skillsScope, skillCatalogScope, skillItems])
 
   // Opening a badge flyout must retire the mention popup: two popups over the
   // composer overlap and hide each other.
@@ -787,8 +817,14 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
   }, [])
 
   const run = async (): Promise<void> => {
-    const input = prompt.trim()
-    if (!input || busy || submitting) return
+    const input = prompt
+    if (!input.trim() || busy || submitting) return
+    const selection = /^\s*\//.test(input) ? selectedSkillScope.current : null
+    let selectedScope: string | undefined
+    try { selectedScope = skillSelectionScope(selection, skillsScope) } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause))
+      return
+    }
     setSubmitting(true)
     setPrompt('')
     setMentionCaret(0)
@@ -806,7 +842,9 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
         ? { engineId: draftEngine, ...engineModelOption }
         : undefined
     try {
-      const result = await window.ndDsh.harness.run(input, options)
+      const catalog = /^\s*\//.test(input) ? await window.ndDsh.skills.catalog(activeProjectId ?? null) : undefined
+      const result = await window.ndDsh.harness.run(input, { ...options, ...(catalog ? { skillScope: selectedScope ?? catalog.scope, ...(selection?.selectionId ? { skillSelectionId: selection.selectionId } : {}) } : {}) })
+      selectedSkillScope.current = null
       setActiveSessionId(result.sessionId)
       if (draftEngine !== null) {
         setDraftEngineId(null)
@@ -824,7 +862,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
 
   const stop = async (): Promise<void> => {
     try {
-      await window.ndDsh.harness.stop()
+      if (activeSessionId) await window.ndDsh.harness.stopSession(activeSessionId)
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : String(cause))
     }
@@ -857,7 +895,8 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
       ? { sessionId: activeSessionId, ...(supportsEngineModels && engineModel !== null ? { model: engineModel } : {}) }
       : undefined
     try {
-      const result = await window.ndDsh.harness.run(retryPrompt, options)
+      const catalog = /^\s*\//.test(retryPrompt) ? await window.ndDsh.skills.catalog(activeProjectId ?? null) : undefined
+      const result = await window.ndDsh.harness.run(retryPrompt, { ...options, ...(catalog ? { skillScope: catalog.scope } : {}) })
       setActiveSessionId(result.sessionId)
       void refreshElementChips()
       // User messages arrive through session events, including on retry.
@@ -1022,12 +1061,23 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
               <button className="grid size-[22px] place-items-center rounded-[5px] text-faint transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[13px]" title="Refresh sessions" onClick={() => void refreshSessions()}>
                 <SearchIcon />
               </button>
+              {archiveableIds.length > 0 ? (
+                <button
+                  className="grid size-[22px] place-items-center rounded-[5px] text-faint transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[13px]"
+                  title="Archive all visible chats"
+                  aria-label="Archive all visible chats"
+                  onClick={() => setArchiveAllIds([...archiveableIds])}
+                >
+                  <ArchiveIcon />
+                </button>
+              ) : null}
               <button
                 className={cn(
                   'grid size-[22px] place-items-center rounded-[5px] transition-colors [&_svg]:size-[13px]',
                   showArchived ? 'bg-accent text-primary' : 'text-faint hover:bg-accent hover:text-foreground',
                 )}
                 title={showArchived ? 'Showing archived chats' : 'Show archived chats'}
+                aria-label={showArchived ? 'Showing archived chats' : 'Show archived chats'}
                 onClick={() => setShowArchived((value) => !value)}
               >
                 <ArchiveIcon />
@@ -1126,6 +1176,25 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
           </button>
         </footer>
       </aside>
+
+      <Dialog open={archiveAllIds !== null} onOpenChange={(open) => { if (!open && !archivingAll) setArchiveAllIds(null) }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Archive {archiveAllIds?.length ?? 0} chat threads?</DialogTitle>
+            <DialogDescription>
+              These threads will leave the active list and remain available under archived chats. Running sessions will not be stopped.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="outline" disabled={archivingAll}>Cancel</Button>
+            </DialogClose>
+            <Button variant="destructive" disabled={archivingAll || !archiveAllIds?.length} onClick={() => void confirmArchiveAll()}>
+              {archivingAll ? 'Archiving…' : 'Archive chats'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <aside className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface-0">
         <header className="flex h-[38px] shrink-0 items-center justify-between border-b border-border-soft bg-sidebar px-2.5">
@@ -1257,6 +1326,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
                       ? { onConfigureModel: () => setZcodeConfigOpen(true) }
                       : {})}
                     {...(onOpenFile ? { onOpenFile } : {})}
+                    {...(onOpenLink ? { onOpenLink } : {})}
                   />
                 )}
               </Fragment>
@@ -1306,6 +1376,8 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
           onError={onError}
         />
 
+        {activeProjectId ? <ProjectServerControl key={activeProjectId} projectId={activeProjectId} /> : null}
+
         <div className="mx-3 my-1.5 flex flex-col rounded-xl border border-border bg-surface-1 px-2.5 py-2 shadow-[0_4px_16px_rgba(0,0,0,0.18)]" ref={menuRef}>
           {elementChips.length > 0 ? (
             <div className="mb-[7px] flex flex-wrap gap-[5px]" aria-label="Staged UI elements">
@@ -1335,9 +1407,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
                 {mentionItems.length === 0 ? (
                   <div className="px-2.5 py-2 text-xs text-faint">
                     {mentionTrigger.kind === 'skill'
-                      ? (activeSessionId
-                        ? (skillsState === 'loading' ? 'Loading skills…' : skillsState === 'unavailable' ? 'Skills unavailable' : 'No matching skills')
-                        : 'Send a message first to load skills')
+                      ? (skillsState === 'loading' || skillsState === 'idle' ? 'Loading ND skills…' : skillsState === 'unavailable' ? 'ND skill catalog unavailable. Click Skills to retry.' : 'No matching ND skills in this project.')
                       : 'No matching files'}
                   </div>
                 ) : (
@@ -1408,6 +1478,9 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
                 )}
               </div>
             ) : null}
+            {composerSkill && selectedSkillScope.current?.owner === skillsScope && prompt.trimStart().startsWith(`/${composerSkill.name} `) ? (
+              <div className="mb-1 text-xs"><SkillMessage text={`/${composerSkill.name}`} skill={composerSkill} /></div>
+            ) : null}
             <textarea
               ref={textareaRef}
               value={prompt}
@@ -1455,6 +1528,15 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
 
           <div className="mt-[5px] flex flex-nowrap items-center justify-between gap-1 border-t border-border pt-[5px]">
             <div className="flex min-w-0 items-center gap-1">
+              <button type="button" className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-[3px] text-[10px] text-soft hover:bg-accent [&_svg]:size-3"
+                title="Browse this session's available skills. Skills use a leading /name; select one, then describe the task. Browser work uses live-browser when present in the catalog."
+                onClick={() => {
+                  const next = openSkillPicker(prompt)
+                  setPrompt(next.value); setMentionCaret(next.caret); setMentionDismissed(null)
+                  setSkillsRetry((value) => value + 1)
+                  setPermissionMenuOpen(false); setModelMenuOpen(false); setEngineModelMenuOpen(false); setContextMenuOpen(false)
+                  requestAnimationFrame(() => { textareaRef.current?.focus(); textareaRef.current?.setSelectionRange(next.caret, next.caret) })
+                }}><SparkIcon /> Skills</button>
               {onHarnessThread ? (
                 <div className="relative">
                   <button
@@ -1725,7 +1807,9 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
                 <button
                   className="grid size-[25px] shrink-0 place-items-center rounded-[7px] bg-primary text-primary-foreground transition-[filter] enabled:hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-35 [&_svg]:size-3.5"
                   onClick={() => void stop()}
-                  title="Cancel the running turn"
+                  disabled={!activeSessionId}
+                  aria-label="Cancel response"
+                  title="Cancel this session's response only. Project servers and other sessions keep running."
                 >
                   <StopIcon />
                 </button>
@@ -1919,6 +2003,7 @@ interface ThreadEntryViewProps {
   retryPrompt?: string
   onAnswerApproval?(entry: Extract<ThreadEntry, { kind: 'approval' }>, outcome: 'allowed-once' | 'rejected'): void
   onOpenFile?(relativePath: string): void
+  onOpenLink?(url: string): void
   onRetry?(prompt: string): void
   onSwitchModel?(): void
   onSwitchAccount?(): void
@@ -1926,7 +2011,7 @@ interface ThreadEntryViewProps {
   onConfigureModel?(): void
 }
 
-function ThreadEntryView({ entry, isLastAssistant, retryPrompt, onAnswerApproval, onOpenFile, onRetry, onSwitchModel, onSwitchAccount, onConfigureModel }: ThreadEntryViewProps) {
+function ThreadEntryView({ entry, isLastAssistant, retryPrompt, onAnswerApproval, onOpenFile, onOpenLink, onRetry, onSwitchModel, onSwitchAccount, onConfigureModel }: ThreadEntryViewProps) {
   switch (entry.kind) {
     case 'user':
       return (
@@ -1934,7 +2019,7 @@ function ThreadEntryView({ entry, isLastAssistant, retryPrompt, onAnswerApproval
           <div className="flex max-w-[85%] items-end gap-1.5">
             <CopyMessageButton text={entry.text} />
             <article className="rounded-2xl rounded-br-sm bg-info/[0.13] px-3.5 py-2.5">
-              <div className="whitespace-pre-wrap [overflow-wrap:anywhere] text-[12.5px]/[1.65] text-foreground">{entry.text}</div>
+              <div className="whitespace-pre-wrap [overflow-wrap:anywhere] text-[12.5px]/[1.65] text-foreground"><SkillMessage text={entry.text} skill={entry.skillMention} /></div>
             </article>
           </div>
         </div>
@@ -1950,7 +2035,7 @@ function ThreadEntryView({ entry, isLastAssistant, retryPrompt, onAnswerApproval
             {segments.map((segment, index) => {
               if (segment.kind === 'review') return <ReviewVerdictCard key={index} review={segment.review} />
               if (segment.kind === 'plan') return <PlanSubmittedCard key={index} plan={segment.plan} />
-              return <MarkdownLite key={index} text={segment.text} {...(onOpenFile ? { onOpenFile } : {})} />
+              return <MarkdownLite key={index} text={segment.text} {...(onOpenFile ? { onOpenFile } : {})} {...(onOpenLink ? { onOpenLink } : {})} />
             })}
             {entry.streaming ? <span className="ml-0.5 inline-block h-[13px] w-1.5 animate-caret-blink bg-primary align-bottom" /> : null}
             {!entry.streaming ? (
@@ -2570,4 +2655,50 @@ function PingDot({ state, title }: { state: ProviderPingResult['state']; title?:
       title={title}
     />
   )
+}
+
+/** Plain textarea keeps canonical invocation; sent messages use trusted ND metadata. */
+function SkillMessage({ text, skill }: { text: string; skill: SkillSuggestion | undefined }) {
+  const [open, setOpen] = useState(false)
+  const [detail, setDetail] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    if (!open || !skill?.selectionId) return
+    let cancelled = false
+    setDetail(null)
+    setError(null)
+    void window.ndDsh.skills.detail(skill.selectionId).then((result) => {
+      if (!cancelled) setDetail(result.markdown)
+    }).catch((cause) => {
+      if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause))
+    })
+    return () => { cancelled = true }
+  }, [open, skill?.selectionId])
+  const invocation = skill ? `/${skill.name}` : ''
+  const start = text.length - text.trimStart().length
+  if (!skill?.selectionId || text.slice(start, start + invocation.length) !== invocation
+    || (text[start + invocation.length] !== undefined && !/\s/.test(text[start + invocation.length]!))) return <>{text}</>
+  const info = `${skill.displayName ?? skill.name} — ${skill.description} — ${skill.source ?? 'ND skill'} — ${invocation}`
+  return <>
+    {text.slice(0, start)}
+    <span className="group/skill relative inline-block">
+      <button type="button" className="rounded bg-info/10 px-1 font-medium text-info hover:bg-info/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-info" title={info} aria-label={`Read skill: ${info}`} onClick={() => setOpen(true)}>
+        /{skill.displayName ?? skill.name}
+      </button>
+      <span role="tooltip" className="pointer-events-none absolute bottom-full right-0 z-50 hidden w-64 whitespace-normal rounded-md border border-border bg-background p-2 text-xs text-foreground shadow-lg group-hover/skill:block group-focus-within/skill:block">{info}</span>
+    </span>
+    {text.slice(start + invocation.length)}
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{skill.displayName ?? skill.name}</DialogTitle>
+          <DialogDescription>{skill.description} · {skill.source ?? 'ND skill'} · {invocation}</DialogDescription>
+        </DialogHeader>
+        <div className="max-h-[65vh] overflow-auto whitespace-normal" aria-live="polite">
+          {error ? <p role="alert">{error}</p> : detail === null ? <p>Loading skill…</p> : <MarkdownLite text={detail} />}
+        </div>
+        <DialogFooter><DialogClose asChild><button type="button" className="rounded-md border border-border px-3 py-1.5">Close</button></DialogClose></DialogFooter>
+      </DialogContent>
+    </Dialog>
+  </>
 }

@@ -33,7 +33,7 @@ function foldEventInto(entries: ThreadEntry[], envelope: HistoryEventEnvelope): 
       if (!text) return
       const last = entries.at(-1)
       if (last?.kind === 'user' && last.text === text) return
-      entries.push({ kind: 'user', id: crypto.randomUUID(), text })
+      entries.push({ kind: 'user', id: crypto.randomUUID(), text, ...(data.skillMention ? { skillMention: data.skillMention as import('./skill-catalog.js').SkillSuggestion } : {}) })
       return
     }
     case 'assistant/chunk': {
@@ -105,7 +105,7 @@ function foldEventInto(entries: ThreadEntry[], envelope: HistoryEventEnvelope): 
   }
 }
 
-function messageText(message: unknown): string | undefined {
+export function messageText(message: unknown): string | undefined {
   if (typeof message === 'string') return message
   if (!message || typeof message !== 'object') return undefined
   const record = message as Record<string, unknown>
