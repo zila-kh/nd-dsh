@@ -163,6 +163,134 @@ export class GitService {
     return await this.refresh()
   }
 
+  /**
+   * Select the session-owned branch without ever carrying uncommitted work
+   * across branches. ChatGPT Web must start from one exact committed Git state.
+   */
+  async ensureBranch(name: string): Promise<GitStatusSnapshot> {
+    this.assertBranchName(name)
+    const repoRoot = await this.requireRepoRoot()
+    if (await this.currentBranch(repoRoot) === name) return await this.refresh()
+    await this.runExclusive(async () => {
+      const status = await this.cli.status(repoRoot)
+      if (status.stdout.length > 0) {
+        throw new GitError({
+          message: `Refusing to switch to ${name} while the worktree has uncommitted changes. Commit or stash them first.`,
+          gitErrorCode: GitErrorCodes.DirtyWorkTree,
+        })
+      }
+      const existing = (await this.cli.exec(repoRoot, ['branch', '--list', name])).stdout.trim().length > 0
+      await this.cli.exec(repoRoot, existing ? ['checkout', name] : ['checkout', '-b', name])
+    })
+    return await this.refresh()
+  }
+
+  async head(): Promise<string | null> {
+    const repoRoot = await this.requireRepoRoot()
+    try {
+      const value = (await this.cli.exec(repoRoot, ['rev-parse', 'HEAD'])).stdout.trim()
+      return value || null
+    } catch (error) {
+      if (error instanceof GitError && /unknown revision|bad revision|ambiguous argument|does not have any commits yet/i.test(error.stderr ?? '')) return null
+      throw error
+    }
+  }
+
+  /** Renderer/prompt-safe remote metadata; actual Git commands continue using the remote name. */
+  async remoteUrl(remote: string): Promise<string | null> {
+    this.assertRemoteName(remote)
+    const repoRoot = await this.requireRepoRoot()
+    try {
+      const raw = (await this.cli.exec(repoRoot, ['remote', 'get-url', remote])).stdout.trim()
+      return raw ? this.sanitizeRemoteUrl(raw) : null
+    } catch (error) {
+      if (error instanceof GitError) return null
+      throw error
+    }
+  }
+
+  async hasUncommittedChanges(): Promise<boolean> {
+    const repoRoot = await this.requireRepoRoot()
+    return (await this.cli.status(repoRoot)).stdout.length > 0
+  }
+
+  /**
+   * Publish a session branch only from a clean worktree. If the remote branch
+   * already moved (for example ChatGPT pushed while ND was closed), fetch it
+   * first and require a fast-forward merge. Divergence therefore fails before
+   * any push instead of surfacing as a destructive recovery problem later.
+   */
+  async pushBranch(remote: string, branch: string): Promise<GitStatusSnapshot> {
+    this.assertRemoteName(remote)
+    this.assertBranchName(branch)
+    const repoRoot = await this.requireRepoRoot()
+    await this.runExclusive(async () => {
+      const current = await this.currentBranch(repoRoot)
+      if (current !== branch) {
+        throw new GitError({ message: `Refusing to push ${branch}: the active branch is ${current ?? 'detached HEAD'}.` })
+      }
+      const status = await this.cli.status(repoRoot)
+      if (status.stdout.length > 0) {
+        throw new GitError({
+          message: `Refusing to sync ${branch} while the worktree has uncommitted changes. Commit or stash them first.`,
+          gitErrorCode: GitErrorCodes.DirtyWorkTree,
+        })
+      }
+      let localHead = (await this.cli.exec(repoRoot, ['rev-parse', 'HEAD'])).stdout.trim()
+      if (!localHead) throw new GitError({ message: `Cannot push ${branch}: the repository has no committed HEAD.` })
+
+      const remoteHeadBefore = this.parseRemoteHead((await this.cli.exec(repoRoot, ['ls-remote', '--heads', remote, `refs/heads/${branch}`])).stdout)
+      if (remoteHeadBefore && remoteHeadBefore !== localHead) {
+        await this.cli.exec(repoRoot, ['fetch', remote, branch])
+        try {
+          await this.cli.exec(repoRoot, ['merge', '--ff-only', 'FETCH_HEAD'])
+        } catch (error) {
+          throw this.divergedBranchError(remote, branch, error)
+        }
+        localHead = (await this.cli.exec(repoRoot, ['rev-parse', 'HEAD'])).stdout.trim()
+      }
+
+      await this.cli.exec(repoRoot, ['push', '--set-upstream', remote, branch])
+      const confirmedRemoteHead = this.parseRemoteHead((await this.cli.exec(repoRoot, ['ls-remote', '--heads', remote, `refs/heads/${branch}`])).stdout)
+      if (!confirmedRemoteHead || confirmedRemoteHead !== localHead) {
+        throw new GitError({ message: `Git reported a successful push, but ${remote}/${branch} does not match local HEAD.` })
+      }
+    })
+    return await this.refresh()
+  }
+
+  async remoteBranchHead(remote: string, branch: string): Promise<string | null> {
+    this.assertRemoteName(remote)
+    this.assertBranchName(branch)
+    const repoRoot = await this.requireRepoRoot()
+    const result = await this.cli.exec(repoRoot, ['ls-remote', '--heads', remote, `refs/heads/${branch}`])
+    return this.parseRemoteHead(result.stdout)
+  }
+
+  async fastForwardBranch(remote: string, branch: string): Promise<GitStatusSnapshot> {
+    this.assertRemoteName(remote)
+    this.assertBranchName(branch)
+    const repoRoot = await this.requireRepoRoot()
+    await this.runExclusive(async () => {
+      const current = await this.currentBranch(repoRoot)
+      if (current !== branch) throw new GitError({ message: `Refusing to sync ${branch}: the active branch is ${current ?? 'detached HEAD'}.` })
+      const status = await this.cli.status(repoRoot)
+      if (status.stdout.length > 0) {
+        throw new GitError({
+          message: `Refusing to fast-forward ${branch} while the worktree has uncommitted changes.`,
+          gitErrorCode: GitErrorCodes.DirtyWorkTree,
+        })
+      }
+      await this.cli.exec(repoRoot, ['fetch', remote, branch])
+      try {
+        await this.cli.exec(repoRoot, ['merge', '--ff-only', 'FETCH_HEAD'])
+      } catch (error) {
+        throw this.divergedBranchError(remote, branch, error)
+      }
+    })
+    return await this.refresh()
+  }
+
   async push(): Promise<GitStatusSnapshot> {
     const repoRoot = await this.requireRepoRoot()
     await this.runExclusive(() => this.cli.exec(repoRoot, ['push']))
@@ -336,6 +464,38 @@ export class GitService {
     if (!/^[\w.\-/]{1,256}$/.test(name) || name.startsWith('-') || name.endsWith('.lock') || name.includes('..')) {
       throw new GitError({ message: `'${name}' is not a valid branch name.`, gitErrorCode: GitErrorCodes.InvalidBranchName })
     }
+  }
+
+  private assertRemoteName(name: string): void {
+    if (!/^[\w.-]{1,128}$/.test(name) || name.startsWith('-')) {
+      throw new GitError({ message: `'${name}' is not a valid Git remote name.` })
+    }
+  }
+
+  private parseRemoteHead(output: string): string | null {
+    const sha = output.trim().split(/\s+/)[0]
+    return sha && /^[0-9a-f]{40,64}$/i.test(sha) ? sha : null
+  }
+
+  private sanitizeRemoteUrl(raw: string): string {
+    try {
+      const parsed = new URL(raw)
+      parsed.username = ''
+      parsed.password = ''
+      parsed.search = ''
+      parsed.hash = ''
+      return parsed.toString()
+    } catch {
+      // SCP-style SSH remotes such as git@github.com:owner/repo.git are not URLs.
+      return raw
+    }
+  }
+
+  private divergedBranchError(remote: string, branch: string, error: unknown): GitError {
+    return new GitError({
+      message: `Refusing to sync ${branch}: local history and ${remote}/${branch} cannot be fast-forwarded safely. Resolve the divergence locally before continuing ChatGPT Web sync.`,
+      ...(error instanceof GitError && error.stderr ? { stderr: error.stderr } : {}),
+    })
   }
 }
 
