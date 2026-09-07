@@ -64,6 +64,7 @@ export class CodexAppServerWire {
   /** Login completion can race the promise continuation for login/start. */
   private readonly completedLogins = new Map<string, LoginCompletion>()
   private unclaimedLoginCompletion: LoginCompletion | undefined
+  private loginStartInFlight = false
   private buffer = ''
   private closed = false
   private readonly nativeModels = new Map<string, string>()
@@ -161,6 +162,7 @@ export class CodexAppServerWire {
     this.pendingLogins.clear()
     this.completedLogins.clear()
     this.unclaimedLoginCompletion = undefined
+    this.loginStartInFlight = false
     this.nativeModels.clear()
   }
 
@@ -174,12 +176,18 @@ export class CodexAppServerWire {
     if (initial.account !== null && initial.account !== undefined) return
     if (initial.requiresOpenaiAuth !== true) return
 
-    const login = asRecord(await this.request('account/login/start', {
-      type: 'chatgpt',
-      appBrand: 'chatgpt',
-      codexStreamlinedLogin: true,
-      useHostedLoginSuccessPage: true,
-    }), 'account/login/start response')
+    this.loginStartInFlight = true
+    let login: JsonObject
+    try {
+      login = asRecord(await this.request('account/login/start', {
+        type: 'chatgpt',
+        appBrand: 'chatgpt',
+        codexStreamlinedLogin: true,
+        useHostedLoginSuccessPage: true,
+      }), 'account/login/start response')
+    } finally {
+      this.loginStartInFlight = false
+    }
     if (login.type !== 'chatgpt') throw new Error('Codex app-server did not start a ChatGPT OAuth login')
     const loginId = asText(login.loginId, 'ChatGPT login id')
     const authUrl = asText(login.authUrl, 'ChatGPT authorization URL')
@@ -240,12 +248,12 @@ export class CodexAppServerWire {
     const explicitId = typeof params.loginId === 'string' && params.loginId ? params.loginId : undefined
     const loginId = explicitId ?? (this.pendingLogins.size === 1 ? this.pendingLogins.keys().next().value as string | undefined : undefined)
     if (!loginId) {
-      this.unclaimedLoginCompletion = result
+      if (this.loginStartInFlight) this.unclaimedLoginCompletion = result
       return
     }
     const pending = this.pendingLogins.get(loginId)
     if (!pending) {
-      this.completedLogins.set(loginId, result)
+      if (this.loginStartInFlight) this.completedLogins.set(loginId, result)
       return
     }
     this.pendingLogins.delete(loginId)
