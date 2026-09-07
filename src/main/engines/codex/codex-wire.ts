@@ -3,14 +3,16 @@ import type { EngineModelOption } from '../../../shared/contracts.js'
 
 /**
  * ND-owned JSON-RPC line client for the official Codex app-server stdio
- * protocol (pinned vendored payload, currently 0.147.0). The wire owns only
- * framing, request correlation, and the fixed handshake; thread/turn state
- * and product policy live in {@link CodexCliEngine}.
+ * protocol (pinned vendored payload, currently 0.147.0). The wire owns
+ * framing, request correlation, the fixed handshake, and the app-server-owned
+ * ChatGPT OAuth bootstrap. Thread/turn state and product policy live in
+ * {@link CodexCliEngine}.
  */
 
 export type JsonObject = Record<string, unknown>
 
 const REQUEST_TIMEOUT_MS = 120_000
+const LOGIN_TIMEOUT_MS = 5 * 60_000
 
 export interface CodexWireHandlers {
   /** Product notifications such as `turn/started`, `item/*`, `turn/completed`. */
@@ -19,10 +21,23 @@ export interface CodexWireHandlers {
   onServerRequest(method: string, params: JsonObject): Promise<unknown>
   /** Fatal protocol failure. The wire rejects outstanding requests afterwards. */
   onProtocolError(error: Error): void
+  /** Test/embedding seam. Production defaults to Electron's system-browser opener. */
+  onAuthUrl?: (url: string) => Promise<void>
 }
 
 interface PendingRequest {
   resolve: (value: unknown) => void
+  reject: (error: Error) => void
+  timer: NodeJS.Timeout
+}
+
+interface LoginCompletion {
+  success: boolean
+  error?: string
+}
+
+interface PendingLogin {
+  resolve: (value: LoginCompletion) => void
   reject: (error: Error) => void
   timer: NodeJS.Timeout
 }
@@ -45,6 +60,7 @@ export function asText(value: unknown, label: string): string {
 export class CodexAppServerWire {
   private nextRequestId = 1
   private readonly pending = new Map<number, PendingRequest>()
+  private readonly pendingLogins = new Map<string, PendingLogin>()
   private buffer = ''
   private closed = false
   private readonly nativeModels = new Map<string, string>()
@@ -69,6 +85,7 @@ export class CodexAppServerWire {
       asRecord(result, 'initialize response')
       this.send({ method: 'initialized' })
     }, (error: Error) => { this.fail(error); throw error })
+    await this.ensureChatGptAuthenticated()
   }
 
   /** Create a thread and return its id. */
@@ -134,7 +151,105 @@ export class CodexAppServerWire {
       pending.reject(new Error('Codex app-server connection closed'))
     }
     this.pending.clear()
+    for (const pending of this.pendingLogins.values()) {
+      clearTimeout(pending.timer)
+      pending.reject(new Error('Codex app-server connection closed during ChatGPT sign-in'))
+    }
+    this.pendingLogins.clear()
     this.nativeModels.clear()
+  }
+
+  /**
+   * Let the official app-server own credential storage and refresh. ND only
+   * checks whether an account exists, starts the managed ChatGPT login when it
+   * does not, opens the returned URL, then waits for app-server completion.
+   */
+  private async ensureChatGptAuthenticated(): Promise<void> {
+    const initial = await this.readAccount(true)
+    if (initial.account !== null && initial.account !== undefined) return
+    if (initial.requiresOpenaiAuth !== true) return
+
+    const login = asRecord(await this.request('account/login/start', {
+      type: 'chatgpt',
+      appBrand: 'chatgpt',
+      codexStreamlinedLogin: true,
+      useHostedLoginSuccessPage: true,
+    }), 'account/login/start response')
+    if (login.type !== 'chatgpt') throw new Error('Codex app-server did not start a ChatGPT OAuth login')
+    const loginId = asText(login.loginId, 'ChatGPT login id')
+    const authUrl = asText(login.authUrl, 'ChatGPT authorization URL')
+    const completion = this.waitForLogin(loginId)
+
+    try {
+      await this.openAuthUrl(authUrl)
+    } catch (error: unknown) {
+      this.abandonLogin(loginId)
+      throw error
+    }
+
+    const result = await completion
+    if (!result.success) throw new Error(result.error ?? 'ChatGPT sign-in was not completed')
+
+    const authenticated = await this.readAccount(true)
+    if (authenticated.account === null || authenticated.account === undefined) {
+      throw new Error('ChatGPT sign-in completed but Codex returned no authenticated account')
+    }
+  }
+
+  private async readAccount(refreshToken: boolean): Promise<JsonObject> {
+    const response = asRecord(await this.request('account/read', { refreshToken }), 'account/read response')
+    if (typeof response.requiresOpenaiAuth !== 'boolean') {
+      throw new Error('Codex app-server returned an invalid account/read response')
+    }
+    return response
+  }
+
+  private waitForLogin(loginId: string): Promise<LoginCompletion> {
+    if (this.pendingLogins.has(loginId)) throw new Error(`Codex ChatGPT login is already pending: ${loginId}`)
+    return new Promise<LoginCompletion>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingLogins.delete(loginId)
+        reject(new Error('ChatGPT sign-in timed out'))
+      }, LOGIN_TIMEOUT_MS)
+      this.pendingLogins.set(loginId, { resolve, reject, timer })
+    })
+  }
+
+  private resolveLogin(params: JsonObject): void {
+    const explicitId = typeof params.loginId === 'string' && params.loginId ? params.loginId : undefined
+    const loginId = explicitId ?? (this.pendingLogins.size === 1 ? this.pendingLogins.keys().next().value as string | undefined : undefined)
+    if (!loginId) return
+    const pending = this.pendingLogins.get(loginId)
+    if (!pending) return
+    this.pendingLogins.delete(loginId)
+    clearTimeout(pending.timer)
+    pending.resolve({
+      success: params.success === true,
+      ...(typeof params.error === 'string' && params.error ? { error: params.error } : {}),
+    })
+  }
+
+  private abandonLogin(loginId: string): void {
+    const pending = this.pendingLogins.get(loginId)
+    if (!pending) return
+    clearTimeout(pending.timer)
+    this.pendingLogins.delete(loginId)
+  }
+
+  private async openAuthUrl(value: string): Promise<void> {
+    let authUrl: URL
+    try {
+      authUrl = new URL(value)
+    } catch {
+      throw new Error('Codex app-server returned an invalid ChatGPT authorization URL')
+    }
+    if (authUrl.protocol !== 'https:') throw new Error('Codex ChatGPT authorization URL must use HTTPS')
+    if (this.handlers.onAuthUrl) {
+      await this.handlers.onAuthUrl(authUrl.toString())
+      return
+    }
+    const { shell } = await import('electron')
+    await shell.openExternal(authUrl.toString())
   }
 
   private consume(chunk: string): void {
@@ -200,6 +315,7 @@ export class CodexAppServerWire {
     }
     if (typeof message.method === 'string') {
       const params = isObject(message.params) ? message.params : {}
+      if (message.method === 'account/login/completed') this.resolveLogin(params)
       this.handlers.onNotification(message.method, params)
     }
   }
