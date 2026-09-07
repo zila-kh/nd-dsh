@@ -67,6 +67,8 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
   const [completionResult, setCompletionResult] = useState<ProviderPingResult | null>(null)
   // Per-model ping state: modelId → 'testing' | ProviderPingResult
   const [modelPings, setModelPings] = useState<Record<string, 'testing' | ProviderPingResult>>({})
+  const [newHeaderKey, setNewHeaderKey] = useState('')
+  const [newHeaderValue, setNewHeaderValue] = useState('')
 
   // Clear per-model pings when the selected provider changes.
   useEffect(() => {
@@ -99,6 +101,8 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
     setApiKeyDraft('')
     setShowApiKey(false)
     setPingResult(null)
+    setNewHeaderKey('')
+    setNewHeaderValue('')
   }, [selectedId])
 
   const selected = providers.find((provider) => provider.id === selectedId) ?? providers[0] ?? null
@@ -221,6 +225,32 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
       })
     }
     setEditingContextModelId(null)
+  }
+
+  const addHeader = (): void => {
+    const key = newHeaderKey.trim()
+    const value = newHeaderValue.trim()
+    if (!key) return onError('Header name is required')
+    if (!selected) return
+    const current = selected.headers ?? {}
+    if (Object.keys(current).some((k) => k.toLowerCase() === key.toLowerCase())) {
+      return onError(`Header "${key}" is already set`)
+    }
+    updateSelected({ headers: { ...current, [key]: value } })
+    setNewHeaderKey('')
+    setNewHeaderValue('')
+  }
+
+  const removeHeader = (keyToRemove: string): void => {
+    if (!selected || !selected.headers) return
+    const next = { ...selected.headers }
+    delete next[keyToRemove]
+    updateSelected({ headers: Object.keys(next).length > 0 ? next : undefined })
+  }
+
+  const updateHeaderValue = (key: string, value: string): void => {
+    if (!selected || !selected.headers) return
+    updateSelected({ headers: { ...selected.headers, [key]: value } })
   }
 
   const refresh = async (): Promise<void> => {
@@ -422,6 +452,157 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
                   {selected.hasApiKey ? <button type="button" className={scopeButton} disabled={savingCredential} onClick={() => void clearCredential()}>Clear key</button> : null}
                 </div>
                 <span className="max-w-[300px] truncate text-[10px]/[1.45] text-(--models-muted)">Stored credentials are write-only from this screen. React receives only whether a credential exists; the key value remains in the trusted main process and OS-backed secure storage.</span>
+              </div>
+              <div className="flex flex-col gap-[5px]">
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-medium text-(--models-muted)">Custom HTTP headers</label>
+                  {!selected.headers?.['x-opencode-session'] ? (
+                    <button
+                      type="button"
+                      className="text-[10px] text-(--models-muted) transition-colors hover:text-(--models-text)"
+                      onClick={() => {
+                        setNewHeaderKey('x-opencode-session')
+                        setNewHeaderValue('chatId')
+                      }}
+                    >
+                      + Add x-opencode-session
+                    </button>
+                  ) : null}
+                </div>
+                {selected.headers && Object.keys(selected.headers).length > 0 ? (
+                  <div className="flex flex-col gap-1.5">
+                    {Object.entries(selected.headers).map(([key, value]) => (
+                      <div key={key} className="flex items-center gap-2">
+                        <span className="h-8 w-44 shrink-0 truncate rounded-[7px] border border-(--models-border) bg-(--models-field) px-2.5 py-1.5 font-mono text-[11px] text-(--models-text)">
+                          {key}
+                        </span>
+                        <input
+                          value={value}
+                          placeholder="Header value"
+                          spellCheck={false}
+                          onChange={(e) => updateHeaderValue(key, e.target.value)}
+                          className="h-8 min-w-0 flex-1 rounded-[7px] border border-(--models-border) bg-(--models-field) px-2.5 font-mono text-[11px] text-(--models-text) outline-none"
+                        />
+                        <select
+                          aria-label={`Preset value for ${key}`}
+                          title="Choose dynamic value or generate UUID"
+                          className="h-8 shrink-0 rounded-[7px] border border-(--models-border) bg-(--models-field) px-2 font-mono text-[11px] text-(--models-muted) outline-none transition-colors hover:text-(--models-text) cursor-pointer"
+                          value=""
+                          onChange={(e) => {
+                            const val = e.target.value
+                            if (!val) return
+                            if (val === '__uuid__') {
+                              updateHeaderValue(key, crypto.randomUUID())
+                            } else {
+                              updateHeaderValue(key, val)
+                            }
+                          }}
+                        >
+                          <option value="" disabled hidden>Preset ▾</option>
+                          <option value="chatId">chatId (dynamic)</option>
+                          <option value="sessionId">sessionId (dynamic)</option>
+                          <option value="uuid">uuid (dynamic)</option>
+                          <option value="__uuid__">Generate UUID</option>
+                        </select>
+                        <button
+                          type="button"
+                          className={cn(miniIconButton, 'hover:text-destructive')}
+                          title={`Remove ${key}`}
+                          aria-label={`Remove ${key}`}
+                          onClick={() => removeHeader(key)}
+                        >
+                          <TrashIcon />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                <div className="flex items-center gap-1.5 text-[10px] text-(--models-muted)">
+                  <span>Dynamic value presets:</span>
+                  <button
+                    type="button"
+                    className="rounded border border-(--models-border) bg-(--models-field) px-1.5 py-0.5 font-mono text-[10px] text-(--models-text) hover:border-(--models-text)/30 transition-colors"
+                    onClick={() => {
+                      if (!newHeaderKey.trim()) setNewHeaderKey('x-opencode-session')
+                      setNewHeaderValue('chatId')
+                    }}
+                  >
+                    chatId
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded border border-(--models-border) bg-(--models-field) px-1.5 py-0.5 font-mono text-[10px] text-(--models-text) hover:border-(--models-text)/30 transition-colors"
+                    onClick={() => {
+                      if (!newHeaderKey.trim()) setNewHeaderKey('x-opencode-session')
+                      setNewHeaderValue('sessionId')
+                    }}
+                  >
+                    sessionId
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded border border-(--models-border) bg-(--models-field) px-1.5 py-0.5 font-mono text-[10px] text-(--models-text) hover:border-(--models-text)/30 transition-colors"
+                    onClick={() => {
+                      if (!newHeaderKey.trim()) setNewHeaderKey('x-opencode-session')
+                      setNewHeaderValue('uuid')
+                    }}
+                  >
+                    uuid
+                  </button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    value={newHeaderKey}
+                    placeholder="Header name (e.g. x-opencode-session)"
+                    spellCheck={false}
+                    onChange={(e) => setNewHeaderKey(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') addHeader() }}
+                    className="h-8 w-44 shrink-0 rounded-[7px] border border-(--models-border) bg-(--models-field) px-2.5 font-mono text-[11px] text-(--models-text) outline-none"
+                  />
+                  <input
+                    value={newHeaderValue}
+                    placeholder="Header value (e.g. chatId, uuid)"
+                    spellCheck={false}
+                    onChange={(e) => setNewHeaderValue(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') addHeader() }}
+                    className="h-8 min-w-0 flex-1 rounded-[7px] border border-(--models-border) bg-(--models-field) px-2.5 font-mono text-[11px] text-(--models-text) outline-none"
+                  />
+                  <select
+                    aria-label="Select header value preset"
+                    title="Choose dynamic value or generate UUID"
+                    className="h-8 shrink-0 rounded-[7px] border border-(--models-border) bg-(--models-field) px-2 font-mono text-[11px] text-(--models-muted) outline-none transition-colors hover:text-(--models-text) cursor-pointer"
+                    value=""
+                    onChange={(e) => {
+                      const val = e.target.value
+                      if (!val) return
+                      if (val === '__uuid__') {
+                        setNewHeaderValue(crypto.randomUUID())
+                      } else {
+                        setNewHeaderValue(val)
+                      }
+                      if (!newHeaderKey.trim()) {
+                        setNewHeaderKey('x-opencode-session')
+                      }
+                    }}
+                  >
+                    <option value="" disabled hidden>Value preset ▾</option>
+                    <option value="chatId">chatId (dynamic)</option>
+                    <option value="sessionId">sessionId (dynamic)</option>
+                    <option value="uuid">uuid (dynamic)</option>
+                    <option value="__uuid__">Generate UUID</option>
+                  </select>
+                  <button
+                    type="button"
+                    className={scopeButton}
+                    disabled={!newHeaderKey.trim()}
+                    onClick={addHeader}
+                  >
+                    Add header
+                  </button>
+                </div>
+                <span className="text-[10px]/[1.45] text-(--models-muted)">
+                  Custom HTTP headers sent with every request. Dynamic values like <code>chatId</code>, <code>sessionId</code>, or <code>uuid</code> automatically resolve to unique conversation IDs at runtime. Required by gateways like OpenCode (Console Go: <code>x-opencode-session</code>) and custom proxies.
+                </span>
               </div>
             </form>
 

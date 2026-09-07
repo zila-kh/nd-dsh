@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto'
+import { isOpenCodeEndpoint } from './provider-runtime.js'
+
 /**
  * Real provider reachability probe. A ping is an actual HTTP GET against the
  * provider's `/models` endpoint using the stored credential, so the status
@@ -19,6 +22,7 @@ export interface ProviderPingOutcome {
 export interface ProviderPingTarget {
   baseUrl: string
   apiKey?: string
+  headers?: Record<string, string> | undefined
 }
 
 export interface ProviderPingOptions {
@@ -52,12 +56,19 @@ export async function pingProvider(
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 6_000)
   const started = now()
+  const pingHeaders: Record<string, string> = {
+    ...(target.headers ?? {}),
+    ...(target.apiKey?.trim() ? { Authorization: `Bearer ${target.apiKey.trim()}` } : {}),
+  }
+  if (!pingHeaders['x-opencode-session'] && isOpenCodeEndpoint(target.baseUrl)) {
+    pingHeaders['x-opencode-session'] = randomUUID()
+  }
   try {
     const response = await fetchImpl(url, {
       method: 'GET',
       redirect: 'error',
       signal: controller.signal,
-      headers: target.apiKey?.trim() ? { Authorization: `Bearer ${target.apiKey.trim()}` } : {},
+      headers: pingHeaders,
     })
     return {
       state: classifyPingStatus(response.status),
@@ -106,15 +117,20 @@ export async function probeProviderCompletion(
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 20_000)
   const started = now()
+  const probeHeaders: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(target.headers ?? {}),
+    ...(target.apiKey?.trim() ? { Authorization: `Bearer ${target.apiKey.trim()}` } : {}),
+  }
+  if (!probeHeaders['x-opencode-session'] && isOpenCodeEndpoint(target.baseUrl)) {
+    probeHeaders['x-opencode-session'] = randomUUID()
+  }
   try {
     const response = await fetchImpl(url, {
       method: 'POST',
       redirect: 'error',
       signal: controller.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(target.apiKey?.trim() ? { Authorization: `Bearer ${target.apiKey.trim()}` } : {}),
-      },
+      headers: probeHeaders,
       body: JSON.stringify({
         model: target.model.trim(),
         messages: [{ role: 'user', content: 'Reply with OK.' }],

@@ -616,6 +616,9 @@ export class HarnessService {
     if (frame.kind === 'session-status' && frame.sessionId === this.activeSessionId) {
       this.updateStatus(frame.running ? 'running' : 'ready')
     }
+    if ((frame.kind === 'agent-error' || frame.kind === 'stream-error') && (!frame.sessionId || frame.sessionId === this.activeSessionId)) {
+      this.updateStatus('ready')
+    }
     this.onEvent?.(sanitizeRendererFrame(frame))
   }
 

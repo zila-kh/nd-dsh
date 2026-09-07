@@ -132,4 +132,23 @@ describe('probeProviderCompletion', () => {
     const outcome = await probeProviderCompletion(target, { fetchImpl: failing, now: () => 5 })
     expect(outcome.state).toBe('unreachable')
   })
+
+  it('forwards custom headers on completion requests', async () => {
+    let capturedHeaders: HeadersInit | undefined
+    const mockFetch = (async (_url: string, init?: RequestInit) => {
+      capturedHeaders = init?.headers
+      return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'OK.' } }] }), { status: 200 })
+    }) as unknown as typeof fetch
+
+    await probeProviderCompletion({
+      ...target,
+      headers: { 'x-opencode-session': 'session-xyz', 'x-api-version': '2026-01-01' },
+    }, { fetchImpl: mockFetch })
+
+    expect(capturedHeaders).toMatchObject({
+      'x-opencode-session': 'session-xyz',
+      'x-api-version': '2026-01-01',
+      Authorization: 'Bearer sk-test',
+    })
+  })
 })

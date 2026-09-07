@@ -80,7 +80,9 @@ app.on('second-instance', () => {
   if (!mainWindow) return
   if (mainWindow.isMinimized()) mainWindow.restore()
   mainWindow.show()
+  mainWindow.setAlwaysOnTop(true)
   mainWindow.focus()
+  mainWindow.setAlwaysOnTop(false)
 })
 
 async function createWindow(cdpPort: number): Promise<void> {
@@ -375,7 +377,10 @@ async function createWindow(cdpPort: number): Promise<void> {
     }
   })
 
-  window.once('ready-to-show', () => window.show())
+  window.once('ready-to-show', () => {
+    window.show()
+    window.focus()
+  })
   if (rendererUrl) await window.loadURL(rendererUrl)
   else await window.loadFile(rendererFile)
 
@@ -383,7 +388,10 @@ async function createWindow(cdpPort: number): Promise<void> {
     console.warn('Initial browser navigation failed:', error)
   })
   if (theme.surface() === 'dsh') harness.warmup()
-  if (!window.isVisible()) window.show()
+  if (!window.isVisible()) {
+    window.show()
+    window.focus()
+  }
 
   let closeAfterFreeformSave = false
   let savingFreeformForClose = false

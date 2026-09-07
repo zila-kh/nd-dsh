@@ -3,7 +3,7 @@ import { app, safeStorage } from 'electron'
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { ModelProvider, ProviderModel, ProviderPingResult } from '../shared/contracts.js'
-import { buildProviderRuntime, DIRECT_DEEPSEEK_ROUTE, type ProviderRuntimeConfig } from './provider-runtime.js'
+import { buildProviderRuntime, DIRECT_DEEPSEEK_ROUTE, isDynamicSessionHeader, isOpenCodeEndpoint, type ProviderRuntimeConfig } from './provider-runtime.js'
 import { pingProvider, probeProviderCompletion } from './provider-ping.js'
 import { sanitizeProviderModel } from '../shared/provider-models.js'
 
@@ -41,6 +41,18 @@ function defaultProvider(): ModelProvider {
   }
 }
 
+function sanitizeHeaders(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const result: Record<string, string> = {}
+  for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+    const trimmedKey = key.trim()
+    if (trimmedKey && typeof val === 'string') {
+      result[trimmedKey] = val.trim()
+    }
+  }
+  return Object.keys(result).length > 0 ? result : undefined
+}
+
 function sanitizeProvider(value: unknown, includeLegacySecret = false): ModelProvider | undefined {
   if (!value || typeof value !== 'object') return undefined
   const record = value as Record<string, unknown>
@@ -52,6 +64,10 @@ function sanitizeProvider(value: unknown, includeLegacySecret = false): ModelPro
         .map((model) => sanitizeProviderModel(model, DEFAULT_CONTEXT))
         .filter((model): model is ProviderModel => model !== undefined)
     : []
+  const headers = sanitizeHeaders(record.headers)
+  const maxRetries = typeof record.maxRetries === 'number' && Number.isFinite(record.maxRetries)
+    ? Math.max(0, Math.min(Math.round(record.maxRetries), 5))
+    : undefined
   return {
     id,
     name,
@@ -60,7 +76,26 @@ function sanitizeProvider(value: unknown, includeLegacySecret = false): ModelPro
     apiFormat: typeof record.apiFormat === 'string' ? record.apiFormat : DEFAULT_API_FORMAT,
     apiKey: includeLegacySecret && typeof record.apiKey === 'string' ? record.apiKey : '',
     models,
+    ...(headers ? { headers } : {}),
+    ...(maxRetries !== undefined ? { maxRetries } : {}),
   }
+}
+
+function resolveProbeHeaders(headers: Record<string, string> | undefined, baseUrl: string | undefined): Record<string, string> {
+  const result: Record<string, string> = {}
+  if (headers) {
+    for (const [key, val] of Object.entries(headers)) {
+      if (isDynamicSessionHeader(val)) {
+        result[key] = randomUUID()
+      } else if (val.trim()) {
+        result[key] = val.trim()
+      }
+    }
+  }
+  if (isOpenCodeEndpoint(baseUrl) && !result['x-opencode-session']) {
+    result['x-opencode-session'] = randomUUID()
+  }
+  return result
 }
 
 function cloneProviders(providers: ModelProvider[]): ModelProvider[] {
@@ -164,7 +199,12 @@ export class ProviderStore {
     if (!provider) throw new Error('Provider not found')
     const cached = this.pingCache.get(id)
     if (!force && cached && Date.now() - cached.at < PING_CACHE_TTL_MS) return cached.result
-    const outcome = await pingProvider({ baseUrl: provider.baseUrl, apiKey: provider.apiKey })
+    const pingHeaders = resolveProbeHeaders(provider.headers, provider.baseUrl)
+    const outcome = await pingProvider({
+      baseUrl: provider.baseUrl,
+      apiKey: provider.apiKey,
+      ...(Object.keys(pingHeaders).length > 0 ? { headers: pingHeaders } : {}),
+    })
     const result: ProviderPingResult = {
       providerId: id,
       state: outcome.state,
@@ -193,7 +233,13 @@ export class ProviderStore {
     if (!provider) throw new Error('Provider not found')
     const model = provider.models.find((item) => item.id.trim())?.id.trim()
     if (!model) throw new Error(`Provider ${provider.name || id} has no configured model to test`)
-    const outcome = await probeProviderCompletion({ baseUrl: provider.baseUrl, apiKey: provider.apiKey, model })
+    const probeHeaders = resolveProbeHeaders(provider.headers, provider.baseUrl)
+    const outcome = await probeProviderCompletion({
+      baseUrl: provider.baseUrl,
+      apiKey: provider.apiKey,
+      model,
+      ...(Object.keys(probeHeaders).length > 0 ? { headers: probeHeaders } : {}),
+    })
     return {
       providerId: id,
       state: outcome.state,

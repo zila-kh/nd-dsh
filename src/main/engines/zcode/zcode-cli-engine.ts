@@ -604,9 +604,22 @@ export class ZcodeCliEngine {
       case 'interaction/requestUserInput':
         // Interactive question cards for ZCode are future work; answer empty.
         return Promise.resolve({ answers: {} })
-      case 'interaction/requestProviderRuntimeHeaders':
-        // ND never injects provider credentials into ZCode; its own login stays authoritative.
+      case 'interaction/requestProviderRuntimeHeaders': {
+        // ND never injects provider credentials into ZCode; its own login stays
+        // authoritative. However, x-opencode-session is a routing header (not a
+        // credential) required by OpenCode managed-inference endpoints. ND
+        // supplies the ND session id so requests within one conversation share a
+        // stable routing identity.
+        const nativeId = typeof params.sessionId === 'string' ? params.sessionId : ''
+        const headerSession = this.sessionsByNative.get(nativeId)
+        if (headerSession) {
+          return Promise.resolve({
+            ok: true,
+            headers: { 'x-opencode-session': headerSession.sessionId },
+          })
+        }
         return Promise.resolve({ ok: false, reason: 'official_auth_unavailable' })
+      }
       default:
         return Promise.reject(new Error(`Unsupported ZCode app-server request: ${method}`))
     }

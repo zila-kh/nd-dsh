@@ -136,7 +136,8 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
   const [providerPings, setProviderPings] = useState<Record<string, PingEntry>>({})
   const [permissionMode, setPermissionMode] = useState('workspace-write')
   const [prompt, setPrompt] = useState('')
-  const [sessionsLoaded, setSessionsLoaded] = useState(false)
+  const [harnessSessionsLoaded, setHarnessSessionsLoaded] = useState(false)
+  const [engineSessionsLoaded, setEngineSessionsLoaded] = useState(false)
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false)
   const [modelMenuOpen, setModelMenuOpen] = useState(false)
   const [modelMenuPane, setModelMenuPane] = useState<ModelMenuPane>('root')
@@ -265,9 +266,18 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
     [showArchived, visibleSessions, visibleEngineSessions, activeSessionId],
   )
 
+  const sessionsLoaded = (harnessSessionsLoaded && engineSessionsLoaded)
+    || (engineSessionsLoaded && visibleEngineSessions.length > 0)
+    || (harnessSessionsLoaded && visibleSessions.length > 0)
+
   const refreshSessions = useCallback(async (): Promise<void> => {
     try {
-      const result = await window.ndDsh.dsh.rpc('session.list', {})
+      const result = await Promise.race([
+        window.ndDsh.dsh.rpc('session.list', {}),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Timed out waiting for session list')), 10_000),
+        ),
+      ])
       const items = ((result.value ?? {}) as { items?: SessionSummary[] }).items ?? []
       setSessions(items)
       setBusySessions((current) => {
@@ -278,10 +288,10 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
         }
         return next
       })
-      setSessionsLoaded(true)
+      setHarnessSessionsLoaded(true)
       setActiveSessionId((current) => current ?? items[0]?.sessionId ?? null)
     } catch (cause) {
-      setSessionsLoaded(true)
+      setHarnessSessionsLoaded(true)
       onError(cause instanceof Error ? cause.message : String(cause))
     }
   }, [onError])
@@ -316,8 +326,11 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
         }
         return next
       })
+      setEngineSessionsLoaded(true)
+      setActiveSessionId((current) => current ?? items[0]?.sessionId ?? null)
     } catch {
       // Engine chat listing stays empty; not an error surface.
+      setEngineSessionsLoaded(true)
     }
   }, [])
 
@@ -697,6 +710,24 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
     setMentionCaret(0)
   }, [])
 
+  const markSessionNotBusy = useCallback((sessionId: string | null | undefined): void => {
+    if (!sessionId) return
+    setBusySessions((current) => {
+      if (!current.has(sessionId)) return current
+      const next = new Set(current)
+      next.delete(sessionId)
+      return next
+    })
+    setSessions((current) => {
+      if (!current.some((s) => s.sessionId === sessionId && s.running)) return current
+      return current.map((s) => (s.sessionId === sessionId ? { ...s, running: false } : s))
+    })
+    setEngineSessions((current) => {
+      if (!current.some((s) => s.sessionId === sessionId && s.running)) return current
+      return current.map((s) => (s.sessionId === sessionId ? { ...s, running: false } : s))
+    })
+  }, [])
+
   // The live gateway stream: fold session events into the active thread, show
   // approvals/questions as cards, and track per-session busy state.
   useEffect(() => {
@@ -714,6 +745,12 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
           else next.delete(sessionId)
           return next
         })
+        setSessions((current) =>
+          current.map((s) => (s.sessionId === sessionId ? { ...s, running: Boolean(frame.running) } : s))
+        )
+        setEngineSessions((current) =>
+          current.map((s) => (s.sessionId === sessionId ? { ...s, running: Boolean(frame.running) } : s))
+        )
         return
       }
       if (frame.kind === 'session-added' || frame.kind === 'session-removed') {
@@ -738,13 +775,25 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
       }
     }
     if (frame.kind === 'agent-error' && frame.message) {
-      const lastUserText = findLastUserPrompt(sessionId)
+      const targetSessionId = sessionId ?? activeSessionId ?? undefined
+      if (targetSessionId) {
+        markSessionNotBusy(targetSessionId)
+      }
+      const lastUserText = findLastUserPrompt(targetSessionId)
       // Quota errors on Antigravity threads are native-account limits; ND can
       // only route the user to the CLI's own account switch (/logout).
-      const antigravityQuota = sessionId !== undefined
-        && engineSessions.some((session) => session.sessionId === sessionId && session.engineId === ANTIGRAVITY_ENGINE_ID)
+      const antigravityQuota = targetSessionId !== undefined
+        && engineSessions.some((session) => session.sessionId === targetSessionId && session.engineId === ANTIGRAVITY_ENGINE_ID)
         && /quota/i.test(frame.message)
-      appendNotice(sessionId, describeAgentError(frame.message, currentRoute()), 'error', lastUserText, antigravityQuota)
+      appendNotice(targetSessionId, describeAgentError(frame.message, currentRoute()), 'error', lastUserText, antigravityQuota)
+    }
+    if (frame.kind === 'stream-error') {
+      setBusySessions(new Set())
+      setSessions((current) => current.map((s) => (s.running ? { ...s, running: false } : s)))
+      setEngineSessions((current) => current.map((s) => (s.running ? { ...s, running: false } : s)))
+      if (frame.message) {
+        appendNotice(activeSessionId ?? undefined, describeAgentError(frame.message, currentRoute()), 'error')
+      }
     }
   }
 
@@ -854,6 +903,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
       // User messages arrive through session events, including on retry.
       if (!sessions.some((s) => s.sessionId === result.sessionId)) void refreshSessions()
     } catch (cause) {
+      if (activeSessionId) markSessionNotBusy(activeSessionId)
       onError(cause instanceof Error ? cause.message : String(cause))
     } finally {
       setSubmitting(false)
@@ -861,10 +911,17 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
   }
 
   const stop = async (): Promise<void> => {
+    const targetSessionId = activeSessionId
+    if (targetSessionId) {
+      markSessionNotBusy(targetSessionId)
+    }
     try {
-      if (activeSessionId) await window.ndDsh.harness.stopSession(activeSessionId)
+      if (targetSessionId) await window.ndDsh.harness.stopSession(targetSessionId)
     } catch (cause) {
-      onError(cause instanceof Error ? cause.message : String(cause))
+      const msg = cause instanceof Error ? cause.message : String(cause)
+      if (!/not running|no session|already stopped|idle/i.test(msg)) {
+        onError(msg)
+      }
     }
   }
 
@@ -1058,7 +1115,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
           <div className="mb-1.5 flex items-center justify-between">
             <span className="text-[11px] font-semibold text-faint">Workspaces</span>
             <div className="flex items-center gap-1">
-              <button className="grid size-[22px] place-items-center rounded-[5px] text-faint transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[13px]" title="Refresh sessions" onClick={() => void refreshSessions()}>
+              <button className="grid size-[22px] place-items-center rounded-[5px] text-faint transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[13px]" title="Refresh sessions" onClick={() => { void refreshSessions(); void refreshEngineSessions() }}>
                 <SearchIcon />
               </button>
               {archiveableIds.length > 0 ? (
@@ -1132,7 +1189,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
                   <SessionCard
                     key={session.sessionId}
                     active={activeSessionId === session.sessionId}
-                    busy={busySessions.has(session.sessionId)}
+                    busy={busySessions.has(session.sessionId) || Boolean(session.running)}
                     title={sessionTitle(session)}
                     time={sessionTime(session)}
                     archived={session.archived === true}
@@ -1149,7 +1206,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
                   <SessionCard
                     key={session.sessionId}
                     active={activeSessionId === session.sessionId}
-                    busy={busySessions.has(session.sessionId)}
+                    busy={busySessions.has(session.sessionId) || Boolean(session.running)}
                     title={session.title}
                     time={sessionTime({ updatedAt: session.updatedAt } as SessionSummary)}
                     engineChip={engines.find((engine) => engine.id === session.engineId)?.name ?? session.engineId}
@@ -1164,6 +1221,9 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
                     onClick={() => selectEngineSession(session)}
                   />
                 ))}
+                {!harnessSessionsLoaded && visibleEngineSessions.length > 0 ? (
+                  <div className="px-0.5 py-1 text-[9px]/[1.4] text-faint animate-pulse">Syncing harness chats…</div>
+                ) : null}
               </>
             )}
           </div>

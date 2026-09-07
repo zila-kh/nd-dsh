@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import type { ModelProvider } from '../src/shared/contracts.js'
 import {
   buildProviderRuntime,
+  isDynamicSessionHeader,
+  isOpenCodeEndpoint,
   parseContextWindow,
   protocolFromApiFormat,
   providerCredentialEnvName,
@@ -91,8 +93,133 @@ describe('provider runtime compiler', () => {
     expect(providerCredentialEnvName('openai')).not.toBe(providerCredentialEnvName('anthropic'))
   })
 
+  it('carries custom HTTP headers into the pi-ai provider profile', () => {
+    const runtime = buildProviderRuntime([
+      provider({
+        id: 'opencode-go',
+        name: 'Console Go',
+        headers: {
+          'x-opencode-session': 'test-session-123',
+          'x-custom-header': 'custom-value',
+        },
+      }),
+    ])
+
+    expect(runtime.profiles['opencode-go']?.headers).toEqual({
+      'x-opencode-session': 'test-session-123',
+      'x-custom-header': 'custom-value',
+    })
+  })
+
+  it('configures bounded retry policy by default and respects custom maxRetries', () => {
+    const runtime = buildProviderRuntime([
+      provider({ id: 'default-retries', models: [{ id: 'model-a', context: '128K' }] }),
+      provider({ id: 'custom-retries', maxRetries: 1, models: [{ id: 'model-b', context: '128K' }] }),
+      provider({ id: 'zero-retries', maxRetries: 0, models: [{ id: 'model-c', context: '128K' }] }),
+      provider({ id: 'clamped-retries', maxRetries: 10, models: [{ id: 'model-d', context: '128K' }] }),
+    ])
+
+    expect(runtime.profiles['default-retries']?.retryPolicy).toEqual({
+      mode: 'normal',
+      maxRetries: 2,
+      backoff: {
+        initialDelayMs: 500,
+        maxDelayMs: 3000,
+        jitterRatio: 0.1,
+      },
+    })
+    expect(runtime.profiles['custom-retries']?.retryPolicy?.maxRetries).toBe(1)
+    expect(runtime.profiles['zero-retries']?.retryPolicy?.maxRetries).toBe(0)
+    expect(runtime.profiles['clamped-retries']?.retryPolicy?.maxRetries).toBe(5)
+  })
+
   it('rejects unsupported protocols and unsafe provider URLs before runtime launch', () => {
     expect(() => protocolFromApiFormat('mystery-wire-protocol')).toThrow(/unsupported provider api format/i)
     expect(() => buildProviderRuntime([provider({ id: 'broken', baseUrl: 'file:///tmp/model' })])).toThrow(/http or https/i)
   })
+
+  it('detects OpenCode managed-inference endpoints by hostname', () => {
+    expect(isOpenCodeEndpoint('https://opencode.ai/zen/go/v1')).toBe(true)
+    expect(isOpenCodeEndpoint('https://api.opencode.ai/v1')).toBe(true)
+    expect(isOpenCodeEndpoint('https://console.opencode.ai')).toBe(true)
+    expect(isOpenCodeEndpoint('https://example.com/opencode.ai')).toBe(false)
+    expect(isOpenCodeEndpoint('https://api.deepseek.com')).toBe(false)
+    expect(isOpenCodeEndpoint('')).toBe(false)
+    expect(isOpenCodeEndpoint(undefined)).toBe(false)
+    expect(isOpenCodeEndpoint('not-a-url')).toBe(false)
+  })
+
+  it('auto-injects x-opencode-session for OpenCode providers without one configured', () => {
+    const runtime = buildProviderRuntime([
+      provider({
+        id: 'opencode-go',
+        name: 'Console Go',
+        baseUrl: 'https://opencode.ai/zen/go/v1',
+      }),
+    ])
+
+    const headers = runtime.profiles['opencode-go']?.headers
+    expect(headers).toBeDefined()
+    expect(headers?.['x-opencode-session']).toBeDefined()
+    expect(headers?.['x-opencode-session']).toMatch(/^[0-9a-f-]{36}$/)
+  })
+
+  it('preserves user-configured x-opencode-session and does not overwrite it', () => {
+    const runtime = buildProviderRuntime([
+      provider({
+        id: 'opencode-go',
+        name: 'Console Go',
+        baseUrl: 'https://opencode.ai/zen/go/v1',
+        headers: { 'x-opencode-session': 'my-custom-session' },
+      }),
+    ])
+
+    expect(runtime.profiles['opencode-go']?.headers?.['x-opencode-session']).toBe('my-custom-session')
+  })
+
+  it('does not inject x-opencode-session for non-OpenCode providers', () => {
+    const runtime = buildProviderRuntime([
+      provider({
+        id: 'generic',
+        name: 'Generic',
+        baseUrl: 'https://api.example.com/v1',
+      }),
+    ])
+
+    expect(runtime.profiles['generic']?.headers).toBeUndefined()
+  })
+
+  it('detects dynamic session header placeholders', () => {
+    expect(isDynamicSessionHeader('chatId')).toBe(true)
+    expect(isDynamicSessionHeader('{{chatId}}')).toBe(true)
+    expect(isDynamicSessionHeader('sessionId')).toBe(true)
+    expect(isDynamicSessionHeader('{{sessionId}}')).toBe(true)
+    expect(isDynamicSessionHeader('uuid')).toBe(true)
+    expect(isDynamicSessionHeader('{{uuid}}')).toBe(true)
+    expect(isDynamicSessionHeader('custom-token-xyz')).toBe(false)
+    expect(isDynamicSessionHeader('')).toBe(false)
+    expect(isDynamicSessionHeader(undefined)).toBe(false)
+  })
+
+  it('resolves dynamic header placeholders like chatId, sessionId, uuid into unique UUIDs', () => {
+    const runtime = buildProviderRuntime([
+      provider({
+        id: 'opencode-go',
+        name: 'Console Go',
+        baseUrl: 'https://opencode.ai/zen/go/v1',
+        headers: {
+          'x-opencode-session': 'chatId',
+          'x-request-id': 'uuid',
+          'x-static': 'static-value',
+        },
+      }),
+    ])
+
+    const headers = runtime.profiles['opencode-go']?.headers
+    expect(headers).toBeDefined()
+    expect(headers?.['x-opencode-session']).toMatch(/^[0-9a-f-]{36}$/)
+    expect(headers?.['x-request-id']).toMatch(/^[0-9a-f-]{36}$/)
+    expect(headers?.['x-static']).toBe('static-value')
+  })
 })
+

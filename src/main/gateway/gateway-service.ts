@@ -232,7 +232,11 @@ export class NdGatewayService {
     const upstream = resolveUpstream(this.providers(), binding.providerId, request.url)
     const result = await this.fetchUpstream(upstream.url, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${upstream.apiKey}` },
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${upstream.apiKey}`,
+        ...(upstream.headers ?? {}),
+      },
       body: JSON.stringify(optimized),
       signal: AbortSignal.timeout(120_000),
     })
@@ -266,7 +270,7 @@ export class NdGatewayService {
   }
 }
 
-function resolveUpstream(providers: ProviderStore, providerId: string, path: string): { url: string; apiKey: string } {
+function resolveUpstream(providers: ProviderStore, providerId: string, path: string): { url: string; apiKey: string; headers?: Record<string, string> | undefined } {
   const metadata = providers.list().find((item) => item.id === providerId)
   if (!metadata) throw new Error('Selected provider no longer exists')
   const runtime = providers.runtimeConfig()
@@ -282,7 +286,7 @@ function resolveUpstream(providers: ProviderStore, providerId: string, path: str
   }
   if (!apiKey) throw new Error(`${metadata.name} API key is required`)
   if (!baseUrl) throw new Error(`${metadata.name} base URL is not configured`)
-  return { url: joinBasePath(baseUrl, path), apiKey }
+  return { url: joinBasePath(baseUrl, path), apiKey, ...(metadata.headers ? { headers: metadata.headers } : {}) }
 }
 
 function joinBasePath(baseUrl: string, path: string): string {

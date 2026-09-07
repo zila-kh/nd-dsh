@@ -445,6 +445,8 @@ export interface ModelProvider {
   apiKey: string
   hasApiKey?: boolean
   models: ProviderModel[]
+  headers?: Record<string, string> | undefined
+  maxRetries?: number | undefined
 }
 
 /** Result of a real HTTP probe against a provider's server. */

@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { ModelProvider } from '../shared/contracts.js'
 import { parseModelTokenLimit } from '../shared/provider-models.js'
 
@@ -11,12 +11,25 @@ export interface HarnessPiAiModelProfile {
   input?: Array<'text' | 'image'>
 }
 
+export interface HarnessPiAiRetryPolicy {
+  mode: 'normal'
+  maxRetries?: number
+  retryableCodes?: string[]
+  backoff?: {
+    initialDelayMs?: number
+    maxDelayMs?: number
+    jitterRatio?: number
+  }
+}
+
 export interface HarnessPiAiProviderProfile {
   displayName: string
   apiKeyEnv?: string
   api?: HarnessProviderProtocol
   baseURL?: string
   models?: HarnessPiAiModelProfile[]
+  headers?: Record<string, string> | undefined
+  retryPolicy?: HarnessPiAiRetryPolicy | undefined
 }
 
 export interface ProviderRuntimeConfig {
@@ -87,12 +100,28 @@ export function buildProviderRuntime(providers: readonly ModelProvider[]): Provi
       })
       .filter((item): item is HarnessPiAiModelProfile => item !== undefined)
 
+    const maxRetries = provider.maxRetries !== undefined
+      ? Math.max(0, Math.min(Math.round(provider.maxRetries), 5))
+      : 2
+
+    const profileHeaders = resolveRuntimeHeaders(provider.headers, provider.baseUrl)
+
     profiles[route] = {
       displayName: provider.name.trim() || route,
       ...(keyEnv ? { apiKeyEnv: keyEnv } : {}),
       ...(protocol ? { api: protocol } : {}),
       ...(baseURL ? { baseURL } : {}),
       ...(models.length ? { models } : {}),
+      ...(profileHeaders ? { headers: profileHeaders } : {}),
+      retryPolicy: {
+        mode: 'normal',
+        maxRetries,
+        backoff: {
+          initialDelayMs: 500,
+          maxDelayMs: 3000,
+          jitterRatio: 0.1,
+        },
+      },
     }
   }
 
@@ -144,3 +173,52 @@ function normalizeBaseUrl(value: string, route: string): string | undefined {
   }
   return parsed.toString().replace(/\/$/, '')
 }
+
+/** Whether a base URL points to an OpenCode managed-inference endpoint. */
+export function isOpenCodeEndpoint(baseUrl: string | undefined): boolean {
+  if (!baseUrl) return false
+  try {
+    return new URL(baseUrl.trim()).hostname.endsWith('opencode.ai')
+  } catch { return false }
+}
+
+/** Whether a header value represents a dynamic session identifier like chatId, sessionId, or uuid. */
+export function isDynamicSessionHeader(value: string | undefined): boolean {
+  if (!value) return false
+  const trimmed = value.trim().toLowerCase()
+  return (
+    trimmed === 'chatid'
+    || trimmed === '{{chatid}}'
+    || trimmed === 'sessionid'
+    || trimmed === '{{sessionid}}'
+    || trimmed === 'uuid'
+    || trimmed === '{{uuid}}'
+  )
+}
+
+/**
+ * Resolve provider headers for runtime execution:
+ * - Dynamic session values (`chatId`, `sessionId`, `uuid`) are resolved to fresh UUIDs.
+ * - For OpenCode managed endpoints, `x-opencode-session` is auto-injected if not present.
+ */
+export function resolveRuntimeHeaders(
+  headers: Record<string, string> | undefined,
+  baseUrl: string | undefined,
+): Record<string, string> | undefined {
+  const result: Record<string, string> = {}
+  if (headers) {
+    for (const [key, val] of Object.entries(headers)) {
+      if (isDynamicSessionHeader(val)) {
+        result[key] = randomUUID()
+      } else if (val.trim()) {
+        result[key] = val.trim()
+      }
+    }
+  }
+  if (isOpenCodeEndpoint(baseUrl) && !result['x-opencode-session']) {
+    result['x-opencode-session'] = randomUUID()
+  }
+  return Object.keys(result).length > 0 ? result : undefined
+}
+
+

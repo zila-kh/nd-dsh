@@ -142,7 +142,7 @@ export function GatewaySettings({ onError }: GatewaySettingsProps) {
         <SettingsRow>
           <div className={rowStack}>
             <strong className={rowTitle}>Connection</strong>
-            <span className={rowDesc}>Connect installs a reversible, ND-marked route in your user-level Codex config. Native Codex choices stay native; only ND â€” provider â€” model choices route through ND.</span>
+            <span className={rowDesc}>Connect installs a reversible, ND-marked route in your user-level Codex config. Native Codex choices stay native; only ND — provider — model choices route through ND.</span>
             {selectedProvider && !responsesCompatible ? <span className={rowPathText}>Change this provider’s API format to Responses (/responses) in Models first.</span> : null}
           </div>
           <div className="flex shrink-0 items-center gap-2">
@@ -159,7 +159,7 @@ export function GatewaySettings({ onError }: GatewaySettingsProps) {
           <SettingsRow>
             <div className={rowStack}>
               <strong className={rowTitle}>Proxy model catalog enabled</strong>
-              <span className={rowDesc}>Restart Codex once, then choose an ND â€” {selectedProvider?.name ?? 'provider'} â€” model. Disconnect restores your prior configuration and removes these entries when Codex refreshes.</span>
+              <span className={rowDesc}>Restart Codex once, then choose an ND — {selectedProvider?.name ?? 'provider'} — model. Disconnect restores your prior configuration and removes these entries when Codex refreshes.</span>
             </div>
             <StatusChip good>Installed</StatusChip>
           </SettingsRow>

@@ -29,6 +29,9 @@ export interface FollowHandle {
 /** Snapshot window requested per follow stream (matches the renderer's history read). */
 const FOLLOW_WINDOW = 50
 
+const GATEWAY_RPC_TIMEOUT_MS = 15_000
+const GATEWAY_AUTH_TIMEOUT_MS = 10_000
+
 /**
  * Loopback client for the DeepSeek Harness web-plane gateway.
  *
@@ -65,7 +68,7 @@ export class GatewayClient {
   /** Exchange DSH's one-time launch URL for the authority-bound session cookie. */
   static async authenticate(authenticatedUrl: string): Promise<GatewayClient> {
     const url = new URL(authenticatedUrl)
-    const response = await fetch(url, { redirect: 'manual' })
+    const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(GATEWAY_AUTH_TIMEOUT_MS) })
     if (response.status !== 303) {
       throw new Error(`DSH web authentication failed: HTTP ${response.status}`)
     }
@@ -107,7 +110,7 @@ export class GatewayClient {
     return { ready, close: () => this.closeFollowEntry(entry) }
   }
 
-  async rpc(method: string, payload: unknown = {}): Promise<GatewayRpcResult> {
+  async rpc(method: string, payload: unknown = {}, timeoutMs = GATEWAY_RPC_TIMEOUT_MS): Promise<GatewayRpcResult> {
     const endpoint = this.remoteProtocol ? remoteRequest(method, payload) : { method, payload }
     const rpcId = randomUUID()
     let response: Response
@@ -116,6 +119,7 @@ export class GatewayClient {
         method: 'POST',
         headers: this.headers(),
         body: JSON.stringify({ type: 'client-request', rpcId, ...endpoint }),
+        signal: AbortSignal.timeout(timeoutMs),
       })
     } catch (error) {
       // The runtime child exited or is restarting between calls. Transport
@@ -130,7 +134,7 @@ export class GatewayClient {
     }
     if (response.status === 404 && !this.remoteProtocol && method === 'session.list') {
       this.remoteProtocol = true
-      const result = await this.rpc(method, payload)
+      const result = await this.rpc(method, payload, timeoutMs)
       // Both route trees can be temporarily absent while an older runtime
       // mounts. Only retain negotiation once the new endpoint exists.
       if (result.error?.code === 'gateway-http' && result.error.message.endsWith('HTTP 404')) this.remoteProtocol = false
@@ -154,13 +158,14 @@ export class GatewayClient {
     return { ok: false, error: normalizeError(frame.result.error) }
   }
 
-  async respond(rpcId: string, value: unknown): Promise<void> {
+  async respond(rpcId: string, value: unknown, timeoutMs = GATEWAY_RPC_TIMEOUT_MS): Promise<void> {
     let response: Response
     try {
       response = await fetch(`${this.baseUrl}/api/respond`, {
         method: 'POST',
         headers: this.headers(),
         body: JSON.stringify({ type: 'client-response', rpcId, result: { ok: true, value } }),
+        signal: AbortSignal.timeout(timeoutMs),
       })
     } catch (error) {
       throw new Error(`gateway respond: ${error instanceof Error ? error.message : String(error)}`)

@@ -16,6 +16,7 @@ export interface AgentBrowserStatus {
 
 const COMMAND_TIMEOUT_MS = 120_000
 const MAX_CAPTURE_CHARS = 2_000_000
+const BIND_COMMAND_TIMEOUT_MS = 10_000
 const BIND_RETRY_DELAY_MS = 2_500
 const SMOKE_TEST_TIMEOUT_MS = 15_000
 
@@ -126,8 +127,8 @@ export class AgentBrowserClient {
   }
 
   private async bindPinnedTab(targetId: string): Promise<void> {
-    await this.run(['tab', targetId], ['--no-pin-tab'])
-    await this.run(['get', 'url'], ['--pin-tab'])
+    await this.run(['tab', targetId], ['--no-pin-tab'], BIND_COMMAND_TIMEOUT_MS)
+    await this.run(['get', 'url'], ['--pin-tab'], BIND_COMMAND_TIMEOUT_MS)
   }
 
   /**
