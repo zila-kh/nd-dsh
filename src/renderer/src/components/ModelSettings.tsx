@@ -69,10 +69,12 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
   const [modelPings, setModelPings] = useState<Record<string, 'testing' | ProviderPingResult>>({})
   const [newHeaderKey, setNewHeaderKey] = useState('')
   const [newHeaderValue, setNewHeaderValue] = useState('')
+  const [saveStatus, setSaveStatus] = useState<string | null>(null)
 
   // Clear per-model pings when the selected provider changes.
   useEffect(() => {
     setModelPings({})
+    setCompletionResult(null)
   }, [selectedId])
 
   useEffect(() => {
@@ -110,7 +112,14 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
   const commit = (next: ModelProvider[]): void => {
     const safe = next.map((provider) => ({ ...provider, apiKey: '' }))
     setProviders(safe)
-    void window.ndDsh.providers.save(safe).then(setProviders).catch((cause) => onError(errorMessage(cause)))
+    void window.ndDsh.providers
+      .save(safe)
+      .then((saved) => {
+        setProviders(saved)
+        setSaveStatus('Saved')
+        setTimeout(() => setSaveStatus(null), 2000)
+      })
+      .catch((cause) => onError(errorMessage(cause)))
   }
 
   const updateSelected = (patch: Partial<ModelProvider>): void => {
@@ -229,9 +238,12 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
 
   const addHeader = (): void => {
     const key = newHeaderKey.trim()
-    const value = newHeaderValue.trim()
+    let value = newHeaderValue.trim()
     if (!key) return onError('Header name is required')
     if (!selected) return
+    if (!value && key.toLowerCase() === 'x-opencode-session') {
+      value = 'chatId'
+    }
     const current = selected.headers ?? {}
     if (Object.keys(current).some((k) => k.toLowerCase() === key.toLowerCase())) {
       return onError(`Header "${key}" is already set`)
@@ -455,7 +467,14 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
               </div>
               <div className="flex flex-col gap-[5px]">
                 <div className="flex items-center justify-between">
-                  <label className="text-[11px] font-medium text-(--models-muted)">Custom HTTP headers</label>
+                  <div className="flex items-center gap-2">
+                    <label className="text-[11px] font-medium text-(--models-muted)">Custom HTTP headers</label>
+                    {saveStatus ? (
+                      <span className="text-[10px] text-green-400 font-medium animate-pulse">
+                        ✓ {saveStatus}
+                      </span>
+                    ) : null}
+                  </div>
                   {!selected.headers?.['x-opencode-session'] ? (
                     <button
                       type="button"
