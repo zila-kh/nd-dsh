@@ -360,8 +360,15 @@ export class CodexCliEngine {
       onServerRequest: (method, params) => this.handleServerRequest(method, params),
       onProtocolError: (error) => this.handleProtocolError(error),
     })
-    await wire.start()
-    this.wire = wire
+    try {
+      await wire.start()
+      this.wire = wire
+    } catch (error: unknown) {
+      wire.close()
+      if (this.child === child) this.child = undefined
+      await killProcessTree(child)
+      throw error
+    }
   }
 
   private handleNotification(method: string, params: JsonObject): void {
