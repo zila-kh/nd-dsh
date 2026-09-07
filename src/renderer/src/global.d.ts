@@ -7,6 +7,7 @@ import type { OrganizationDesktopApi } from '../../shared/organization'
 import type { OrganizationStrategyDesktopApi } from '../../shared/organization-strategy'
 import type { TerminalDesktopApi } from '../../shared/terminal'
 import type { TokenSaverDesktopApi } from '../../shared/token-saver'
+import type { WorkflowPluginsDesktopApi } from '../../shared/workflow-plugins'
 
 declare global {
   interface Window {
@@ -19,6 +20,7 @@ declare global {
     ndDshTerminal: TerminalDesktopApi
     ndDshTokenSaver: TokenSaverDesktopApi
     ndDshGateway: NdGatewayDesktopApi
+    ndDshWorkflowPlugins: WorkflowPluginsDesktopApi
     ndDshRuntimeMode?: 'ui-preview'
   }
 }

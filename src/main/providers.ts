@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path'
 import type { ModelProvider, ProviderModel, ProviderPingResult } from '../shared/contracts.js'
 import { buildProviderRuntime, DIRECT_DEEPSEEK_ROUTE, type ProviderRuntimeConfig } from './provider-runtime.js'
 import { pingProvider, probeProviderCompletion } from './provider-ping.js'
+import { sanitizeProviderModel } from '../shared/provider-models.js'
 
 const PROVIDERS_FILE = 'providers.json'
 const PROVIDER_SECRETS_FILE = 'provider-secrets.json'
@@ -48,13 +49,7 @@ function sanitizeProvider(value: unknown, includeLegacySecret = false): ModelPro
   if (!id || !name) return undefined
   const models = Array.isArray(record.models)
     ? record.models
-        .map((model): ProviderModel | undefined => {
-          if (!model || typeof model !== 'object') return undefined
-          const entry = model as Record<string, unknown>
-          const modelId = typeof entry.id === 'string' ? entry.id.trim() : ''
-          if (!modelId) return undefined
-          return { id: modelId, context: typeof entry.context === 'string' ? entry.context : DEFAULT_CONTEXT }
-        })
+        .map((model) => sanitizeProviderModel(model, DEFAULT_CONTEXT))
         .filter((model): model is ProviderModel => model !== undefined)
     : []
   return {

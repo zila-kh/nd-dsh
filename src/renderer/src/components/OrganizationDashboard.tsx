@@ -8,6 +8,8 @@ import { OrganizationStrategyCenter } from './OrganizationStrategyCenter'
 interface Props {
   workspace: WorkspaceState | null
   onOpenDeepSeek(): void
+  /** Hands a prepared prompt to the agent console (prefills the chat). */
+  onAskAgent?(prompt: string): void
   onError(message: string): void
   companyView: CompanyView
   onCompanyViewChange(view: CompanyView): void
@@ -15,7 +17,7 @@ interface Props {
 
 export type CompanyView = 'workspace' | 'operations' | 'strategy'
 
-export function OrganizationDashboard({ workspace, onOpenDeepSeek, onError, companyView, onCompanyViewChange }: Props) {
+export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, onError, companyView, onCompanyViewChange }: Props) {
   const [state, setState] = useState<OrganizationSnapshot | null>(null)
   const [cancelingRunId, setCancelingRunId] = useState<string | null>(null)
 
@@ -83,7 +85,7 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onError, comp
 
       <div className="min-h-0 flex-1">
         {companyView === 'workspace' ? (
-          <OrganizationDashboardLegacy workspace={workspace} onOpenDeepSeek={onOpenDeepSeek} onError={onError} />
+          <OrganizationDashboardLegacy workspace={workspace} onOpenDeepSeek={onOpenDeepSeek} {...(onAskAgent ? { onAskAgent } : {})} onError={onError} />
         ) : company ? (
           <div className="h-full overflow-auto p-[14px]">
             {companyView === 'operations' ? (

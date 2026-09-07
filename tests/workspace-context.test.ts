@@ -25,6 +25,7 @@ describe('workspace prompt context', () => {
     expect(prompt).toContain('"projectName": "Todo app"')
     expect(prompt).toContain('"projectObjective": "Build a focused task-management app for small teams."')
     expect(prompt).toContain('If the user asks what the project is about')
+    expect(prompt).toContain('do not substitute the parent repository for this project')
   })
 
   it('removes the ND-only block from renderer-visible history', () => {

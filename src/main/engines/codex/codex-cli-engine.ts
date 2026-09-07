@@ -1,7 +1,9 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { stripWorkspaceContext } from '../../../shared/workspace-context.js'
 import type {
   DshEventFrame,
+  EngineModelOption,
   EngineSessionSummary,
   EngineSessionTranscript,
   SessionEventEnvelope,
@@ -128,6 +130,10 @@ export class CodexCliEngine {
     return { sessionId, engineId: CODEX_CLI_ENGINE_ID, events: [...session.transcript] }
   }
 
+  async listModels(): Promise<EngineModelOption[]> {
+    return (await this.ensureStarted()).listModels()
+  }
+
   async createSession(input: { cwd?: string; mode?: CodexRunMode } = {}): Promise<{ sessionId: string }> {
     const wire = await this.ensureStarted()
     const sessionId = `codex-${randomUUID()}`
@@ -156,7 +162,7 @@ export class CodexCliEngine {
    * Submit one prompt to a codex-backed session (created lazily when no id is
    * given). Progress streams out as frames; the promise settles with the turn.
    */
-  async run(prompt: string, options: { sessionId?: string; cwd?: string } = {}): Promise<{ sessionId: string }> {
+  async run(prompt: string, options: { sessionId?: string; cwd?: string; model?: string } = {}): Promise<{ sessionId: string }> {
     const cleaned = prompt.trim()
     if (!cleaned) throw new Error('Prompt cannot be empty')
     if (cleaned.length > 100_000) throw new Error('Prompt exceeds the 100,000 character limit')
@@ -175,8 +181,9 @@ export class CodexCliEngine {
     activeSession.turnSettled = settled
     try {
       let wire = await this.ensureStarted()
-      this.recordUserMessage(activeSession, cleaned)
-      if (activeSession.title === 'New Codex chat') activeSession.title = cleaned.slice(0, 80)
+      const userPrompt = stripWorkspaceContext(cleaned)
+      this.recordUserMessage(activeSession, userPrompt)
+      if (activeSession.title === 'New Codex chat') activeSession.title = userPrompt.slice(0, 80)
       // Threads die with their app-server child. If the child restarted since
       // this session's thread was created (or the server lost the thread),
       // recreate it transparently instead of failing the run.
@@ -186,12 +193,12 @@ export class CodexCliEngine {
       }
       let turnId: string
       try {
-        turnId = await wire.startTurn(activeSession.threadId, [cleaned])
+        turnId = await wire.startTurn(activeSession.threadId, [cleaned], options.model)
       } catch (error: unknown) {
         if (!isThreadNotFound(error)) throw error
         await this.recreateThread(activeSession)
         wire = await this.ensureStarted()
-        turnId = await wire.startTurn(activeSession.threadId, [cleaned])
+        turnId = await wire.startTurn(activeSession.threadId, [cleaned], options.model)
       }
       activeSession.turnId = turnId
       activeSession.running = true
@@ -353,7 +360,7 @@ export class CodexCliEngine {
       onServerRequest: (method, params) => this.handleServerRequest(method, params),
       onProtocolError: (error) => this.handleProtocolError(error),
     })
-    wire.start()
+    await wire.start()
     this.wire = wire
   }
 

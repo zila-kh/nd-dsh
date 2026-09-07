@@ -421,6 +421,10 @@ export interface ThemeState {
 export interface ProviderModel {
   id: string
   context: string
+  /** Omitted means inherit the runtime catalog's supported inputs. */
+  inputTypes?: Array<'text' | 'image'>
+  /** Optional model output limit, in tokens. */
+  maxOutputTokens?: number
 }
 
 /**
@@ -554,6 +558,7 @@ export interface QaOutputChunk {
 export interface DesktopApi {
   app: {
     info(): Promise<AppInfo>
+    restart(): Promise<void>
   }
   /** Pluggable capability providers (engine/memory/context) and subject routing. */
   capabilities: {
@@ -585,6 +590,16 @@ export interface DesktopApi {
     transcript(sessionId: string): Promise<EngineSessionTranscript>
     /** Native model catalog for engines that expose one; empty for the rest. */
     models(engineId: string): Promise<EngineModelOption[]>
+  }
+  /**
+   * ND's GUI for the ZCode CLI's own model-provider config
+   * (`~/.zcode/cli/config.json`). Reads never return API keys; writes are
+   * validated against the shared ZCode schema and restart the ZCode runtime
+   * so the next turn picks the new provider up.
+   */
+  zcodeConfig: {
+    read(): Promise<import('./zcode-config.js').ZcodeCliConfigSnapshot>
+    write(update: import('./zcode-config.js').ZcodeCliConfigUpdate): Promise<import('./zcode-config.js').ZcodeCliConfigSnapshot>
   }
   sessions: {
     /** Archive or unarchive any chat thread (harness or engine-backed); resolves with the refreshed archived id list. */
@@ -662,6 +677,8 @@ export interface DesktopApi {
     onChanged(listener: (state: ThemeState) => void): () => void
   }
   git: {
+    configureRemote(root: string, name: string, url: string): Promise<GitStatusSnapshot>
+    connectGitHub(root: string, name: string, url: string): Promise<GitStatusSnapshot>
     state(): Promise<GitStatusSnapshot>
     refresh(): Promise<GitStatusSnapshot>
     stage(relativePaths: string[]): Promise<GitStatusSnapshot>
@@ -693,6 +710,7 @@ export interface DesktopApi {
 
 export const IPC = {
   appInfo: 'app:info',
+  appRestart: 'app:restart',
   windowSetFloatMode: 'window:set-float-mode',
   windowResizeFloatWindow: 'window:resize-float-window',
   windowMoveFloatWindow: 'window:move-float-window',
@@ -756,6 +774,8 @@ export const IPC = {
   enginesSessions: 'engines:sessions',
   enginesTranscript: 'engines:transcript',
   enginesModels: 'engines:models',
+  zcodeConfigRead: 'zcode-config:read',
+  zcodeConfigWrite: 'zcode-config:write',
   sessionsSetArchived: 'sessions:set-archived',
   captureInspectApp: 'capture:inspect-app',
   captureInspectElement: 'capture:inspect-element',
@@ -765,6 +785,8 @@ export const IPC = {
   captureCopyElementContext: 'capture:copy-element-context',
   captureCopyElementShot: 'capture:copy-element-shot',
   gitState: 'git:state',
+  gitConfigureRemote: 'git:configure-remote',
+  gitConnectGitHub: 'git:connect-github',
   gitRefresh: 'git:refresh',
   gitStage: 'git:stage',
   gitUnstage: 'git:unstage',

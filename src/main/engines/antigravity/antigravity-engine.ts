@@ -8,6 +8,7 @@ import type {
   SessionEventEnvelope,
 } from '../../../shared/contracts.js'
 import { ANTIGRAVITY_ENGINE_ID } from '../../../shared/coding-engines.js'
+import { stripWorkspaceContext } from '../../../shared/workspace-context.js'
 import { antigravityBinPath } from '../../app-paths.js'
 
 /**
@@ -73,6 +74,11 @@ interface AntigravitySession {
   buffer: string
   /** Final response text is re-emitted by `result`; skip the duplicate. */
   lastAssistantText?: string
+  /** Response step identity, so ACTIVE/DONE replays do not add bubbles. */
+  lastAssistantStepIndex?: number
+  assistantResponse?: { stepIndex: number | undefined; text: string; lastDelta: string }
+  turnAssistantText: string
+  lastToolError?: string
 }
 
 /** Minimal single-shot deferred: turns settle exactly once via notification. */
@@ -218,6 +224,7 @@ export class AntigravityEngine {
       sequence: 0,
       transcript: [],
       buffer: '',
+      turnAssistantText: '',
     }
     this.sessions.set(sessionId, session)
     this.emitFrame({ kind: 'session-added', sessionId, meta: { engineId: ANTIGRAVITY_ENGINE_ID } })
@@ -261,10 +268,15 @@ export class AntigravityEngine {
     const settled = deferred<TurnOutcome>()
     activeSession.turnSettled = settled
     delete activeSession.lastAssistantText
+    delete activeSession.lastAssistantStepIndex
+    delete activeSession.assistantResponse
+    delete activeSession.lastToolError
+    activeSession.turnAssistantText = ''
     try {
       const child = this.ensureChild(activeSession)
-      this.recordUserMessage(activeSession, cleaned)
-      if (activeSession.title === 'New Antigravity chat') activeSession.title = cleaned.slice(0, 80)
+      const userPrompt = stripWorkspaceContext(cleaned)
+      this.recordUserMessage(activeSession, userPrompt)
+      if (activeSession.title === 'New Antigravity chat') activeSession.title = userPrompt.slice(0, 80)
       child.stdin?.write(`${JSON.stringify({ event: 'user', message: { content: cleaned } })}\n`)
       activeSession.running = true
       activeSession.updatedAt = Date.now()
@@ -425,10 +437,30 @@ export class AntigravityEngine {
   private handleStep(session: AntigravitySession, step: AntigravityStepUpdate): void {
     if (step.step_type === 'agent_response') {
       const text = typeof step.text_delta === 'string' ? step.text_delta : ''
-      if (text.trim()) this.recordAssistantMessage(session, text)
+      const stepIndex = typeof step.step_index === 'number' ? step.step_index : undefined
+      if (!session.assistantResponse && stepIndex !== undefined
+        && stepIndex === session.lastAssistantStepIndex && step.state === 'DONE'
+        && (!text || text.trim() === session.lastAssistantText?.trim())) return
+      if (session.assistantResponse && session.assistantResponse.stepIndex !== stepIndex) {
+        this.finishAssistantResponse(session)
+      }
+      const response = session.assistantResponse ?? { stepIndex, text: '', lastDelta: '' }
+      session.assistantResponse = response
+      // DONE can replay the text already delivered by the active update.
+      if (text && !(step.state === 'DONE' && text === response.lastDelta)) {
+        response.text += text
+        response.lastDelta = text
+        this.recordEnvelope(session, {
+          type: 'assistant/chunk',
+          data: { chunk: { content: [{ type: 'text', text }] } },
+        })
+      }
+      // Keep the step open until the next step/result: text_delta updates are
+      // fragments, and the terminal result owns the complete response.
       return
     }
     if (step.step_type !== 'tool') return
+    this.finishAssistantResponse(session)
     const callId = typeof step.step_index === 'number' ? `step-${step.step_index}` : `step-${session.sequence + 1}`
     const name = typeof step.tool_name === 'string' && step.tool_name
       ? step.tool_name
@@ -437,19 +469,37 @@ export class AntigravityEngine {
       this.recordToolCall(session, callId, name, step.tool_info?.parameters ?? null)
       return
     }
+    if (step.state !== 'DONE' && step.state !== 'ERROR') return
     const failed = step.state === 'ERROR'
     const failure = isObject(step.tool_info?.error) ? step.tool_info.error : undefined
-    const failureText = failed && typeof failure?.message === 'string' ? `\n${summarize(failure.message)}` : ''
-    this.recordToolResult(session, callId, `${failed ? 'failed' : 'completed'}${failureText}`)
+    const error = failed
+      ? typeof failure?.message === 'string' ? summarize(failure.message) : `${name} failed`
+      : undefined
+    if (error) session.lastToolError = error
+    this.recordToolResult(session, callId, error ?? 'completed', error)
   }
 
   private handleResult(session: AntigravitySession, result: AntigravityResult): void {
+    this.finishAssistantResponse(session)
     const response = typeof result.response === 'string' ? result.response : ''
-    if (response.trim() && response !== session.lastAssistantText) {
+    if (response.trim() && response.trim() !== session.lastAssistantText?.trim()
+      && response.trim() !== session.turnAssistantText.trim()) {
       this.recordAssistantMessage(session, response)
     }
     if (!session.turnSettled) return
     if (result.status === 'SUCCESS') {
+      if (session.lastToolError || !session.turnAssistantText.trim()) {
+        const permissionHint = session.lastToolError && /permission check failed|denied permission/i.test(session.lastToolError)
+          ? `\n\nThe CLI cannot request permission in chat. Check that the selected project folder contains the file you want it to read.${session.cwd ? ` Current workspace: ${session.cwd}` : ''}`
+          : ''
+        session.turnSettled.resolve({
+          status: 'failed',
+          failureMessage: session.lastToolError
+            ? `Antigravity ended without a reply after a tool failed: ${session.lastToolError}${permissionHint}`
+            : 'Antigravity ended this turn without a reply. Please retry.',
+        })
+        return
+      }
       session.turnSettled.resolve({ status: 'success' })
       return
     }
@@ -465,6 +515,7 @@ export class AntigravityEngine {
   private finishTurn(session: AntigravitySession): void {
     const wasActive = session.running || session.turnSettled !== undefined
     if (!wasActive) return
+    this.finishAssistantResponse(session)
     session.running = false
     delete session.turnSettled
     session.updatedAt = Date.now()
@@ -479,19 +530,33 @@ export class AntigravityEngine {
   }
 
   private recordAssistantMessage(session: AntigravitySession, text: string): void {
+    delete session.lastToolError
     session.lastAssistantText = text
+    session.turnAssistantText += text
     this.recordEnvelope(session, {
       type: 'assistant/message',
       data: { message: { role: 'assistant', content: [{ type: 'text', text }] } },
     })
   }
 
+  private finishAssistantResponse(session: AntigravitySession): void {
+    const response = session.assistantResponse
+    if (!response) return
+    delete session.assistantResponse
+    if (response.stepIndex !== undefined) session.lastAssistantStepIndex = response.stepIndex
+    else delete session.lastAssistantStepIndex
+    if (response.text) this.recordAssistantMessage(session, response.text)
+  }
+
   private recordToolCall(session: AntigravitySession, callId: string, name: string, args: unknown): void {
     this.recordEnvelope(session, { type: 'tool/call', data: { callId, name, arguments: args } })
   }
 
-  private recordToolResult(session: AntigravitySession, callId: string, result: string): void {
-    this.recordEnvelope(session, { type: 'tool/result', data: { callId, message: { content: [{ type: 'text', text: result }] } } })
+  private recordToolResult(session: AntigravitySession, callId: string, result: string, error?: string): void {
+    this.recordEnvelope(session, {
+      type: 'tool/result',
+      data: { callId, message: { content: [{ type: 'text', text: result }] }, ...(error === undefined ? {} : { error }) },
+    })
   }
 
   private recordEnvelope(session: AntigravitySession, partial: { type: string; data?: unknown }): void {

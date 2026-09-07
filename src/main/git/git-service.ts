@@ -15,7 +15,6 @@ import {
   GitStatusParser,
   MAX_CLI_LENGTH,
   parseGitCommits,
-  parseGitRemotes,
   sanitizeRelativePath,
   splitInChunks,
   type Commit,
@@ -40,14 +39,20 @@ const UNMERGED_COMBINATIONS = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']
 
 export class GitService {
   private readonly cli: GitCli
+  private readonly authCli: GitCli
   private readonly workspace: WorkspaceLike
   private stateListener?: (state: GitStatusSnapshot) => void
   private queue: Promise<unknown> = Promise.resolve()
   private snapshot: GitStatusSnapshot
+  private refreshGeneration = 0
 
   constructor(workspace: WorkspaceLike, options: GitServiceOptions = {}) {
     this.workspace = workspace
     this.cli = new GitCli(options)
+    // OAuth output must never enter the renderer's Git output stream.
+    const authOptions = { ...options }
+    delete authOptions.onOutput
+    this.authCli = new GitCli(authOptions)
     this.snapshot = this.emptySnapshot(this.workspace.state().root)
   }
 
@@ -64,17 +69,25 @@ export class GitService {
   }
 
   async refresh(): Promise<GitStatusSnapshot> {
-    const root = this.workspace.state().root
-    const snapshot = await this.buildSnapshot(root)
+    const workspace = this.workspace.state()
+    const generation = ++this.refreshGeneration
+    const snapshot = await this.buildSnapshot(workspace)
+    // Workspace/project context can change while Git commands are in flight.
+    // Never let an older result replace the active project's snapshot.
+    if (generation !== this.refreshGeneration || !sameWorkspaceContext(workspace, this.workspace.state())) {
+      return this.snapshot
+    }
     this.snapshot = snapshot
     this.stateListener?.(snapshot)
     return snapshot
   }
 
   async stage(relativePaths: string[]): Promise<GitStatusSnapshot> {
-    const repoRoot = await this.requireRepoRoot()
+    const context = this.captureWorkspaceContext()
+    const repoRoot = await this.requireRepoRoot(context)
     const paths = relativePaths.map(sanitizeRelativePath)
     await this.runExclusive(async () => {
+      this.assertWorkspaceContext(context)
       for (const chunk of splitInChunks(paths, MAX_CLI_LENGTH)) {
         await this.cli.exec(repoRoot, ['add', '--', ...chunk])
       }
@@ -83,9 +96,11 @@ export class GitService {
   }
 
   async unstage(relativePaths: string[]): Promise<GitStatusSnapshot> {
-    const repoRoot = await this.requireRepoRoot()
+    const context = this.captureWorkspaceContext()
+    const repoRoot = await this.requireRepoRoot(context)
     const paths = relativePaths.map(sanitizeRelativePath)
     await this.runExclusive(async () => {
+      this.assertWorkspaceContext(context)
       for (const chunk of splitInChunks(paths, MAX_CLI_LENGTH)) {
         try {
           await this.cli.exec(repoRoot, ['reset', '-q', 'HEAD', '--', ...chunk])
@@ -103,11 +118,13 @@ export class GitService {
   }
 
   async discard(relativePaths: string[]): Promise<GitStatusSnapshot> {
-    const repoRoot = await this.requireRepoRoot()
+    const context = this.captureWorkspaceContext()
+    const repoRoot = await this.requireRepoRoot(context)
     const untracked = new Set(this.snapshot.untracked.map((change) => change.path))
     const cleanPaths = relativePaths.filter((path) => untracked.has(sanitizeRelativePath(path))).map(sanitizeRelativePath)
     const trackedPaths = relativePaths.filter((path) => !untracked.has(sanitizeRelativePath(path))).map(sanitizeRelativePath)
     await this.runExclusive(async () => {
+      this.assertWorkspaceContext(context)
       if (trackedPaths.length > 0) {
         await this.cli.exec(repoRoot, ['checkout', '-q', '--', ...trackedPaths])
       }
@@ -125,13 +142,19 @@ export class GitService {
     if (this.snapshot.staged.length === 0) {
       throw new GitError({ message: 'There are no staged changes to commit.', gitErrorCode: GitErrorCodes.NoStagedChanges })
     }
-    const repoRoot = await this.requireRepoRoot()
-    await this.runExclusive(() => this.cli.exec(repoRoot, ['commit', '-m', message]))
+    const context = this.captureWorkspaceContext()
+    const repoRoot = await this.requireRepoRoot(context)
+    await this.runExclusive(() => {
+      this.assertWorkspaceContext(context)
+      return this.cli.exec(repoRoot, ['commit', '-m', message])
+    })
     return await this.refresh()
   }
 
   async diff(relativePath: string, staged?: boolean): Promise<string> {
-    const repoRoot = await this.requireRepoRoot()
+    const context = this.captureWorkspaceContext()
+    const repoRoot = await this.requireRepoRoot(context)
+    this.assertWorkspaceContext(context)
     const path = sanitizeRelativePath(relativePath)
     if (staged) {
       return (await this.cli.exec(repoRoot, ['diff', '--cached', '--', path])).stdout
@@ -151,15 +174,90 @@ export class GitService {
 
   async checkout(branch: string): Promise<GitStatusSnapshot> {
     this.assertBranchName(branch)
-    const repoRoot = await this.requireRepoRoot()
-    await this.runExclusive(() => this.cli.exec(repoRoot, ['checkout', branch]))
+    const context = this.captureWorkspaceContext()
+    const repoRoot = await this.requireRepoRoot(context)
+    await this.runExclusive(() => {
+      this.assertWorkspaceContext(context)
+      return this.cli.exec(repoRoot, ['checkout', branch])
+    })
+    return await this.refresh()
+  }
+
+  async configureRemote(root: string, name: string, url: string): Promise<GitStatusSnapshot> {
+    return this.configureProjectRemote(root, name, url, false)
+  }
+
+  async connectGitHub(root: string, name: string, url: string): Promise<GitStatusSnapshot> {
+    // Only credential-free GitHub.com HTTPS URLs are eligible for this flow.
+    if (!/^https:\/\/github\.com\/[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/.test(url)) {
+      throw new Error('Enter a GitHub repository URL such as https://github.com/owner/repo.git.')
+    }
+    return this.configureProjectRemote(root, name, url, true)
+  }
+
+  private async configureProjectRemote(root: string, name: string, url: string, githubOAuth: boolean): Promise<GitStatusSnapshot> {
+    this.assertRemoteName(name)
+    if (!/^(https:\/\/|ssh:\/\/|git@[\w.-]+:)/.test(url) || /[\s\x00-\x1f]/.test(url)) {
+      throw new GitError({ message: 'Enter an HTTPS or SSH Git remote URL.' })
+    }
+    const context = this.captureWorkspaceContext()
+    if (!sameWorkspacePath(context.root, root)) throw new GitError({ message: 'The active project changed. Reopen Git setup.' })
+    await this.runExclusive(async () => {
+      this.assertWorkspaceContext(context)
+      if (githubOAuth) {
+        try {
+          await this.authCli.exec(root, ['credential-manager', '--version'], { timeoutMs: 10_000 })
+        } catch {
+          throw new Error('GitHub sign-in requires Git Credential Manager. Install or update Git with Git Credential Manager enabled, then try again.')
+        }
+        try {
+          await this.authCli.exec(root, ['credential-manager', 'github', 'login', '--url', 'https://github.com', '--browser'], {
+            env: { GCM_INTERACTIVE: 'always' }, timeoutMs: 180_000,
+          })
+        } catch {
+          throw new Error('GitHub sign-in was cancelled, failed, or timed out. Try connecting again and complete authorization in your browser.')
+        }
+        try {
+          await this.authCli.exec(root, ['-c', 'credential.helper=manager', 'ls-remote', '--', url], {
+            env: { GCM_INTERACTIVE: 'never' }, timeoutMs: 30_000,
+          })
+        } catch {
+          throw new Error('GitHub sign-in completed, but this repository could not be read. Check its URL and your account or organization access, then retry.')
+        }
+        if (root !== this.workspace.state().root) throw new Error('The active project changed. Reopen Git setup.')
+      }
+      let repoRoot: string
+      try {
+        repoRoot = await this.cli.getRepositoryRoot(root)
+      } catch {
+        await this.cli.exec(root, ['init'])
+        repoRoot = root
+      }
+      if (!sameWorkspacePath(repoRoot, root)) {
+        // Git discovery walks up to a parent repository until this project is
+        // initialized. Connect Git is the explicit opt-in that creates the
+        // project-local repository, so the parent repository remains untouched.
+        await this.cli.exec(root, ['init'])
+        repoRoot = root
+      }
+      const remotes = await this.listRemotes(repoRoot)
+      await this.cli.exec(repoRoot, ['remote', remotes.includes(name) ? 'set-url' : 'add', name, url])
+      if (githubOAuth) {
+        // Scope the helper to this project; never alter global Git configuration.
+        await this.cli.exec(repoRoot, ['config', '--local', 'credential.helper', 'manager'])
+      }
+    })
     return await this.refresh()
   }
 
   async createBranch(name: string): Promise<GitStatusSnapshot> {
     this.assertBranchName(name)
-    const repoRoot = await this.requireRepoRoot()
-    await this.runExclusive(() => this.cli.exec(repoRoot, ['checkout', '-b', name]))
+    const context = this.captureWorkspaceContext()
+    const repoRoot = await this.requireRepoRoot(context)
+    await this.runExclusive(() => {
+      this.assertWorkspaceContext(context)
+      return this.cli.exec(repoRoot, ['checkout', '-b', name])
+    })
     return await this.refresh()
   }
 
@@ -169,9 +267,12 @@ export class GitService {
    */
   async ensureBranch(name: string): Promise<GitStatusSnapshot> {
     this.assertBranchName(name)
-    const repoRoot = await this.requireRepoRoot()
+    const context = this.captureWorkspaceContext()
+    const repoRoot = await this.requireRepoRoot(context)
+    this.assertWorkspaceContext(context)
     if (await this.currentBranch(repoRoot) === name) return await this.refresh()
     await this.runExclusive(async () => {
+      this.assertWorkspaceContext(context)
       const status = await this.cli.status(repoRoot)
       if (status.stdout.length > 0) {
         throw new GitError({
@@ -186,7 +287,9 @@ export class GitService {
   }
 
   async head(): Promise<string | null> {
-    const repoRoot = await this.requireRepoRoot()
+    const context = this.captureWorkspaceContext()
+    const repoRoot = await this.requireRepoRoot(context)
+    this.assertWorkspaceContext(context)
     try {
       const value = (await this.cli.exec(repoRoot, ['rev-parse', 'HEAD'])).stdout.trim()
       return value || null
@@ -199,7 +302,9 @@ export class GitService {
   /** Renderer/prompt-safe remote metadata; actual Git commands continue using the remote name. */
   async remoteUrl(remote: string): Promise<string | null> {
     this.assertRemoteName(remote)
-    const repoRoot = await this.requireRepoRoot()
+    const context = this.captureWorkspaceContext()
+    const repoRoot = await this.requireRepoRoot(context)
+    this.assertWorkspaceContext(context)
     try {
       const raw = (await this.cli.exec(repoRoot, ['remote', 'get-url', remote])).stdout.trim()
       return raw ? this.sanitizeRemoteUrl(raw) : null
@@ -210,7 +315,9 @@ export class GitService {
   }
 
   async hasUncommittedChanges(): Promise<boolean> {
-    const repoRoot = await this.requireRepoRoot()
+    const context = this.captureWorkspaceContext()
+    const repoRoot = await this.requireRepoRoot(context)
+    this.assertWorkspaceContext(context)
     return (await this.cli.status(repoRoot)).stdout.length > 0
   }
 
@@ -223,8 +330,10 @@ export class GitService {
   async pushBranch(remote: string, branch: string): Promise<GitStatusSnapshot> {
     this.assertRemoteName(remote)
     this.assertBranchName(branch)
-    const repoRoot = await this.requireRepoRoot()
+    const context = this.captureWorkspaceContext()
+    const repoRoot = await this.requireRepoRoot(context)
     await this.runExclusive(async () => {
+      this.assertWorkspaceContext(context)
       const current = await this.currentBranch(repoRoot)
       if (current !== branch) {
         throw new GitError({ message: `Refusing to push ${branch}: the active branch is ${current ?? 'detached HEAD'}.` })
@@ -262,7 +371,9 @@ export class GitService {
   async remoteBranchHead(remote: string, branch: string): Promise<string | null> {
     this.assertRemoteName(remote)
     this.assertBranchName(branch)
-    const repoRoot = await this.requireRepoRoot()
+    const context = this.captureWorkspaceContext()
+    const repoRoot = await this.requireRepoRoot(context)
+    this.assertWorkspaceContext(context)
     const result = await this.cli.exec(repoRoot, ['ls-remote', '--heads', remote, `refs/heads/${branch}`])
     return this.parseRemoteHead(result.stdout)
   }
@@ -270,8 +381,10 @@ export class GitService {
   async fastForwardBranch(remote: string, branch: string): Promise<GitStatusSnapshot> {
     this.assertRemoteName(remote)
     this.assertBranchName(branch)
-    const repoRoot = await this.requireRepoRoot()
+    const context = this.captureWorkspaceContext()
+    const repoRoot = await this.requireRepoRoot(context)
     await this.runExclusive(async () => {
+      this.assertWorkspaceContext(context)
       const current = await this.currentBranch(repoRoot)
       if (current !== branch) throw new GitError({ message: `Refusing to sync ${branch}: the active branch is ${current ?? 'detached HEAD'}.` })
       const status = await this.cli.status(repoRoot)
@@ -292,20 +405,32 @@ export class GitService {
   }
 
   async push(): Promise<GitStatusSnapshot> {
-    const repoRoot = await this.requireRepoRoot()
-    await this.runExclusive(() => this.cli.exec(repoRoot, ['push']))
+    const context = this.captureWorkspaceContext()
+    const repoRoot = await this.requireRepoRoot(context)
+    await this.runExclusive(() => {
+      this.assertWorkspaceContext(context)
+      return this.cli.exec(repoRoot, ['push'])
+    })
     return await this.refresh()
   }
 
   async pull(): Promise<GitStatusSnapshot> {
-    const repoRoot = await this.requireRepoRoot()
-    await this.runExclusive(() => this.cli.exec(repoRoot, ['pull', '--ff-only']))
+    const context = this.captureWorkspaceContext()
+    const repoRoot = await this.requireRepoRoot(context)
+    await this.runExclusive(() => {
+      this.assertWorkspaceContext(context)
+      return this.cli.exec(repoRoot, ['pull', '--ff-only'])
+    })
     return await this.refresh()
   }
 
   async fetch(): Promise<GitStatusSnapshot> {
-    const repoRoot = await this.requireRepoRoot()
-    await this.runExclusive(() => this.cli.exec(repoRoot, ['fetch']))
+    const context = this.captureWorkspaceContext()
+    const repoRoot = await this.requireRepoRoot(context)
+    await this.runExclusive(() => {
+      this.assertWorkspaceContext(context)
+      return this.cli.exec(repoRoot, ['fetch'])
+    })
     return await this.refresh()
   }
 
@@ -315,18 +440,33 @@ export class GitService {
     return run
   }
 
-  private async requireRepoRoot(): Promise<string> {
-    const root = this.workspace.state().root
-    return await this.cli.getRepositoryRoot(root)
+  private async requireRepoRoot(expected?: WorkspaceState): Promise<string> {
+    const state = this.workspace.state()
+    this.assertWorkspaceUsableState(state)
+    if (expected) this.assertWorkspaceContext(expected)
+    const root = state.root
+    const repoRoot = await this.cli.getRepositoryRoot(root)
+    if (expected) this.assertWorkspaceContext(expected)
+    if (!sameWorkspacePath(repoRoot, root)) {
+      throw new GitError({ message: 'This project folder is inside another Git repository. Select a folder with its own Git repository for project Git.' })
+    }
+    return repoRoot
   }
 
-  private async buildSnapshot(root: string): Promise<GitStatusSnapshot> {
+  private async buildSnapshot(workspace: WorkspaceState): Promise<GitStatusSnapshot> {
+    const root = workspace.root
+    if (workspace.binding === 'unlinked' || workspace.binding === 'missing') return this.emptySnapshot(root)
     let repoRoot: string
     try {
       repoRoot = await this.cli.getRepositoryRoot(root)
     } catch {
       return this.emptySnapshot(root)
     }
+
+    // A project may live below a repository that belongs to its parent project.
+    // Do not leak that parent repository's branch, remotes, or changes into this
+    // project's Git controls. Project Git is scoped to the exact workspace root.
+    if (!sameWorkspacePath(repoRoot, root)) return this.emptySnapshot(root, repoRoot)
 
     const empty = this.emptySnapshot(root, repoRoot)
     try {
@@ -358,6 +498,26 @@ export class GitService {
       console.warn('Git status snapshot failed:', error instanceof Error ? error.message : String(error))
       return empty
     }
+  }
+
+  private captureWorkspaceContext(): WorkspaceState {
+    const state = this.workspace.state()
+    this.assertWorkspaceUsableState(state)
+    return state
+  }
+
+  private assertWorkspaceContext(expected: WorkspaceState): void {
+    const current = this.workspace.state()
+    if (!sameWorkspaceContext(expected, current)) {
+      throw new GitError({ message: 'The active project changed. Reopen Git and try again.' })
+    }
+    this.assertWorkspaceUsableState(current)
+  }
+
+  private assertWorkspaceUsableState(state: WorkspaceState): void {
+    const binding = state.binding
+    if (binding === 'unlinked') throw new GitError({ message: 'The active project has no workspace linked. Select a workspace for this project first.' })
+    if (binding === 'missing') throw new GitError({ message: 'The active project workspace is unavailable. Relocate the project workspace first.' })
   }
 
   private emptySnapshot(root: string, repoRoot: string | null = null): GitStatusSnapshot {
@@ -451,10 +611,10 @@ export class GitService {
 
   private async listRemotes(root: string): Promise<string[]> {
     try {
-      const result = await this.cli.exec(root, ['config', '--local', '--list'])
-      const seen = new Set<string>()
-      for (const remote of parseGitRemotes(result.stdout)) seen.add(remote.name)
-      return [...seen]
+      // `git config --list` emits flat key=value records, not the INI sections
+      // consumed by parseGitRemotes. Ask Git for names directly instead.
+      const result = await this.cli.exec(root, ['remote'])
+      return [...new Set(result.stdout.split(/\r?\n/).map((name) => name.trim()).filter(Boolean))]
     } catch {
       return []
     }
@@ -497,6 +657,18 @@ export class GitService {
       ...(error instanceof GitError && error.stderr ? { stderr: error.stderr } : {}),
     })
   }
+}
+
+function sameWorkspacePath(left: string, right: string): boolean {
+  const normalize = (value: string): string => value.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase()
+  return normalize(left) === normalize(right)
+}
+
+function sameWorkspaceContext(left: WorkspaceState, right: WorkspaceState): boolean {
+  return sameWorkspacePath(left.root, right.root)
+    && left.binding === right.binding
+    && left.projectId === right.projectId
+    && left.projectWorkspacePath === right.projectWorkspacePath
 }
 
 function toCommitInfo(commit: Commit): GitCommitInfo {

@@ -58,3 +58,21 @@ export function resolveModelSelectionDisplay(
     stale: false,
   }
 }
+
+/**
+ * Whether ND's own provider record marks this model as accepting images.
+ * The runtime model catalog does not project modalities, so the composer's
+ * Vision signal comes from the same settings ND compiles into the runtime.
+ * ND's `deepseek` compatibility route appears in the runtime catalog as
+ * `deepseek-official`, so both ids resolve to the same record.
+ */
+export function isVisionModel(
+  providers: readonly ModelProvider[],
+  providerId: string,
+  modelId: string,
+): boolean {
+  const routeId = providerId === 'deepseek-official' ? 'deepseek' : providerId
+  const provider = providers.find((item) => item.id === routeId)
+  const model = provider?.models.find((item) => item.id === modelId)
+  return model?.inputTypes?.includes('image') ?? false
+}

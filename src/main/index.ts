@@ -1,5 +1,5 @@
 import 'dotenv/config'
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, Menu, type MenuItemConstructorOptions } from 'electron'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
 import { dirname, join } from 'node:path'
@@ -25,9 +25,13 @@ import { NdPencilController } from './design/nd-pencil-controller.js'
 import { DshSurfaceController } from './dsh/dsh-surface.js'
 import { pickFreePort } from './dsh/gateway-client.js'
 import { AntigravityEngine } from './engines/antigravity/antigravity-engine.js'
+import { ClaudeCodeCliEngine } from './engines/claude/claude-code-cli-engine.js'
 import { CodexCliEngine } from './engines/codex/codex-cli-engine.js'
+import { CursorCliEngine } from './engines/cursor/cursor-cli-engine.js'
 import { CodingEngineRegistry } from './engines/coding-engine-registry.js'
 import { EngineSessionRouter } from './engines/engine-session-router.js'
+import { PiCodingEngine } from './engines/pi/pi-coding-engine.js'
+import { ZcodeCliEngine } from './engines/zcode/zcode-cli-engine.js'
 import { GitService } from './git/git-service.js'
 import { HarnessService } from './harness/harness-service.js'
 import { registerIpc } from './ipc.js'
@@ -57,6 +61,10 @@ let mainWindow: BrowserWindow | undefined
 let activeHarness: HarnessService | undefined
 let activeCodexEngine: CodexCliEngine | undefined
 let activeAntigravityEngine: AntigravityEngine | undefined
+let activeZcodeEngine: ZcodeCliEngine | undefined
+let activePiEngine: PiCodingEngine | undefined
+let activeCursorEngine: CursorCliEngine | undefined
+let activeClaudeEngine: ClaudeCodeCliEngine | undefined
 let activeEngineRouter: EngineSessionRouter | undefined
 let activeNdPencil: NdPencilController | undefined
 let activeTerminalManager: TerminalManager | undefined
@@ -141,12 +149,20 @@ async function createWindow(cdpPort: number): Promise<void> {
   activeCodexEngine = codexEngine
   const antigravityEngine = new AntigravityEngine({ log: (line) => console.log(line) })
   activeAntigravityEngine = antigravityEngine
+  const zcodeEngine = new ZcodeCliEngine({ log: (line) => console.log(line) })
+  activeZcodeEngine = zcodeEngine
+  const piEngine = new PiCodingEngine({ log: (line) => console.log(line) })
+  activePiEngine = piEngine
+  const cursorEngine = new CursorCliEngine({ log: (line) => console.log(line) })
+  activeCursorEngine = cursorEngine
+  const claudeEngine = new ClaudeCodeCliEngine({ log: (line) => console.log(line) })
+  activeClaudeEngine = claudeEngine
   const engineRouter = new EngineSessionRouter(harness, codexEngine, workspace, antigravityEngine, {
     browser,
     git,
     storePath: join(userData, 'chatgpt-web-sessions.json'),
     log: (line) => console.warn(line),
-  })
+  }, zcodeEngine, piEngine, cursorEngine, claudeEngine)
   activeEngineRouter = engineRouter
   const organizationStore = new OrganizationStore(join(userData, 'organization.json'))
   const interruptedRuns = await organizationStore.reconcileInterruptedRuns()
@@ -201,7 +217,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   const approvalGate = new OrganizationApprovalGate(organizationStore, harness)
   const qa = new QaService()
   qa.setProjectRoot(workspace.state().root)
-  const disposeIpc = registerIpc({ window, preloadPath: preload, browser, dshSurface, engines, engineRouter, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, qa, sessionArchive, capabilities })
+  const disposeIpc = registerIpc({ window, preloadPath: preload, browser, dshSurface, engines, engineRouter, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, qa, sessionArchive, capabilities, organizationStore })
   const disposeTerminalIpc = registerTerminalIpc(window, terminalManager)
   const disposeDesignIpc = registerDesignIpc(window, design, ndPencil)
   const disposeOrganizationIpc = registerOrganizationIpc(window, organizationStore, organization, projectWorkspace, projectRuntime)
@@ -227,11 +243,12 @@ async function createWindow(cdpPort: number): Promise<void> {
     const rootChanged = lastWorkspaceRoot !== state.root
     lastWorkspaceRoot = state.root
     if (rootChanged) void ndPencil.setVisible(false)
-    if (rootChanged) {
-      void git.handleWorkspaceChanged().catch((error) => {
-        console.warn('Git workspace synchronization failed:', error instanceof Error ? error.message : String(error))
-      })
-    }
+    // Git belongs to the active workspace/project context. A project can
+    // become unlinked or change identity without changing the filesystem root,
+    // so refresh on every workspace state event rather than only root changes.
+    void git.handleWorkspaceChanged().catch((error) => {
+      console.warn('Git workspace synchronization failed:', error instanceof Error ? error.message : String(error))
+    })
     if (!window.isDestroyed()) window.webContents.send(IPC.workspaceStateEvent, state)
     void design.handleWorkspaceChanged(state).catch((error) => {
       console.warn('Design workspace synchronization failed:', error instanceof Error ? error.message : String(error))
@@ -300,12 +317,16 @@ async function createWindow(cdpPort: number): Promise<void> {
     },
     event: dispatchEngineFrame,
     gatewayReady: (url) => {
-      console.log(`ND-DSH gateway ready at ${url}`)
+      console.log(`ND-DSH gateway ready at ${new URL(url).origin}`)
       dshSurface.setTarget(url)
     },
   })
   codexEngine.setEmitter(dispatchEngineFrame)
   antigravityEngine.setEmitter(dispatchEngineFrame)
+  zcodeEngine.setEmitter(dispatchEngineFrame)
+  piEngine.setEmitter(dispatchEngineFrame)
+  cursorEngine.setEmitter(dispatchEngineFrame)
+  claudeEngine.setEmitter(dispatchEngineFrame)
   engineRouter.setEmitter(dispatchEngineFrame)
 
   const rendererUrl = process.env.ELECTRON_RENDERER_URL || process.env.VITE_DEV_SERVER_URL
@@ -317,6 +338,26 @@ async function createWindow(cdpPort: number): Promise<void> {
   })
   window.webContents.on('will-redirect', (event, url) => {
     if (!allowedRenderer(url)) event.preventDefault()
+  })
+  // Native edit context menu: chat text copies like desktop text (select →
+  // right-click → Copy), inputs get the standard editing verbs, images copy
+  // directly. Roles only — no navigation; image copy uses the copyImageAt
+  // webContents call because Electron ships no `copyImage` menu role.
+  window.webContents.on('context-menu', (_event, props) => {
+    const items: MenuItemConstructorOptions[] = []
+    if (props.isEditable) {
+      if (props.selectionText.trim().length > 0) items.push({ role: 'cut' }, { role: 'copy' })
+      items.push({ role: 'paste' }, { role: 'selectAll' })
+    } else {
+      if (props.selectionText.trim().length > 0) items.push({ role: 'copy' })
+      if (props.mediaType === 'image' && props.srcURL) {
+        items.push({
+          label: 'Copy image',
+          click: () => window.webContents.copyImageAt(props.x, props.y),
+        })
+      }
+    }
+    if (items.length > 0) Menu.buildFromTemplate(items).popup({ window })
   })
   window.webContents.on('before-input-event', (event, input) => {
     if ((input.control || input.meta) && input.key.toLowerCase() === 's' && input.type === 'keyDown') {
@@ -375,9 +416,17 @@ async function createWindow(cdpPort: number): Promise<void> {
     if (activeHarness === harness) activeHarness = undefined
     if (activeCodexEngine === codexEngine) activeCodexEngine = undefined
     if (activeAntigravityEngine === antigravityEngine) activeAntigravityEngine = undefined
+    if (activeZcodeEngine === zcodeEngine) activeZcodeEngine = undefined
+    if (activePiEngine === piEngine) activePiEngine = undefined
+    if (activeCursorEngine === cursorEngine) activeCursorEngine = undefined
+    if (activeClaudeEngine === claudeEngine) activeClaudeEngine = undefined
     if (activeTerminalManager === terminalManager) { activeTerminalManager = undefined; beginTerminalClose(terminalManager) }
     beginCodexClose(codexEngine)
     beginAntigravityClose(antigravityEngine)
+    beginZcodeClose(zcodeEngine)
+    beginPiClose(piEngine)
+    beginCursorClose(cursorEngine)
+    beginClaudeClose(claudeEngine)
     beginHarnessClose(harness)
   })
 }
@@ -413,6 +462,26 @@ app.on('before-quit', (event) => {
     const antigravityEngine = activeAntigravityEngine
     activeAntigravityEngine = undefined
     beginAntigravityClose(antigravityEngine)
+  }
+  if (activeZcodeEngine) {
+    const zcodeEngine = activeZcodeEngine
+    activeZcodeEngine = undefined
+    beginZcodeClose(zcodeEngine)
+  }
+  if (activePiEngine) {
+    const piEngine = activePiEngine
+    activePiEngine = undefined
+    beginPiClose(piEngine)
+  }
+  if (activeCursorEngine) {
+    const cursorEngine = activeCursorEngine
+    activeCursorEngine = undefined
+    beginCursorClose(cursorEngine)
+  }
+  if (activeClaudeEngine) {
+    const claudeEngine = activeClaudeEngine
+    activeClaudeEngine = undefined
+    beginClaudeClose(claudeEngine)
   }
   if (activeEngineRouter) {
     const engineRouter = activeEngineRouter
@@ -458,6 +527,22 @@ function beginCodexClose(codexEngine: CodexCliEngine): void {
 
 function beginAntigravityClose(antigravityEngine: AntigravityEngine): void {
   trackClose(antigravityEngine.close().catch((error) => console.error('Failed to close the Antigravity engine cleanly:', error)))
+}
+
+function beginZcodeClose(zcodeEngine: ZcodeCliEngine): void {
+  trackClose(zcodeEngine.close().catch((error) => console.error('Failed to close the ZCode engine cleanly:', error)))
+}
+
+function beginPiClose(piEngine: PiCodingEngine): void {
+  trackClose(piEngine.close().catch((error) => console.error('Failed to close the Pi engine cleanly:', error)))
+}
+
+function beginCursorClose(cursorEngine: CursorCliEngine): void {
+  trackClose(cursorEngine.close().catch((error) => console.error('Failed to close the Cursor engine cleanly:', error)))
+}
+
+function beginClaudeClose(claudeEngine: ClaudeCodeCliEngine): void {
+  trackClose(claudeEngine.close().catch((error) => console.error('Failed to close the Claude Code engine cleanly:', error)))
 }
 
 function beginEngineRouterClose(engineRouter: EngineSessionRouter): void {

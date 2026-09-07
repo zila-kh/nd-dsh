@@ -81,6 +81,24 @@ describe('OrganizationOrchestrator', () => {
     expect(harness.prompts).toHaveLength(3)
   })
 
+  it('assembles a structured PM plan from streamed assistant chunks', async () => {
+    const { store, project, orchestrator } = await fixture()
+    const planRun = await orchestrator.planProject(project.id)
+    const output = plan([{ title: 'Streamed feature', description: 'Build it' }])
+    let seq = 1
+    for (const chunk of [output.slice(0, 24), output.slice(24, 80), output.slice(80)]) {
+      await orchestrator.handleHarnessEvent({
+        kind: 'session-event',
+        sessionId: planRun.sessionId,
+        event: { type: 'assistant/chunk', seq: seq++, time: Date.now(), data: { chunk: { type: 'text-delta', text: chunk } } },
+      })
+    }
+    await orchestrator.handleHarnessEvent(stopped(planRun.sessionId))
+    const state = await store.state()
+    expect(state.tasks[0]?.title).toBe('Streamed feature')
+    expect(state.tasks[0]?.status).toBe('in_progress')
+  })
+
   it('connects the full autopilot OS loop including rework, memory, dependencies, and next-task progression', async () => {
     const { store, project, harness, orchestrator } = await fixture(4)
     const planRun = await orchestrator.runNext(project.id, false)

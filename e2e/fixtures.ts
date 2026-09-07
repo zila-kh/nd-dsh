@@ -31,7 +31,9 @@ export async function launchApp(): Promise<LaunchedApp> {
  * part of close, so asking `app.process()` from a later timer can dereference
  * an already-disposed channel even though the OS process is still exiting.
  */
-export async function closeApp({ app }: LaunchedApp): Promise<void> {
+export async function closeApp(launched: LaunchedApp | undefined): Promise<void> {
+  if (!launched) return
+  const { app } = launched
   const child = app.process()
   const close = app.close().catch(() => undefined)
   const settled = await settlesWithin(close, 8_000)

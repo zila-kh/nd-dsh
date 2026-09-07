@@ -43,7 +43,8 @@
     "react-dom": "19.2.8",
     "react-resizable-panels": "^4.12.3",
     "sonner": "^2.0.8",
-    "tailwind-merge": "^3.6.0"
+    "tailwind-merge": "^3.6.0",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@playwright/test": "1.62.1",
@@ -51,6 +52,7 @@
     "@types/node": "24.10.0",
     "@types/react": "19.2.4",
     "@types/react-dom": "19.2.4",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "6.0.5",
     "agent-browser": "0.34.0",
     "electron": "43.4.0",

@@ -36,3 +36,4 @@ artifacts/
 # Todo example local runtime state (npm cache, logs, JSON data store)
 examples/todo/cache/
 examples/todo/data/
+beta-qa-report-**

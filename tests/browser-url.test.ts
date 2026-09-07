@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_BROWSER_URL, normalizeBrowserUrl } from '../src/main/browser/browser-url.js'
+import { DEFAULT_BROWSER_URL, normalizeBrowserUrl, sanitizeBrowserUserAgent } from '../src/main/browser/browser-url.js'
 
 describe('normalizeBrowserUrl', () => {
   it('uses the local development URL for blank input', () => {
@@ -28,5 +28,12 @@ describe('normalizeBrowserUrl', () => {
     expect(() => normalizeBrowserUrl('file:///tmp/secret')).toThrow(/Unsupported browser protocol/)
     expect(() => normalizeBrowserUrl('javascript:alert(1)')).toThrow(/Unsupported browser protocol/)
     expect(() => normalizeBrowserUrl('about:downloads')).toThrow(/Unsupported browser protocol/)
+  })
+})
+
+describe('sanitizeBrowserUserAgent', () => {
+  it('removes only the Electron runtime token', () => {
+    expect(sanitizeBrowserUserAgent('Mozilla/5.0 Chrome/134.0.0.0 Safari/537.36 Electron/43.4.0')).toBe('Mozilla/5.0 Chrome/134.0.0.0 Safari/537.36')
+    expect(sanitizeBrowserUserAgent('Mozilla/5.0 Chrome/134.0.0.0 Safari/537.36')).toBe('Mozilla/5.0 Chrome/134.0.0.0 Safari/537.36')
   })
 })

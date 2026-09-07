@@ -1,5 +1,11 @@
 export const DEFAULT_BROWSER_URL = 'about:blank'
 
+/** Keep Chromium's normal identity without exposing the Electron runtime token. */
+export function sanitizeBrowserUserAgent(userAgent: string): string {
+  const sanitized = userAgent.replace(/\s+Electron\/[^\s]+/gi, '').trim()
+  return sanitized || userAgent
+}
+
 const LOOPBACK_HOST = /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:[/?#]|$)/i
 const DOMAIN_WITH_PORT = /^(?:[a-z0-9-]+\.)+[a-z0-9-]+:\d+(?:[/?#]|$)/i
 const ALLOWED_EXPLICIT_PROTOCOL = /^(?:https?|about):/i

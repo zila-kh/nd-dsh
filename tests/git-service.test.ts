@@ -8,6 +8,7 @@ import type { WorkspaceState } from '../src/shared/contracts.js'
 
 const ROOT = 'C:/workspaces/demo'
 const REPO_ROOT = 'C:/workspaces/demo'
+const NESTED_ROOT = 'C:/workspaces/demo/examples'
 const LOCAL_SHA = '2222222222222222222222222222222222222222'
 const REMOTE_SHA = '3333333333333333333333333333333333333333'
 
@@ -21,13 +22,6 @@ const COMMIT_LOG = [
   'main',
   'Latest commit',
   '\x00',
-].join('\n')
-
-const REMOTE_CONFIG = [
-  '[remote "origin"]',
-  '\turl = https://example.com/demo.git',
-  '\tfetch = +refs/heads/*:refs/remotes/origin/*',
-  '',
 ].join('\n')
 
 const DIRTY_STATUS = [
@@ -44,15 +38,16 @@ type FakeGitResponse = {
   stdout?: string
   stderr?: string
   stdoutSequence?: string[]
+  delayMs?: number
 }
 
 /** Scripted stand-in for the git binary: each spawn records its argv and answers from `script`. */
 class FakeGit {
-  readonly calls: Array<{ args: string[]; env: NodeJS.ProcessEnv | undefined }> = []
+  readonly calls: Array<{ args: string[]; env: NodeJS.ProcessEnv | undefined; cwd: string | undefined }> = []
   script: FakeGitResponse[] = []
 
   spawn: GitSpawnFunction = (_path, args, options) => {
-    const record = { args, env: options.env }
+    const record = { args, env: options.env, cwd: options.cwd }
     this.calls.push(record)
     const response = this.script.find((candidate) => candidate.match.every((token) => args.includes(token)))
       ?? { match: [], stdout: '' }
@@ -63,7 +58,7 @@ class FakeGit {
     child.stdout = stdout
     child.stderr = stderr
     child.stdin = new PassThrough()
-    process.nextTick(() => {
+    const complete = () => {
       const sequenceOutput = response.stdoutSequence?.shift()
       if (response.stderr !== undefined) stderr.write(response.stderr)
       if (sequenceOutput !== undefined) stdout.write(sequenceOutput)
@@ -71,7 +66,9 @@ class FakeGit {
       stdout.end()
       stderr.end()
       emitter.emit('exit', response.exitCode ?? 0, null)
-    })
+    }
+    if (response.delayMs) setTimeout(complete, response.delayMs)
+    else process.nextTick(complete)
     return child as unknown as ChildProcess
   }
 
@@ -85,10 +82,10 @@ class FakeGit {
   }
 }
 
-function createService(fake: FakeGit): GitService {
+function createService(fake: FakeGit, root = ROOT): GitService {
   const workspace = {
     state(): WorkspaceState {
-      return { root: ROOT, name: 'demo' }
+      return { root, name: 'demo' }
     },
   }
   return new GitService(workspace, { gitPath: '/fake/git', spawnProcess: fake.spawn })
@@ -101,7 +98,7 @@ function repositoryScript(): FakeGitResponse[] {
     { match: ['symbolic-ref'], stdout: 'main\n' },
     { match: ['for-each-ref'], stdout: 'main\x00origin/main\x00[ahead 2]\nfeature\x00\x00\n' },
     { match: ['log'], stdout: COMMIT_LOG },
-    { match: ['config', '--local'], stdout: REMOTE_CONFIG },
+    { match: ['remote'], stdout: 'origin\r\n' },
   ]
 }
 
@@ -122,6 +119,78 @@ beforeEach(() => {
 })
 
 describe('GitService snapshot', () => {
+  it('reads remote names directly from Git, including Windows line endings', async () => {
+    fake.script = [{ match: ['remote'], stdout: 'origin\r\nupstream\r\n' }, ...repositoryScript()]
+    expect((await createService(fake).refresh()).remotes).toEqual(['origin', 'upstream'])
+    expect(fake.argsOf('config', '--list')).toBeUndefined()
+  })
+  it('configures a named remote without pushing and rejects a stale project', async () => {
+    fake.script = repositoryScript()
+    const service = createService(fake)
+    await service.configureRemote(ROOT, 'origin', 'https://example.com/new.git')
+    expect(fake.argsOf('remote', 'set-url')).toContain('https://example.com/new.git')
+    expect(fake.argsOf('push')).toBeUndefined()
+    const count = fake.calls.length
+    await expect(service.configureRemote('C:/another', 'origin', 'https://example.com/new.git')).rejects.toThrow('active project changed')
+    await expect(service.configureRemote(ROOT, '-bad', 'https://example.com/new.git')).rejects.toThrow('valid Git remote')
+    await expect(service.configureRemote(ROOT, 'origin', 'file:///secret')).rejects.toThrow('HTTPS or SSH')
+    expect(fake.calls).toHaveLength(count)
+  })
+  it('authenticates GitHub with Git Credential Manager OAuth before configuring the remote', async () => {
+    fake.script = [
+      { match: ['credential-manager', '--version'], stdout: '2.6.1\n' },
+      { match: ['credential-manager', 'github', 'login'], stdout: 'Logged in\n' },
+      { match: ['ls-remote'], stdout: `${LOCAL_SHA}\tHEAD\n` },
+      ...repositoryScript(),
+    ]
+    const service = createService(fake)
+
+    await service.connectGitHub(ROOT, 'origin', 'https://github.com/acme/demo.git')
+
+    expect(fake.argsOf('credential-manager', 'github', 'login')).toEqual(expect.arrayContaining(['--browser']))
+    expect(fake.argsOf('ls-remote')).toEqual(expect.arrayContaining(['https://github.com/acme/demo.git']))
+    expect(fake.argsOf('config', '--local', 'credential.helper', 'manager')).toBeDefined()
+    expect(fake.argsOf('push')).toBeUndefined()
+  })
+  it('does not expose or mutate the previous repository for an unlinked project', async () => {
+    fake.script = repositoryScript()
+    const workspace = {
+      state(): WorkspaceState {
+        return { root: ROOT, name: 'demo', binding: 'unlinked', projectId: 'project-without-folder' }
+      },
+    }
+    const service = new GitService(workspace, { gitPath: '/fake/git', spawnProcess: fake.spawn })
+
+    const state = await service.refresh()
+
+    expect(state.repoRoot).toBeNull()
+    expect(state.branch).toBeNull()
+    expect(state.remotes).toEqual([])
+    expect(fake.calls).toHaveLength(0)
+    await expect(service.configureRemote(ROOT, 'origin', 'https://example.com/new.git')).rejects.toThrow(/no workspace linked/i)
+    expect(fake.calls).toHaveLength(0)
+  })
+  it('ignores a slow Git refresh from the previous project when the context changes', async () => {
+    let context: WorkspaceState = { root: ROOT, name: 'demo', binding: 'project', projectId: 'first-project' }
+    fake.script = [
+      { match: ['rev-parse', '--show-toplevel'], stdout: `${ROOT}\n` },
+      { match: ['status'], stdout: DIRTY_STATUS, delayMs: 25 },
+      { match: ['symbolic-ref'], stdout: 'main\n' },
+      { match: ['for-each-ref'], stdout: 'main\x00\x00\n' },
+      { match: ['log'], stdout: COMMIT_LOG },
+      { match: ['remote'], stdout: 'origin\n' },
+    ]
+    const workspace = { state: (): WorkspaceState => context }
+    const service = new GitService(workspace, { gitPath: '/fake/git', spawnProcess: fake.spawn })
+
+    const previous = service.refresh()
+    context = { ...context, binding: 'unlinked', projectId: 'second-project' }
+    const active = await service.refresh()
+
+    expect(active.repoRoot).toBeNull()
+    await previous
+    expect(service.current.repoRoot).toBeNull()
+  })
   it('groups porcelain entries into staged/unstaged/untracked/conflict sets', async () => {
     fake.script = repositoryScript()
     const service = createService(fake)
@@ -140,6 +209,29 @@ describe('GitService snapshot', () => {
     expect(state.heads).toHaveLength(1)
     expect(state.heads[0]).toMatchObject({ hash: '1111111111111111111111111111111111111111', message: 'Latest commit' })
     expect(state.branches[0]).toMatchObject({ name: 'main', ahead: 2, upstream: 'origin/main' })
+  })
+
+  it('does not expose a parent repository as project Git', async () => {
+    fake.script = repositoryScript()
+    const state = await createService(fake, NESTED_ROOT).refresh()
+
+    expect(state.root).toBe(NESTED_ROOT)
+    expect(state.repoRoot).toBe(REPO_ROOT)
+    expect(state.branch).toBeNull()
+    expect(state.remotes).toEqual([])
+    expect(state.staged).toEqual([])
+    expect(fake.argsOf('status')).toBeUndefined()
+  })
+
+  it('initializes project-local Git instead of configuring the parent repository', async () => {
+    fake.script = repositoryScript()
+    const service = createService(fake, NESTED_ROOT)
+
+    await service.configureRemote(NESTED_ROOT, 'origin', 'https://example.com/new.git')
+    expect(fake.argsOf('init')).toEqual(['init'])
+    expect(fake.argsOf('remote', 'set-url')).toContain('https://example.com/new.git')
+    expect(fake.calls.find((call) => call.args.includes('init'))?.cwd).toBe(NESTED_ROOT)
+    expect(fake.calls.find((call) => call.args.includes('set-url'))?.cwd).toBe(NESTED_ROOT)
   })
 
   it('reports an empty snapshot outside a repository', async () => {

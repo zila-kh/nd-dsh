@@ -63,6 +63,9 @@ class FakeAppServer {
       case 'initialize':
         this.respond(message.id, {})
         break
+      case 'model/list':
+        this.respond(message.id, { data: [{ id: 'catalog-id', model: 'codex-test-model', displayName: 'Codex Test Model' }], nextCursor: null })
+        break
       case 'thread/start': {
         this.threadCounter += 1
         this.lastThreadId = `thr-${this.threadCounter}`
@@ -141,6 +144,21 @@ async function makeEngine() {
 }
 
 describe('CodexCliEngine', () => {
+  it('lists native models and applies a selected model to a turn', async () => {
+    const { engine, server } = await makeEngine()
+    try {
+      await expect(engine.listModels()).resolves.toEqual([{ id: 'codex-test-model', name: 'Codex Test Model' }])
+      const { sessionId } = await engine.createSession({ cwd: '/workspace' })
+      const run = engine.run('hello', { sessionId, model: 'codex-test-model' })
+      await flush()
+      expect(server.requests.find((request) => request.method === 'turn/start')?.params.model).toBe('codex-test-model')
+      server.completeTurn('completed')
+      await run
+    } finally {
+      await engine.close()
+    }
+  })
+
   it('creates a session, streams a turn into shared frames, and settles cleanly', async () => {
     const { engine, server, frames } = await makeEngine()
     try {

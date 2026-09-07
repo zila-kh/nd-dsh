@@ -1,3 +1,4 @@
+import { foldEvent, foldHistory, type HistoryEventEnvelope } from '../../../shared/chat-events'
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type KeyboardEvent, type ReactNode, Fragment } from 'react'
 import type {
   CodingEngineDescriptor,
@@ -13,7 +14,7 @@ import type {
   SessionSummary,
   WorkspaceSuggestion,
 } from '../../../shared/contracts'
-import { ANTIGRAVITY_ENGINE_ID, CODEX_CLI_ENGINE_ID, ND_HARNESS_ENGINE_ID } from '../../../shared/coding-engines'
+import { ANTIGRAVITY_ENGINE_ID, CODEX_CLI_ENGINE_ID, ND_HARNESS_ENGINE_ID, ZCODE_CLI_ENGINE_ID } from '../../../shared/coding-engines'
 import { DisplayGroup, groupEntries, parseFileChanges, toolPreview } from '../../../shared/chat-grouping'
 import { filterSessionsInProjectScope, isSessionInProjectScope } from '../../../shared/session-project-scope'
 import { splitAssistantSegments, type ReviewVerdict } from '../../../shared/structured-output'
@@ -21,7 +22,7 @@ import type { ProjectPlanInput } from '../../../shared/organization'
 import type { AskQuestion, ThreadEntry, TodoItem } from '../lib/types'
 import { FOLDER_ACCENT, SKILL_ACCENT, fileExtensionOf, fileAccent } from '../lib/file-accents'
 import { applyMention, detectMentionTrigger } from '../../../shared/mentions'
-import { resolveModelSelectionDisplay, type ModelCatalogState } from '../lib/model-selection'
+import { isVisionModel, resolveModelSelectionDisplay, type ModelCatalogState } from '../lib/model-selection'
 import { describeAgentError, type AgentErrorRoute } from '../lib/runtime-notices'
 import {
   ArchiveIcon,
@@ -51,10 +52,14 @@ import {
 import { cn } from '../lib/utils'
 import { TerminalDock } from './TerminalDock'
 import { ChangedFilesCard } from './ChangedFilesCard'
+import { ChatContextPopover } from './ChatContextPopover'
+import { ZcodeModelConfigDialog } from './ZcodeModelConfigDialog'
 import { MarkdownLite } from './MarkdownLite'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 
 interface ChatPanelProps {
+  onGitEditableChange?(editable: boolean): void
   status: HarnessStatus | null
   workspaceName?: string
   sessionsCollapsed: boolean
@@ -79,12 +84,17 @@ const PERMISSION_MODES = [
   { id: 'danger-full-access', label: 'Full access' },
 ] as const
 
-const RESULT_MAX_CHARS = 2_000
-
 /** Stable fallback so the project-scope memos keep a consistent dependency. */
 const EMPTY_SESSION_PROJECTS: Readonly<Record<string, string>> = {}
 
 const FS_WRITE_TOOL_NAMES = new Set(['fs_edit', 'fs_write', 'fs_write_text', 'fs_create', 'fs_apply_patch', 'fs_str_replace', 'apply_patch'])
+
+/**
+ * ZCode fails its session with `ModelConfigMissing` until its own CLI config
+ * resolves an explicit model provider; on that error ND offers its provider
+ * GUI instead of asking the user to hand-write `~/.zcode/cli/config.json`.
+ */
+const ZCODE_MODEL_CONFIG_MISSING = /Model config is missing|explicit model provider/i
 
 interface SkillSuggestion {
   name: string
@@ -112,12 +122,13 @@ function fileMentionTag(relativePath: string): string {
   return extension ? extension.toUpperCase().slice(0, 5) : 'FILE'
 }
 
-export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionProjectScope, projects, onSelectProject, onError, onOpenSettings, onOpenFile, externalPrompt, onExternalPromptConsumed, elementAttachmentVersion }: ChatPanelProps) {
+export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionProjectScope, projects, onSelectProject, onError, onOpenSettings, onOpenFile, externalPrompt, onExternalPromptConsumed, elementAttachmentVersion, onGitEditableChange }: ChatPanelProps) {
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [terminalOpen, setTerminalOpen] = useState(false)
   const [threads, setThreads] = useState<Record<string, ThreadEntry[]>>({})
   const [busySessions, setBusySessions] = useState<Set<string>>(new Set())
+  const [submitting, setSubmitting] = useState(false)
   const [models, setModels] = useState<SessionModels | null>(null)
   const [modelCatalogState, setModelCatalogState] = useState<ModelCatalogState>('idle')
   const [providerRoutes, setProviderRoutes] = useState<ModelProvider[]>([])
@@ -147,11 +158,14 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
   // Dedicated terminal session that hosts the interactive `agy` TUI for native
   // account switching (/logout); independent from per-chat terminals.
   const [switchAccountTerminalOpen, setSwitchAccountTerminalOpen] = useState(false)
-  // Native model selection for engines that expose a catalog (Antigravity).
-  // `null` means "engine-native default": no model flag is sent at all.
+  // Native model selection for engines that expose a catalog.
+  // `null` asks the adapter to use its native configured default.
   const [engineModels, setEngineModels] = useState<EngineModelOption[]>([])
-  const [engineModel, setEngineModel] = useState<string | null>(null)
+  const [engineModelSelections, setEngineModelSelections] = useState<Record<string, string | null>>({})
   const [engineModelMenuOpen, setEngineModelMenuOpen] = useState(false)
+  // GUI for the ZCode CLI's own model-provider config (~/.zcode/cli/config.json);
+  // opened from the ZCode runtime error card and the engine model menu.
+  const [zcodeConfigOpen, setZcodeConfigOpen] = useState(false)
   // Chat archival lives ND-side; the sidebar filters on it and each thread
   // card gets a hover menu that toggles it (harness and engine chats alike).
   const [showArchived, setShowArchived] = useState(false)
@@ -185,7 +199,12 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
   const activeSession = useMemo(() => sessions.find((s) => s.sessionId === activeSessionId) ?? null, [sessions, activeSessionId])
   const entries = useMemo(() => threads[activeSessionId ?? ''] ?? [], [threads, activeSessionId])
   const threadContext = useMemo(() => collectThreadContext(entries), [entries])
-  const busy = busySessions.has(activeSessionId ?? '')
+  const busy = busySessions.has(activeSessionId ?? '') || Boolean(activeSession?.running) || Boolean(engineSessions.find((session) => session.sessionId === activeSessionId)?.running)
+  useEffect(() => {
+    const loaded = activeSessionId === null || threads[activeSessionId] !== undefined
+    onGitEditableChange?.(loaded && !submitting && busySessions.size === 0 && !entries.some((entry) => entry.kind === 'user' || entry.kind === 'assistant'))
+    return () => onGitEditableChange?.(false)
+  }, [activeSessionId, submitting, busySessions, entries, threads, onGitEditableChange])
   // Elapsed wall-clock time for the active session's current turn; drives the
   // "Working for 2m 14s" hint next to the thinking indicator.
   const [busyElapsedMs, setBusyElapsedMs] = useState(0)
@@ -209,6 +228,11 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
       ? draftEngineId
       : ND_HARNESS_ENGINE_ID
   const onHarnessThread = activeEngineId === ND_HARNESS_ENGINE_ID
+  const supportsEngineModels = activeEngineId === ANTIGRAVITY_ENGINE_ID || activeEngineId === CODEX_CLI_ENGINE_ID || activeEngineId === ZCODE_CLI_ENGINE_ID
+  const engineModel = engineModelSelections[activeEngineId] ?? null
+  const setEngineModel = (model: string | null): void => {
+    setEngineModelSelections((current) => ({ ...current, [activeEngineId]: model }))
+  }
   const activeEngineName = engines.find((engine) => engine.id === activeEngineId)?.name ?? 'Codex CLI'
   // Extra chat engines come straight from the catalog; unavailable ones never render.
   const chatEngines = useMemo(() => engines.filter((engine) => engine.available && engine.id !== ND_HARNESS_ENGINE_ID), [engines])
@@ -239,6 +263,14 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
       const result = await window.ndDsh.dsh.rpc('session.list', {})
       const items = ((result.value ?? {}) as { items?: SessionSummary[] }).items ?? []
       setSessions(items)
+      setBusySessions((current) => {
+        const next = new Set(current)
+        for (const session of items) {
+          if (session.running) next.add(session.sessionId)
+          else next.delete(session.sessionId)
+        }
+        return next
+      })
       setSessionsLoaded(true)
       setActiveSessionId((current) => current ?? items[0]?.sessionId ?? null)
     } catch (cause) {
@@ -249,7 +281,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
 
   const loadHistory = useCallback(async (sessionId: string): Promise<void> => {
     try {
-      const result = await window.ndDsh.dsh.rpc('session.history', { sessionId, maxMessages: 50 })
+      const result = await window.ndDsh.dsh.rpc('session.history', { sessionId, maxMessages: 2_000 })
       const events = ((result.value ?? {}) as { events?: { event?: HistoryEventEnvelope }[] }).events ?? []
       const entries = foldHistory(events.flatMap((item) => (item.event ? [item.event] : [])))
       setThreads((current) => ({ ...current, [sessionId]: entries }))
@@ -267,7 +299,16 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
 
   const refreshEngineSessions = useCallback(async (): Promise<void> => {
     try {
-      setEngineSessions(await window.ndDsh.engines.sessions())
+      const items = await window.ndDsh.engines.sessions()
+      setEngineSessions(items)
+      setBusySessions((current) => {
+        const next = new Set(current)
+        for (const session of items) {
+          if (session.running) next.add(session.sessionId)
+          else next.delete(session.sessionId)
+        }
+        return next
+      })
     } catch {
       // Engine chat listing stays empty; not an error surface.
     }
@@ -360,11 +401,16 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
   const selectHeaderEngine = useCallback((engineId: string): void => {
     if (engineId === activeEngineId) return
     if (engineId === ND_HARNESS_ENGINE_ID) {
-      void handleNewSession()
+      // Return to the default ND Agent thread without an eager session.create:
+      // the session is created on first send, so selecting Default also works
+      // while the Harness gateway is still starting or lacks a credential.
+      setDraftEngineId(null)
+      setActiveSessionId(null)
+      setChangedFiles([])
       return
     }
     startEngineDraft(engineId)
-  }, [activeEngineId, handleNewSession, startEngineDraft])
+  }, [activeEngineId, startEngineDraft])
 
   useEffect(() => {
     void refreshSessions()
@@ -441,16 +487,16 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
     }
   }, [activeSessionId, engineSessionIds])
 
-  // Engines with a native model catalog (Antigravity) load it once per active
-  // engine; switching threads keeps the chosen slug until the engine changes.
+  // Engines with a native model catalog load it once per active
+  // engine; each engine keeps its own selection when switching between them.
   useEffect(() => {
     setEngineModelMenuOpen(false)
-    if (activeEngineId !== ANTIGRAVITY_ENGINE_ID) {
-      setEngineModels([])
+    setEngineModels([])
+    if (!supportsEngineModels) {
       return
     }
     let cancelled = false
-    void window.ndDsh.engines.models(ANTIGRAVITY_ENGINE_ID)
+    void window.ndDsh.engines.models(activeEngineId)
       .then((options) => {
         if (!cancelled) setEngineModels(options)
       })
@@ -460,7 +506,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
     return () => {
       cancelled = true
     }
-  }, [activeEngineId])
+  }, [activeEngineId, supportsEngineModels])
 
   // Provider routes edited in settings (model removed/renamed, provider
   // disabled) must reach open chat threads: refetch the session's catalog so
@@ -724,7 +770,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
   }
   useEffect(() => {
     if (atBottom) scrollToEnd(false)
-  }, [entries.length, atBottom])
+  }, [entries, atBottom])
 
   useEffect(() => {
     const handleOutsideClick = (event: MouseEvent): void => {
@@ -742,16 +788,16 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
 
   const run = async (): Promise<void> => {
     const input = prompt.trim()
-    if (!input || busy) return
+    if (!input || busy || submitting) return
+    setSubmitting(true)
     setPrompt('')
     setMentionCaret(0)
     setMentionDismissed(null)
     // A drafted engine chat has no session yet: the first send creates it on
     // that engine (router-side); harness sends stay exactly as before.
     const draftEngine = activeSessionId === null ? draftEngineId : null
-    // Antigravity threads carry the picker's slug; every other engine keeps
-    // its native model configuration (no flag is sent).
-    const engineModelOption = activeEngineId === ANTIGRAVITY_ENGINE_ID && engineModel !== null
+    // Direct engines receive only their own selected model slug.
+    const engineModelOption = supportsEngineModels && engineModel !== null
       ? { model: engineModel }
       : {}
     const options = activeSessionId !== null
@@ -767,13 +813,12 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
         void refreshEngineSessions()
       }
       void refreshElementChips()
-      setThreads((current) => ({
-        ...current,
-        [result.sessionId]: [...(current[result.sessionId] ?? []), { kind: 'user', id: crypto.randomUUID(), text: input }],
-      }))
+      // User messages arrive through session events, including on retry.
       if (!sessions.some((s) => s.sessionId === result.sessionId)) void refreshSessions()
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setSubmitting(false)
     }
   }
 
@@ -809,16 +854,13 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
   const retry = async (retryPrompt: string): Promise<void> => {
     if (busy || !retryPrompt.trim()) return
     const options = activeSessionId
-      ? { sessionId: activeSessionId, ...(activeEngineId === ANTIGRAVITY_ENGINE_ID && engineModel !== null ? { model: engineModel } : {}) }
+      ? { sessionId: activeSessionId, ...(supportsEngineModels && engineModel !== null ? { model: engineModel } : {}) }
       : undefined
     try {
       const result = await window.ndDsh.harness.run(retryPrompt, options)
       setActiveSessionId(result.sessionId)
       void refreshElementChips()
-      setThreads((current) => ({
-        ...current,
-        [result.sessionId]: [...(current[result.sessionId] ?? []), { kind: 'user', id: crypto.randomUUID(), text: retryPrompt }],
-      }))
+      // User messages arrive through session events, including on retry.
       if (!sessions.some((s) => s.sessionId === result.sessionId)) void refreshSessions()
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : String(cause))
@@ -936,25 +978,41 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
   return (
     <div className="flex h-full w-full min-h-0 min-w-0 flex-1 flex-row overflow-hidden">
       <aside className={cn('flex h-full min-h-0 w-[185px] shrink-0 grow-0 basis-[185px] flex-col overflow-hidden border-r border-border-soft bg-sidebar', sessionsCollapsed && 'hidden')}>
-        <div className="space-y-1 px-3 pb-1 pt-2">
-          <button
-            className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-border-soft bg-secondary px-3 py-[7px] text-xs font-medium text-soft transition-colors hover:border-border-strong hover:bg-accent hover:text-foreground [&_svg]:size-3.5"
-            onClick={() => void handleNewSession()}
-          >
-            <PlusIcon />
-            <span>New Session</span>
-          </button>
-          {chatEngines.map((engine) => (
-            <button
-              key={engine.id}
-              className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-border-soft bg-transparent px-3 py-[7px] text-xs font-medium text-faint transition-colors hover:border-border-strong hover:bg-accent hover:text-foreground [&_svg]:size-3.5"
-              title={`${engine.description}${engine.unavailableReason ? `\n${engine.unavailableReason}` : ''}`}
-              onClick={() => startEngineDraft(engine.id)}
-            >
-              <PlusIcon />
-              <span>New {engine.name} chat</span>
-            </button>
-          ))}
+        <div className="px-3 pb-1 pt-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                className="flex w-full items-center gap-1.5 rounded-xl border border-border-soft bg-secondary px-3 py-[7px] text-xs font-medium text-soft transition-colors hover:border-border-strong hover:bg-accent hover:text-foreground [&_svg]:size-3.5"
+                title="Start a new chat"
+              >
+                <PlusIcon />
+                <span>New Session</span>
+                <ChevronDownIcon className="ml-auto opacity-60" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-(--radix-dropdown-menu-trigger-width)">
+              <DropdownMenuItem className="text-xs" onSelect={() => void handleNewSession()}>
+                <PlusIcon />
+                <span>New Session</span>
+              </DropdownMenuItem>
+              {chatEngines.length > 0 ? (
+                <>
+                  <DropdownMenuSeparator />
+                  {chatEngines.map((engine) => (
+                    <DropdownMenuItem
+                      key={engine.id}
+                      className="text-xs"
+                      title={`${engine.description}${engine.unavailableReason ? `\n${engine.unavailableReason}` : ''}`}
+                      onSelect={() => startEngineDraft(engine.id)}
+                    >
+                      <PlusIcon />
+                      <span>New {engine.name} chat</span>
+                    </DropdownMenuItem>
+                  ))}
+                </>
+              ) : null}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 py-2">
@@ -1080,7 +1138,9 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
               >
                 {activeSession
                   ? sessionTitle(activeSession)
-                  : draftEngineId !== null
+                  : activeEngineSession
+                    ? activeEngineSession.title
+                    : draftEngineId !== null
                     ? `New ${activeEngineName} chat`
                     : 'No session'}
               </strong>
@@ -1169,7 +1229,7 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
             <div className="flex h-full flex-col items-center justify-center gap-1 p-5 text-center text-faint">
               <span className="mb-1.5 grid size-[46px] place-items-center rounded-xl border border-primary/30 bg-primary/10 text-primary [&_svg]:size-5"><SparkIcon /></span>
               <h3 className="m-0 text-[13px] font-semibold text-soft">{onHarnessThread ? 'ND Agent' : activeEngineName}</h3>
-              <p className="m-0 max-w-[300px] text-[9px]/[1.6]">Ask anything about this workspace — open files, inspect the browser, or plan company goals. Context used during the thread appears on the composer badge.</p>
+              <p className="m-0 max-w-[300px] text-[9px]/[1.6]">Ask anything about this workspace — open files, inspect the browser, or plan company goals. Inspect context usage and thread activity with the Context badge.</p>
             </div>
           ) : null}
           {groupEntries(entries).map((group, index, groups) => {
@@ -1192,6 +1252,10 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
                     onRetry={retry}
                     onSwitchModel={() => { setModelMenuOpen(true); setModelMenuPane('root') }}
                     onSwitchAccount={() => void openAntigravityAccountTerminal()}
+                    {...(group.kind === 'entry' && group.entry.kind === 'notice' && group.entry.tone === 'error'
+                      && ZCODE_MODEL_CONFIG_MISSING.test(group.entry.text) && activeEngineId === ZCODE_CLI_ENGINE_ID
+                      ? { onConfigureModel: () => setZcodeConfigOpen(true) }
+                      : {})}
                     {...(onOpenFile ? { onOpenFile } : {})}
                   />
                 )}
@@ -1233,6 +1297,12 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
           sessionId={switchAccountTerminalOpen ? 'antigravity-account' : activeSessionId}
           {...(switchAccountTerminalOpen || !terminalCwd ? {} : { cwd: terminalCwd })}
           onOpenChange={switchAccountTerminalOpen ? setSwitchAccountTerminalOpen : setTerminalOpen}
+          onError={onError}
+        />
+
+        <ZcodeModelConfigDialog
+          open={zcodeConfigOpen}
+          onClose={() => setZcodeConfigOpen(false)}
           onError={onError}
         />
 
@@ -1417,79 +1487,16 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
                   <span>{activeEngineName}</span>
                 </span>
               )}
-              <div
-                className="relative"
-                onMouseEnter={() => setContextMenuOpen(true)}
-                onMouseLeave={() => setContextMenuOpen(false)}
-              >
-                <button
-                  className="flex h-6 items-center gap-[5px] rounded-full border border-border-strong px-2 font-mono text-[8px] text-faint transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-3"
-                  title="Context used in this thread (hover to inspect)"
-                  onClick={() => { setContextMenuOpen((open) => !open); closeMention() }}
-                >
-                  <ContextIcon />
-                  <span>{threadContext.readFiles.length + threadContext.editedFiles.length}</span>
-                </button>
-                {contextMenuOpen ? (
-                  <div className="absolute bottom-full left-0 right-auto z-[130] mb-1.5 max-h-[300px] w-[250px] overflow-auto rounded-[10px] border border-border-strong bg-surface-1 p-1 shadow-[0_10px_30px_rgba(0,0,0,0.4)]">
-                    <div className="px-2.5 pb-1 pt-1.5 text-[8px] font-bold tracking-[0.12em] text-faint">THREAD CONTEXT</div>
-                    {threadContext.readFiles.length === 0
-                      && threadContext.editedFiles.length === 0
-                      && threadContext.tools.length === 0 ? (
-                      <>
-                        <ContextRow label="Files" value="0" />
-                        <ContextRow label="Tools" value="0" />
-                      </>
-                    ) : (
-                      <>
-                        {threadContext.editedFiles.length > 0 ? (
-                          <div>
-                            <small className="block px-2.5 pb-[3px] pt-1.5 text-[7px] font-bold tracking-[0.1em] text-primary">EDITED</small>
-                            {threadContext.editedFiles.map((file) => (
-                              <button
-                                key={file}
-                                className="flex w-full items-center gap-[7px] rounded-[5px] px-2.5 py-1 text-left font-mono text-[9px] text-soft transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[11px] [&_svg]:shrink-0 [&_svg]:text-faint"
-                                onClick={() => onOpenFile?.(file)}
-                                title={file}
-                              >
-                                <FileIcon />
-                                <span className="truncate">{file}</span>
-                              </button>
-                            ))}
-                          </div>
-                        ) : null}
-                        {threadContext.readFiles.length > 0 ? (
-                          <div>
-                            <small className="block px-2.5 pb-[3px] pt-1.5 text-[7px] font-bold tracking-[0.1em] text-primary">READ</small>
-                            {threadContext.readFiles.map((file) => (
-                              <button
-                                key={file}
-                                className="flex w-full items-center gap-[7px] rounded-[5px] px-2.5 py-1 text-left font-mono text-[9px] text-soft transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[11px] [&_svg]:shrink-0 [&_svg]:text-faint"
-                                onClick={() => onOpenFile?.(file)}
-                                title={file}
-                              >
-                                <FileIcon />
-                                <span className="truncate">{file}</span>
-                              </button>
-                            ))}
-                          </div>
-                        ) : null}
-                        {threadContext.tools.length > 0 ? (
-                          <div>
-                            <small className="block px-2.5 pb-[3px] pt-1.5 text-[7px] font-bold tracking-[0.1em] text-primary">TOOLS</small>
-                            {threadContext.tools.map((tool) => (
-                              <ContextRow key={tool.name} label={tool.name} value={`×${tool.count}`} />
-                            ))}
-                          </div>
-                        ) : null}
-                      </>
-                    )}
-                    <div className="mt-1 border-t border-border-soft px-2.5 py-1.5 font-mono text-[8px] text-faint">
-                      {threadContext.userMessages} prompt{threadContext.userMessages === 1 ? '' : 's'} · {threadContext.assistantMessages} repl{threadContext.assistantMessages === 1 ? 'y' : 'ies'}
-                    </div>
-                  </div>
-                ) : null}
-              </div>
+              <ChatContextPopover
+                key={activeSessionId ?? 'draft'}
+                sessionId={onHarnessThread ? activeSessionId : null}
+                projections={activeSession?.projections?.values}
+                busy={busy}
+                open={contextMenuOpen}
+                onOpenChange={(open) => { setContextMenuOpen(open); if (open) closeMention() }}
+                activity={threadContext}
+                onOpenFile={onOpenFile}
+              />
             </div>
 
             <div className="flex min-w-0 items-center gap-1">
@@ -1587,7 +1594,12 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
                                   }}
                                 >
                                   <span className="min-w-0">
-                                    <span className="block truncate text-[11px] font-medium">{model.name ?? compactModelLabel(model.id)}</span>
+                                    <span className="flex items-center gap-1.5">
+                                      <span className="block truncate text-[11px] font-medium">{model.name ?? compactModelLabel(model.id)}</span>
+                                      {isVisionModel(providerRoutes, group.id, model.id) ? (
+                                        <span className="shrink-0 rounded-full bg-green-400/10 px-1.5 py-px text-[8px] font-semibold uppercase tracking-wide text-green-400" title="This model accepts image input">Vision</span>
+                                      ) : null}
+                                    </span>
                                     {model.name ? <span className="block truncate font-mono text-[8px] text-fainter">{model.id}</span> : null}
                                     {model.description ? <span className="mt-0.5 block line-clamp-2 text-[9px]/[1.35] text-faint">{model.description}</span> : null}
                                   </span>
@@ -1625,11 +1637,11 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
                   </div>
                 ) : null}
               </div>
-              </>) : activeEngineId === ANTIGRAVITY_ENGINE_ID ? (
+              </>) : supportsEngineModels ? (
               <div className="relative">
                 <button
                   className="flex min-w-0 max-w-[135px] shrink items-center gap-1 rounded-md border border-border-soft bg-secondary px-1.5 py-[3px] text-[10px] text-soft transition-colors hover:border-border-strong hover:bg-accent hover:text-foreground [&_svg]:size-3 [&_svg]:shrink-0"
-                  title={engineModel ?? 'Antigravity keeps its own configured model'}
+                  title={engineModel ?? `${activeEngineName} keeps its own configured model`}
                   onClick={() => {
                     const nextOpen = !engineModelMenuOpen
                     setEngineModelMenuOpen(nextOpen)
@@ -1646,9 +1658,9 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
                   <div
                     className="absolute bottom-full right-0 z-[130] mb-1.5 w-[286px] overflow-hidden rounded-xl border border-border-strong bg-surface-1 p-1.5 shadow-[0_14px_40px_rgba(0,0,0,0.42)]"
                     role="menu"
-                    aria-label="Antigravity model"
+                    aria-label={`${activeEngineName} model`}
                   >
-                    <div className="px-2 pb-1 pt-0.5 text-[8px] font-semibold uppercase tracking-[0.11em] text-fainter">Antigravity model</div>
+                    <div className="px-2 pb-1 pt-0.5 text-[8px] font-semibold uppercase tracking-[0.11em] text-fainter">{activeEngineName} model</div>
                     <div className="max-h-[310px] overflow-y-auto px-0.5 pb-0.5">
                       <button
                         type="button"
@@ -1690,9 +1702,20 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
                         )
                       })}
                       {engineModels.length === 0 ? (
-                        <div className="px-2.5 py-2 text-[10px]/[1.4] text-faint">Model catalog is unavailable; Antigravity keeps its native configuration.</div>
+                        <div className="px-2.5 py-2 text-[10px]/[1.4] text-faint">Model catalog is unavailable; {activeEngineName} keeps its native configuration.</div>
                       ) : null}
                     </div>
+                    {activeEngineId === ZCODE_CLI_ENGINE_ID ? (
+                      <button
+                        type="button"
+                        className="flex w-full items-center gap-1.5 border-t border-border-soft px-2.5 py-2 text-left text-[10px] font-medium text-soft transition-colors hover:bg-accent hover:text-foreground"
+                        title="Set up model providers in the ZCode CLI config without leaving ND"
+                        onClick={() => { setEngineModelMenuOpen(false); setZcodeConfigOpen(true) }}
+                      >
+                        <SettingsIcon className="size-3 shrink-0 text-faint" />
+                        Configure model providers…
+                      </button>
+                    ) : null}
                   </div>
                 ) : null}
               </div>
@@ -1890,15 +1913,6 @@ function compactModelLabel(value: string): string {
   return clean.split('/').filter(Boolean).at(-1) ?? clean
 }
 
-function ContextRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between px-2.5 py-1 font-mono text-[9px] text-soft">
-      <span>{label}</span>
-      <span className="text-faint">{value}</span>
-    </div>
-  )
-}
-
 interface ThreadEntryViewProps {
   entry: ThreadEntry
   isLastAssistant?: boolean
@@ -1908,9 +1922,11 @@ interface ThreadEntryViewProps {
   onRetry?(prompt: string): void
   onSwitchModel?(): void
   onSwitchAccount?(): void
+  /** Opens the ND GUI for the engine's own model config (ZCode CLI provider setup). */
+  onConfigureModel?(): void
 }
 
-function ThreadEntryView({ entry, isLastAssistant, retryPrompt, onAnswerApproval, onOpenFile, onRetry, onSwitchModel, onSwitchAccount }: ThreadEntryViewProps) {
+function ThreadEntryView({ entry, isLastAssistant, retryPrompt, onAnswerApproval, onOpenFile, onRetry, onSwitchModel, onSwitchAccount, onConfigureModel }: ThreadEntryViewProps) {
   switch (entry.kind) {
     case 'user':
       return (
@@ -1972,7 +1988,7 @@ function ThreadEntryView({ entry, isLastAssistant, retryPrompt, onAnswerApproval
               Quota is native to your Antigravity account: wait for the reset, switch model, or click <span className="font-medium">Switch account</span> to run <code className="font-mono">agy</code> in a terminal and use <code className="font-mono">/logout</code> to sign in as another Google user.
             </div>
           ) : null}
-          {(entry.tone === 'error' && entry.retryPrompt && onRetry) || (entry.switchAccount && onSwitchAccount) ? (
+          {(entry.tone === 'error' && entry.retryPrompt && onRetry) || (entry.switchAccount && onSwitchAccount) || onConfigureModel ? (
             <div className="mt-2 flex items-center gap-2">
               {entry.tone === 'error' && entry.retryPrompt && onRetry ? (
                 <button
@@ -1982,6 +1998,17 @@ function ThreadEntryView({ entry, isLastAssistant, retryPrompt, onAnswerApproval
                 >
                   <RotateIcon className="size-3" />
                   Retry
+                </button>
+              ) : null}
+              {onConfigureModel ? (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-1 text-[11px] font-medium text-destructive transition-colors hover:bg-destructive/20 active:bg-destructive/25"
+                  title="Set up the model provider for this engine without leaving ND"
+                  onClick={onConfigureModel}
+                >
+                  <SettingsIcon className="size-3" />
+                  Configure model
                 </button>
               ) : null}
               {onSwitchModel ? (
@@ -2417,124 +2444,6 @@ function QuestionCard({ entry }: { entry: Extract<ThreadEntry, { kind: 'question
       )}
     </article>
   )
-}
-
-// ── session event fold ────────────────────────────────────────────────────────
-
-interface HistoryEventEnvelope {
-  type: string
-  seq: number
-  data?: unknown
-}
-
-function foldHistory(events: HistoryEventEnvelope[]): ThreadEntry[] {
-  const entries: ThreadEntry[] = []
-  for (const envelope of events) {
-    if (!envelope) continue
-    foldEventInto(entries, envelope)
-  }
-  return entries
-}
-
-function foldEvent(entries: ThreadEntry[], envelope: HistoryEventEnvelope): ThreadEntry[] {
-  const next = [...entries]
-  foldEventInto(next, envelope)
-  return next
-}
-
-function foldEventInto(entries: ThreadEntry[], envelope: HistoryEventEnvelope): void {
-  const data = (envelope.data ?? {}) as Record<string, unknown>
-  switch (envelope.type) {
-    case 'user/message': {
-      const text = messageText(data.message)
-      if (!text) return
-      const last = entries.at(-1)
-      if (last?.kind === 'user' && last.text === text) return
-      entries.push({ kind: 'user', id: crypto.randomUUID(), text })
-      return
-    }
-    case 'assistant/chunk': {
-      const text = messageText(data.chunk)
-      if (!text) return
-      const last = entries.at(-1)
-      if (last?.kind === 'assistant' && last.streaming) {
-        last.text = `${last.text}${text}`
-      } else {
-        entries.push({ kind: 'assistant', id: crypto.randomUUID(), text, streaming: true })
-      }
-      return
-    }
-    case 'assistant/message': {
-      const text = messageText(data.message)
-      if (text === undefined) return
-      const last = entries.at(-1)
-      if (last?.kind === 'assistant' && last.streaming) {
-        last.text = text
-        last.streaming = false
-      } else {
-        entries.push({ kind: 'assistant', id: crypto.randomUUID(), text })
-      }
-      return
-    }
-    case 'agent/reasoning': {
-      const text = typeof data.text === 'string' ? data.text : ''
-      if (!text) return
-      const last = entries.at(-1)
-      if (last?.kind === 'reasoning' && last.text.length < 4000) {
-        last.text = `${last.text}\n${text}`
-      } else {
-        entries.push({ kind: 'reasoning', id: crypto.randomUUID(), text })
-      }
-      return
-    }
-    case 'tool/call': {
-      const callId = typeof data.callId === 'string' ? data.callId : undefined
-      const name = typeof data.name === 'string' ? data.name : 'tool'
-      entries.push({ kind: 'tool', id: crypto.randomUUID(), ...(callId === undefined ? {} : { callId }), name, args: data.arguments, status: 'running' })
-      return
-    }
-    case 'tool/result': {
-      const runningIndex = entries.findIndex((entry) => entry.kind === 'tool' && entry.status === 'running')
-      const text = messageText(data.message) ?? ''
-      const summary = typeof data.error === 'string' ? `Error: ${data.error}` : text.slice(0, RESULT_MAX_CHARS)
-      if (runningIndex === -1) {
-        entries.push({ kind: 'tool', id: crypto.randomUUID(), name: 'tool', status: typeof data.error === 'string' ? 'error' : 'done', result: summary })
-      } else {
-        const entry = entries[runningIndex]
-        if (entry?.kind === 'tool') {
-          entry.status = typeof data.error === 'string' ? 'error' : 'done'
-          entry.result = summary
-        }
-      }
-      return
-    }
-    case 'todo/write': {
-      const todos = Array.isArray(data.todos) ? data.todos as unknown as TodoItem[] : []
-      const last = entries.at(-1)
-      if (last?.kind === 'todo') last.items = todos
-      else entries.push({ kind: 'todo', id: crypto.randomUUID(), items: todos })
-      return
-    }
-    default:
-      // turn/step markers, request headers, compaction records, and plugin
-      // events stay out of the surface; the trajectory view owns those.
-      return
-  }
-}
-
-function messageText(message: unknown): string | undefined {
-  if (!message || typeof message !== 'object') return undefined
-  const record = message as Record<string, unknown>
-  if (typeof record.content === 'string') return record.content
-  if (!Array.isArray(record.content)) return undefined
-  const parts: string[] = []
-  for (const block of record.content) {
-    if (block && typeof block === 'object' && (block as Record<string, unknown>).type === 'text') {
-      const text = (block as Record<string, unknown>).text
-      if (typeof text === 'string') parts.push(text)
-    }
-  }
-  return parts.length > 0 ? parts.join('\n') : undefined
 }
 
 function collectChangedFiles(entries: ThreadEntry[]): string[] {

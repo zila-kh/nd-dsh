@@ -1,19 +1,26 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import { MoreHorizontal } from 'lucide-react'
 import type { CodingEngineDescriptor, ModelProvider, WorkspaceState } from '../../../shared/contracts'
 import type { CapabilityAssignmentSnapshot, CapabilityDescriptor, CapabilityKind, CapabilityProviderStatus } from '../../../shared/capabilities'
 import { DEFAULT_CAPABILITY_PROVIDER } from '../../../shared/capabilities'
 import { ND_HARNESS_ENGINE_ID } from '../../../shared/coding-engines'
 import type { OrganizationPolicyEffect, OrganizationRun, OrganizationSnapshot, OrganizationTask, ProjectRuntimeStatus, TaskPriority } from '../../../shared/organization'
 import { DEFAULT_PROJECT_PORT } from '../../../shared/organization'
+import type { RepositoryBoardCard, RepositoryWorkflowPrd, RepositoryWorkflowTask, WorkflowProjectView } from '../../../shared/workflow-plugins'
+import { projectRepositoryBoard, WORKFLOW_BOARD_COLUMNS } from '../../../shared/workflow-plugins'
 import { Card as UiCard } from './ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu'
 import { Input } from './ui/input'
+import { WorkflowIntegrationPanel } from './WorkflowIntegrationPanel'
 import { cn } from '../lib/utils'
 
 interface Props {
   workspace: WorkspaceState | null
   onOpenDeepSeek(): void
+  /** Hands a prepared prompt to the agent console (prefills the chat). */
+  onAskAgent?(prompt: string): void
   onError(message: string): void
 }
 
@@ -38,7 +45,7 @@ const CAPABILITY_SELECTS: Array<{ kind: CapabilityKind; label: string; title: st
   { kind: 'context', label: 'Context', title: 'How workspace understanding is gathered before this employee runs' },
 ]
 
-export function OrganizationDashboard({ workspace, onOpenDeepSeek, onError }: Props) {
+export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, onError }: Props) {
   const [state, setState] = useState<OrganizationSnapshot | null>(null)
   const [section, setSection] = useState<Section>('overview')
   const [busy, setBusy] = useState<string | null>(null)
@@ -55,6 +62,9 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onError }: Pr
   const [providers, setProviders] = useState<ModelProvider[]>([])
   const [runtime, setRuntime] = useState<ProjectRuntimeStatus | null>(null)
   const [runtimeDraft, setRuntimeDraft] = useState({ startCommand: '', testCommand: '', targetUrl: '', targetPort: '', healthCheckPath: '' })
+  const [workflowView, setWorkflowView] = useState<WorkflowProjectView>({})
+  const [showWorkflow, setShowWorkflow] = useState(false)
+  const [repoTaskPath, setRepoTaskPath] = useState<string | null>(null)
 
   useEffect(() => {
     let mounted = true
@@ -103,6 +113,28 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onError }: Pr
   const memory = useMemo(() => state?.memory.filter((item) => item.companyId === company?.id && (!item.projectId || item.projectId === project?.id)) ?? [], [state, company?.id, project?.id])
   const runs = useMemo(() => state?.runs.filter((item) => item.companyId === company?.id && (!project || item.projectId === project.id)).slice(0, 8) ?? [], [state, company?.id, project])
   const activity = useMemo(() => state?.activity.filter((item) => item.companyId === company?.id && (!project || !item.projectId || item.projectId === project.id)).slice(0, 12) ?? [], [state, company?.id, project])
+  // Repository cards project beside ND tasks but never merge into ND metrics.
+  const repoBoard = useMemo(
+    () => projectRepositoryBoard(workflowView.snapshot, workflowView.binding ? `repo:${workflowView.binding.pluginId}` : 'repo'),
+    [workflowView],
+  )
+  // Clicked repository ticket -> full source record for the detail modal.
+  const repoTaskDetail = useMemo(
+    () => workflowView.snapshot?.tasks.find((item) => item.sourcePath === repoTaskPath) ?? null,
+    [workflowView.snapshot, repoTaskPath],
+  )
+  const repoTasksByPath = useMemo(
+    () => new Map((workflowView.snapshot?.tasks ?? []).map((item) => [item.sourcePath, item])),
+    [workflowView.snapshot],
+  )
+
+  // Clicking a repository ticket opens the agent console with the task's
+  // full context prefilled; the card menu holds detail/copy actions.
+  const openRepoDetail = (task: RepositoryWorkflowTask): void => setRepoTaskPath(task.sourcePath)
+  const openRepoChat = (task: RepositoryWorkflowTask): void => {
+    if (onAskAgent) onAskAgent(buildRepoTaskPrompt(task))
+    else setRepoTaskPath(task.sourcePath)
+  }
 
   // Dev-server lifecycle state for the active project, kept live by the
   // main-process runtime service.
@@ -126,6 +158,29 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onError }: Pr
     return () => { mounted = false }
     // Reseed only when switching projects; snapshot refreshes must not clobber typing.
   }, [project?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Repository workflow mirror for the active project: main-process ownership
+  // means the renderer only ever asks by company/project ids.
+  useEffect(() => {
+    if (!company || !project) {
+      setWorkflowView({})
+      return
+    }
+    const workflowPlugins = window.ndDshWorkflowPlugins
+    if (!workflowPlugins || typeof workflowPlugins.snapshot !== 'function' || typeof workflowPlugins.onChanged !== 'function') {
+      setWorkflowView({})
+      return
+    }
+    let mounted = true
+    const load = (): void => {
+      void workflowPlugins.snapshot(company.id, project.id)
+        .then((value) => { if (mounted) setWorkflowView(value) })
+        .catch(() => undefined)
+    }
+    load()
+    const off = workflowPlugins.onChanged(() => load())
+    return () => { mounted = false; off() }
+  }, [company?.id, project?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const activeRuntime = runtime && (!project || runtime.projectId === project.id) ? runtime : null
 
@@ -356,6 +411,26 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onError }: Pr
       </DialogContent>
     </Dialog>
 
+    {company && project ? (
+      <WorkflowIntegrationPanel
+        companyId={company.id}
+        projectId={project.id}
+        projectName={project.name}
+        hasWorkspace={Boolean(project.workspacePath)}
+        open={showWorkflow}
+        onOpenChange={setShowWorkflow}
+        onError={onError}
+      />
+    ) : null}
+
+    {repoTaskDetail ? (
+      <RepositoryTaskModal
+        task={repoTaskDetail}
+        snapshot={workflowView.snapshot}
+        onClose={() => setRepoTaskPath(null)}
+      />
+    ) : null}
+
     <div className="flex min-h-[46px] items-stretch overflow-x-auto border-b border-border-soft bg-surface-1">
       <strong className="flex items-center px-3 text-xs tracking-[0.1em] text-faint">PROJECTS</strong>
       {projects.length === 0 ? (
@@ -503,7 +578,29 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onError }: Pr
         </div>
       </> : null}
 
-      {section === 'work' ? <Card title={project ? `${project.name} work board` : 'Work board'}>
+      {section === 'work' ? <Card
+        title={project ? `${project.name} work board` : 'Work board'}
+        action={project ? (
+          <div className="flex items-center gap-2">
+            {workflowView.snapshot?.stale ? (
+              <span className="inline-flex items-center rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.06em] text-warning" title={workflowView.snapshot.lastError ?? undefined}>
+                repo stale
+              </span>
+            ) : null}
+            {workflowView.pluginMissing ? (
+              <span className="inline-flex items-center rounded-full border border-destructive/30 bg-destructive/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.06em] text-destructive">
+                plugin missing
+              </span>
+            ) : null}
+            {workflowView.disconnected ? (
+              <span className="inline-flex items-center rounded-full border border-border-strong bg-secondary px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.06em] text-muted-foreground">
+                workflow off
+              </span>
+            ) : null}
+            <button className={orgButton} onClick={() => setShowWorkflow(true)}>Workflow</button>
+          </div>
+        ) : undefined}
+      >
         {project ? (
           <form className="mb-2 grid grid-cols-[1fr_2fr_1.5fr_auto] gap-[7px]" onSubmit={(event) => void createTask(event)}>
             <input placeholder="Task title" value={taskDraft.title} onChange={(event) => setTaskDraft((value) => ({ ...value, title: event.target.value }))} required className={orgInput} />
@@ -523,15 +620,66 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onError }: Pr
           </form>
         ) : null}
         <div className="grid grid-cols-[repeat(5,minmax(160px,1fr))] gap-2 overflow-x-auto max-[1100px]:grid-cols-[repeat(5,220px)]">
-          {(['ready', 'in_progress', 'review', 'blocked', 'completed'] as const).map((status) => (
-            <section key={status} className="min-h-[300px] rounded-[7px] border border-border-soft bg-surface-0 p-2">
-              <header className="mb-[7px] flex justify-between text-xs font-bold uppercase text-muted-foreground">
-                {status.replace('_', ' ')} <b>{tasks.filter((item) => item.status === status).length}</b>
-              </header>
-              {tasks.filter((item) => item.status === status).map((item) => <TaskCard key={item.id} task={item} state={state} busy={busy} run={action} />)}
-            </section>
-          ))}
+          {(['ready', 'in_progress', 'review', 'blocked', 'completed'] as const).map((status) => {
+            const repoCards = repoBoard[status]
+            return (
+              <section key={status} className="min-h-[300px] rounded-[7px] border border-border-soft bg-surface-0 p-2">
+                <header className="mb-[7px] flex items-center justify-between text-xs font-bold uppercase text-muted-foreground">
+                  <span>{status.replace('_', ' ')}</span>
+                  <span className="flex items-center gap-1">
+                    <b>{tasks.filter((item) => item.status === status).length}{repoCards.length ? <span className="font-normal normal-case text-faint">+{repoCards.length} repo</span> : null}</b>
+                    {onAskAgent ? (
+                      <button
+                        type="button"
+                        aria-label={`Ask the agent to add or advance a ${status.replace('_', ' ')} task`}
+                        title={`Ask the agent to add or advance a ${status.replace('_', ' ')} task`}
+                        className="grid size-[18px] place-items-center rounded-[5px] border border-transparent text-faint transition-colors hover:border-border-strong hover:bg-secondary hover:text-foreground"
+                        onClick={() => onAskAgent(buildColumnPrompt(status))}
+                      >
+                        +
+                      </button>
+                    ) : null}
+                  </span>
+                </header>
+                {tasks.filter((item) => item.status === status).map((item) => <TaskCard key={item.id} task={item} state={state} busy={busy} run={action} />)}
+                {repoCards.map((card) => {
+              const task = repoTasksByPath.get(card.sourcePath)
+              return (
+                <RepositoryCard
+                  key={card.key}
+                  card={card}
+                  task={task}
+                  onOpenDetail={() => setRepoTaskPath(card.sourcePath)}
+                  onOpenChat={() => { if (task) openRepoChat(task) }}
+                />
+              )
+            })}
+              </section>
+            )
+          })}
         </div>
+        {repoBoard.needs_attention.length ? (
+          <div className="mt-2 rounded-[7px] border border-warning/25 bg-warning/[0.06] p-2">
+            <header className="mb-[7px] text-xs font-bold uppercase text-warning">
+              Repository · needs attention <b>{repoBoard.needs_attention.length}</b>
+            </header>
+            {repoBoard.needs_attention.map((card) => {
+              const task = repoTasksByPath.get(card.sourcePath)
+              return (
+                <RepositoryCard
+                  key={card.key}
+                  card={card}
+                  task={task}
+                  onOpenDetail={() => setRepoTaskPath(card.sourcePath)}
+                  onOpenChat={() => { if (task) openRepoChat(task) }}
+                />
+              )
+            })}
+            <p className="m-0 px-1 text-[11px] text-muted-foreground">
+              Ambiguous repository records are never given an invented status. Resolve them in the repository, then refresh the integration.
+            </p>
+          </div>
+        ) : null}
       </Card> : null}
 
       {section === 'workforce' ? <div className="mb-2.5 grid grid-cols-1 gap-2.5 min-[1100px]:grid-cols-2">
@@ -699,6 +847,262 @@ function TaskAction({ task, busy, run, reviewRetry }: { task: OrganizationTask; 
     return <button className={cn(orgButton, 'h-[22px] px-1.5 text-[11px]')} disabled={busy !== null || Boolean(task.reviewSessionId)} onClick={() => void run(`review-${task.id}`, () => window.ndDshOrganization.reviewTask(task.id))}>{task.reviewSessionId ? 'Reviewing…' : reviewRetry ? 'Retry review' : 'Review'}</button>
   }
   return <small className="shrink-0">{task.status}</small>
+}
+
+/**
+ * Read-only mirrored repository card. Clicking it opens the agent console
+ * with the task's full context prefilled; the three-dot menu holds more
+ * options (open detail, copy source path). It never offers Run, Retry,
+ * Review, or lifecycle drag actions, and completion/acceptance labels stay
+ * explicitly source-reported facts.
+ */
+function RepositoryCard({ card, task, onOpenDetail, onOpenChat }: {
+  card: RepositoryBoardCard
+  task?: RepositoryWorkflowTask | undefined
+  onOpenDetail(): void
+  onOpenChat(): void
+}) {
+  const hasTask = Boolean(task)
+  return (
+    <article
+      className={cn(
+        'mb-[7px] flex flex-col gap-1.5 rounded-[7px] border border-dashed border-border-strong bg-sidebar p-[9px] transition-colors',
+        hasTask ? 'cursor-pointer hover:border-primary/40' : '',
+      )}
+      role={hasTask ? 'button' : undefined}
+      tabIndex={hasTask ? 0 : undefined}
+      title={hasTask ? 'Ask the agent to work on this repository task' : undefined}
+      onClick={() => { if (hasTask) onOpenChat() }}
+      onKeyDown={(event) => {
+        if (!hasTask) return
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          onOpenChat()
+        }
+      }}
+    >
+      <div className="flex items-center justify-between gap-1.5">
+        <small className="text-[11px] uppercase tracking-[0.06em] text-faint">{card.lifecycle}{card.legacyArchive ? ' · archived' : ''}</small>
+        <div className="flex shrink-0 items-center gap-1">
+          <small className="rounded-full border border-border-strong bg-secondary px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-faint">repo</small>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label="Repository task options"
+                className="grid size-[18px] place-items-center rounded-[5px] border border-transparent text-faint transition-colors hover:border-border-strong hover:bg-secondary hover:text-foreground"
+                onClick={(event) => event.stopPropagation()}
+                onKeyDown={(event) => event.stopPropagation()}
+              >
+                <MoreHorizontal className="size-3.5" aria-hidden="true" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-[170px]">
+              <DropdownMenuItem onSelect={() => { if (hasTask) onOpenChat() }}>Ask agent about this task</DropdownMenuItem>
+              <DropdownMenuItem onSelect={onOpenDetail}>Open detail</DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                disabled={!task}
+                onSelect={() => { if (task) void navigator.clipboard.writeText(task.sourcePath) }}
+              >
+                Copy source path
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
+      <strong className="text-sm">{card.title}</strong>
+      <code className="truncate font-mono text-[10px] text-faint" title={card.sourcePath}>{card.sourcePath}</code>
+      {card.criteriaTotal > 0 ? (
+        <small className="text-[11px] text-muted-foreground">Criteria {card.criteriaChecked}/{card.criteriaTotal} checked — checked boxes do not imply completion.</small>
+      ) : null}
+      <div className="flex flex-wrap gap-1">
+        <span className="rounded-full border border-border-strong bg-secondary px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">source-reported</span>
+        {card.hasEvidence ? <span className="rounded-full border border-info/30 bg-info/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em] text-info">evidence</span> : null}
+        {card.humanAcceptance
+          ? <span className="rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em] text-primary">accepted</span>
+          : card.column === 'completed'
+            ? <span className="rounded-full border border-warning/30 bg-warning/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em] text-warning">no acceptance record</span>
+            : null}
+      </div>
+      {card.warnings.slice(0, 2).map((warning, index) => (
+        <p key={`${card.key}-warning-${index}`} className="m-0 rounded-[5px] border border-warning/25 bg-warning/[0.08] px-[7px] py-1 text-[10px]/[1.4] text-warning">{warning}</p>
+      ))}
+    </article>
+  )
+}
+
+/**
+ * The agent has workspace access, so the prompt only links the source record
+ * with '@' — the agent reads the task (and its linked PRD) from the repo.
+ */
+function buildRepoTaskPrompt(task: RepositoryWorkflowTask): string {
+  const prdNote = task.prdRefs.length > 0 ? ' and its linked PRD' : ''
+  return `@${task.sourcePath} work on this repository task from the ND workflow mirror. Read the task file${prdNote} in the workspace first and follow its conventions — checked criteria are not completion, and human acceptance must be recorded by a person.`
+}
+
+/**
+ * Per-column composer shortcut: the prompt names the target lifecycle and
+ * points the agent at the workflow task directory; the user appends specifics.
+ */
+function buildColumnPrompt(status: 'ready' | 'in_progress' | 'review' | 'blocked' | 'completed'): string {
+  const dir = '@.agents/docs/tasks/'
+  switch (status) {
+    case 'ready':
+      return `${dir} add a new repository task in "todo" (ready) state to this project's workflow — outcome: [describe the outcome], acceptance criteria: [list them]`
+    case 'in_progress':
+      return `${dir} move one ready "todo" task into "wip" (in progress) and start on it; ask me which if it is ambiguous`
+    case 'review':
+      return `${dir} submit a "wip" task for review per this workflow's conventions — summarize what was done and what verification evidence exists`
+    case 'blocked':
+      return `${dir} move a task into "blocked" state — blocker: [describe the blocker]`
+    case 'completed':
+      return `${dir} complete and archive a "wip" task into done/ per the workflow conventions — only after fresh verification evidence and my explicit human acceptance`
+  }
+}
+
+const repoDetailLabel = 'text-[10px] font-bold uppercase tracking-[0.1em] text-faint'
+const repoDetailDesc = 'text-[11px]/[1.5] text-muted-foreground'
+const repoDetailCode = 'break-all rounded-[5px] border border-border-soft bg-surface-0 px-[7px] py-[5px] font-mono text-[10px]/[1.5] text-soft'
+
+function severityChipClass(severity: string): string {
+  if (severity === 'error') return 'border-destructive/30 bg-destructive/[0.08] text-destructive'
+  if (severity === 'warning') return 'border-warning/30 bg-warning/[0.08] text-warning'
+  return 'border-border-strong bg-secondary text-muted-foreground'
+}
+
+/**
+ * Full record for one mirrored repository ticket: everything the workflow
+ * plugin reported, plus scan context. Read-only by design — edit the source
+ * file in the repository, then refresh the integration.
+ */
+function RepositoryTaskModal({ task, snapshot, onClose }: { task: RepositoryWorkflowTask; snapshot: WorkflowProjectView['snapshot']; onClose(): void }) {
+  const linkedPrds: Array<{ ref: string; prd?: RepositoryWorkflowPrd | undefined }> = task.prdRefs.map((ref) => ({
+    ref,
+    prd: snapshot?.prds.find((item) => item.key === ref || item.sourcePath.includes(ref)),
+  }))
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogContent className="max-h-[85vh] overflow-auto sm:max-w-[600px]">
+        <DialogHeader>
+          <DialogTitle>{task.title}</DialogTitle>
+          <DialogDescription>
+            Read-only mirror of the repository task record. Edit the source file in the repository, then refresh the workflow integration.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="grid gap-[11px]">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="rounded-full border border-border-strong bg-secondary px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.06em] text-faint">{task.lifecycle}</span>
+            {task.displayStatus ? (
+              <span className="rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.06em] text-primary">{task.displayStatus.replace('_', ' ')}</span>
+            ) : (
+              <span className="rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.06em] text-warning">ambiguous status</span>
+            )}
+            {task.archived ? <span className="rounded-full border border-border-strong bg-secondary px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.06em] text-muted-foreground">archived</span> : null}
+            {task.legacyArchive ? <span className="rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.06em] text-warning">legacy archive name</span> : null}
+          </div>
+
+          <div className="grid gap-[5px]">
+            <small className={repoDetailLabel}>Source record</small>
+            <code className={repoDetailCode}>{task.sourcePath}</code>
+            <small className={repoDetailDesc}>{task.key ? `Task number ${task.key}` : 'Unnumbered record — needs an explicit mapping before ND can act on it'}{task.contentHash ? ` · hash ${task.contentHash.slice(0, 24)}` : ''}</small>
+          </div>
+
+          {task.outcome ? (
+            <div className="grid gap-[5px]">
+              <small className={repoDetailLabel}>Outcome</small>
+              <p className="m-0 text-xs/[1.55] text-foreground">{task.outcome}</p>
+            </div>
+          ) : null}
+
+          {task.scope.length > 0 ? (
+            <div className="grid gap-[5px]">
+              <small className={repoDetailLabel}>Scope</small>
+              <ul className="m-0 list-none space-y-1 p-0 text-xs/[1.5] text-muted-foreground">
+                {task.scope.map((item, index) => <li key={`scope-${index}`}>· {item}</li>)}
+              </ul>
+            </div>
+          ) : null}
+
+          {task.criteria.length > 0 ? (
+            <div className="grid gap-[5px]">
+              <small className={repoDetailLabel}>Acceptance criteria ({task.criteria.filter((item) => item.checked).length}/{task.criteria.length} checked — not completion)</small>
+              <ul className="m-0 list-none space-y-1 p-0 text-xs/[1.5]">
+                {task.criteria.map((item, index) => (
+                  <li key={`criteria-${index}`} className="flex items-start gap-1.5">
+                    <span className={cn('mt-[3px] grid size-[13px] shrink-0 place-items-center rounded-[3px] border text-[9px] font-bold', item.checked ? 'border-primary/40 bg-primary/15 text-primary' : 'border-border-strong bg-background text-transparent')}>✓</span>
+                    <span className={item.checked ? 'text-foreground' : 'text-muted-foreground'}>{item.text}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          <div className="grid grid-cols-1 gap-[7px] min-[560px]:grid-cols-2">
+            <div className="grid gap-[5px] rounded-[7px] border border-border-soft bg-surface-0 p-[9px]">
+              <small className={repoDetailLabel}>Evidence</small>
+              {task.evidence || task.evidencePresent
+                ? <p className="m-0 text-xs/[1.5] text-foreground">{task.evidence ?? 'Recorded (no excerpt in source)'}</p>
+                : <p className="m-0 text-xs/[1.5] text-faint">Not recorded in the source.</p>}
+            </div>
+            <div className="grid gap-[5px] rounded-[7px] border border-border-soft bg-surface-0 p-[9px]">
+              <small className={repoDetailLabel}>Human acceptance</small>
+              {task.humanAcceptance || task.humanAcceptanceRecorded
+                ? <p className="m-0 text-xs/[1.5] text-foreground">{task.humanAcceptance ?? 'Recorded (no excerpt in source)'}</p>
+                : <p className="m-0 text-xs/[1.5] text-faint">Not recorded — acceptance is never implied by ND.</p>}
+            </div>
+          </div>
+
+          {linkedPrds.length > 0 ? (
+            <div className="grid gap-[5px]">
+              <small className={repoDetailLabel}>Linked PRDs</small>
+              {linkedPrds.map(({ ref, prd }) => (
+                <div key={ref} className="rounded-[7px] border border-border-soft bg-surface-0 p-[9px]">
+                  <div className="flex items-center justify-between gap-2">
+                    <strong className="truncate text-xs">{prd?.title ?? `PRD ${ref}`}</strong>
+                    {prd?.status ? <span className="shrink-0 rounded-full border border-border-strong bg-secondary px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.06em] text-muted-foreground">{prd.status}</span> : null}
+                  </div>
+                  {prd ? <code className={cn(repoDetailCode, 'mt-1 block')}>{prd.sourcePath}</code> : <small className={repoDetailDesc}>PRD file not found in this snapshot.</small>}
+                  {prd && !prd.inIndex ? <small className={cn(repoDetailDesc, 'text-warning')}>Not listed in the PRD index.</small> : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {task.diagnostics.length > 0 ? (
+            <div className="grid gap-[5px]">
+              <small className={repoDetailLabel}>Source diagnostics</small>
+              {task.diagnostics.map((diagnostic, index) => (
+                <div key={`diag-${index}`} className={cn('rounded-[7px] border px-[9px] py-[7px] text-[11px]/[1.5]', severityChipClass(diagnostic.severity))}>
+                  <strong className="font-semibold">{diagnostic.code}</strong> — {diagnostic.message}
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {snapshot ? (
+            <div className="grid gap-[5px]">
+              <small className={repoDetailLabel}>Scan context</small>
+              <small className={repoDetailDesc}>
+                Scanned {new Date(snapshot.scannedAt).toLocaleString()}
+                {snapshot.git.available ? ` · ${snapshot.git.branch ?? 'detached'} @ ${snapshot.git.head ? snapshot.git.head.slice(0, 10) : '?'}` : ' · git unavailable'}
+                {snapshot.git.dirty ? ' · dirty worktree' : ''}
+                {snapshot.stale ? ' · STALE' : ''}
+              </small>
+              {snapshot.lastError ? <small className={cn(repoDetailDesc, 'text-destructive')}>{snapshot.lastError}</small> : null}
+            </div>
+          ) : null}
+        </div>
+
+        <DialogFooter>
+          <DialogClose asChild>
+            <button type="button" className={orgButton}>Close</button>
+          </DialogClose>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
 }
 
 /** List row with a two-line label block on the left and optional trailing control. */

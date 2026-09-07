@@ -51,6 +51,22 @@ describe('provider runtime compiler', () => {
     expect(runtime.profiles['responses-proxy']?.api).toBe('openai-responses')
   })
 
+  it('carries explicit vision and output capabilities into the pi-ai model profile', () => {
+    const runtime = buildProviderRuntime([
+      provider({
+        id: 'mimo-route',
+        models: [{ id: 'mimo-v2.5', context: '1M', inputTypes: ['text', 'image'], maxOutputTokens: 128_000 }],
+      }),
+    ])
+
+    expect(runtime.profiles['mimo-route']?.models).toEqual([{
+      id: 'mimo-v2.5',
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      input: ['text', 'image'],
+    }])
+  })
+
   it('excludes disabled providers and uses the first enabled provider with a model as the new-session default', () => {
     const runtime = buildProviderRuntime([
       provider({ id: 'off', enabled: false }),

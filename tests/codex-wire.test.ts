@@ -67,6 +67,44 @@ async function handshake(harness: Harness): Promise<number> {
 }
 
 describe('CodexAppServerWire', () => {
+  it('loads all visible catalog pages using model slugs rather than entry ids', async () => {
+    const harness = setup()
+    await handshake(harness)
+    const pending = harness.wire.listModels()
+    await flush(harness)
+    const first = harness.sent.at(-1)!
+    expect(first.method).toBe('model/list')
+    expect(first.params).toEqual({ limit: 100, includeHidden: false })
+    harness.receive({ id: first.id, result: { data: [
+      { id: 'catalog-a', model: 'model-a', displayName: 'Model A' },
+      { id: 'hidden', model: 'hidden-model', hidden: true },
+    ], nextCursor: 'page-2' } })
+    await flush(harness)
+    const second = harness.sent.at(-1)!
+    expect(second.params).toMatchObject({ cursor: 'page-2' })
+    harness.receive({ id: second.id, result: { data: [{ id: 'catalog-b', model: 'model-b', displayName: 'Model B' }], nextCursor: null } })
+    await expect(pending).resolves.toEqual([{ id: 'model-a', name: 'Model A' }, { id: 'model-b', name: 'Model B' }])
+    harness.wire.close()
+  })
+
+  it('forwards the selected model and restores the thread native default', async () => {
+    const harness = setup()
+    await handshake(harness)
+    const started = harness.wire.startThread({ cwd: '/workspace', approvalPolicy: 'never' })
+    await flush(harness)
+    harness.receive({ id: harness.sent.at(-1)!.id, result: { thread: { id: 'thr-42' }, model: 'native-model' } })
+    await started
+    for (const model of ['selected-model', undefined]) {
+      const turn = harness.wire.startTurn('thr-42', ['hello'], model)
+      await flush(harness)
+      const request = harness.sent.at(-1)!
+      expect(request.params).toMatchObject({ model: model ?? 'native-model' })
+      harness.receive({ id: request.id, result: { turn: { id: 'turn-1' } } })
+      await turn
+    }
+    harness.wire.close()
+  })
+
   it('performs the initialize handshake before any other request', async () => {
     const harness = setup()
     await handshake(harness)

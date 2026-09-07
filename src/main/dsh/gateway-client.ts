@@ -1,10 +1,33 @@
 import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:net'
+import WebSocket from 'ws'
 import type {
   DshEventFrame,
   GatewayRpcResult,
   SessionEventEnvelope,
 } from '../../shared/contracts.js'
+
+/** One frame delivered by a `session/follow` stream. */
+export interface SessionStreamFrame {
+  type: 'snapshot' | 'event' | 'error' | 'end'
+  /** Snapshot only: the inclusive log cut the opening window covers. */
+  cursor?: number
+  /** Snapshot only: the opening journal window. */
+  records?: unknown[]
+  /** Event frames only. */
+  event?: { type: string; seq: number; time?: number; data?: unknown }
+  /** Error frames only. */
+  message?: string
+}
+
+export interface FollowHandle {
+  /** Resolves once the opening snapshot frame arrived; rejects if the stream errors first. */
+  ready: Promise<void>
+  close(): void
+}
+
+/** Snapshot window requested per follow stream (matches the renderer's history read). */
+const FOLLOW_WINDOW = 50
 
 /**
  * Loopback client for the DeepSeek Harness web-plane gateway.
@@ -16,28 +39,83 @@ import type {
  * - Answerable frames (approvals, questions): POST /api/respond with a
  *   `client-response` envelope echoing the frame's rpcId; the body is a
  *   `{ accepted }` receipt.
- * - Live events: WebSocket downlinks at /api/events.mux and /api/events.host.
+ * - Live events: legacy downlinks at /api/events.mux and /api/events.host.
  *   The server only pushes `server-request` frames; client messages close the
  *   socket, so no opener is sent.
+ * - Remote face (0.1.2+ runtimes): slash endpoints with named-argument
+ *   envelopes (see remoteRequest), plus the /api/remote.mux WebSocket that
+ *   carries both the forwarded host-event stream ($events) and per-session
+ *   `session/follow` journal streams (see followSession).
  */
 export class GatewayClient {
   private readonly sockets = new Set<WebSocket>()
   private closed = false
+  private remoteProtocol = false
+  private followSocket: WebSocket | undefined
+  private readonly followEntries = new Map<string, FollowEntry>()
+  private readonly followByStream = new Map<string, FollowEntry>()
+  private followReconnect: NodeJS.Timeout | undefined
+  private followSeq = 0
 
-  constructor(private readonly baseUrl: string) {}
+  constructor(
+    private readonly baseUrl: string,
+    private readonly cookie?: string,
+  ) {}
+
+  /** Exchange DSH's one-time launch URL for the authority-bound session cookie. */
+  static async authenticate(authenticatedUrl: string): Promise<GatewayClient> {
+    const url = new URL(authenticatedUrl)
+    const response = await fetch(url, { redirect: 'manual' })
+    if (response.status !== 303) {
+      throw new Error(`DSH web authentication failed: HTTP ${response.status}`)
+    }
+    const setCookie = response.headers.get('set-cookie')
+    const cookie = setCookie?.split(';', 1)[0]?.trim()
+    if (!cookie) throw new Error('DSH web authentication returned no session cookie')
+    return new GatewayClient(url.origin, cookie)
+  }
 
   get origin(): string {
     return new URL(this.baseUrl).origin
   }
 
+  /** Whether the runtime serves the SRC remote face (slash endpoints + stream mux). */
+  get remote(): boolean {
+    return this.remoteProtocol
+  }
+
+  /**
+   * Subscribe to one session's live journal through the remote stream mux
+   * (`session/follow`). The opening snapshot frame covers the session's
+   * current log window; later frames are the appended events, so a consumer
+   * that adopts the snapshot silently and emits only newer sequences sees
+   * exactly the turns that start after it subscribed. The socket reconnects
+   * transparently and reopens the stream (a fresh snapshot re-arrives).
+   */
+  followSession(sessionId: string, onFrame: (frame: SessionStreamFrame) => void): FollowHandle {
+    const existing = this.followEntries.get(sessionId)
+    if (existing) return { ready: existing.ready, close: () => this.closeFollowEntry(existing) }
+    let resolveReady!: () => void
+    let rejectReady!: (cause: Error) => void
+    const ready = new Promise<void>((resolve, reject) => {
+      resolveReady = resolve
+      rejectReady = reject
+    })
+    const entry: FollowEntry = { sessionId, onFrame, ready, resolveReady, rejectReady, settled: false, streamId: undefined }
+    this.followEntries.set(sessionId, entry)
+    this.ensureFollowSocket()
+    return { ready, close: () => this.closeFollowEntry(entry) }
+  }
+
   async rpc(method: string, payload: unknown = {}): Promise<GatewayRpcResult> {
+    const endpoint = this.remoteProtocol ? remoteRequest(method, payload) : { method, payload }
     const rpcId = randomUUID()
     let response: Response
     try {
-      response = await fetch(`${this.baseUrl}/api/${method}`, {
+      response = await fetch(`${this.baseUrl}/api/${endpoint.method}`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ type: 'client-request', rpcId, method, payload }),
+        headers: this.headers(),
+        body: JSON.stringify({ type: 'client-request', rpcId, ...endpoint }),
       })
     } catch (error) {
       // The runtime child exited or is restarting between calls. Transport
@@ -49,6 +127,14 @@ export class GatewayClient {
           message: `gateway ${method}: ${error instanceof Error ? error.message : String(error)}`,
         },
       }
+    }
+    if (response.status === 404 && !this.remoteProtocol && method === 'session.list') {
+      this.remoteProtocol = true
+      const result = await this.rpc(method, payload)
+      // Both route trees can be temporarily absent while an older runtime
+      // mounts. Only retain negotiation once the new endpoint exists.
+      if (result.error?.code === 'gateway-http' && result.error.message.endsWith('HTTP 404')) this.remoteProtocol = false
+      return result
     }
     if (!response.ok) {
       return { ok: false, error: { code: 'gateway-http', message: `gateway ${method}: HTTP ${response.status}` } }
@@ -73,7 +159,7 @@ export class GatewayClient {
     try {
       response = await fetch(`${this.baseUrl}/api/respond`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: this.headers(),
         body: JSON.stringify({ type: 'client-response', rpcId, result: { ok: true, value } }),
       })
     } catch (error) {
@@ -87,12 +173,23 @@ export class GatewayClient {
   }
 
   openEvents(onFrame: (frame: DshEventFrame) => void): void {
+    if (this.remoteProtocol) {
+      this.openRemoteEvents(onFrame)
+      return
+    }
     this.openSocket('/api/events.mux', onFrame)
     this.openSocket('/api/events.host', onFrame)
   }
 
   close(): void {
     this.closed = true
+    if (this.followReconnect !== undefined) {
+      clearTimeout(this.followReconnect)
+      this.followReconnect = undefined
+    }
+    this.closeFollowSocket()
+    for (const entry of [...this.followEntries.values()]) this.failFollowEntry(entry, 'Runtime event stream was closed')
+    this.followEntries.clear()
     for (const socket of this.sockets) {
       try {
         socket.close()
@@ -107,8 +204,11 @@ export class GatewayClient {
     if (this.closed) return
     const base = new URL(this.baseUrl)
     base.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:'
-    const socket = new WebSocket(`${base.origin}${path}`)
+    const socket = new WebSocket(`${base.origin}${path}`, {
+      ...(this.cookie ? { headers: { cookie: this.cookie } } : {}),
+    })
     this.sockets.add(socket)
+    socket.on('error', () => {})
     socket.addEventListener('message', (event) => {
       try {
         const message = JSON.parse(String(event.data)) as ServerRequestFrame
@@ -125,6 +225,194 @@ export class GatewayClient {
         setTimeout(() => this.openSocket(path, onFrame), 1_000)
       }
     })
+  }
+
+  private openRemoteEvents(onFrame: (frame: DshEventFrame) => void): void {
+    if (this.closed) return
+    const url = new URL('/api/remote.mux', this.baseUrl)
+    url.protocol = 'ws:'
+    const socket = new WebSocket(url, { headers: this.headers() })
+    this.sockets.add(socket)
+    socket.on('error', () => {})
+    socket.on('open', () => socket.send(JSON.stringify({ type: 'open', streamId: 'host', endpoint: '$events', payload: { args: {} } })))
+    socket.on('message', (data) => {
+      try {
+        const message = JSON.parse(String(data))
+        if (message.type === 'error') {
+          onFrame({ kind: 'stream-error', message: message.error?.message ?? 'Runtime event stream failed' })
+          return
+        }
+        if (message.type !== 'item' || message.value?.type !== 'emit') return
+        const { event, args } = message.value
+        if (!Array.isArray(args)) return
+        const sessionId = asString(args[0])
+        if (event === 'api-session/status' && sessionId) onFrame({ kind: 'session-status', sessionId, running: args[1] === true })
+        if (event === 'api-session/error' && sessionId) onFrame({ kind: 'agent-error', sessionId, message: String(args[1]) })
+        if (event === 'api-session/removed' && sessionId) onFrame({ kind: 'session-removed', sessionId })
+        if (event === 'api-session/added') onFrame({ kind: 'session-added', meta: args[0] })
+      } catch {
+        // Ignore malformed transport frames.
+      }
+    })
+    socket.on('close', () => {
+      this.sockets.delete(socket)
+      if (!this.closed) setTimeout(() => this.openRemoteEvents(onFrame), 1_000)
+    })
+  }
+
+  /** Open (or reuse) the dedicated follow-stream mux socket. */
+  private ensureFollowSocket(): void {
+    if (this.followSocket !== undefined || this.closed) return
+    const base = new URL(this.baseUrl)
+    base.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:'
+    const socket = new WebSocket(`${base.origin}/api/remote.mux`, {
+      ...(this.cookie ? { headers: { cookie: this.cookie } } : {}),
+    })
+    this.followSocket = socket
+    socket.on('error', (cause) => {
+      console.warn('[nd-dsh-follow] socket error:', cause instanceof Error ? cause.message : String(cause))
+    })
+    socket.on('unexpected-response', (_request, response) => {
+      console.warn('[nd-dsh-follow] upgrade rejected: HTTP', response.statusCode)
+    })
+    socket.on('open', () => {
+      console.warn('[nd-dsh-follow] socket open; entries:', this.followEntries.size)
+      if (this.followSocket !== socket) return
+      for (const entry of [...this.followEntries.values()]) this.openFollowStream(entry)
+    })
+    socket.on('message', (data) => {
+      try {
+        this.routeFollowFrame(JSON.parse(String(data)))
+      } catch {
+        // A malformed mux frame is dropped; the stream stays open.
+      }
+    })
+    socket.on('close', (code, reason) => {
+      console.warn('[nd-dsh-follow] socket closed:', code, String(reason))
+      if (this.followSocket === socket) this.followSocket = undefined
+      this.followByStream.clear()
+      for (const entry of this.followEntries.values()) entry.streamId = undefined
+      if (!this.closed && this.followEntries.size > 0 && this.followReconnect === undefined) {
+        this.followReconnect = setTimeout(() => {
+          this.followReconnect = undefined
+          this.ensureFollowSocket()
+        }, 1_000)
+      }
+    })
+  }
+
+  private openFollowStream(entry: FollowEntry): void {
+    const socket = this.followSocket
+    if (!socket || socket.readyState !== WebSocket.OPEN || entry.streamId !== undefined) return
+    const streamId = `follow-${String(++this.followSeq)}`
+    entry.streamId = streamId
+    this.followByStream.set(streamId, entry)
+    console.warn(`[nd-dsh-follow] opening stream ${streamId} for ${entry.sessionId} (readyState ${socket.readyState})`)
+    socket.send(JSON.stringify({
+      type: 'open',
+      streamId,
+      endpoint: 'session/follow',
+      payload: { args: { request: { address: { kind: 'session', sessionId: entry.sessionId }, maxMessages: FOLLOW_WINDOW } } },
+    }))
+  }
+
+  private routeFollowFrame(message: {
+    type?: unknown
+    streamId?: unknown
+    value?: unknown
+    error?: unknown
+  }): void {
+    if (typeof message.streamId !== 'string') {
+      console.warn('[nd-dsh-follow] frame without stream id:', JSON.stringify(message).slice(0, 200))
+      return
+    }
+    const entry = this.followByStream.get(message.streamId)
+    if (!entry) {
+      console.warn('[nd-dsh-follow] frame for unknown stream', message.streamId, ':', JSON.stringify(message).slice(0, 200))
+      return
+    }
+    if (message.type === 'item') {
+      const frame = asStreamFrame(message.value)
+      if (frame === undefined) {
+        console.warn('[nd-dsh-follow] unparsed item on', message.streamId, ':', JSON.stringify(message.value).slice(0, 200))
+        return
+      }
+      if (frame.type === 'snapshot' && !entry.settled) {
+        entry.settled = true
+        entry.resolveReady()
+      }
+      entry.onFrame(frame)
+      return
+    }
+    if (message.type === 'error') {
+      const error = (message.error ?? {}) as { message?: unknown }
+      this.failFollowEntry(entry, asString(error.message) ?? 'Session event stream failed')
+      return
+    }
+    if (message.type === 'end') {
+      this.followByStream.delete(message.streamId)
+      entry.streamId = undefined
+      if (!entry.settled) {
+        entry.settled = true
+        entry.rejectReady(new Error('Session event stream ended before its snapshot'))
+      }
+      entry.onFrame({ type: 'end' })
+    }
+  }
+
+  private closeFollowEntry(entry: FollowEntry): void {
+    if (this.followEntries.get(entry.sessionId) === entry) this.followEntries.delete(entry.sessionId)
+    if (entry.streamId !== undefined) {
+      this.followByStream.delete(entry.streamId)
+      const socket = this.followSocket
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        try {
+          socket.send(JSON.stringify({ type: 'cancel', streamId: entry.streamId }))
+        } catch {
+          // The socket may already be torn down.
+        }
+      }
+      entry.streamId = undefined
+    }
+    if (!entry.settled) {
+      entry.settled = true
+      entry.rejectReady(new Error('Session event stream was closed before its snapshot'))
+    }
+    if (this.followEntries.size === 0) this.closeFollowSocket()
+  }
+
+  private failFollowEntry(entry: FollowEntry, message: string): void {
+    if (entry.streamId !== undefined) {
+      this.followByStream.delete(entry.streamId)
+      entry.streamId = undefined
+    }
+    if (!entry.settled) {
+      entry.settled = true
+      entry.rejectReady(new Error(message))
+    }
+    entry.onFrame({ type: 'error', message })
+  }
+
+  private closeFollowSocket(): void {
+    if (this.followReconnect !== undefined) {
+      clearTimeout(this.followReconnect)
+      this.followReconnect = undefined
+    }
+    const socket = this.followSocket
+    this.followSocket = undefined
+    if (!socket) return
+    try {
+      socket.close()
+    } catch {
+      // The socket may already be torn down.
+    }
+  }
+
+  private headers(): Record<string, string> {
+    return {
+      'content-type': 'application/json',
+      ...(this.cookie ? { cookie: this.cookie } : {}),
+    }
   }
 }
 
@@ -148,6 +436,44 @@ interface ServerResponseFrame {
   type: 'server-response'
   rpcId: string
   result: { ok: true; value: unknown } | { ok: false; error: unknown }
+}
+
+interface FollowEntry {
+  readonly sessionId: string
+  readonly onFrame: (frame: SessionStreamFrame) => void
+  readonly ready: Promise<void>
+  readonly resolveReady: () => void
+  readonly rejectReady: (cause: Error) => void
+  settled: boolean
+  streamId: string | undefined
+}
+
+/** Leniently normalize one mux stream item into a session stream frame. */
+function asStreamFrame(value: unknown): SessionStreamFrame | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const record = value as Record<string, unknown>
+  if (record.type === 'snapshot') {
+    const cursor = typeof record.cursor === 'number' ? record.cursor : undefined
+    return {
+      type: 'snapshot',
+      ...(cursor === undefined ? {} : { cursor }),
+      ...(Array.isArray(record.records) ? { records: record.records } : {}),
+    }
+  }
+  if (record.type === 'event') {
+    const event = record.event as Record<string, unknown> | undefined
+    if (!event || typeof event.type !== 'string' || typeof event.seq !== 'number') return undefined
+    return {
+      type: 'event',
+      event: {
+        type: event.type,
+        seq: event.seq,
+        ...(typeof event.time === 'number' ? { time: event.time } : {}),
+        ...(event.data !== undefined ? { data: event.data } : {}),
+      },
+    }
+  }
+  return undefined
 }
 
 interface ServerRequestFrame {
@@ -215,6 +541,12 @@ function translateFrame(message: ServerRequestFrame): DshEventFrame | undefined 
     default:
       return { kind: 'other', ...withSession, meta: payload }
   }
+}
+
+function remoteRequest(method: string, payload: unknown): { method: string; payload: unknown } {
+  const endpoint = method === 'session.models' ? 'session/modelCatalog' : method.replace('.', '/')
+  const args = method === 'session.models' ? {} : { [method === 'session.list' ? '_request' : 'request']: payload }
+  return { method: endpoint, payload: { args } }
 }
 
 function asString(value: unknown): string | undefined {
