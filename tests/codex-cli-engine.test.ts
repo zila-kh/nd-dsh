@@ -18,11 +18,15 @@ class FakeAppServer {
   responses: Array<{ id: number; result?: unknown; error?: unknown }> = []
   threadCounter = 0
   turnCounter = 0
+  killCalls = 0
   lastThreadId?: string
   lastTurnId?: string
   private buffer = ''
 
-  constructor() {
+  constructor(private readonly accountResult: Record<string, unknown> = {
+    account: { type: 'chatgpt', email: 'test@example.com', planType: 'plus' },
+    requiresOpenaiAuth: true,
+  }) {
     this.stdin = new PassThrough()
     this.stdout = new PassThrough()
     const stderr = new PassThrough()
@@ -34,6 +38,7 @@ class FakeAppServer {
     base.exitCode = null
     base.signalCode = null
     base.kill = () => {
+      this.killCalls += 1
       queueMicrotask(() => this.child.emit('exit', null, 'SIGTERM'))
       return true
     }
@@ -64,10 +69,7 @@ class FakeAppServer {
         this.respond(message.id, {})
         break
       case 'account/read':
-        this.respond(message.id, {
-          account: { type: 'chatgpt', email: 'test@example.com', planType: 'plus' },
-          requiresOpenaiAuth: true,
-        })
+        this.respond(message.id, this.accountResult)
         break
       case 'model/list':
         this.respond(message.id, { data: [{ id: 'catalog-id', model: 'codex-test-model', displayName: 'Codex Test Model' }], nextCursor: null })
@@ -137,9 +139,9 @@ afterAll(() => {
   else process.env.ND_DSH_CODEX_BINARY = originalOverride
 })
 
-async function makeEngine() {
+async function makeEngine(accountResult?: Record<string, unknown>) {
   process.env.ND_DSH_CODEX_BINARY = process.execPath
-  const server = new FakeAppServer()
+  const server = new FakeAppServer(accountResult)
   const engine = new CodexCliEngine({
     log: () => {},
     spawnProcess: (() => server.child) as never,
@@ -160,6 +162,17 @@ describe('CodexCliEngine', () => {
       expect(server.requests.find((request) => request.method === 'turn/start')?.params.model).toBe('codex-test-model')
       server.completeTurn('completed')
       await run
+    } finally {
+      await engine.close()
+    }
+  })
+
+  it('cleans up the spawned app-server when the account startup handshake fails', async () => {
+    const { engine, server } = await makeEngine({ account: null, requiresOpenaiAuth: 'invalid' })
+    try {
+      await expect(engine.listModels()).rejects.toThrow(/invalid account\/read response/i)
+      await flush()
+      expect(server.killCalls).toBeGreaterThan(0)
     } finally {
       await engine.close()
     }
