@@ -12,6 +12,7 @@ import type { EngineModelOption } from '../../../shared/contracts.js'
 export type JsonObject = Record<string, unknown>
 
 const REQUEST_TIMEOUT_MS = 120_000
+/** Keep the client wait aligned with app-server v0.147's browser-login timeout. */
 const LOGIN_TIMEOUT_MS = 10 * 60_000
 
 export interface CodexWireHandlers {
