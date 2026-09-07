@@ -7,7 +7,7 @@ import type { DshEventFrame } from '../src/shared/contracts.js'
 
 /**
  * Scripted stand-in for the official `codex app-server --stdio` child: answers
- * the fixed handshake/thread/turn requests and lets each test drive
+ * the fixed handshake/account/thread/turn requests and lets each test drive
  * notifications, approvals, and crashes over the same stdio wires.
  */
 class FakeAppServer {
@@ -62,6 +62,12 @@ class FakeAppServer {
     switch (message.method) {
       case 'initialize':
         this.respond(message.id, {})
+        break
+      case 'account/read':
+        this.respond(message.id, {
+          account: { type: 'chatgpt', email: 'test@example.com', planType: 'plus' },
+          requiresOpenaiAuth: true,
+        })
         break
       case 'model/list':
         this.respond(message.id, { data: [{ id: 'catalog-id', model: 'codex-test-model', displayName: 'Codex Test Model' }], nextCursor: null })
@@ -166,6 +172,8 @@ describe('CodexCliEngine', () => {
       expect(sessionId).toMatch(/^codex-/)
       await flush()
 
+      const accountRead = server.requests.find((request) => request.method === 'account/read')
+      expect(accountRead?.params).toEqual({})
       const threadStart = server.requests.find((request) => request.method === 'thread/start')
       expect(threadStart?.params.cwd).toBe('/workspace')
       expect(threadStart?.params.approvalPolicy).toBe('on-request')
