@@ -96,6 +96,9 @@ export class GatewayClient {
    * transparently and reopens the stream (a fresh snapshot re-arrives).
    */
   followSession(sessionId: string, onFrame: (frame: SessionStreamFrame) => void): FollowHandle {
+    if (this.closed) {
+      return { ready: Promise.reject(new Error('Runtime event stream was closed')), close: () => {} }
+    }
     const existing = this.followEntries.get(sessionId)
     if (existing) return { ready: existing.ready, close: () => this.closeFollowEntry(existing) }
     let resolveReady!: () => void
@@ -107,6 +110,9 @@ export class GatewayClient {
     const entry: FollowEntry = { sessionId, onFrame, ready, resolveReady, rejectReady, settled: false, streamId: undefined }
     this.followEntries.set(sessionId, entry)
     this.ensureFollowSocket()
+    // A reused socket has already emitted open; start this entry immediately.
+    // Connecting sockets open all queued entries from their open handler.
+    this.openFollowStream(entry)
     return { ready, close: () => this.closeFollowEntry(entry) }
   }
 
@@ -149,7 +155,11 @@ export class GatewayClient {
     } catch {
       return { ok: false, error: { code: 'gateway-protocol', message: `gateway ${method}: unreadable response body` } }
     }
-    if (!frame || frame.type !== 'server-response') {
+    if (
+      !frame || frame.type !== 'server-response' ||
+      !frame.result || typeof frame.result !== 'object' ||
+      typeof frame.result.ok !== 'boolean'
+    ) {
       return { ok: false, error: { code: 'gateway-protocol', message: `gateway ${method}: unexpected response shape` } }
     }
     if (frame.result.ok) {
@@ -235,7 +245,7 @@ export class GatewayClient {
   private openRemoteEvents(onFrame: (frame: DshEventFrame) => void): void {
     if (this.closed) return
     const url = new URL('/api/remote.mux', this.baseUrl)
-    url.protocol = 'ws:'
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
     const socket = new WebSocket(url, { headers: this.headers() })
     this.sockets.add(socket)
     socket.on('error', () => {})
@@ -286,6 +296,7 @@ export class GatewayClient {
       for (const entry of [...this.followEntries.values()]) this.openFollowStream(entry)
     })
     socket.on('message', (data) => {
+      if (this.followSocket !== socket) return
       try {
         this.routeFollowFrame(JSON.parse(String(data)))
       } catch {
@@ -294,7 +305,10 @@ export class GatewayClient {
     })
     socket.on('close', (code, reason) => {
       console.warn('[nd-dsh-follow] socket closed:', code, String(reason))
-      if (this.followSocket === socket) this.followSocket = undefined
+      // A replaced socket can finish closing after its successor has opened.
+      // Only the current transport may reset routing or schedule a reconnect.
+      if (this.followSocket !== socket) return
+      this.followSocket = undefined
       this.followByStream.clear()
       for (const entry of this.followEntries.values()) entry.streamId = undefined
       if (!this.closed && this.followEntries.size > 0 && this.followReconnect === undefined) {
@@ -361,6 +375,7 @@ export class GatewayClient {
         entry.settled = true
         entry.rejectReady(new Error('Session event stream ended before its snapshot'))
       }
+      this.closeFollowEntry(entry)
       entry.onFrame({ type: 'end' })
     }
   }
@@ -395,6 +410,8 @@ export class GatewayClient {
       entry.settled = true
       entry.rejectReady(new Error(message))
     }
+    // Terminal streams must not leave a cached rejected handle behind.
+    this.closeFollowEntry(entry)
     entry.onFrame({ type: 'error', message })
   }
 
