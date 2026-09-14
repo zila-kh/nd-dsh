@@ -451,7 +451,7 @@ export function registerIpc(deps: IpcDependencies): () => void {
   handle(IPC.dshViewSetBounds, (_event, value) => deps.dshSurface.setBounds(asBounds(value)))
   handle(IPC.dshViewSetVisible, (_event, visible) => deps.dshSurface.setVisible(Boolean(visible)))
   handle(IPC.dshViewReload, () => deps.dshSurface.reload())
-  let dshUpdateInFlight: Promise<{ updated: true; message: string }> | null = null
+  let dshUpdateInFlight: Promise<{ updated: boolean; message: string }> | null = null
   handle(IPC.dshViewUpdateUpstream, () => {
     if (!dshUpdateInFlight) {
       dshUpdateInFlight = runDshPackageUpdate((stream, chunk) => {
@@ -512,7 +512,7 @@ export function registerIpc(deps: IpcDependencies): () => void {
 
 const MAX_DSH_UPDATE_OUTPUT = 32_000
 
-function runDshPackageUpdate(onLog: (stream: 'stdout' | 'stderr', chunk: string) => void): Promise<{ updated: true; message: string }> {
+function runDshPackageUpdate(onLog: (stream: 'stdout' | 'stderr', chunk: string) => void): Promise<{ updated: boolean; message: string }> {
   const root = projectRoot()
   const script = app.isPackaged
     ? join(process.resourcesPath, 'scripts', 'install-harness-runtime.mjs')
@@ -554,6 +554,11 @@ function runDshPackageUpdate(onLog: (stream: 'stdout' | 'stderr', chunk: string)
       if (code !== 0) {
         const detail = lines.find((line) => line.startsWith('Error: '))?.slice('Error: '.length) ?? lines.at(-1)
         reject(new Error(detail || `DSH upstream update exited with code ${String(code)}.`))
+        return
+      }
+      const skipped = stdout.split(/\r?\n/).find((line) => line.startsWith('DSH package already up to date'))
+      if (skipped) {
+        resolve({ updated: false, message: skipped.trim() })
         return
       }
       const summary = lines.find((line) => line.startsWith('DSH package installed'))

@@ -111,12 +111,12 @@ export function DshCodingSurface({ active, inspectOverlayVisible = false, state,
     setUpdating(true)
     setUpdateSucceeded(false)
     setRestarting(false)
-    setUpdateLog('> Install @deepseek-ai/dsh@latest\n')
+    setUpdateLog('> Check @deepseek-ai/dsh@latest; install only when needed\n')
     setUpdateFeedback(null)
     void window.ndDsh.dshView.updateUpstream()
       .then((result) => {
         setUpdateLog((current) => `${current}\n[ND] ${result.message}\n`)
-        setUpdateSucceeded(true)
+        setUpdateSucceeded(result.updated)
         setUpdateFeedback({ message: result.message, error: false })
         onNotify(result.message)
       })
@@ -225,7 +225,7 @@ export function DshCodingSurface({ active, inspectOverlayVisible = false, state,
             </header>
             <div className="flex min-h-0 flex-1 flex-col gap-2 p-3">
               <p className="m-0 text-[10px]/[1.5] text-faint">
-                Installs the npm <code className="font-mono text-soft">latest</code> release of <code className="font-mono text-soft">@deepseek-ai/dsh</code> into ND's managed runtime. ND does not compile or patch the package.
+                Installs the npm <code className="font-mono text-soft">latest</code> release of <code className="font-mono text-soft">@deepseek-ai/dsh</code> into ND's managed runtime. Skips installation when the same version is already installed and required runtime files are present. ND does not compile or patch the package.
               </p>
               <pre
                 ref={updateLogRef}

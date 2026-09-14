@@ -303,7 +303,7 @@ export interface DshViewState {
 }
 
 export interface DshUpstreamUpdateResult {
-  updated: true
+  updated: boolean
   message: string
 }
 
