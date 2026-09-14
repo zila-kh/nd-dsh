@@ -12,6 +12,7 @@ import { Input } from './components/ui/input'
 import { Badge } from './components/ui/badge'
 import { Toaster } from './components/ui/sonner'
 import { ChatPanel } from './components/ChatPanel'
+import { SurfaceErrorBoundary } from './components/surface-error-boundary'
 import { DesignView } from './components/DesignView'
 import { DiffView } from './components/DiffView'
 import { DshCodingSurface } from './components/DshCodingSurface'
@@ -817,34 +818,38 @@ export default function App() {
 
       <main className="relative min-h-0 min-w-0 overflow-hidden bg-surface-0">
         {surface === 'dsh' ? (
-          <DshCodingSurface active inspectOverlayVisible={inspectOverlayVisible} state={dshView} onNotify={notify} />
+          <SurfaceErrorBoundary label="DeepSeek" resetKey={surface} onError={notify}>
+            <DshCodingSurface active inspectOverlayVisible={inspectOverlayVisible} state={dshView} onNotify={notify} />
+          </SurfaceErrorBoundary>
         ) : view !== 'settings' ? (
           <Group orientation="horizontal" className="h-full w-full">
             <Panel className="flex min-w-0 flex-col overflow-hidden" defaultSize={580} minSize={sessionsCollapsed ? CHAT_MIN_PX_SIDEBAR_COLLAPSED : CHAT_MIN_PX}>
-              <ChatPanel
-                key={workspace?.root ?? 'workspace-loading'}
-                status={harnessStatus}
-                onGitEditableChange={setGitEditable}
-                {...(workspace?.projectName || workspace?.name ? { workspaceName: workspace.projectName ?? workspace.name } : {})}
-                sessionProjectScope={{ activeProjectId: project?.id, sessionProjects: runSessionProjects }}
-                {...(companyProjects.length ? {
-                  projects: companyProjects.map((item) => ({
-                    id: item.id,
-                    name: item.name,
-                    active: item.id === project?.id,
-                    linked: Boolean(item.workspacePath),
-                  })),
-                  onSelectProject: switchProject,
-                } : {})}
-                sessionsCollapsed={sessionsCollapsed}
-                onError={notify}
-                onOpenSettings={openSettings}
-                onOpenFile={(path) => void openFile(path)}
-                onOpenLink={(url) => void openLink(url)}
-                externalPrompt={externalPrompt}
-                onExternalPromptConsumed={() => setExternalPrompt(null)}
-                elementAttachmentVersion={elementAttachmentVersion}
-              />
+              <SurfaceErrorBoundary label="Chat" resetKey={workspace?.root ?? 'workspace-loading'} onError={notify}>
+                <ChatPanel
+                  key={workspace?.root ?? 'workspace-loading'}
+                  status={harnessStatus}
+                  onGitEditableChange={setGitEditable}
+                  {...(workspace?.projectName || workspace?.name ? { workspaceName: workspace.projectName ?? workspace.name } : {})}
+                  sessionProjectScope={{ activeProjectId: project?.id, sessionProjects: runSessionProjects }}
+                  {...(companyProjects.length ? {
+                    projects: companyProjects.map((item) => ({
+                      id: item.id,
+                      name: item.name,
+                      active: item.id === project?.id,
+                      linked: Boolean(item.workspacePath),
+                    })),
+                    onSelectProject: switchProject,
+                  } : {})}
+                  sessionsCollapsed={sessionsCollapsed}
+                  onError={notify}
+                  onOpenSettings={openSettings}
+                  onOpenFile={(path) => void openFile(path)}
+                  onOpenLink={(url) => void openLink(url)}
+                  externalPrompt={externalPrompt}
+                  onExternalPromptConsumed={() => setExternalPrompt(null)}
+                  elementAttachmentVersion={elementAttachmentVersion}
+                />
+              </SurfaceErrorBoundary>
             </Panel>
             <Separator
               aria-label="Resize chat pane"
@@ -854,7 +859,9 @@ export default function App() {
             </Separator>
             <Panel className="relative min-h-0 min-w-0 overflow-hidden bg-surface-0" minSize={WORKSPACE_MIN_PX}>
               <section aria-hidden={view !== 'company'} className={cn('absolute inset-0 overflow-hidden', view === 'company' ? 'block' : 'hidden')}>
-                <OrganizationDashboard workspace={workspace} onOpenDeepSeek={() => setView('agent')} onAskAgent={askAgent} onError={notify} companyView={companyView} onCompanyViewChange={setCompanyView} />
+                <SurfaceErrorBoundary label="Company" resetKey={`${companyView}:${company?.id ?? ''}:${project?.id ?? ''}`} onError={notify}>
+                  <OrganizationDashboard workspace={workspace} onOpenDeepSeek={() => setView('agent')} onAskAgent={askAgent} onError={notify} companyView={companyView} onCompanyViewChange={setCompanyView} />
+                </SurfaceErrorBoundary>
               </section>
 
               <section aria-hidden={view !== 'agent'} className={cn('absolute inset-0 overflow-hidden', view === 'agent' && !workspaceCollapsed ? 'flex' : 'hidden')}>
@@ -874,12 +881,14 @@ export default function App() {
                       <div className="grid h-full w-full min-h-0 grid-cols-[minmax(0,1fr)_200px]">
                         <div className="min-h-0 min-w-0 overflow-hidden">
                           {activeDiff ? (
-                            <DiffView
-                              relativePath={activeDiff.relativePath}
-                              staged={activeDiff.staged}
-                              onClose={() => setActiveDiff(null)}
-                              onError={notify}
-                            />
+                            <SurfaceErrorBoundary label="Diff" resetKey={`${activeDiff.relativePath}:${String(activeDiff.staged)}`} onError={notify}>
+                              <DiffView
+                                relativePath={activeDiff.relativePath}
+                                staged={activeDiff.staged}
+                                onClose={() => setActiveDiff(null)}
+                                onError={notify}
+                              />
+                            </SurfaceErrorBoundary>
                           ) : (
                             <>
                               {openFileTabs.length ? (
@@ -914,68 +923,80 @@ export default function App() {
                                   })}
                                 </div>
                               ) : null}
-                              <EditorPane file={selectedFile} onAgentPrompt={askAgent} onOpenLink={(url) => void openLink(url)} onError={notify} />
+                              <SurfaceErrorBoundary label="Editor" resetKey={selectedFile?.relativePath ?? ''} onError={notify}>
+                                <EditorPane file={selectedFile} onAgentPrompt={askAgent} onOpenLink={(url) => void openLink(url)} onError={notify} />
+                              </SurfaceErrorBoundary>
                             </>
                           )}
                         </div>
                         <div className="min-h-0 border-l border-border-soft">
-                          <Explorer
-                            workspace={workspace}
-                            selectedPath={selectedFile?.relativePath}
-                            onWorkspaceChanged={changeWorkspace}
-                            onOpenFile={(path) => void openFile(path)}
-                            onOpenDiff={openDiff}
-                            onError={notify}
-                          />
+                          <SurfaceErrorBoundary label="Files" resetKey={workspace?.root ?? ''} onError={notify}>
+                            <Explorer
+                              workspace={workspace}
+                              selectedPath={selectedFile?.relativePath}
+                              onWorkspaceChanged={changeWorkspace}
+                              onOpenFile={(path) => void openFile(path)}
+                              onOpenDiff={openDiff}
+                              onError={notify}
+                            />
+                          </SurfaceErrorBoundary>
                         </div>
                       </div>
                     ) : (
-                      <BrowserPane
-                        active={view === 'agent'}
-                        state={browserState}
-                        onSnapshot={() => notify('Browser snapshot captured from the live page.')}
-                        onError={notify}
-                      />
+                      <SurfaceErrorBoundary label="Browser" resetKey={`${view}:${browserState?.url ?? ''}`} onError={notify}>
+                        <BrowserPane
+                          active={view === 'agent'}
+                          state={browserState}
+                          onSnapshot={() => notify('Browser snapshot captured from the live page.')}
+                          onError={notify}
+                        />
+                      </SurfaceErrorBoundary>
                     )}
                   </div>
                 </div>
               </section>
 
               <section aria-hidden={view !== 'design'} className={cn('absolute inset-0 overflow-hidden', view === 'design' ? 'block' : 'hidden')}>
-                <DesignView
-                  active={view === 'design'}
-                  workspace={workspace}
-                  browser={browserState}
-                  harness={harnessStatus}
-                  onWorkspaceChanged={changeWorkspace}
-                  onAskAgent={askAgent}
-                  onError={notify}
-                />
+                <SurfaceErrorBoundary label="Design" resetKey={`${view}:${workspace?.root ?? ''}`} onError={notify}>
+                  <DesignView
+                    active={view === 'design'}
+                    workspace={workspace}
+                    browser={browserState}
+                    harness={harnessStatus}
+                    onWorkspaceChanged={changeWorkspace}
+                    onAskAgent={askAgent}
+                    onError={notify}
+                  />
+                </SurfaceErrorBoundary>
               </section>
 
               <section aria-hidden={view !== 'qa'} className={cn('absolute inset-0 overflow-hidden', view === 'qa' ? 'block' : 'hidden')}>
-                <QaView active={view === 'qa'} {...(workspace?.root ? { workspaceRoot: workspace.root } : {})} onError={notify} onAskAgent={askAgent} />
+                <SurfaceErrorBoundary label="QA" resetKey={view} onError={notify}>
+                  <QaView active={view === 'qa'} {...(workspace?.root ? { workspaceRoot: workspace.root } : {})} onError={notify} onAskAgent={askAgent} />
+                </SurfaceErrorBoundary>
               </section>
             </Panel>
           </Group>
         ) : (
           <section aria-hidden={view !== 'settings'} className="relative h-full w-full overflow-hidden">
             <Suspense fallback={<div className="grid h-full w-full place-items-center bg-surface-0"><div className="size-[34px] animate-spin rounded-full border border-border-strong border-t-primary" /></div>}>
-              <SettingsPane
-                theme={theme}
-                onSelectTheme={selectTheme}
-                workspace={workspace}
-                onWorkspaceChanged={changeWorkspace}
-                harness={harnessStatus}
-                browser={browserState}
-                onError={notify}
-                tab={settingsTab}
-                onSelectTab={setSettingsTab}
-                subTab={settingsSubTabs.general}
-                onSelectSubTab={(subTab) => setSettingsSubTabs((current) => ({ ...current, general: subTab }))}
-                capabilitySubTab={settingsSubTabs.capabilities}
-                onSelectCapabilitySubTab={(subTab) => setSettingsSubTabs((current) => ({ ...current, capabilities: subTab }))}
-              />
+              <SurfaceErrorBoundary label="Settings" resetKey={view} onError={notify}>
+                <SettingsPane
+                  theme={theme}
+                  onSelectTheme={selectTheme}
+                  workspace={workspace}
+                  onWorkspaceChanged={changeWorkspace}
+                  harness={harnessStatus}
+                  browser={browserState}
+                  onError={notify}
+                  tab={settingsTab}
+                  onSelectTab={setSettingsTab}
+                  subTab={settingsSubTabs.general}
+                  onSelectSubTab={(subTab) => setSettingsSubTabs((current) => ({ ...current, general: subTab }))}
+                  capabilitySubTab={settingsSubTabs.capabilities}
+                  onSelectCapabilitySubTab={(subTab) => setSettingsSubTabs((current) => ({ ...current, capabilities: subTab }))}
+                />
+              </SurfaceErrorBoundary>
             </Suspense>
           </section>
         )}
