@@ -118,6 +118,13 @@ export class ProviderStore {
   private readonly filePath: string
   private readonly secretsPath: string
   private providers: ModelProvider[]
+  /**
+   * Ciphertext that exists on disk but could not be decrypted in this session
+   * (for example after an OS keyring reset or a profile move). It is carried
+   * back into the next secrets write so a failed decrypt can never erase a
+   * stored credential; only an explicit replace or clear drops it.
+   */
+  private readonly preservedSecrets: Record<string, string> = {}
   private revisionValue = 0
   private readonly pingCache = new Map<string, { at: number; result: ProviderPingResult }>()
 
@@ -165,6 +172,7 @@ export class ProviderStore {
     const provider = this.providers.find((item) => item.id === id)
     if (!provider) throw new Error('Provider not found')
     provider.apiKey = apiKey
+    delete this.preservedSecrets[id]
     this.revisionValue += 1
     this.persist()
     return this.list()
@@ -176,6 +184,7 @@ export class ProviderStore {
     const provider = this.providers.find((item) => item.id === id)
     if (!provider) throw new Error('Provider not found')
     provider.apiKey = ''
+    delete this.preservedSecrets[id]
     this.revisionValue += 1
     this.persist()
     return this.list()
@@ -301,7 +310,11 @@ export class ProviderStore {
         try {
           decrypted[providerId] = safeStorage.decryptString(Buffer.from(encoded, 'base64'))
         } catch (error) {
-          console.warn(`Could not decrypt API key for provider ${providerId}:`, error)
+          // The key may become readable again later (keyring unlocked, profile
+          // restored), so the ciphertext is preserved for the next write
+          // instead of being silently dropped.
+          this.preservedSecrets[providerId] = encoded
+          console.warn(`Could not decrypt API key for provider ${providerId}; the stored credential is preserved:`, error)
         }
       }
       return decrypted
@@ -328,7 +341,7 @@ export class ProviderStore {
     }
 
     try {
-      const keys: Record<string, string> = {}
+      const keys: Record<string, string> = { ...this.preservedSecrets }
       for (const provider of this.providers) {
         const apiKey = provider.apiKey.trim()
         if (!apiKey) continue
