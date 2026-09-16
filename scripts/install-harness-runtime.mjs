@@ -12,6 +12,8 @@ const runtimeRoot = resolve(
 const packageName = '@deepseek-ai/dsh'
 const packageSpec = `${packageName}@latest`
 const requiredPeerSpec = '@deepseek-ai/cordis-plugin-group@latest'
+/** ND's official DSH engine adapter; pinned to the same release as `dsh`. */
+const codexAdapterName = 'dsh-subagent-codex'
 
 await installRuntime()
 
@@ -20,7 +22,7 @@ async function installRuntime() {
   const installedManifestPath = join(runtimeRoot, 'node_modules', '@deepseek-ai', 'dsh', 'package.json')
   const installedBinPath = join(runtimeRoot, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
   const requiredPeerPath = join(runtimeRoot, 'node_modules', '@deepseek-ai', 'cordis-plugin-group', 'lib', 'index.js')
-  const codexAdapterRoot = join(runtimeRoot, 'node_modules', '@deepseek-ai', 'dsh-subagent-codex')
+  const codexAdapterRoot = join(runtimeRoot, 'node_modules', '@deepseek-ai', codexAdapterName)
   const codexAdapterPath = join(codexAdapterRoot, 'lib', 'index.js')
   const installedVersion = await readVersion(installedManifestPath)
 
@@ -32,11 +34,24 @@ async function installRuntime() {
   }
   console.log(`Latest published DSH version: ${latestVersion}.`)
 
+  const audit = await auditManagedRuntime(runtimeRoot)
+  if (audit.mixed.length > 0) {
+    console.log(`Managed runtime holds sibling packages from ${audit.mixed.length} different releases (${summarize(audit.mixed)}), so an earlier install left hoisted packages behind.`)
+  }
+  if (audit.duplicated.length > 0) {
+    console.log(`Managed runtime loads duplicate copies of ${audit.duplicated.length} package(s) (${summarize(audit.duplicated)}), which forks module-private state.`)
+  }
+  if (audit.mixed.length > 0 || audit.duplicated.length > 0) {
+    console.log('Reinstalling a clean tree so exactly one copy of each DSH package is present.')
+  }
+
   if (installedVersion === latestVersion
     && existsSync(installedBinPath)
     && existsSync(requiredPeerPath)
     && existsSync(codexAdapterPath)
-    && await readVersion(join(codexAdapterRoot, 'package.json')) === latestVersion) {
+    && await readVersion(join(codexAdapterRoot, 'package.json')) === latestVersion
+    && audit.mixed.length === 0
+    && audit.duplicated.length === 0) {
     console.log(`DSH package already up to date at version ${latestVersion}. Skipping install; no restart required.`)
     return
   }
@@ -52,6 +67,14 @@ async function installRuntime() {
   }
 
   const targetSpec = `${packageName}@${latestVersion}`
+  // The managed runtime holds exactly one published release. An in-place npm
+  // install leaves the previous release's hoisted packages behind, and a
+  // leftover duplicate of a package that carries module-private state silently
+  // changes behavior: @deepseek-ai/dsh-scope keys a scoped context by a private
+  // Symbol, so a second loaded copy makes scopeOf() return undefined and every
+  // session.create fails with "refusing to compose an unscoped context".
+  // Replace the tree instead of merging into it.
+  await clearInstalledTree(runtimeRoot)
   console.log(`Installing ${targetSpec} from the official npm registry...`)
   await runNpmInstall(targetSpec, requiredPeerSpec)
   if (!existsSync(installedBinPath) || !existsSync(requiredPeerPath)) {
@@ -60,7 +83,7 @@ async function installRuntime() {
   const version = await readVersion(installedManifestPath)
   if (version !== latestVersion) throw new Error('The installed DSH version does not match the requested release.')
 
-  const codexAdapterSpec = `@deepseek-ai/dsh-subagent-codex@${version}`
+  const codexAdapterSpec = `@deepseek-ai/${codexAdapterName}@${version}`
   console.log(`Installing ND's official DSH engine adapter ${codexAdapterSpec}...`)
   await runNpmInstall(codexAdapterSpec)
   if (!existsSync(codexAdapterPath) || await readVersion(join(codexAdapterRoot, 'package.json')) !== version) {
@@ -78,6 +101,74 @@ async function readVersion(path) {
   } catch (error) {
     if (error.code === 'ENOENT' || error instanceof SyntaxError) return undefined
     throw error
+  }
+}
+
+/**
+ * Audit the installed tree for the two defects that silently break the runtime.
+ *
+ * A healthy managed runtime hoists exactly one copy of every package, and its
+ * `@deepseek-ai/dsh*` sibling packages all come from a single release train.
+ * `dsh` and the pinned codex adapter are versioned by the release ND pins, not
+ * by the sibling train, so they are excluded from that uniformity check.
+ *
+ * - `mixed`: the top-level siblings disagree on a version, which means an
+ *   in-place npm install left an earlier release's hoisted packages behind.
+ * - `duplicated`: a second copy of a package nested inside another package.
+ *   A duplicate forks module identity: @deepseek-ai/dsh-scope tags a scoped
+ *   context with a private Symbol, so a context minted by one copy is invisible
+ *   to scopeOf() in the other, and every session.create fails with
+ *   "refusing to compose an unscoped context".
+ *
+ * A package nested inside itself is not a duplicate.
+ */
+async function auditManagedRuntime(runtimeRoot) {
+  const topLevel = await dshPackagesIn(join(runtimeRoot, 'node_modules', '@deepseek-ai'))
+  const train = topLevel.filter((pkg) => pkg.name !== 'dsh' && pkg.name !== codexAdapterName)
+  const trainVersions = [...new Set(train.map((pkg) => pkg.version ?? 'unreadable'))].sort()
+  const mixed = trainVersions.length > 1 ? trainVersions : []
+  const duplicated = new Set()
+  for (const pkg of topLevel) {
+    for (const nested of await dshPackagesIn(join(pkg.directory, 'node_modules', '@deepseek-ai'))) {
+      if (nested.name !== pkg.name) duplicated.add(`${nested.name} nested in ${pkg.name}`)
+    }
+  }
+  return { mixed, duplicated: [...duplicated].sort() }
+}
+
+async function dshPackagesIn(scopeDirectory) {
+  let entries
+  try {
+    entries = await fs.readdir(scopeDirectory, { withFileTypes: true })
+  } catch (error) {
+    if (error.code === 'ENOENT') return []
+    throw error
+  }
+  const packages = []
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith('dsh')) continue
+    const directory = join(scopeDirectory, entry.name)
+    packages.push({ name: entry.name, directory, version: await readVersion(join(directory, 'package.json')) })
+  }
+  return packages
+}
+
+function summarize(packages) {
+  const head = packages.slice(0, 4).join(', ')
+  return packages.length > 4 ? `${head}, and ${packages.length - 4} more` : head
+}
+
+async function clearInstalledTree(runtimeRoot) {
+  for (const name of ['node_modules', 'package-lock.json']) {
+    const target = join(runtimeRoot, name)
+    try {
+      await fs.rm(target, { recursive: true, force: true, maxRetries: 3 })
+    } catch (error) {
+      throw new Error(
+        `Could not clear the previous managed runtime at ${target} (${error.code ?? 'unknown error'}). `
+        + 'Quit ND-DSH and stop any running agent runtime, then retry.',
+      )
+    }
   }
 }
 

@@ -139,4 +139,53 @@ describe('published DSH package updater', () => {
     expect(calls).toHaveLength(2)
     expect(logs.some((line) => line.includes('already up to date'))).toBe(false)
   })
+
+  it('reinstalls a clean tree when top-level siblings come from different releases', async () => {
+    installed()
+    put(packageFile('dsh-scope', 'package.json'), JSON.stringify({ version: '0.1.0' }))
+    put(packageFile('dsh-session', 'package.json'), JSON.stringify({ version: '0.2.0' }))
+    await runInstaller()
+    expect(calls.filter((args) => args[0] === 'install')).toHaveLength(2)
+    expect(logs.some((line) => line.startsWith('Managed runtime holds sibling packages from 2 different releases') && line.includes('0.1.0') && line.includes('0.2.0'))).toBe(true)
+    expect(logs.some((line) => line.includes('already up to date'))).toBe(false)
+  })
+
+  it('reinstalls a clean tree when a package is duplicated inside another package', async () => {
+    installed()
+    // Both copies report the same version, so only the duplicate is detectable.
+    put(packageFile('dsh-scope', 'package.json'), JSON.stringify({ version: '0.2.0' }))
+    put(packageFile('dsh-base', 'package.json'), JSON.stringify({ version: '0.2.0' }))
+    const nested = join(runtimeRoot, 'node_modules', '@deepseek-ai', 'dsh-base', 'node_modules', '@deepseek-ai', 'dsh-scope', 'package.json')
+    put(nested, JSON.stringify({ version: '0.2.0' }))
+    await runInstaller()
+    expect(calls.filter((args) => args[0] === 'install')).toHaveLength(2)
+    expect(logs.some((line) => line.startsWith('Managed runtime loads duplicate copies') && line.includes('dsh-scope nested in dsh-base'))).toBe(true)
+    expect(logs.some((line) => line.includes('already up to date'))).toBe(false)
+  })
+
+  it('treats an unreadable sibling manifest as a differing release', async () => {
+    installed()
+    put(packageFile('dsh-scope', 'package.json'), '{broken')
+    put(packageFile('dsh-session', 'package.json'), JSON.stringify({ version: '0.2.0' }))
+    await runInstaller()
+    expect(calls.filter((args) => args[0] === 'install')).toHaveLength(2)
+  })
+
+  it('drops the previous tree so an orphaned sibling cannot survive the install', async () => {
+    installed()
+    put(packageFile('dsh-scope', 'package.json'), JSON.stringify({ version: '0.1.0' }))
+    put(packageFile('dsh-session', 'package.json'), JSON.stringify({ version: '0.2.0' }))
+    put(packageFile('dsh-scope', 'ORPHAN'))
+    await runInstaller()
+    expect(existsSync(packageFile('dsh-scope', 'ORPHAN'))).toBe(false)
+  })
+
+  it('keeps the skip fast path for a uniform release with no nested copies', async () => {
+    installed()
+    put(packageFile('dsh-scope', 'package.json'), JSON.stringify({ version: '0.2.0' }))
+    put(packageFile('dsh-session', 'package.json'), JSON.stringify({ version: '0.2.0' }))
+    await runInstaller()
+    expect(calls.filter((args) => args[0] === 'install')).toHaveLength(0)
+    expect(logs).toContain('DSH package already up to date at version 0.2.0. Skipping install; no restart required.')
+  })
 })
