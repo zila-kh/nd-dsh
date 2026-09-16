@@ -22,7 +22,7 @@ interface HistoryEnvelope {
 // Long tool-driven turns can legitimately exceed 400 envelopes. Keep a larger
 // bounded window so restoring a chat retains its opening prompt and context
 // while still preventing an unbounded in-memory journal.
-const JOURNAL_LIMIT = 2_000
+const JOURNAL_LIMIT = 10_000
 /** How long a fresh follow may wait for its opening snapshot. */
 const SNAPSHOT_TIMEOUT_MS = 15_000
 

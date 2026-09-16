@@ -59,6 +59,7 @@ export function DesignView({ active, workspace, browser, harness, onWorkspaceCha
       if (next.status === 'ready' && next.documentPath) {
         setSurface('freeform')
       }
+      void window.ndDshDesign.state().then(updateState).catch(() => undefined)
     }
 
     window.ndDshDesign.state()

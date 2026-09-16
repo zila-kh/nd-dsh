@@ -46,4 +46,32 @@ describe('chat event folding', () => {
     ])
     expect(entries).toEqual([{ kind: 'assistant', id: expect.any(String), text: 'Hello world', streaming: false }])
   })
+
+  it('folds raw runtime user and assistant events where content is on data directly', () => {
+    const entries = foldHistory([
+      {
+        type: 'user/message',
+        seq: 1,
+        data: {
+          id: 'user-msg-1',
+          role: 'user',
+          content: [{ type: 'text', text: 'Build habit tracker' }],
+          source: { kind: 'user' },
+        },
+      },
+      {
+        type: 'assistant/message',
+        seq: 2,
+        data: {
+          id: 'asst-msg-1',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Working on habit tracker...' }],
+        },
+      },
+    ])
+    expect(entries).toEqual([
+      { kind: 'user', id: expect.any(String), text: 'Build habit tracker' },
+      { kind: 'assistant', id: expect.any(String), text: 'Working on habit tracker...' },
+    ])
+  })
 })

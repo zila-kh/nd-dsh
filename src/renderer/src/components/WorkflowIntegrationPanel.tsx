@@ -87,9 +87,9 @@ export function WorkflowIntegrationPanel({ companyId, projectId, projectName, ha
     })
   }
 
-  const binding = view.binding
+  const binding = view?.binding
   const bindingPlugin = plugins.plugins.find((item) => item.id === binding?.pluginId)
-  const snapshot = view.snapshot
+  const snapshot = view?.snapshot
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

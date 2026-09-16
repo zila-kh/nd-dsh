@@ -29,7 +29,7 @@ function foldEventInto(entries: ThreadEntry[], envelope: HistoryEventEnvelope): 
   const data = (envelope.data ?? {}) as Record<string, unknown>
   switch (envelope.type) {
     case 'user/message': {
-      const text = messageText(data.message)
+      const text = messageText(data.message) ?? messageText(data)
       if (!text) return
       const last = entries.at(-1)
       if (last?.kind === 'user' && last.text === text) return
@@ -37,7 +37,7 @@ function foldEventInto(entries: ThreadEntry[], envelope: HistoryEventEnvelope): 
       return
     }
     case 'assistant/chunk': {
-      const text = messageText(data.chunk)
+      const text = messageText(data.chunk) ?? messageText(data)
       if (!text) return
       const last = entries.at(-1)
       if (last?.kind === 'assistant' && last.streaming) {
@@ -48,7 +48,7 @@ function foldEventInto(entries: ThreadEntry[], envelope: HistoryEventEnvelope): 
       return
     }
     case 'assistant/message': {
-      const text = messageText(data.message)
+      const text = messageText(data.message) ?? messageText(data)
       if (text === undefined) return
       const last = entries.at(-1)
       if (last?.kind === 'assistant' && last.streaming) {

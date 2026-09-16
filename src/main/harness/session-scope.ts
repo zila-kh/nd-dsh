@@ -19,6 +19,7 @@ export function scopeSessionListPayload(
   value: unknown,
   workspaceRoot: string,
   archivedIds: ReadonlySet<string>,
+  runningIds?: ReadonlySet<string>,
 ): unknown {
   const raw = (value as { items?: unknown } | undefined)?.items
   if (!Array.isArray(raw)) return value
@@ -27,7 +28,15 @@ export function scopeSessionListPayload(
       if (!isSessionLike(item)) return false
       return sessionInWorkspace(workspaceRoot, (item as { cwd?: unknown }).cwd)
     })
-    .map((item) => (archivedIds.has(item.sessionId) ? { ...item, archived: true } : item))
+    .map((item) => {
+      const isArchived = archivedIds.has(item.sessionId)
+      const isRunning = runningIds?.has(item.sessionId) || (item as { running?: unknown }).running === true
+      return {
+        ...item,
+        ...(isArchived ? { archived: true } : {}),
+        ...(isRunning ? { running: true } : {}),
+      }
+    })
   return {
     ...(typeof value === 'object' && value !== null ? value : {}),
     items,

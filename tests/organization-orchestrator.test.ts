@@ -244,4 +244,98 @@ describe('OrganizationOrchestrator', () => {
     expect(state.runs[0]?.status).toBe('failed')
     expect(await orchestrator.runNext(project.id, false)).toBeNull()
   })
+
+  it('robustly parses plans with markdown fences, trailing commas, uppercase tags, and omitted closing tags', async () => {
+    const { store, project, orchestrator } = await fixture()
+    const planRun = await orchestrator.planProject(project.id)
+
+    // Messy output: uppercase tag, markdown fences, trailing commas, missing closing tag
+    const messyOutput = `Here is the comprehensive plan:
+<ND-DSH-PLAN>
+\`\`\`json
+{
+  "goal": { "title": "Messy Launch", "description": "Ship it despite messy output", },
+  "milestones": [
+    {
+      "title": "Delivery",
+      "description": "Execute tasks",
+      "tasks": [
+        {
+          "title": "Robust task 1",
+          "description": "Handle formatting edge cases",
+          "acceptanceCriteria": ["Works cleanly",],
+        },
+      ],
+    },
+  ],
+}
+\`\`\`
+Hope this helps!`
+
+    await orchestrator.handleHarnessEvent(assistant(planRun.sessionId, messyOutput))
+    await orchestrator.handleHarnessEvent(stopped(planRun.sessionId))
+
+    const state = await store.state()
+    expect(state.tasks[0]?.title).toBe('Robust task 1')
+    expect(state.tasks[0]?.status).toBe('in_progress')
+  })
+
+  it('recovers plans via fallback when tags are omitted entirely', async () => {
+    const { store, project, orchestrator } = await fixture()
+    const planRun = await orchestrator.planProject(project.id)
+
+    const untaggedOutput = `I have analyzed the project requirements.
+Here is the project plan:
+{
+  "goal": { "title": "Untagged Goal", "description": "Goal without xml tags" },
+  "milestones": [
+    {
+      "title": "Untagged Milestone",
+      "description": "Milestone 1",
+      "tasks": [
+        {
+          "title": "Untagged Task",
+          "description": "Task from untagged json",
+          "acceptanceCriteria": ["Passes"]
+        }
+      ]
+    }
+  ]
+}
+Let me know if you need any adjustments.`
+
+    await orchestrator.handleHarnessEvent(assistant(planRun.sessionId, untaggedOutput))
+    await orchestrator.handleHarnessEvent(stopped(planRun.sessionId))
+
+    const state = await store.state()
+    expect(state.tasks[0]?.title).toBe('Untagged Task')
+    expect(state.tasks[0]?.status).toBe('in_progress')
+  })
+
+  it('reports specific validation diagnostic when plan has cyclic dependency', async () => {
+    const { store, project, orchestrator } = await fixture()
+    const planRun = await orchestrator.planProject(project.id)
+
+    const cyclicOutput = `<nd-dsh-plan>{
+  "goal": { "title": "Cycle Goal", "description": "Has cycle" },
+  "milestones": [
+    {
+      "title": "M1",
+      "description": "Milestone",
+      "tasks": [
+        { "title": "Task A", "description": "A", "dependsOn": ["Task B"], "acceptanceCriteria": [] },
+        { "title": "Task B", "description": "B", "dependsOn": ["Task A"], "acceptanceCriteria": [] }
+      ]
+    }
+  ]
+}</nd-dsh-plan>`
+
+    await orchestrator.handleHarnessEvent(assistant(planRun.sessionId, cyclicOutput))
+    await orchestrator.handleHarnessEvent(stopped(planRun.sessionId))
+
+    const state = await store.state()
+    const run = state.runs.find((item) => item.id === planRun.runId)!
+    expect(run.status).toBe('failed')
+    expect(run.error).toContain('Planned task dependency cycle detected')
+  })
 })

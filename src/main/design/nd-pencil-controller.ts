@@ -1,4 +1,4 @@
-import { app, clipboard, ipcMain, session, WebContentsView, type BrowserWindow, type IpcMainEvent, type Rectangle } from 'electron'
+import { app, clipboard, ipcMain, nativeTheme, session, WebContentsView, type BrowserWindow, type IpcMainEvent, type Rectangle } from 'electron'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { constants as fsConstants, promises as fs } from 'node:fs'
@@ -129,6 +129,11 @@ export class NdPencilController {
       this.handlePageMessage(payload)
     }
     ipcMain.on(ND_PENCIL_HOST_IPC.pageMessage, this.pageMessageHandler)
+    nativeTheme.on('updated', () => {
+      if (this.visible && this.status === 'ready') {
+        void this.syncChildFramePreferences()
+      }
+    })
   }
 
   async initialize(): Promise<void> {
@@ -398,6 +403,7 @@ export class NdPencilController {
 
   private handlePageMessage(raw: string): void {
     if (raw === '{"type":"nd-shell/frame-loaded"}') {
+      void this.syncChildFramePreferences()
       this.startInitLoop()
       return
     }
@@ -674,6 +680,24 @@ export class NdPencilController {
       this.error = `ND Pencil renderer exited: ${details.reason}`
       this.emitState()
     })
+    contents.on('did-frame-finish-load', (_event, isMainFrame) => {
+      if (!isMainFrame) {
+        void this.syncChildFramePreferences()
+      }
+    })
+  }
+
+  private async syncChildFramePreferences(): Promise<void> {
+    const theme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
+    const script = childFramePreferencesScript(theme)
+    const frames = this.view.webContents.mainFrame?.frames ?? []
+    for (const frame of frames) {
+      try {
+        await frame.executeJavaScript(script)
+      } catch {
+        // Frame may be navigating or destroyed
+      }
+    }
   }
 
   private emitState(): void {
@@ -849,7 +873,14 @@ function buildShellHtml(frameUrl: string, frameOrigin: string): string {
 <head>
 <meta charset="utf-8">
 <meta name="color-scheme" content="dark light">
-<style>html,body{position:relative;margin:0;width:100%;height:100%;overflow:hidden;background:#111}iframe{position:absolute;left:0;top:-${UPSTREAM_TOP_BAR_HEIGHT}px;display:block;width:100%;height:calc(100% + ${UPSTREAM_TOP_BAR_HEIGHT}px);border:0;background:#111}</style>
+<style>
+html,body{position:relative;margin:0;width:100%;height:100%;overflow:hidden;background:#111}
+@media (prefers-color-scheme: light) {
+  html,body{background:#f4f5f7}
+  iframe{background:#f4f5f7}
+}
+iframe{position:absolute;left:0;top:-${UPSTREAM_TOP_BAR_HEIGHT}px;display:block;width:100%;height:calc(100% + ${UPSTREAM_TOP_BAR_HEIGHT}px);border:0;background:#111}
+</style>
 </head>
 <body>
 <iframe id="op-frame" src="${escapeAttribute(frameUrl)}" allow="clipboard-read; clipboard-write"></iframe>
@@ -867,6 +898,27 @@ function buildShellHtml(frameUrl: string, frameOrigin: string): string {
 </script>
 </body>
 </html>`
+}
+
+function childFramePreferencesScript(theme: 'dark' | 'light'): string {
+  return `(function() {
+    try {
+      var key = 'openpencil-rust-web-settings::anon';
+      var raw = localStorage.getItem(key);
+      var data = raw ? JSON.parse(raw) : { version: 1 };
+      var changed = false;
+      if (data.locale !== 'en-US') {
+        data.locale = 'en-US';
+        changed = true;
+      }
+      if (changed) {
+        localStorage.setItem(key, JSON.stringify(data));
+      }
+      if (localStorage.getItem('openpencil-rust-web-theme') !== ${JSON.stringify(theme)}) {
+        localStorage.setItem('openpencil-rust-web-theme', ${JSON.stringify(theme)});
+      }
+    } catch (e) {}
+  })();`
 }
 
 function escapeAttribute(value: string): string {

@@ -285,7 +285,7 @@ Do not rebuild these; the domain and IPC already support them (see `src/shared/o
 - Manual **goal/milestone creation** (`goal.create` unused; planning is PM-only today).
 - Manual **task dependency editing** (`dependsOn` is PM-set only) and task assignment editing.
 - **Project update** surface (status/repo-URL editing).
-- Explorer **Search** and **Source Control** tabs are placeholders.
+- Explorer **Search** (workspace file suggest) and **Source Control** (Git staging/commit/branch/sync) tabs are shipped.
 - No agent **trajectory inspection view** (full trajectory lives in the harness session store).
 
 Legacy/unused renderer components: `ActivityRail.tsx`, `LeftSidebarToggle.tsx`, `RightSidebarToggle.tsx` (App has its own toggles).

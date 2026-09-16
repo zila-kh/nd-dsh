@@ -50,6 +50,7 @@ export class HarnessService {
   private startPromise: Promise<GatewayClient> | undefined
   private stopping = false
   private canceledSessions = new Set<string>()
+  private readonly runningSessions = new Set<string>()
   private providerRevisionAtStart = -1
   private tokenSaverEnabledAtStart = true
   private onStatusChanged?: (status: HarnessStatus) => void
@@ -185,6 +186,7 @@ export class HarnessService {
     if (selectedUiTarget) this.browser.clearSelection(selectedUiTarget.id)
     if (selectedAnnotation) await this.browser.clearAnnotation(selectedAnnotation.id)
     const value = result.value as { messageId?: unknown } | undefined
+    this.runningSessions.add(sessionId)
     this.updateStatus('running')
     return { sessionId, ...(typeof value?.messageId === 'string' ? { messageId: value.messageId } : {}) }
   }
@@ -260,7 +262,7 @@ export class HarnessService {
     if (!result.ok) return result
     const archivedIds = await this.sessionArchive.archivedIds()
     const workspaceRoot = this.workspace.state().root
-    return { ...result, value: scopeSessionListPayload(result.value, workspaceRoot, archivedIds) }
+    return { ...result, value: scopeSessionListPayload(result.value, workspaceRoot, archivedIds, this.runningSessions) }
   }
 
   /** Boot the runtime eagerly. */
@@ -291,6 +293,7 @@ export class HarnessService {
   async stop(): Promise<HarnessStatus> {
     if (this.activeSessionId && this.gateway) {
       const sessionId = this.activeSessionId
+      this.runningSessions.delete(sessionId)
       // Mark intent before the RPC: the gateway may emit running:false before
       // the cancellation response reaches this process.
       this.canceledSessions.add(sessionId)
@@ -352,6 +355,7 @@ export class HarnessService {
       })
     }
     this.activeSessionId = undefined
+    this.runningSessions.clear()
     this.updateStatus('stopped')
   }
 
@@ -613,11 +617,23 @@ export class HarnessService {
   }
 
   private handleEvent(frame: DshEventFrame): void {
-    if (frame.kind === 'session-status' && frame.sessionId === this.activeSessionId) {
-      this.updateStatus(frame.running ? 'running' : 'ready')
+    if (frame.kind === 'session-status') {
+      if (frame.sessionId) {
+        if (frame.running) {
+          this.runningSessions.add(frame.sessionId)
+        } else {
+          this.runningSessions.delete(frame.sessionId)
+        }
+      }
+      if (frame.sessionId === this.activeSessionId) {
+        this.updateStatus(frame.running ? 'running' : 'ready')
+      }
     }
-    if ((frame.kind === 'agent-error' || frame.kind === 'stream-error') && (!frame.sessionId || frame.sessionId === this.activeSessionId)) {
-      this.updateStatus('ready')
+    if (frame.kind === 'agent-error' || frame.kind === 'stream-error') {
+      if (frame.sessionId) this.runningSessions.delete(frame.sessionId)
+      if (!frame.sessionId || frame.sessionId === this.activeSessionId) {
+        this.updateStatus('ready')
+      }
     }
     this.onEvent?.(sanitizeRendererFrame(frame))
   }

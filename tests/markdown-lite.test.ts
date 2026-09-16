@@ -81,4 +81,21 @@ describe('parseMarkdownBlocks', () => {
       { kind: 'table', headers: ['Name', 'Status'], rows: [['API', '**ready**'], ['UI', 'pending']] },
     ])
   })
+
+  it('splits table immediately following prose without an empty line', () => {
+    const input = 'Here are the results:\n| File | Status |\n| -- | :- |\n| main.ts | ok |'
+    const blocks = parseMarkdownBlocks(input)
+    expect(blocks).toEqual([
+      { kind: 'paragraph', text: 'Here are the results:' },
+      { kind: 'table', headers: ['File', 'Status'], rows: [['main.ts', 'ok']] },
+    ])
+  })
+
+  it('pads missing cells in table rows to match header length', () => {
+    const input = '| Col A | Col B | Col C |\n|---|---|---|\n| 1 | 2 |\n| 3 | 4 | 5 |'
+    const blocks = parseMarkdownBlocks(input)
+    expect(blocks).toEqual([
+      { kind: 'table', headers: ['Col A', 'Col B', 'Col C'], rows: [['1', '2', ''], ['3', '4', '5']] },
+    ])
+  })
 })

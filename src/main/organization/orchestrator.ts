@@ -70,6 +70,7 @@ export class OrganizationOrchestrator {
   private lastProgressAt = new Map<string, number>()
   private parallelFillProjects = new Set<string>()
   private stallReconcileBusy = false
+  private readonly structuredErrors = new Map<string, string>()
   private readonly taskWorktrees = new TaskWorktreeManager()
 
   constructor(
@@ -407,7 +408,10 @@ export class OrganizationOrchestrator {
       if (this.structuredHandled.has(sessionId)) {
         await this.store.completeRun(run.id, this.finalText.get(sessionId))
       } else {
-        const message = `Expected structured ${run.kind} result was not produced`
+        const detail = this.structuredErrors.get(sessionId)
+        const message = detail
+          ? `Structured ${run.kind} failed: ${detail}`
+          : `Expected structured ${run.kind} result was not produced`
         await this.store.completeRun(run.id, this.finalText.get(sessionId), message)
         if (run.taskId) {
           // Keep the completed worker evidence reviewable. A malformed or
@@ -417,8 +421,12 @@ export class OrganizationOrchestrator {
         }
       }
     } else if (run) {
-      await this.store.completeRun(run.id, this.finalText.get(sessionId), `Expected structured ${run.kind} result was not produced`)
-      if (run.taskId) await this.failTask(run.taskId, 'Structured review result was not produced')
+      const detail = this.structuredErrors.get(sessionId)
+      const message = detail
+        ? `Structured ${run.kind} failed: ${detail}`
+        : `Expected structured ${run.kind} result was not produced`
+      await this.store.completeRun(run.id, this.finalText.get(sessionId), message)
+      if (run.taskId) await this.failTask(run.taskId, detail ? `Structured review failed: ${detail}` : 'Structured review result was not produced')
     }
 
     const project = this.autoAdvance.get(sessionId)
@@ -427,13 +435,23 @@ export class OrganizationOrchestrator {
   }
 
   private async handlePlan(projectId: string, sessionId: string, text: string): Promise<void> {
-    const plan = extractTaggedJson<ProjectPlanInput>(text, 'nd-dsh-plan')
-    if (!plan) return
-    validatePlan(plan)
+    let plan: ProjectPlanInput | undefined
+    try {
+      plan = extractTaggedJson<ProjectPlanInput>(text, 'nd-dsh-plan', ['goal', 'milestones'])
+      if (!plan) return
+      validatePlan(plan)
+      this.structuredErrors.delete(sessionId)
+    } catch (cause) {
+      this.structuredErrors.set(sessionId, errorMessage(cause))
+      return
+    }
     if (this.structuredInFlight.has(sessionId)) return
     this.structuredInFlight.add(sessionId)
     try {
       await this.store.applyPlan(projectId, plan)
+    } catch (cause) {
+      this.structuredErrors.set(sessionId, `Failed to apply plan: ${errorMessage(cause)}`)
+      throw cause
     } finally {
       this.structuredInFlight.delete(sessionId)
     }
@@ -442,9 +460,18 @@ export class OrganizationOrchestrator {
   }
 
   private async handleReview(taskId: string, projectId: string, sessionId: string, text: string): Promise<void> {
-    const review = extractTaggedJson<ReviewVerdict>(text, 'nd-dsh-review')
-    if (!review) return
-    if ((review.verdict !== 'pass' && review.verdict !== 'fail') || typeof review.summary !== 'string' || !review.summary.trim()) throw new Error('Invalid ND-DSH review result')
+    let review: ReviewVerdict | undefined
+    try {
+      review = extractTaggedJson<ReviewVerdict>(text, 'nd-dsh-review', ['verdict', 'summary'])
+      if (!review) return
+      if ((review.verdict !== 'pass' && review.verdict !== 'fail') || typeof review.summary !== 'string' || !review.summary.trim()) {
+        throw new Error('Invalid ND-DSH review result: verdict must be pass or fail with non-empty summary')
+      }
+      this.structuredErrors.delete(sessionId)
+    } catch (cause) {
+      this.structuredErrors.set(sessionId, errorMessage(cause))
+      return
+    }
     if (this.structuredInFlight.has(sessionId)) return
     this.structuredInFlight.add(sessionId)
     try {
@@ -715,6 +742,7 @@ export class OrganizationOrchestrator {
     this.finalText.delete(sessionId)
     this.structuredHandled.delete(sessionId)
     this.structuredInFlight.delete(sessionId)
+    this.structuredErrors.delete(sessionId)
     this.autoAdvance.delete(sessionId)
     this.reviewWorktrees.delete(sessionId)
     this.executionBaselines.delete(sessionId)
@@ -809,16 +837,77 @@ function messageText(message: unknown): string | undefined {
   return parts.length ? parts.join('\n') : undefined
 }
 
-function extractTaggedJson<T>(text: string, tag: string): T | undefined {
-  const match = new RegExp(`<${tag}>\\s*([\\s\\S]*?)\\s*</${tag}>`).exec(text)
-  if (!match?.[1]) return undefined
-  let raw = match[1].trim()
-  if (raw.startsWith('```')) raw = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
-  try {
-    return JSON.parse(raw) as T
-  } catch {
-    return undefined
+function extractJsonObjectString(text: string, requiredMarkers?: string[]): string | undefined {
+  let searchIndex = 0
+  while (searchIndex < text.length) {
+    const start = text.indexOf('{', searchIndex)
+    if (start === -1) return undefined
+    let depth = 0
+    let inString = false
+    let escaped = false
+    let end = -1
+    for (let i = start; i < text.length; i++) {
+      const char = text[i]
+      if (escaped) {
+        escaped = false
+        continue
+      }
+      if (char === '\\') {
+        escaped = true
+        continue
+      }
+      if (char === '"') {
+        inString = !inString
+        continue
+      }
+      if (!inString) {
+        if (char === '{') depth++
+        else if (char === '}') {
+          depth--
+          if (depth === 0) {
+            end = i + 1
+            break
+          }
+        }
+      }
+    }
+    if (end === -1) {
+      return undefined
+    }
+    const candidate = text.slice(start, end)
+    if (!requiredMarkers || requiredMarkers.every((marker) => candidate.includes(marker))) {
+      return candidate
+    }
+    searchIndex = start + 1
   }
+  return undefined
+}
+
+function sanitizeJson(raw: string): string {
+  let cleaned = raw.trim()
+  if (cleaned.startsWith('```')) {
+    cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
+  }
+  return cleaned.replace(/,(\s*[}\]])/g, '$1')
+}
+
+function extractTaggedJson<T>(text: string, tag: string, fallbackMarkers?: string[]): T | undefined {
+  const tagRegex = new RegExp(`<${tag}>([\\s\\S]*?)(?:</${tag}>|$)`, 'i')
+  const match = tagRegex.exec(text)
+  let candidateText: string | undefined
+  if (match?.[1]?.trim()) {
+    candidateText = match[1]
+  } else if (fallbackMarkers && fallbackMarkers.some((marker) => text.includes(marker))) {
+    candidateText = text
+  }
+
+  if (!candidateText) return undefined
+
+  const jsonObject = extractJsonObjectString(candidateText, fallbackMarkers)
+  if (!jsonObject) return undefined
+
+  const sanitized = sanitizeJson(jsonObject)
+  return JSON.parse(sanitized) as T
 }
 
 function validatePlan(plan: ProjectPlanInput): void {

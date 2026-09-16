@@ -549,6 +549,14 @@ export default function App() {
     return map
   }, [orgState])
 
+  const headerWorkspaceLabel = orgState && company
+    ? (project ? (workspace?.projectName ?? project.name ?? workspace?.name ?? 'No workspace') : 'No project')
+    : (workspace?.projectName ?? workspace?.name ?? 'No workspace')
+
+  const showGitControls = Boolean(
+    workspace?.root && (!orgState || (project && (!workspace.projectId || workspace.projectId === project.id)))
+  )
+
   const createCompany = (event: FormEvent): void => {
     event.preventDefault()
     void window.ndDshOrganization.mutate({ type: 'company.create', name: companyDraft.name, mission: companyDraft.mission })
@@ -701,7 +709,7 @@ export default function App() {
             <div className="flex min-w-0 flex-col">
               <strong className="text-[15px] tracking-[0.06em] text-strong">ND-DSH</strong>
               <span className="overflow-hidden text-xs text-faint text-ellipsis whitespace-nowrap">
-                {workspace?.projectName ?? workspace?.name ?? 'No workspace'}
+                {headerWorkspaceLabel}
               </span>
             </div>
           </div>
@@ -755,7 +763,7 @@ export default function App() {
               <Button variant="outline" size="xs" className="h-6 rounded-md px-2 text-xs" onClick={() => { setView('company'); setCompanyView('operations') }}>
                 Manage
               </Button>
-              {workspace?.root ? <ProjectGitControls key={`${workspace.projectId ?? 'workspace'}:${workspace.root}:${workspace.binding ?? 'standalone'}`} root={workspace.root} editable={gitEditable} workspaceBinding={workspace.binding} onError={notify} /> : null}
+              {showGitControls && workspace?.root ? <ProjectGitControls key={`${workspace.projectId ?? 'workspace'}:${workspace.root}:${workspace.binding ?? 'standalone'}`} root={workspace.root} editable={gitEditable} workspaceBinding={workspace.binding} onError={notify} /> : null}
             </div>
           ) : null}
         </div>
@@ -821,8 +829,10 @@ export default function App() {
           <SurfaceErrorBoundary label="DeepSeek" resetKey={surface} onError={notify}>
             <DshCodingSurface active inspectOverlayVisible={inspectOverlayVisible} state={dshView} onNotify={notify} />
           </SurfaceErrorBoundary>
-        ) : view !== 'settings' ? (
-          <Group orientation="horizontal" className="h-full w-full">
+        ) : (
+          <>
+            <div className={cn('h-full w-full', view === 'settings' ? 'hidden' : 'block')}>
+              <Group orientation="horizontal" className="h-full w-full">
             <Panel className="flex min-w-0 flex-col overflow-hidden" defaultSize={580} minSize={sessionsCollapsed ? CHAT_MIN_PX_SIDEBAR_COLLAPSED : CHAT_MIN_PX}>
               <SurfaceErrorBoundary label="Chat" resetKey={workspace?.root ?? 'workspace-loading'} onError={notify}>
                 <ChatPanel
@@ -977,7 +987,8 @@ export default function App() {
               </section>
             </Panel>
           </Group>
-        ) : (
+        </div>
+        {view === 'settings' ? (
           <section aria-hidden={view !== 'settings'} className="relative h-full w-full overflow-hidden">
             <Suspense fallback={<div className="grid h-full w-full place-items-center bg-surface-0"><div className="size-[34px] animate-spin rounded-full border border-border-strong border-t-primary" /></div>}>
               <SurfaceErrorBoundary label="Settings" resetKey={view} onError={notify}>
@@ -999,7 +1010,9 @@ export default function App() {
               </SurfaceErrorBoundary>
             </Suspense>
           </section>
-        )}
+        ) : null}
+      </>
+    )}
       </main>
 
       <RuntimePrompts onError={notify} />

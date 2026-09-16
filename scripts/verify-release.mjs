@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const configOnly = process.argv.includes('--config-only')
 const packageJson = readJson(join(root, 'package.json'))
-const builderConfig = readFileSync(join(root, 'electron-builder.yml'), 'utf8')
+const builderConfig = readFileSync(join(root, 'electron-builder.yml'), 'utf8').replace(/\r\n/g, '\n')
 
 const requiredScripts = ['release:stage', 'release:verify', 'dist:win:dir', 'dist:win:portable']
 for (const script of requiredScripts) {

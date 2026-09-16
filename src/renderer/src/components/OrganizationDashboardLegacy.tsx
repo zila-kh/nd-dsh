@@ -115,17 +115,17 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
   const activity = useMemo(() => state?.activity.filter((item) => item.companyId === company?.id && (!project || !item.projectId || item.projectId === project.id)).slice(0, 12) ?? [], [state, company?.id, project])
   // Repository cards project beside ND tasks but never merge into ND metrics.
   const repoBoard = useMemo(
-    () => projectRepositoryBoard(workflowView.snapshot, workflowView.binding ? `repo:${workflowView.binding.pluginId}` : 'repo'),
+    () => projectRepositoryBoard(workflowView?.snapshot, workflowView?.binding ? `repo:${workflowView.binding.pluginId}` : 'repo'),
     [workflowView],
   )
   // Clicked repository ticket -> full source record for the detail modal.
   const repoTaskDetail = useMemo(
-    () => workflowView.snapshot?.tasks.find((item) => item.sourcePath === repoTaskPath) ?? null,
-    [workflowView.snapshot, repoTaskPath],
+    () => workflowView?.snapshot?.tasks.find((item) => item.sourcePath === repoTaskPath) ?? null,
+    [workflowView?.snapshot, repoTaskPath],
   )
   const repoTasksByPath = useMemo(
-    () => new Map((workflowView.snapshot?.tasks ?? []).map((item) => [item.sourcePath, item])),
-    [workflowView.snapshot],
+    () => new Map((workflowView?.snapshot?.tasks ?? []).map((item) => [item.sourcePath, item])),
+    [workflowView?.snapshot],
   )
 
   // Clicking a repository ticket opens the agent console with the task's
@@ -174,7 +174,7 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
     let mounted = true
     const load = (): void => {
       void workflowPlugins.snapshot(company.id, project.id)
-        .then((value) => { if (mounted) setWorkflowView(value) })
+        .then((value) => { if (mounted) setWorkflowView(value ?? {}) })
         .catch(() => undefined)
     }
     load()
@@ -187,18 +187,22 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
   async function saveRuntimeSettings(event: FormEvent): Promise<void> {
     event.preventDefault()
     if (!project) return
-    await action('runtime-save', () => mutate({
-      type: 'project.update',
-      id: project.id,
-      patch: {
-        startCommand: runtimeDraft.startCommand,
-        testCommand: runtimeDraft.testCommand,
-        targetUrl: runtimeDraft.targetUrl,
-        healthCheckPath: runtimeDraft.healthCheckPath,
-        // Port 0 is not a valid port; the store clears the field instead of storing it.
-        targetPort: runtimeDraft.targetPort.trim() ? Number(runtimeDraft.targetPort) : 0,
-      },
-    }))
+    await action('runtime-save', async () => {
+      await mutate({
+        type: 'project.update',
+        id: project.id,
+        patch: {
+          startCommand: runtimeDraft.startCommand,
+          testCommand: runtimeDraft.testCommand,
+          targetUrl: runtimeDraft.targetUrl,
+          healthCheckPath: runtimeDraft.healthCheckPath,
+          // Port 0 is not a valid port; the store clears the field instead of storing it.
+          targetPort: runtimeDraft.targetPort.trim() ? Number(runtimeDraft.targetPort) : 0,
+        },
+      })
+      const refreshed = await window.ndDshOrganization.projectRuntime(project.id).catch(() => null)
+      if (refreshed) setRuntime(refreshed)
+    })
   }
 
   async function openProjectTarget(): Promise<void> {
@@ -426,7 +430,7 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
     {repoTaskDetail ? (
       <RepositoryTaskModal
         task={repoTaskDetail}
-        snapshot={workflowView.snapshot}
+        snapshot={workflowView?.snapshot}
         onClose={() => setRepoTaskPath(null)}
       />
     ) : null}
@@ -582,17 +586,17 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
         title={project ? `${project.name} work board` : 'Work board'}
         action={project ? (
           <div className="flex items-center gap-2">
-            {workflowView.snapshot?.stale ? (
+            {workflowView?.snapshot?.stale ? (
               <span className="inline-flex items-center rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.06em] text-warning" title={workflowView.snapshot.lastError ?? undefined}>
                 repo stale
               </span>
             ) : null}
-            {workflowView.pluginMissing ? (
+            {workflowView?.pluginMissing ? (
               <span className="inline-flex items-center rounded-full border border-destructive/30 bg-destructive/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.06em] text-destructive">
                 plugin missing
               </span>
             ) : null}
-            {workflowView.disconnected ? (
+            {workflowView?.disconnected ? (
               <span className="inline-flex items-center rounded-full border border-border-strong bg-secondary px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.06em] text-muted-foreground">
                 workflow off
               </span>

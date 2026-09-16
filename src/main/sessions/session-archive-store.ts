@@ -45,7 +45,7 @@ export class SessionArchiveStore {
       const record = item as Record<string, unknown>
       if (record.type === 'user/message' && record.data && typeof record.data === 'object') {
         const data = record.data as Record<string, unknown>
-        const text = messageText(data.message)
+        const text = messageText(data.message) ?? messageText(data)
         const saved = text === undefined ? undefined : this.value.messages?.[this.messageKey(sessionId, text)]
         if (saved) return { ...record, data: { ...data, message: saved.original, skillMention: saved.skill } }
       }

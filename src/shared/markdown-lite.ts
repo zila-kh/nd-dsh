@@ -26,13 +26,23 @@ const HEADING = /^(#{1,3})\s+(.*)$/
 const BULLET = /^[-*]\s+(.*)$/
 const ORDERED = /^\d+[.)]\s+(.*)$/
 const QUOTE = /^>\s?(.*)$/
-const TABLE_SEPARATOR = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*$/
+const TABLE_SEPARATOR = /^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$/
 
 function tableCells(line: string): string[] {
   const trimmed = line.trim()
   const withoutOuterPipes = trimmed.startsWith('|') ? trimmed.slice(1) : trimmed
   const content = withoutOuterPipes.endsWith('|') ? withoutOuterPipes.slice(0, -1) : withoutOuterPipes
   return content.split('|').map((cell) => cell.trim())
+}
+
+function isTableStart(lines: string[], index: number): boolean {
+  if (index + 1 >= lines.length) return false
+  const headerLine = lines[index] ?? ''
+  const sepLine = (lines[index + 1] ?? '').trim()
+  if (!headerLine.includes('|') || !TABLE_SEPARATOR.test(sepLine)) return false
+  const headers = tableCells(headerLine)
+  const separatorCells = tableCells(sepLine)
+  return headers.length > 0 && headers.length === separatorCells.length
 }
 
 const MARKDOWN_LINK = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/y
@@ -168,23 +178,21 @@ export function parseMarkdownBlocks(source: string): MarkdownBlock[] {
       blocks.push({ kind: 'quote', text: body.join(' ') })
       continue
     }
-    if (i + 1 < lines.length && line.includes('|') && TABLE_SEPARATOR.test((lines[i + 1] ?? '').trim())) {
+    if (isTableStart(lines, i)) {
       const headers = tableCells(line)
-      const separatorCells = tableCells(lines[i + 1] ?? '')
-      if (headers.length > 0 && headers.length === separatorCells.length) {
-        const rows: string[][] = []
-        i += 2
-        while (i < lines.length) {
-          const current = lines[i] ?? ''
-          if (!current.trim() || !current.includes('|')) break
-          const cells = tableCells(current)
-          if (cells.length !== headers.length) break
-          rows.push(cells)
-          i++
-        }
-        blocks.push({ kind: 'table', headers, rows })
-        continue
+      const rows: string[][] = []
+      i += 2
+      while (i < lines.length) {
+        const current = lines[i] ?? ''
+        if (!current.trim() || !current.includes('|')) break
+        const cells = tableCells(current)
+        while (cells.length < headers.length) cells.push('')
+        if (cells.length > headers.length) cells.length = headers.length
+        rows.push(cells)
+        i++
       }
+      blocks.push({ kind: 'table', headers, rows })
+      continue
     }
     if (!line.trim()) {
       i++
@@ -195,11 +203,19 @@ export function parseMarkdownBlocks(source: string): MarkdownBlock[] {
       const current = lines[i] ?? ''
       if (!current.trim()) break
       const trimmed = current.trim()
-      if (FENCE_OPEN.test(trimmed) || HEADING.test(trimmed) || BULLET.test(trimmed) || ORDERED.test(trimmed) || QUOTE.test(trimmed)) break
+      if (
+        FENCE_OPEN.test(trimmed) ||
+        HEADING.test(trimmed) ||
+        BULLET.test(trimmed) ||
+        ORDERED.test(trimmed) ||
+        QUOTE.test(trimmed) ||
+        isTableStart(lines, i)
+      ) break
       paragraph.push(trimmed)
       i++
     }
-    blocks.push({ kind: 'paragraph', text: paragraph.join(' ') })
+    const hasPipes = paragraph.some((l) => l.includes('|'))
+    blocks.push({ kind: 'paragraph', text: hasPipes ? paragraph.join('\n') : paragraph.join(' ') })
   }
   return blocks
 }
