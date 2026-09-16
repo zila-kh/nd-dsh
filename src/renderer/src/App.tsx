@@ -838,6 +838,7 @@ export default function App() {
                 <ChatPanel
                   key={workspace?.root ?? 'workspace-loading'}
                   status={harnessStatus}
+                  workspaceRoot={workspace?.root}
                   onGitEditableChange={setGitEditable}
                   {...(workspace?.projectName || workspace?.name ? { workspaceName: workspace.projectName ?? workspace.name } : {})}
                   sessionProjectScope={{ activeProjectId: project?.id, sessionProjects: runSessionProjects }}

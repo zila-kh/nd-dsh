@@ -8,6 +8,11 @@ import {
   compileChatGptGitPrompt,
   sanitizeRemoteForPrompt,
 } from '../src/main/engines/chatgpt-web/chatgpt-web-engine.js'
+import {
+  parseChatGptProjectInput,
+  parseChatGptConversationUrl,
+  matchProjectByNameOrPrefix,
+} from '../src/main/engines/chatgpt-web/chatgpt-project-binding.js'
 
 describe('ChatGPT Web Git sync helpers', () => {
   it('keeps chats without a remote independent of Git and preserves the selected branch for Git chats', async () => {
@@ -153,6 +158,212 @@ describe('ChatGPT Web Git sync helpers', () => {
       expect(persisted.sessions[0]?.branch).not.toBe('main')
       expect(persisted.sessions[0]?.conversationUrl).toBeUndefined()
       expect(persisted.sessions[0]?.running).toBe(false)
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('ChatGPT Web project parsing and matching', () => {
+  it('parses various project URL formats, paths, and raw IDs', () => {
+    const fullUrl = 'https://chatgpt.com/g/g-p-6a9bf2a6a8c8191ba1ee77c51bc0967-todo/project'
+    expect(parseChatGptProjectInput(fullUrl)).toEqual({
+      projectRef: 'g-p-6a9bf2a6a8c8191ba1ee77c51bc0967-todo',
+      projectId: 'g-p-6a9bf2a6a8c8191ba1ee77c51bc0967',
+      slug: 'todo',
+      projectUrl: fullUrl,
+    })
+
+    const chatUrl = 'https://chatgpt.com/g/g-p-6a9bf2a6a8c8191ba1ee77c51bc0967-todo/c/6aaac7f2-1234'
+    expect(parseChatGptProjectInput(chatUrl)).toEqual({
+      projectRef: 'g-p-6a9bf2a6a8c8191ba1ee77c51bc0967-todo',
+      projectId: 'g-p-6a9bf2a6a8c8191ba1ee77c51bc0967',
+      slug: 'todo',
+      projectUrl: fullUrl,
+    })
+
+    const pathOnly = '/g/g-p-6a9bf2a6a8c8191ba1ee77c51bc0967-todo/project'
+    expect(parseChatGptProjectInput(pathOnly)).toEqual({
+      projectRef: 'g-p-6a9bf2a6a8c8191ba1ee77c51bc0967-todo',
+      projectId: 'g-p-6a9bf2a6a8c8191ba1ee77c51bc0967',
+      slug: 'todo',
+      projectUrl: fullUrl,
+    })
+
+    const rawRef = 'g-p-6a9bf2a6a8c8191ba1ee77c51bc0967-todo'
+    expect(parseChatGptProjectInput(rawRef)).toEqual({
+      projectRef: 'g-p-6a9bf2a6a8c8191ba1ee77c51bc0967-todo',
+      projectId: 'g-p-6a9bf2a6a8c8191ba1ee77c51bc0967',
+      slug: 'todo',
+      projectUrl: fullUrl,
+    })
+
+    const rawIdWithoutSlug = 'g-p-6a9bf2a6a8c8191ba1ee77c51bc0967'
+    expect(parseChatGptProjectInput(rawIdWithoutSlug)).toEqual({
+      projectRef: 'g-p-6a9bf2a6a8c8191ba1ee77c51bc0967',
+      projectId: 'g-p-6a9bf2a6a8c8191ba1ee77c51bc0967',
+      projectUrl: 'https://chatgpt.com/g/g-p-6a9bf2a6a8c8191ba1ee77c51bc0967/project',
+    })
+
+    expect(parseChatGptProjectInput('https://evil.com/g/g-p-123/project')).toBeNull()
+    expect(parseChatGptProjectInput('not a project')).toBeNull()
+    expect(parseChatGptProjectInput('')).toBeNull()
+  })
+
+  it('parses conversation URLs extracting projectRef and chatId', () => {
+    const projectChat = 'https://chatgpt.com/g/g-p-6a9bf2a6a8c8191ba1ee77c51bc0967-todo/c/6aaac7f2-abcd-ef01'
+    expect(parseChatGptConversationUrl(projectChat)).toEqual({
+      projectRef: 'g-p-6a9bf2a6a8c8191ba1ee77c51bc0967-todo',
+      chatId: '6aaac7f2-abcd-ef01',
+    })
+
+    const nonProjectChat = 'https://chatgpt.com/c/6aaac7f2-abcd-ef01'
+    expect(parseChatGptConversationUrl(nonProjectChat)).toEqual({
+      chatId: '6aaac7f2-abcd-ef01',
+    })
+
+    expect(parseChatGptConversationUrl('https://evil.com/c/123')).toBeNull()
+    expect(parseChatGptConversationUrl('invalid')).toBeNull()
+  })
+
+  it('matches projects by name or prefix', () => {
+    const items = [
+      { name: 'Todo App', url: 'https://chatgpt.com/g/g-p-1-todo-app/project' },
+      { name: 'Analytics Service', url: 'https://chatgpt.com/g/g-p-2-analytics-service/project' },
+    ]
+
+    // Exact match (case insensitive)
+    expect(matchProjectByNameOrPrefix('todo app', items)?.name).toBe('Todo App')
+
+    // Prefix match
+    expect(matchProjectByNameOrPrefix('todo', items)?.name).toBe('Todo App')
+
+    // Prefix matching the slug
+    expect(matchProjectByNameOrPrefix('analytics', items)?.name).toBe('Analytics Service')
+
+    // Unmatched
+    expect(matchProjectByNameOrPrefix('billing', items)).toBeNull()
+  })
+})
+
+describe('ChatGPT Web project binding management and persistence', () => {
+  it('manages project bindings and persists them across engine reloads', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'nd-chatgpt-proj-'))
+    const storePath = join(directory, 'chatgpt-web-sessions.json')
+
+    try {
+      const engine1 = new ChatGptWebEngine({
+        browser: {} as never,
+        git: {} as never,
+        workspace: { state: () => ({ root: '/workspace/app', projectName: 'app' }) } as never,
+        storePath,
+      })
+
+      // Initially no binding
+      expect(engine1.getProjectBinding('/workspace/app')).toBeNull()
+
+      // Set binding with full URL
+      const saved = await engine1.setProjectBinding('/workspace/app', 'https://chatgpt.com/g/g-p-6a9bf2a6a8c8191ba1ee77c51bc0967-app/project')
+      expect(saved).toMatchObject({
+        workspaceRoot: '/workspace/app',
+        chatGptProjectRef: 'g-p-6a9bf2a6a8c8191ba1ee77c51bc0967-app',
+        chatGptProjectId: 'g-p-6a9bf2a6a8c8191ba1ee77c51bc0967',
+        chatGptProjectUrl: 'https://chatgpt.com/g/g-p-6a9bf2a6a8c8191ba1ee77c51bc0967-app/project',
+        source: 'manual',
+      })
+
+      await engine1.close()
+
+      // Reload in a new engine instance
+      const engine2 = new ChatGptWebEngine({
+        browser: {} as never,
+        git: {} as never,
+        workspace: { state: () => ({ root: '/workspace/app', projectName: 'app' }) } as never,
+        storePath,
+      })
+
+      const reloaded = engine2.getProjectBinding('/workspace/app')
+      expect(reloaded).toMatchObject({
+        workspaceRoot: '/workspace/app',
+        chatGptProjectRef: 'g-p-6a9bf2a6a8c8191ba1ee77c51bc0967-app',
+        source: 'manual',
+      })
+
+      // Clear binding
+      await engine2.clearProjectBinding('/workspace/app')
+      expect(engine2.getProjectBinding('/workspace/app')).toBeNull()
+
+      await engine2.close()
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('degrades gracefully to non-git mode if git push fails in prepareGit', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'nd-chatgpt-push-fail-'))
+    const storePath = join(directory, 'chatgpt-web-sessions.json')
+
+    try {
+      const git = {
+        refresh: async () => ({ remotes: ['origin'], branch: 'feature/test' }),
+        remoteUrl: async () => 'https://example.com/repo.git',
+        head: async () => 'abc',
+        ensureBranch: vi.fn(async () => {}),
+        pushBranch: vi.fn(async () => {
+          throw new Error('Connection refused to remote git server')
+        }),
+        remoteBranchHead: async () => 'abc',
+        hasUncommittedChanges: async () => false,
+      }
+
+      const engine = new ChatGptWebEngine({
+        browser: {} as never,
+        workspace: { state: () => ({ root: '/workspace' }) } as never,
+        git: git as never,
+        storePath,
+      })
+
+      const internals = engine as unknown as {
+        sessions: Map<string, { transcript: Array<{ type: string; message?: { content?: Array<{ type: string; text?: string }> } }> }>
+        prepareGit: (session: unknown, signal: AbortSignal) => Promise<{ branch: string } | null>
+      }
+
+      const { sessionId } = await engine.createSession({ cwd: '/workspace' })
+      const session = internals.sessions.get(sessionId)!
+
+      // prepareGit should catch push failure, record a reasoning note, and return null instead of throwing
+      const gitInfo = await internals.prepareGit(session, new AbortController().signal)
+      expect(gitInfo).toBeNull()
+
+      // Verify reasoning entry was recorded
+      expect(session.transcript.some((entry) =>
+        entry.type === 'agent/reasoning' &&
+        (entry as { data?: { text?: string } }).data?.text?.includes('Connection refused to remote git server'),
+      )).toBe(true)
+
+      await engine.close()
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('fails with clear instructions if no project is bound and auto-match fails', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'nd-chatgpt-resolve-'))
+    const storePath = join(directory, 'chatgpt-web-sessions.json')
+
+    try {
+      const engine = new ChatGptWebEngine({
+        browser: { state: () => ({ url: 'https://chatgpt.com/' }) } as never,
+        git: {} as never,
+        workspace: { state: () => ({ root: '/workspace/unbound', projectName: 'unbound' }) } as never,
+        storePath,
+      })
+
+      await expect(engine.resolveProjectBinding('/workspace/unbound')).rejects.toThrow(
+        'ChatGPT Web requires a project for "unbound"',
+      )
+
+      await engine.close()
     } finally {
       rmSync(directory, { recursive: true, force: true })
     }

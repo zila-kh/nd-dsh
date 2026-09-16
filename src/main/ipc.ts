@@ -428,6 +428,20 @@ export function registerIpc(deps: IpcDependencies): () => void {
   handle(IPC.harnessRun, (_event, value, options) => deps.engineRouter.run(asString(value, 'Prompt', 100_000), asRunOptions(options)))
   handle(IPC.harnessStop, () => deps.engineRouter.stop())
   handle(IPC.harnessStopSession, (_event, value) => deps.engineRouter.stopSession(asString(value, 'Session id', 128)))
+  handle(IPC.chatGptWebProjectGet, (_event, workspaceRoot) => {
+    const root = typeof workspaceRoot === 'string' && workspaceRoot.trim() ? workspaceRoot.trim() : deps.projectWorkspace.state().root
+    return deps.engineRouter.getChatGptWeb()?.getProjectBinding(root) ?? null
+  })
+  handle(IPC.chatGptWebProjectSet, (_event, workspaceRoot, input) => {
+    const root = typeof workspaceRoot === 'string' && workspaceRoot.trim() ? workspaceRoot.trim() : deps.projectWorkspace.state().root
+    const engine = deps.engineRouter.getChatGptWeb()
+    if (!engine) throw new Error('ChatGPT Web is unavailable')
+    return engine.setProjectBinding(root, asString(input, 'ChatGPT Project URL or ID', 1024))
+  })
+  handle(IPC.chatGptWebProjectClear, (_event, workspaceRoot) => {
+    const root = typeof workspaceRoot === 'string' && workspaceRoot.trim() ? workspaceRoot.trim() : deps.projectWorkspace.state().root
+    deps.engineRouter.getChatGptWeb()?.clearProjectBinding(root)
+  })
   handle(IPC.harnessPermissionGet, () => deps.theme.permissionMode())
   handle(IPC.harnessPermissionSet, async (_event, value) => {
     const mode = deps.theme.setPermissionMode(asPermissionMode(value))

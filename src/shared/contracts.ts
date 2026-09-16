@@ -286,6 +286,17 @@ export interface CodingEngineDescriptor {
 }
 
 /** A model selectable for an engine's native configuration; empty name means display the id. */
+export interface ChatGptProjectBinding {
+  workspaceRoot: string
+  projectId?: string
+  projectName: string
+  chatGptProjectRef: string
+  chatGptProjectId: string
+  chatGptProjectUrl: string
+  source: 'auto' | 'manual'
+  updatedAt: number
+}
+
 export interface EngineModelOption {
   id: string
   name?: string
@@ -713,6 +724,11 @@ export interface DesktopApi {
     onState(listener: (state: QaState) => void): () => void
     onOutput(listener: (chunk: QaOutputChunk) => void): () => void
   }
+  chatGptWeb: {
+    getProjectBinding(workspaceRoot?: string): Promise<ChatGptProjectBinding | null>
+    setProjectBinding(workspaceRoot: string, input: string): Promise<ChatGptProjectBinding>
+    clearProjectBinding(workspaceRoot: string): Promise<void>
+  }
   window?: {
     setFloatMode(enabled: boolean): Promise<{ float: boolean }>
     resizeFloatWindow(width: number, height: number): Promise<void>
@@ -821,4 +837,7 @@ export const IPC = {
   qaStop: 'qa:stop',
   qaStateEvent: 'qa:state-event',
   qaOutputEvent: 'qa:output-event',
+  chatGptWebProjectGet: 'chatgpt-web:project-get',
+  chatGptWebProjectSet: 'chatgpt-web:project-set',
+  chatGptWebProjectClear: 'chatgpt-web:project-clear',
 } as const

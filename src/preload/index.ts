@@ -120,6 +120,11 @@ const api: DesktopApi = {
     copyElementContext: (pickId) => ipcRenderer.invoke(IPC.captureCopyElementContext, pickId),
     copyElementShot: (pickId) => ipcRenderer.invoke(IPC.captureCopyElementShot, pickId),
   },
+  chatGptWeb: {
+    getProjectBinding: (workspaceRoot) => ipcRenderer.invoke(IPC.chatGptWebProjectGet, workspaceRoot),
+    setProjectBinding: (workspaceRoot, input) => ipcRenderer.invoke(IPC.chatGptWebProjectSet, workspaceRoot, input),
+    clearProjectBinding: (workspaceRoot) => ipcRenderer.invoke(IPC.chatGptWebProjectClear, workspaceRoot),
+  },
   browser: {
     state: () => ipcRenderer.invoke(IPC.browserState),
     setBounds: (bounds) => ipcRenderer.invoke(IPC.browserSetBounds, bounds),

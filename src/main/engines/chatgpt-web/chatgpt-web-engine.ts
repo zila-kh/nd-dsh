@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type {
+  ChatGptProjectBinding,
   DshEventFrame,
   EngineSessionSummary,
   EngineSessionTranscript,
@@ -11,6 +12,12 @@ import { CHATGPT_WEB_ENGINE_ID } from '../../../shared/coding-engines.js'
 import type { BrowserController } from '../../browser/browser-controller.js'
 import type { GitService } from '../../git/git-service.js'
 import type { WorkspaceService } from '../../workspace/workspace-service.js'
+import {
+  type DiscoveredProjectItem,
+  matchProjectByNameOrPrefix,
+  parseChatGptConversationUrl,
+  parseChatGptProjectInput,
+} from './chatgpt-project-binding.js'
 
 const CHATGPT_HOME_URL = 'https://chatgpt.com/'
 const TRANSCRIPT_EVENT_TYPES = new Set(['user/message', 'assistant/message', 'agent/reasoning'])
@@ -41,11 +48,14 @@ interface StoredChatGptWebSession {
   remote?: string
   lastRemoteSha?: string
   gitMode?: 'none' | 'sync'
+  chatGptProjectRef?: string
+  chatGptChatId?: string
 }
 
 interface PersistedChatGptWebStore {
   version: 1
   sessions: StoredChatGptWebSession[]
+  projectBindings?: Record<string, ChatGptProjectBinding>
 }
 
 interface ChatGptDomTurn {
@@ -149,6 +159,7 @@ export function compileChatGptGitPrompt(prompt: string, context: ChatGptGitConte
  */
 export class ChatGptWebEngine {
   private readonly sessions = new Map<string, StoredChatGptWebSession>()
+  private readonly projectBindings = new Map<string, ChatGptProjectBinding>()
   private readonly activeTurns = new Map<string, AbortController>()
   private readonly remoteCheckedAt = new Map<string, number>()
   private onEvent: ((frame: DshEventFrame) => void) | undefined
@@ -159,6 +170,120 @@ export class ChatGptWebEngine {
     this.loadStore()
     this.watchTimer = setInterval(() => { void this.watchTick() }, BACKGROUND_WATCH_MS)
     this.watchTimer.unref?.()
+  }
+
+  getProjectBinding(workspaceRoot: string): ChatGptProjectBinding | null {
+    const direct = this.projectBindings.get(workspaceRoot)
+    if (direct) return direct
+    const wsState = this.options.workspace.state()
+    const name = wsState.projectName || wsState.name
+    if (name && this.projectBindings.has(name)) return this.projectBindings.get(name) ?? null
+    return null
+  }
+
+  setProjectBinding(workspaceRoot: string, input: string): ChatGptProjectBinding {
+    const parsed = parseChatGptProjectInput(input)
+    if (!parsed) {
+      throw new Error('Invalid ChatGPT Project link or ID. Please provide a link like https://chatgpt.com/g/g-p-.../project or an ID like g-p-...')
+    }
+    const wsState = this.options.workspace.state()
+    const projectName = wsState.projectName || wsState.name || 'project'
+    const binding: ChatGptProjectBinding = {
+      workspaceRoot,
+      ...(wsState.projectId ? { projectId: wsState.projectId } : {}),
+      projectName,
+      chatGptProjectRef: parsed.projectRef,
+      chatGptProjectId: parsed.projectId,
+      chatGptProjectUrl: parsed.projectUrl,
+      source: 'manual',
+      updatedAt: Date.now(),
+    }
+    this.projectBindings.set(workspaceRoot, binding)
+    if (projectName) this.projectBindings.set(projectName, binding)
+    this.persistStore()
+    return binding
+  }
+
+  clearProjectBinding(workspaceRoot: string): void {
+    this.projectBindings.delete(workspaceRoot)
+    const wsState = this.options.workspace.state()
+    const name = wsState.projectName || wsState.name
+    if (name) this.projectBindings.delete(name)
+    this.persistStore()
+  }
+
+  async resolveProjectBinding(workspaceRoot: string, signal?: AbortSignal): Promise<ChatGptProjectBinding> {
+    const existing = this.getProjectBinding(workspaceRoot)
+    if (existing) return existing
+
+    const wsState = this.options.workspace.state()
+    const projectName = wsState.projectName || wsState.name || 'project'
+
+    // 1. Check if the visible browser is currently viewing a project URL
+    const currentUrl = this.options.browser.state().url
+    const currentParsed = parseChatGptProjectInput(currentUrl)
+    if (currentParsed) {
+      const binding: ChatGptProjectBinding = {
+        workspaceRoot,
+        ...(wsState.projectId ? { projectId: wsState.projectId } : {}),
+        projectName,
+        chatGptProjectRef: currentParsed.projectRef,
+        chatGptProjectId: currentParsed.projectId,
+        chatGptProjectUrl: currentParsed.projectUrl,
+        source: 'auto',
+        updatedAt: Date.now(),
+      }
+      this.projectBindings.set(workspaceRoot, binding)
+      this.projectBindings.set(projectName, binding)
+      this.persistStore()
+      return binding
+    }
+
+    // 2. Try auto-discovery via CDP on https://chatgpt.com/projects
+    try {
+      if (signal) assertTurnActive(signal)
+      if (isChatGptPageUrl(currentUrl)) {
+        const cdp = await VisibleCdpConnection.connect(this.options.browser)
+        try {
+          const items = await cdp.evaluate<DiscoveredProjectItem[]>(`(() => {
+            const anchors = Array.from(document.querySelectorAll('a[href*="/g/g-p-"], [role="button"][href*="/g/g-p-"]'));
+            return anchors.map(a => ({
+              name: a.innerText?.trim() || a.getAttribute('aria-label') || '',
+              href: a.getAttribute('href') || '',
+            })).filter(i => i.href);
+          })()`)
+          const matched = matchProjectByNameOrPrefix(projectName, items)
+          if (matched) {
+            const binding: ChatGptProjectBinding = {
+              workspaceRoot,
+              ...(wsState.projectId ? { projectId: wsState.projectId } : {}),
+              projectName,
+              chatGptProjectRef: matched.projectRef,
+              chatGptProjectId: matched.projectId,
+              chatGptProjectUrl: matched.projectUrl,
+              source: 'auto',
+              updatedAt: Date.now(),
+            }
+            this.projectBindings.set(workspaceRoot, binding)
+            this.projectBindings.set(projectName, binding)
+            this.persistStore()
+            return binding
+          }
+        } finally {
+          cdp.close()
+        }
+      }
+    } catch {
+      // Auto-discovery non-fatal, fallback to requirement prompt below
+    }
+
+    // 3. Not found: navigate browser to https://chatgpt.com/projects and throw descriptive error
+    if (!currentUrl.includes('chatgpt.com/projects')) {
+      await this.options.browser.navigate?.('https://chatgpt.com/projects')?.catch?.(() => {})
+    }
+    throw new Error(
+      `ChatGPT Web requires a project for "${projectName}". Please create or select project "${projectName}" on ChatGPT in the Browser tab (opened at https://chatgpt.com/projects), or paste its link/ID.`,
+    )
   }
 
   setEmitter(emit: (frame: DshEventFrame) => void): void {
@@ -312,9 +437,12 @@ export class ChatGptWebEngine {
 
   private async openBoundConversation(session: StoredChatGptWebSession, signal: AbortSignal): Promise<VisibleCdpConnection> {
     assertTurnActive(signal)
+    const binding = await this.resolveProjectBinding(session.cwd ?? this.options.workspace.state().root, signal)
+    session.chatGptProjectRef = binding.chatGptProjectRef
+
     const targetUrl = session.conversationUrl && isChatGptConversationUrl(session.conversationUrl)
       ? session.conversationUrl
-      : CHATGPT_HOME_URL
+      : binding.chatGptProjectUrl
     const currentUrl = this.options.browser.state().url
     if (!sameConversationUrl(currentUrl, targetUrl)) await this.options.browser.navigate(targetUrl)
     assertTurnActive(signal)
@@ -328,9 +456,17 @@ export class ChatGptWebEngine {
         const snapshot = await this.captureSnapshot(cdp)
         assertTurnActive(signal)
         if (snapshot.composer) return cdp
+        await cdp.evaluate<boolean>(`(() => {
+          const btn = Array.from(document.querySelectorAll('button, a')).find(el => {
+            const text = el.innerText?.trim() || '';
+            return text.includes('New chat in') || text.includes('New chat');
+          });
+          if (btn instanceof HTMLElement) { btn.click(); return true; }
+          return false;
+        })()`).catch(() => false)
         await sleep(250)
       }
-      throw new Error('ChatGPT Web is open in ND\'s visible Browser pane, but the composer is unavailable. Sign in to chatgpt.com there, then resend this message.')
+      throw new Error(`ChatGPT Web is open in ND's visible Browser pane, but the composer for project "${binding.projectName}" is unavailable. Sign in to chatgpt.com and ensure project "${binding.projectName}" is accessible, then resend this message.`)
     } catch (error) {
       cdp.close()
       throw error
@@ -372,24 +508,34 @@ export class ChatGptWebEngine {
       throw new Error('ChatGPT Web Git sync requires at least one local commit before the first turn.')
     }
 
-    assertTurnActive(signal)
-    await this.options.git.ensureBranch(session.branch)
-    assertTurnActive(signal)
-    await this.options.git.pushBranch(remote, session.branch)
-    assertTurnActive(signal)
-    const head = await this.options.git.head()
-    if (!head) throw new Error('ChatGPT Web Git sync requires a committed Git HEAD before the first turn.')
-    const remoteSha = await this.options.git.remoteBranchHead(remote, session.branch)
-    if (!remoteSha) throw new Error(`Git remote ${remote}/${session.branch} did not expose the pushed branch.`)
-    session.remote = remote
-    session.lastRemoteSha = remoteSha
-    this.persistStore()
-    return {
-      remote,
-      remoteUrl,
-      branch: session.branch,
-      head,
-      dirty: await this.options.git.hasUncommittedChanges(),
+    try {
+      assertTurnActive(signal)
+      await this.options.git.ensureBranch(session.branch)
+      assertTurnActive(signal)
+      await this.options.git.pushBranch(remote, session.branch)
+      assertTurnActive(signal)
+      const head = await this.options.git.head()
+      if (!head) throw new Error('ChatGPT Web Git sync requires a committed Git HEAD before the first turn.')
+      const remoteSha = await this.options.git.remoteBranchHead(remote, session.branch)
+      if (!remoteSha) throw new Error(`Git remote ${remote}/${session.branch} did not expose the pushed branch.`)
+      session.remote = remote
+      session.lastRemoteSha = remoteSha
+      this.persistStore()
+      return {
+        remote,
+        remoteUrl,
+        branch: session.branch,
+        head,
+        dirty: await this.options.git.hasUncommittedChanges(),
+      }
+    } catch (error) {
+      session.gitMode = 'none'
+      delete session.remote
+      delete session.lastRemoteSha
+      this.persistStore()
+      const message = error instanceof Error ? error.message : String(error)
+      this.recordReasoning(session, `Git sync to ${remote}/${session.branch} was skipped (${message}). Continuing in non-git conversation mode.`)
+      return null
     }
   }
 
@@ -558,7 +704,11 @@ export class ChatGptWebEngine {
   }
 
   private captureConversationUrl(session: StoredChatGptWebSession, url: string): void {
-    if (!isChatGptConversationUrl(url) || session.conversationUrl === url) return
+    if (!isChatGptConversationUrl(url)) return
+    const parsed = parseChatGptConversationUrl(url)
+    if (parsed?.projectRef) session.chatGptProjectRef = parsed.projectRef
+    if (parsed?.chatId) session.chatGptChatId = parsed.chatId
+    if (session.conversationUrl === url) return
     session.conversationUrl = url
     this.persistStore()
   }
@@ -665,7 +815,16 @@ export class ChatGptWebEngine {
         session.seenTurnKeys = Array.isArray(session.seenTurnKeys) ? session.seenTurnKeys.slice(-500) : []
         session.sentPromptHashes = Array.isArray(session.sentPromptHashes) ? session.sentPromptHashes.slice(-100) : []
         session.sequence = Number.isSafeInteger(session.sequence) ? session.sequence : session.transcript.at(-1)?.seq ?? 0
+        if (typeof session.chatGptProjectRef !== 'string') delete session.chatGptProjectRef
+        if (typeof session.chatGptChatId !== 'string') delete session.chatGptChatId
         this.sessions.set(session.sessionId, session)
+      }
+      if (parsed.projectBindings && typeof parsed.projectBindings === 'object') {
+        for (const [key, binding] of Object.entries(parsed.projectBindings)) {
+          if (binding && typeof binding === 'object' && typeof binding.chatGptProjectRef === 'string') {
+            this.projectBindings.set(key, binding)
+          }
+        }
       }
     } catch (error) {
       this.options.log?.(`[chatgpt-web] ignoring unreadable session store: ${error instanceof Error ? error.message : String(error)}`)
@@ -676,7 +835,15 @@ export class ChatGptWebEngine {
     const directory = dirname(this.options.storePath)
     mkdirSync(directory, { recursive: true })
     const tmp = `${this.options.storePath}.${process.pid}.${randomUUID()}.tmp`
-    const payload: PersistedChatGptWebStore = { version: 1, sessions: [...this.sessions.values()] }
+    const bindingsObj: Record<string, ChatGptProjectBinding> = {}
+    for (const [key, val] of this.projectBindings.entries()) {
+      bindingsObj[key] = val
+    }
+    const payload: PersistedChatGptWebStore = {
+      version: 1,
+      sessions: [...this.sessions.values()],
+      projectBindings: bindingsObj,
+    }
     try {
       writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
       renameSync(tmp, this.options.storePath)

@@ -7,6 +7,7 @@ import type {
   EngineSessionSummary,
   ExternalElementAttachmentView,
   HarnessStatus,
+  ChatGptProjectBinding,
   ModelProvider,
   ModelProviderGroup,
   ProviderPingResult,
@@ -14,7 +15,7 @@ import type {
   SessionSummary,
   WorkspaceSuggestion,
 } from '../../../shared/contracts'
-import { ANTIGRAVITY_ENGINE_ID, CODEX_CLI_ENGINE_ID, ND_HARNESS_ENGINE_ID, ZCODE_CLI_ENGINE_ID } from '../../../shared/coding-engines'
+import { ANTIGRAVITY_ENGINE_ID, CHATGPT_WEB_ENGINE_ID, CODEX_CLI_ENGINE_ID, ND_HARNESS_ENGINE_ID, ZCODE_CLI_ENGINE_ID } from '../../../shared/coding-engines'
 import { DisplayGroup, groupEntries, parseFileChanges, toolPreview, type ContextBlock } from '../../../shared/chat-grouping'
 import { filterSessionsInProjectScope, isSessionInProjectScope } from '../../../shared/session-project-scope'
 import { splitAssistantSegments, type ReviewVerdict } from '../../../shared/structured-output'
@@ -57,6 +58,7 @@ import { ProjectServerControl } from './ProjectServerControl'
 import { ChangedFilesCard } from './ChangedFilesCard'
 import { ChatContextPopover } from './ChatContextPopover'
 import { ZcodeModelConfigDialog } from './ZcodeModelConfigDialog'
+import { ChatGptProjectDialog } from './ChatGptProjectDialog'
 import { MarkdownLite } from './MarkdownLite'
 import { Button } from './ui/button'
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog'
@@ -67,6 +69,7 @@ interface ChatPanelProps {
   onGitEditableChange?(editable: boolean): void
   onOpenLink?(url: string): void
   status: HarnessStatus | null
+  workspaceRoot?: string | undefined
   workspaceName?: string
   sessionsCollapsed: boolean
   /** Run attribution for scoping the sidebar to the active project's sessions. */
@@ -123,7 +126,7 @@ function fileMentionTag(relativePath: string): string {
   return extension ? extension.toUpperCase().slice(0, 5) : 'FILE'
 }
 
-export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionProjectScope, projects, onSelectProject, onError, onOpenSettings, onOpenFile, onOpenLink, externalPrompt, onExternalPromptConsumed, elementAttachmentVersion, onGitEditableChange }: ChatPanelProps) {
+export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollapsed, sessionProjectScope, projects, onSelectProject, onError, onOpenSettings, onOpenFile, onOpenLink, externalPrompt, onExternalPromptConsumed, elementAttachmentVersion, onGitEditableChange }: ChatPanelProps) {
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [terminalOpen, setTerminalOpen] = useState(false)
@@ -174,6 +177,9 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
   const [sessionMenuId, setSessionMenuId] = useState<string | null>(null)
   const [archiveAllIds, setArchiveAllIds] = useState<string[] | null>(null)
   const [archivingAll, setArchivingAll] = useState(false)
+  // ChatGPT Project binding: ChatGPT Web requires a project to scope conversations.
+  const [chatGptProjectBinding, setChatGptProjectBinding] = useState<ChatGptProjectBinding | null>(null)
+  const [chatGptProjectModalOpen, setChatGptProjectModalOpen] = useState(false)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -238,6 +244,24 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
     setEngineModelSelections((current) => ({ ...current, [activeEngineId]: model }))
   }
   const activeEngineName = engines.find((engine) => engine.id === activeEngineId)?.name ?? 'Codex CLI'
+  const activeWorkspaceRoot = workspaceRoot ?? terminalCwd ?? ''
+  const currentProjectName = workspaceName ?? ''
+
+  const refreshChatGptProjectBinding = useCallback(async (): Promise<void> => {
+    if (!activeWorkspaceRoot) return
+    try {
+      const binding = await window.ndDsh?.chatGptWeb?.getProjectBinding(activeWorkspaceRoot)
+      setChatGptProjectBinding(binding ?? null)
+    } catch {
+      setChatGptProjectBinding(null)
+    }
+  }, [activeWorkspaceRoot])
+
+  useEffect(() => {
+    if (activeEngineId === CHATGPT_WEB_ENGINE_ID) {
+      void refreshChatGptProjectBinding()
+    }
+  }, [activeEngineId, activeWorkspaceRoot, refreshChatGptProjectBinding])
   // Extra chat engines come straight from the catalog; unavailable ones never render.
   const chatEngines = useMemo(() => engines.filter((engine) => engine.available && engine.id !== ND_HARNESS_ENGINE_ID), [engines])
   // Both listings arrive pre-annotated with ND archive flags; the sidebar
@@ -1348,6 +1372,58 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
           </div>
         ) : null}
 
+        {activeEngineId === CHATGPT_WEB_ENGINE_ID ? (
+          <div className="mx-3 mt-2.5 flex items-center justify-between gap-2 rounded-[7px] border border-border-soft bg-surface-1 px-2.5 py-1.5 text-[10px]">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="shrink-0 font-medium text-soft">ChatGPT Project:</span>
+              {chatGptProjectBinding ? (
+                <span className="flex min-w-0 items-center gap-1.5 truncate">
+                  <strong className="truncate font-semibold text-foreground">
+                    {chatGptProjectBinding.chatGptProjectRef}
+                  </strong>
+                  {chatGptProjectBinding.source === 'auto' ? (
+                    <span className="shrink-0 rounded bg-accent px-1 py-0.5 text-[8px] text-faint">
+                      auto-matched
+                    </span>
+                  ) : null}
+                </span>
+              ) : (
+                <span className="truncate text-warning">
+                  No project linked (required for ChatGPT Web)
+                </span>
+              )}
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+              {chatGptProjectBinding?.chatGptProjectUrl ? (
+                <button
+                  type="button"
+                  className="rounded border border-border-soft px-1.5 py-0.5 text-[9px] text-faint hover:bg-accent hover:text-foreground"
+                  onClick={() => onOpenLink?.(chatGptProjectBinding.chatGptProjectUrl)}
+                  title="Open project in browser"
+                >
+                  Open in ChatGPT
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="rounded border border-border-soft px-1.5 py-0.5 text-[9px] text-faint hover:bg-accent hover:text-foreground"
+                  onClick={() => onOpenLink?.('https://chatgpt.com/projects')}
+                  title="Browse ChatGPT projects"
+                >
+                  chatgpt.com/projects
+                </button>
+              )}
+              <button
+                type="button"
+                className="rounded bg-primary/10 px-2 py-0.5 text-[9px] font-medium text-primary hover:bg-primary/20"
+                onClick={() => setChatGptProjectModalOpen(true)}
+              >
+                {chatGptProjectBinding ? 'Change' : 'Link Project'}
+              </button>
+            </div>
+          </div>
+        ) : null}
+
         {changedFiles.length > 0 ? (
           <ChangedFilesCard files={changedFiles} {...(onOpenFile ? { onOpenFile } : {})} onError={onError} />
         ) : null}
@@ -1891,6 +1967,21 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
 
         <div className="px-3 pb-2.5 pt-1.5 text-center text-[8px] text-fainter">Browser actions run in the pane you can see.</div>
       </aside>
+      <ZcodeModelConfigDialog open={zcodeConfigOpen} onClose={() => setZcodeConfigOpen(false)} />
+      <ChatGptProjectDialog
+        open={chatGptProjectModalOpen}
+        workspaceRoot={activeWorkspaceRoot}
+        workspaceName={currentProjectName}
+        currentBinding={chatGptProjectBinding}
+        onClose={() => setChatGptProjectModalOpen(false)}
+        onSaved={(binding) => {
+          setChatGptProjectBinding(binding)
+        }}
+        onCleared={() => {
+          setChatGptProjectBinding(null)
+        }}
+        onError={onError}
+      />
     </div>
   )
 }

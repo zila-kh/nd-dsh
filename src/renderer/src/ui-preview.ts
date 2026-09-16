@@ -554,6 +554,19 @@ const desktopApi: DesktopApi = {
     onState: qaEvents.on,
     onOutput: () => () => undefined,
   },
+  chatGptWeb: {
+    getProjectBinding: async () => null,
+    setProjectBinding: async (workspaceRoot, input) => ({
+      workspaceRoot,
+      projectName: 'Preview Project',
+      chatGptProjectRef: input.trim(),
+      chatGptProjectId: input.trim(),
+      chatGptProjectUrl: `https://chatgpt.com/g/${input.trim()}/project`,
+      source: 'manual',
+      updatedAt: Date.now(),
+    }),
+    clearProjectBinding: async () => undefined,
+  },
 }
 
 const designApi: DesignDesktopApi = {

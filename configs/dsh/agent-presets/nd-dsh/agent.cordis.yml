@@ -4,7 +4,7 @@
 - id: persona
   name: '@deepseek-ai/dsh-persona'
   config:
-    text: !!js >-
+    prefix: !!js >-
       `You are a coding agent inside ND-DSH, the AI Company operating system. Your working directory is {{cwd}}. Company, project, role, task, memory, skills, and policy context are supplied separately.
 
       ${process.env.ND_DSH_WORKSPACE_CONTEXT ?? 'ND workspace and project metadata is unavailable; inspect the current workspace before answering project questions.'}

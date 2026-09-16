@@ -348,6 +348,10 @@ export class EngineSessionRouter {
     return ND_HARNESS_ENGINE_ID
   }
 
+  getChatGptWeb(): ChatGptWebEngine | undefined {
+    return this.chatGptWeb
+  }
+
   private requireChatGptWeb(): ChatGptWebEngine {
     if (!this.chatGptWeb) {
       throw new Error('ChatGPT Web is unavailable because ND did not initialize its visible-browser Git-sync runtime.')

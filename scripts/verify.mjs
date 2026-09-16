@@ -151,6 +151,10 @@ const codexToolBlock = /- id: tool-subagent-codex\b([\s\S]*?)(?=\n\s*- id:|$)/.e
 if (!codexToolBlock || /disabled:\s*true/.test(codexToolBlock)) {
   errors.push('ND-DSH Codex coding-engine tool must be enabled in the standard agent preset')
 }
+const personaBlock = /- id: persona\b([\s\S]*?)(?=\n\s*- id:|$)/.exec(preset)?.[1] ?? ''
+if (!personaBlock.includes('prefix:')) {
+  errors.push('configs/dsh/agent-presets/nd-dsh/agent.cordis.yml persona row must configure prefix')
+}
 const presetMeta = await fs.readFile(join(root, 'configs/dsh/agent-presets/nd-dsh/preset.yml'), 'utf8')
 if (!presetMeta.includes('name: ND-DSH')) errors.push('configs/dsh/agent-presets/nd-dsh/preset.yml must name the ND-DSH preset')
 
