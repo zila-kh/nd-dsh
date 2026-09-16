@@ -74,4 +74,51 @@ describe('chat event folding', () => {
       { kind: 'assistant', id: expect.any(String), text: 'Working on habit tracker...' },
     ])
   })
+
+  it('keeps Harness-injected context out of the user messages', () => {
+    const entries = foldHistory([
+      { type: 'user/message', seq: 1, data: { source: { kind: 'user' }, message: { content: 'hi' } } },
+      {
+        type: 'user/message',
+        seq: 2,
+        data: {
+          source: { kind: 'agent-instructions' },
+          message: { content: '<system-reminder>\nInstructions from: AGENTS.md\n</system-reminder>' },
+        },
+      },
+      { type: 'user/message', seq: 3, data: { source: { kind: 'plugin' }, message: { content: 'Current runtime context.' } } },
+      { type: 'user/message', seq: 4, data: { source: { kind: 'skill-catalog' }, message: { content: '<available_skills />' } } },
+      { type: 'assistant/message', seq: 5, data: { message: { content: 'Hello!' } } },
+    ])
+
+    expect(entries.filter((entry) => entry.kind === 'user')).toEqual([
+      { kind: 'user', id: expect.any(String), text: 'hi' },
+    ])
+    expect(entries.filter((entry) => entry.kind === 'context').map((entry) => entry.source)).toEqual([
+      'agent-instructions', 'plugin', 'skill-catalog',
+    ])
+    // The injected blocks keep their own text; only their attribution changes.
+    expect(entries.find((entry) => entry.kind === 'context' && entry.source === 'plugin'))
+      .toMatchObject({ text: 'Current runtime context.' })
+    expect(entries.at(-1)).toMatchObject({ kind: 'assistant', text: 'Hello!' })
+  })
+
+  it('drops the product workspace block from the visible user message', () => {
+    const entries = foldHistory([
+      {
+        type: 'user/message',
+        seq: 1,
+        data: {
+          source: { kind: 'user' },
+          message: { content: 'Fix the login bug\n\n[ND-DSH WORKSPACE CONTEXT]\n{"workspaceName":"nd-dsh"}\n[/ND-DSH WORKSPACE CONTEXT]' },
+        },
+      },
+    ])
+    expect(entries).toEqual([{ kind: 'user', id: expect.any(String), text: 'Fix the login bug' }])
+  })
+
+  it('keeps an untagged user message from a session recorded before source tags', () => {
+    const entries = foldHistory([message('user/message', 1, 'hi')])
+    expect(entries).toEqual([{ kind: 'user', id: expect.any(String), text: 'hi' }])
+  })
 })

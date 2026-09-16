@@ -8,6 +8,12 @@ export type DisplayGroup =
   | { kind: 'entry'; key: string; entry: ThreadEntry }
   | { kind: 'tool-group'; key: string; tools: ToolEntry[]; label: string; icon: ToolGroupIcon }
   | { kind: 'reasoning-group'; key: string; text: string }
+  | { kind: 'context-group'; key: string; blocks: ContextBlock[] }
+
+export interface ContextBlock {
+  source: string
+  text: string
+}
 
 export const SKILL_TOOL_NAMES = new Set(['skill_load', 'skill_run', 'load_skill'])
 export const FS_WRITE_TOOL_NAMES = new Set(['fs_edit', 'fs_write', 'fs_write_text', 'fs_create', 'fs_apply_patch', 'fs_str_replace', 'apply_patch'])
@@ -39,6 +45,20 @@ export function groupEntries(entries: ThreadEntry[]): DisplayGroup[] {
         i++
       }
       groups.push({ kind: 'reasoning-group', key, text: texts.join('\n') })
+      continue
+    }
+    if (entry.kind === 'context') {
+      // The Harness injects several context blocks per turn; merge them into a
+      // single internal card instead of one row per block.
+      const blocks: ContextBlock[] = [{ source: entry.source, text: entry.text }]
+      const key = entry.id
+      i++
+      while (i < entries.length && entries[i]?.kind === 'context') {
+        const next = entries[i] as Extract<ThreadEntry, { kind: 'context' }>
+        blocks.push({ source: next.source, text: next.text })
+        i++
+      }
+      groups.push({ kind: 'context-group', key, blocks })
       continue
     }
     if (entry.kind !== 'tool') {

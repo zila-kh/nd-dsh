@@ -135,6 +135,29 @@ describe('groupEntries', () => {
     expect(toolPreview(empty)).toBeUndefined()
   })
 
+  it('merges consecutive injected context blocks into one internal group', () => {
+    const entries: ThreadEntry[] = [
+      { kind: 'user', id: 'u1', text: 'hi' },
+      { kind: 'context', id: 'c1', source: 'agent-instructions', text: 'AGENTS.md body' },
+      { kind: 'context', id: 'c2', source: 'plugin', text: 'runtime context' },
+      { kind: 'context', id: 'c3', source: 'skill-catalog', text: '<available_skills />' },
+      { kind: 'assistant', id: 'a1', text: 'Hello!' },
+    ]
+    const groups = groupEntries(entries)
+    expect(groups).toHaveLength(3)
+    expect(groups[0]).toEqual({ kind: 'entry', key: 'u1', entry: entries[0] })
+    expect(groups[1]).toEqual({
+      kind: 'context-group',
+      key: 'c1',
+      blocks: [
+        { source: 'agent-instructions', text: 'AGENTS.md body' },
+        { source: 'plugin', text: 'runtime context' },
+        { source: 'skill-catalog', text: '<available_skills />' },
+      ],
+    })
+    expect(groups[2]).toEqual({ kind: 'entry', key: 'a1', entry: entries[4] })
+  })
+
   it('sub-groups mixed tool sequences by category', () => {
     const entries: ThreadEntry[] = [
       { kind: 'user', id: 'u1', text: 'Fix the bug' },

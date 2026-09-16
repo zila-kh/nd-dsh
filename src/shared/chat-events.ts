@@ -1,6 +1,21 @@
 import type { ThreadEntry, TodoItem } from './chat-types.js'
+import { stripWorkspaceContext } from './workspace-context.js'
 
 const RESULT_MAX_CHARS = 2_000
+
+/** Source kind the Harness tags on the turn's real prompt. */
+const USER_MESSAGE_SOURCE = 'user'
+
+/**
+ * Read the Harness source tag from a user/message payload. Absent means a
+ * session recorded before the tag existed, which only ever held real prompts.
+ */
+function messageSourceKind(data: Record<string, unknown>): string | undefined {
+  const source = data.source
+  if (!source || typeof source !== 'object') return undefined
+  const kind = (source as Record<string, unknown>).kind
+  return typeof kind === 'string' && kind ? kind : undefined
+}
 
 export interface HistoryEventEnvelope {
   type: string
@@ -31,9 +46,23 @@ function foldEventInto(entries: ThreadEntry[], envelope: HistoryEventEnvelope): 
     case 'user/message': {
       const text = messageText(data.message) ?? messageText(data)
       if (!text) return
+      const source = messageSourceKind(data)
+      // A turn carries the user's own prompt plus synthetic context messages —
+      // workspace instructions, the runtime context snapshot, and the skill
+      // catalog — each tagged with its own source kind. Only the user's prompt
+      // is the user's message; the rest is internal and must not be attributed
+      // to the user or rendered as something they typed.
+      if (source !== undefined && source !== USER_MESSAGE_SOURCE) {
+        const last = entries.at(-1)
+        if (last?.kind === 'context' && last.source === source && last.text === text) return
+        entries.push({ kind: 'context', id: crypto.randomUUID(), source, text })
+        return
+      }
+      const visible = stripWorkspaceContext(text).trim()
+      if (!visible) return
       const last = entries.at(-1)
-      if (last?.kind === 'user' && last.text === text) return
-      entries.push({ kind: 'user', id: crypto.randomUUID(), text, ...(data.skillMention ? { skillMention: data.skillMention as import('./skill-catalog.js').SkillSuggestion } : {}) })
+      if (last?.kind === 'user' && last.text === visible) return
+      entries.push({ kind: 'user', id: crypto.randomUUID(), text: visible, ...(data.skillMention ? { skillMention: data.skillMention as import('./skill-catalog.js').SkillSuggestion } : {}) })
       return
     }
     case 'assistant/chunk': {

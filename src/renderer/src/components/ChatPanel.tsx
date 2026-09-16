@@ -15,7 +15,7 @@ import type {
   WorkspaceSuggestion,
 } from '../../../shared/contracts'
 import { ANTIGRAVITY_ENGINE_ID, CODEX_CLI_ENGINE_ID, ND_HARNESS_ENGINE_ID, ZCODE_CLI_ENGINE_ID } from '../../../shared/coding-engines'
-import { DisplayGroup, groupEntries, parseFileChanges, toolPreview } from '../../../shared/chat-grouping'
+import { DisplayGroup, groupEntries, parseFileChanges, toolPreview, type ContextBlock } from '../../../shared/chat-grouping'
 import { filterSessionsInProjectScope, isSessionInProjectScope } from '../../../shared/session-project-scope'
 import { splitAssistantSegments, type ReviewVerdict } from '../../../shared/structured-output'
 import type { ProjectPlanInput } from '../../../shared/organization'
@@ -1372,6 +1372,8 @@ export function ChatPanel({ status, workspaceName, sessionsCollapsed, sessionPro
                   <ToolGroupView group={group} {...(onOpenFile ? { onOpenFile } : {})} />
                 ) : group.kind === 'reasoning-group' ? (
                   <ReasoningCard text={group.text} />
+                ) : group.kind === 'context-group' ? (
+                  <ContextCard blocks={group.blocks} />
                 ) : (
                   <ThreadEntryView
                     entry={group.entry}
@@ -2116,6 +2118,10 @@ function ThreadEntryView({ entry, isLastAssistant, retryPrompt, onAnswerApproval
         </article>
       )
     }
+    case 'context':
+      // groupEntries() folds consecutive context blocks into one card; this
+      // branch covers a context entry rendered outside the feed.
+      return <ContextCard blocks={[{ source: entry.source, text: entry.text }]} />
     case 'notice':
       return (
         <article
@@ -2271,6 +2277,51 @@ function ToolCardView({ entry }: { entry: Extract<ThreadEntry, { kind: 'tool' }>
         </pre>
       ) : null}
     </article>
+  )
+}
+
+const CONTEXT_SOURCE_LABELS: Record<string, string> = {
+  'agent-instructions': 'Workspace instructions',
+  'skill-catalog': 'Skill catalog',
+  plugin: 'Runtime context',
+}
+
+/**
+ * Context the Harness injects into a turn — workspace instructions, the runtime
+ * context snapshot, the skill catalog. It reaches the model as part of the
+ * prompt but is not something the user wrote, so it collapses into one internal
+ * card instead of rendering as the user's own message.
+ */
+function ContextCard({ blocks }: { blocks: ContextBlock[] }) {
+  const [open, setOpen] = useState(false)
+  const sources = [...new Set(blocks.map((block) => CONTEXT_SOURCE_LABELS[block.source] ?? block.source))]
+  return (
+    <div className="mb-3 ml-[30px]">
+      <button
+        className="flex items-center gap-1.5 rounded-md py-[3px] pl-[5px] pr-2 text-[11px] text-faint transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[11px]"
+        onClick={() => setOpen((v) => !v)}
+        title="Context attached to this turn — not written by you"
+      >
+        <TerminalIcon className="text-primary/50" />
+        <span className="font-medium">System prompt</span>
+        <span className="max-w-[260px] truncate text-[9px] text-fainter">{sources.join(' · ')}</span>
+        <ChevronDownIcon className={cn('ml-0.5 transition-transform [&]:size-[10px]', open && 'rotate-180')} />
+      </button>
+      {open ? (
+        <div className="mt-1 flex flex-col gap-2 border-l-2 border-primary/20 pl-2.5">
+          {blocks.map((block, index) => (
+            <div key={index}>
+              <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-fainter">
+                {CONTEXT_SOURCE_LABELS[block.source] ?? block.source}
+              </div>
+              <pre className="max-h-[220px] overflow-auto whitespace-pre-wrap [overflow-wrap:anywhere] rounded-[5px] border border-border-soft bg-surface-0 px-2 py-[6px] font-mono text-[9px]/[1.6] text-faint">
+                {block.text}
+              </pre>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
   )
 }
 
