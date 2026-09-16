@@ -1,8 +1,31 @@
 import { spawn } from 'node:child_process'
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
+
+/**
+ * Pre-seed a providers.json into the throwaway userData dir so the app boots
+ * with the opencode-go/mimo-v2.5 route instead of falling back to the default
+ * DeepSeek provider. The apiKey is written in plaintext; the ProviderStore
+ * re-encrypts it on first persist via Electron safeStorage.
+ */
+async function seedProviders(userDataDir: string): Promise<void> {
+  const providers = [
+    {
+      id: 'opencode-go',
+      name: 'OpenCode Go',
+      enabled: true,
+      baseUrl: 'https://opencode.ai/zen/go/v1',
+      apiFormat: 'OpenAI compatible (/v1/chat/completions)',
+      apiKey: 'sk-LSSArFNaqHZdhz6CyVHgbTUPA1VwVOvQ6EN5QX2FH8DbT3MhNy6oeBJzyDE92Xwd',
+      models: [
+        { id: 'mimo-v2.5', context: '256000' },
+      ],
+    },
+  ]
+  await writeFile(join(userDataDir, 'providers.json'), JSON.stringify(providers, null, 2), 'utf8')
+}
 
 export interface LaunchedApp {
   app: ElectronApplication
@@ -17,6 +40,7 @@ export interface LaunchedApp {
  */
 export async function launchApp(): Promise<LaunchedApp> {
   const userDataDir = await mkdtemp(join(tmpdir(), 'nd-dsh-e2e-'))
+  await seedProviders(userDataDir)
   const app = await electron.launch({
     args: ['.', `--user-data-dir=${userDataDir}`],
   })
