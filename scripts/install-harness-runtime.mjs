@@ -57,14 +57,16 @@ async function installRuntime() {
   }
 
   await fs.mkdir(runtimeRoot, { recursive: true })
+  // Rewrite the manifest every time. npm --save-exact records the installed
+  // packages here, so reusing a previous manifest would carry an earlier
+  // release's pins into the new install, and a stale adapter pin makes the
+  // adapter step fail with ERESOLVE against the new release's peers.
   const runtimeManifestPath = join(runtimeRoot, 'package.json')
-  if (!existsSync(runtimeManifestPath)) {
-    await fs.writeFile(runtimeManifestPath, `${JSON.stringify({
-      name: 'nd-dsh-managed-runtime',
-      private: true,
-      description: 'ND-managed published DeepSeek Harness runtime.',
-    }, null, 2)}\n`, 'utf8')
-  }
+  await fs.writeFile(runtimeManifestPath, `${JSON.stringify({
+    name: 'nd-dsh-managed-runtime',
+    private: true,
+    description: 'ND-managed published DeepSeek Harness runtime.',
+  }, null, 2)}\n`, 'utf8')
 
   const targetSpec = `${packageName}@${latestVersion}`
   // The managed runtime holds exactly one published release. An in-place npm

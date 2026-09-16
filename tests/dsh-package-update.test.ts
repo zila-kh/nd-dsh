@@ -188,4 +188,17 @@ describe('published DSH package updater', () => {
     expect(calls.filter((args) => args[0] === 'install')).toHaveLength(0)
     expect(logs).toContain('DSH package already up to date at version 0.2.0. Skipping install; no restart required.')
   })
+
+  it('rewrites a stale runtime manifest so earlier pins cannot leak into the install', async () => {
+    installed('0.1.0', '0.1.0')
+    const manifest = join(runtimeRoot, 'package.json')
+    put(manifest, JSON.stringify({
+      name: 'nd-dsh-managed-runtime',
+      private: true,
+      dependencies: { '@deepseek-ai/dsh': '0.1.0', '@deepseek-ai/dsh-subagent-codex': '0.1.0' },
+    }))
+    await runInstaller()
+    expect(calls.filter((args) => args[0] === 'install')).toHaveLength(2)
+    expect(JSON.parse(readFileSync(manifest, 'utf8')).dependencies).toBeUndefined()
+  })
 })
