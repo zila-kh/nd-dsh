@@ -16,4 +16,9 @@
 - Treat `.op` files as Freeform design artifacts, not production application source. Building a Freeform concept must target the active project's real HTML/React/shadcn/native source and remain visible as a normal Git diff.
 - Keep the embedded ND Pencil child view sandboxed and context-isolated. Its managed engine must bind to loopback only, use the per-instance token/allowed-origin contract, deny popups/permissions, and block upstream authentication, collaboration, and built-in AI network routes.
 - ND Agent should manipulate an open Freeform document through ND Pencil's controlled editor/MCP bridge rather than writing the `.op` JSON concurrently through generic filesystem tools.
+- **Security & Secret Safety (Zero-Tolerance)**:
+  - **Never commit live API keys, tokens, credentials, or secrets**: Under no circumstances should real API keys (OpenCode, OpenAI, DeepSeek, Anthropic, GitHub, AWS, etc.) be hardcoded in any file, including source code, E2E test fixtures (e.g. `e2e/fixtures.ts`), sample scripts, configs, or documentation.
+  - **Environment variables and mocks only**: All tests, E2E suites, and seeds must read credentials from environment variables (e.g., `process.env.OPENCODE_API_KEY`) with safe fallbacks or use explicit dummy tokens (e.g., `sk-test-placeholder`). In CI workflows, secrets must be passed strictly via GitHub Actions Secrets (`secrets.*`), never inline.
+  - **Local secrets & `.env` protection**: Keep `.env*` and local credential files untracked and excluded in `.gitignore`. Never use `git add -f` on ignored files containing environment or runtime state.
+  - **Pre-commit diff inspection**: Always verify `git diff --staged` before committing to ensure no private keys, session tokens, or high-entropy credentials are inadvertently introduced.
 - Run `pnpm verify`, `pnpm typecheck`, `pnpm test`, and `pnpm build` before publishing changes.

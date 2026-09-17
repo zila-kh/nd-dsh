@@ -18,7 +18,7 @@ async function seedProviders(userDataDir: string): Promise<void> {
       enabled: true,
       baseUrl: 'https://opencode.ai/zen/go/v1',
       apiFormat: 'OpenAI compatible (/v1/chat/completions)',
-      apiKey: 'sk-LSSArFNaqHZdhz6CyVHgbTUPA1VwVOvQ6EN5QX2FH8DbT3MhNy6oeBJzyDE92Xwd',
+      apiKey: process.env.OPENCODE_API_KEY || '',
       models: [
         { id: 'mimo-v2.5', context: '256000' },
       ],
