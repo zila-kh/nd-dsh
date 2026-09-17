@@ -63,7 +63,8 @@ const opencodeAdapter: StructuredCliAdapter = {
         })
       }
     }
-    if (type === 'step_finish' || type === 'step-finish') events.push({ kind: 'done' })
+    // OpenCode can emit step_finish for intermediate tool/agent steps. The
+    // reusable engine therefore settles this adapter only when the CLI exits.
     if (type === 'error') events.push({ kind: 'error', message: stringValue(wire.message) ?? 'OpenCode reported an error' })
     return events
   },
