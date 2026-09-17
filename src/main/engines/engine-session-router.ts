@@ -30,6 +30,7 @@ import type { AntigravityEngine } from './antigravity/antigravity-engine.js'
 import type { CursorCliEngine } from './cursor/cursor-cli-engine.js'
 import { ChatGptWebEngine } from './chatgpt-web/chatgpt-web-engine.js'
 import type { CodexCliEngine } from './codex/codex-cli-engine.js'
+import { createExtraCliEngines } from './agent-cli/extra-cli-engines.js'
 import type { PiCodingEngine } from './pi/pi-coding-engine.js'
 import type { ZcodeCliEngine } from './zcode/zcode-cli-engine.js'
 
@@ -55,6 +56,8 @@ export interface DirectWorkspaceEngine {
   handlesApproval(rpcId: string): boolean
   respond(rpcId: string, value: unknown): Promise<void>
   listModels(): Promise<EngineModelOption[]>
+  setEmitter?(emit: (frame: DshEventFrame) => void): void
+  close?(): Promise<void>
 }
 
 /**
@@ -84,6 +87,8 @@ export class EngineSessionRouter {
   private readonly chatGptWebLog: ((line: string) => void) | undefined
   /** Workspace-capable direct engines by catalog id, in catalog order. */
   private readonly directEngines = new Map<string, DirectWorkspaceEngine>()
+  /** Direct engines constructed by the router rather than Electron bootstrap. */
+  private readonly routerOwnedDirectEngines = new Set<DirectWorkspaceEngine>()
 
   constructor(
     private readonly harness: HarnessService,
@@ -102,6 +107,10 @@ export class EngineSessionRouter {
     if (pi) this.directEngines.set(PI_CODING_ENGINE_ID, pi)
     if (cursor) this.directEngines.set(CURSOR_CLI_ENGINE_ID, cursor)
     if (claude) this.directEngines.set(CLAUDE_CODE_CLI_ENGINE_ID, claude)
+    for (const [engineId, engine] of createExtraCliEngines((line) => console.warn(line))) {
+      this.directEngines.set(engineId, engine)
+      this.routerOwnedDirectEngines.add(engine)
+    }
     if (chatGptWebRuntime) {
       this.chatGptWebBrowser = chatGptWebRuntime.browser
       this.chatGptWebLog = chatGptWebRuntime.log
@@ -122,26 +131,11 @@ export class EngineSessionRouter {
   /** Every direct engine emits through the same ND organization/renderer fan-out. */
   setEmitter(emit: (frame: DshEventFrame) => void): void {
     this.chatGptWeb?.setEmitter(emit)
-    this.zcode?.setEmitter(emit)
-    this.pi?.setEmitter(emit)
-    this.cursor?.setEmitter(emit)
-    this.claude?.setEmitter(emit)
+    for (const direct of this.directEngines.values()) direct.setEmitter?.(emit)
   }
 
   private get zcode(): ZcodeCliEngine | undefined {
     return this.directEngines.get(ZCODE_CLI_ENGINE_ID) as ZcodeCliEngine | undefined
-  }
-
-  private get pi(): PiCodingEngine | undefined {
-    return this.directEngines.get(PI_CODING_ENGINE_ID) as PiCodingEngine | undefined
-  }
-
-  private get cursor(): CursorCliEngine | undefined {
-    return this.directEngines.get(CURSOR_CLI_ENGINE_ID) as CursorCliEngine | undefined
-  }
-
-  private get claude(): ClaudeCodeCliEngine | undefined {
-    return this.directEngines.get(CLAUDE_CODE_CLI_ENGINE_ID) as ClaudeCodeCliEngine | undefined
   }
 
   async run(prompt: string, options?: HarnessRunOptions): Promise<HarnessRunResult> {
@@ -284,9 +278,10 @@ export class EngineSessionRouter {
     return this.harness.stop()
   }
 
-  /** Release router-owned resources without double-closing the other engines. */
+  /** Release router-owned resources without double-closing bootstrap-owned engines. */
   async close(): Promise<void> {
     await this.chatGptWeb?.close()
+    await Promise.all([...this.routerOwnedDirectEngines].map(async (direct) => { await direct.close?.() }))
   }
 
   /** Approval/question answers are routed by who issued the rpcId. */
