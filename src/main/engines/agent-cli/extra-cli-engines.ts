@@ -2,9 +2,11 @@ import {
   GOOSE_CLI_ENGINE_ID,
   HERMES_CLI_ENGINE_ID,
   JCODE_CLI_ENGINE_ID,
+  MINIMAX_CLI_ENGINE_ID,
   OPENCODE_CLI_ENGINE_ID,
 } from '../../../shared/extra-coding-engines.js'
 import { gooseBinPath, hermesBinPath, jcodeBinPath, opencodeBinPath } from './extra-cli-paths.js'
+import { MiniMaxCliEngine } from './minimax-cli-engine.js'
 import { StructuredCliEngine, type StructuredCliAdapter, type StructuredCliEvent } from './structured-cli-engine.js'
 
 function stringValue(value: unknown): string | undefined {
@@ -133,12 +135,6 @@ const jcodeAdapter: StructuredCliAdapter = {
       const text = stringValue(wire.delta) ?? stringValue(wire.text)
       if (text) events.push({ kind: 'text', text })
     }
-    if (type === 'text_replace') {
-      // Replacement events can restate text already emitted as deltas. Use only
-      // as a fallback when wrappers emit the replacement as the sole text item.
-      const text = stringValue(wire.text)
-      if (text && wire.delta === undefined) events.push({ kind: 'text', text })
-    }
     if (type === 'tool_start' || type === 'tool_exec') {
       const callId = stringValue(wire.id) ?? stringValue(wire.call_id)
       events.push({
@@ -186,10 +182,11 @@ const hermesAdapter: StructuredCliAdapter = {
     }
     if (type === 'tool_result') {
       const callId = stringValue(wire.id) ?? stringValue(wire.call_id)
+      const name = stringValue(wire.name)
       events.push({
         kind: 'tool-result',
         ...(callId ? { callId } : {}),
-        ...(stringValue(wire.name) ? { name: stringValue(wire.name) } : {}),
+        ...(name ? { name } : {}),
         output: wire.output ?? null,
         ...(wire.is_error === true ? { isError: true } : {}),
       })
@@ -206,9 +203,15 @@ const hermesAdapter: StructuredCliAdapter = {
   },
 }
 
-export function createExtraCliEngines(log?: (line: string) => void): Array<[string, StructuredCliEngine]> {
-  return [opencodeAdapter, gooseAdapter, jcodeAdapter, hermesAdapter].map((adapter) => [
+export type ExtraCliEngine = StructuredCliEngine | MiniMaxCliEngine
+
+export function createExtraCliEngines(log?: (line: string) => void): Array<[string, ExtraCliEngine]> {
+  const structured = [opencodeAdapter, gooseAdapter, jcodeAdapter, hermesAdapter].map<[string, ExtraCliEngine]>((adapter) => [
     adapter.id,
     new StructuredCliEngine(adapter, log ? { log } : {}),
   ])
+  return [
+    ...structured,
+    [MINIMAX_CLI_ENGINE_ID, new MiniMaxCliEngine(log)],
+  ]
 }
