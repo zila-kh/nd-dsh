@@ -246,7 +246,7 @@ describe('extra coding engines', () => {
       const transcript = engine.transcript(sessionId).events
       const call = transcript.find((event) => event.type === 'tool/call')
       const result = transcript.find((event) => event.type === 'tool/result')
-      expect(call?.data).toMatchObject({ name: 'terminal' })
+      expect(call?.data).toMatchObject({ name: 'terminal', arguments: { command: 'pwd' } })
       expect(result?.data).toMatchObject({
         callId: (call?.data as Record<string, unknown>)?.callId,
         message: { content: [{ type: 'text', text: 'ok' }] },
