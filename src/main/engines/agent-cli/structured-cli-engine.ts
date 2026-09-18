@@ -319,9 +319,11 @@ export class StructuredCliEngine {
       }
       if (event.kind === 'tool-start') {
         const callId = event.callId ?? `tool-${session.sequence + 1}`
-        session.turnToolCalls.add(callId)
-        session.pendingToolCalls.push({ callId, name: event.name })
-        this.recordToolCall(session, callId, event.name, event.input ?? null)
+        if (!session.turnToolCalls.has(callId)) {
+          session.turnToolCalls.add(callId)
+          session.pendingToolCalls.push({ callId, name: event.name })
+          this.recordToolCall(session, callId, event.name, event.input ?? null)
+        }
         continue
       }
       if (event.kind === 'tool-result') {
