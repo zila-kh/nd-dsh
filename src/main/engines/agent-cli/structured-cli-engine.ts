@@ -395,7 +395,7 @@ export class StructuredCliEngine {
   }
 
   private recordToolCall(session: StructuredCliSession, callId: string, name: string, input: unknown): void {
-    this.recordEnvelope(session, { type: 'tool/call', data: { callId, name, input } })
+    this.recordEnvelope(session, { type: 'tool/call', data: { callId, name, arguments: input } })
   }
 
   private recordToolResult(session: StructuredCliSession, callId: string, output: string, isError: boolean): void {
