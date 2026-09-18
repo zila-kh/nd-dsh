@@ -86,9 +86,9 @@ const gooseAdapter: StructuredCliAdapter = {
   sessionPrefix: 'goose',
   binary: gooseBinPath,
   unavailableMessage: 'The goose CLI is not installed. Install goose or set ND_DSH_GOOSE_BINARY.',
-  buildArgs: ({ prompt, model, nativeSessionId }) => {
-    const args = ['run', '--quiet', '--output-format', 'stream-json', '--with-builtin', 'developer']
-    if (nativeSessionId) args.push('--resume', '--session-id', nativeSessionId)
+  buildArgs: ({ prompt, model, sessionId, isContinuation }) => {
+    const args = ['run', '--quiet', '--output-format', 'stream-json', '--with-builtin', 'developer', '--name', sessionId]
+    if (isContinuation) args.push('--resume')
     if (model) args.push('--model', model)
     args.push('-t', prompt)
     return args
@@ -107,15 +107,35 @@ const gooseAdapter: StructuredCliAdapter = {
         const text = stringValue(block.text)
         if (text && (blockType === 'text' || blockType === undefined)) events.push({ kind: 'text', text })
         if (blockType === 'toolRequest' || blockType === 'tool_use' || blockType === 'toolUse') {
-          const toolCall = recordValue(block.toolCall) ?? recordValue(block.tool_call) ?? block
-          const callId = stringValue(toolCall.id)
+          const wrapper = recordValue(block.toolCall) ?? recordValue(block.tool_call)
+          const toolCall = recordValue(wrapper?.value) ?? wrapper ?? block
+          const callId = stringValue(block.id) ?? stringValue(toolCall.id)
           const name = stringValue(toolCall.name) ?? 'tool'
+          const status = stringValue(wrapper?.status)
           events.push({ kind: 'tool-start', ...(callId ? { callId } : {}), name, input: toolCall.arguments ?? toolCall.input ?? null })
+          if (status === 'error') {
+            events.push({
+              kind: 'tool-result',
+              ...(callId ? { callId } : {}),
+              name,
+              output: stringValue(wrapper?.error) ?? 'Goose tool request failed',
+              isError: true,
+            })
+          }
         }
         if (blockType === 'toolResponse' || blockType === 'tool_result' || blockType === 'toolResult') {
-          const toolResult = recordValue(block.toolResult) ?? recordValue(block.tool_result) ?? block
-          const callId = stringValue(toolResult.id) ?? stringValue(toolResult.toolCallId)
-          events.push({ kind: 'tool-result', ...(callId ? { callId } : {}), output: toolResult.result ?? toolResult.output ?? toolResult.text ?? null })
+          const wrapper = recordValue(block.toolResult) ?? recordValue(block.tool_result)
+          const toolResult = recordValue(wrapper?.value) ?? wrapper ?? block
+          const callId = stringValue(block.id) ?? stringValue(toolResult.id) ?? stringValue(toolResult.toolCallId)
+          const status = stringValue(wrapper?.status)
+          events.push({
+            kind: 'tool-result',
+            ...(callId ? { callId } : {}),
+            output: status === 'error'
+              ? stringValue(wrapper?.error) ?? 'Goose tool failed'
+              : wrapper?.value ?? toolResult.result ?? toolResult.output ?? toolResult.text ?? null,
+            ...(status === 'error' ? { isError: true } : {}),
+          })
         }
       }
     }
@@ -149,6 +169,10 @@ const jcodeAdapter: StructuredCliAdapter = {
       const text = stringValue(wire.delta) ?? stringValue(wire.text)
       if (text) events.push({ kind: 'text', text })
     }
+    if (type === 'text_replace') {
+      const text = stringValue(wire.text)
+      if (text !== undefined) events.push({ kind: 'text-replace', text })
+    }
     if (type === 'tool_start' || type === 'tool_exec') {
       const callId = stringValue(wire.id) ?? stringValue(wire.call_id)
       events.push({
@@ -160,7 +184,15 @@ const jcodeAdapter: StructuredCliAdapter = {
     }
     if (type === 'tool_done') {
       const callId = stringValue(wire.id) ?? stringValue(wire.call_id)
-      events.push({ kind: 'tool-result', ...(callId ? { callId } : {}), output: wire.output ?? wire.result ?? null })
+      const name = stringValue(wire.name) ?? stringValue(wire.tool)
+      const error = stringValue(wire.error)
+      events.push({
+        kind: 'tool-result',
+        ...(callId ? { callId } : {}),
+        ...(name ? { name } : {}),
+        output: wire.output ?? wire.result ?? error ?? null,
+        ...(error ? { isError: true } : {}),
+      })
     }
     if (type === 'done') {
       const text = stringValue(wire.text)
