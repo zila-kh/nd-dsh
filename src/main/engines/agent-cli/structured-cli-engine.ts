@@ -55,6 +55,7 @@ interface StructuredCliSession {
   doneSeen: boolean
   turnAssistantText: string
   turnSettled?: Deferred<TurnOutcome>
+  terminalOutcome?: TurnOutcome
 }
 
 export interface StructuredCliEngineOptions {
@@ -166,6 +167,7 @@ export class StructuredCliEngine {
     session.turnSettled = settled
     session.doneSeen = false
     session.turnAssistantText = ''
+    delete session.terminalOutcome
     const userPrompt = stripWorkspaceContext(cleaned)
     this.recordUserMessage(session, userPrompt)
     if (session.title === `New ${this.adapter.label} chat`) session.title = userPrompt.slice(0, 80)
@@ -202,6 +204,7 @@ export class StructuredCliEngine {
       const child = session.child
       delete session.child
       session.turnSettled?.resolve({ status: 'failed', failureMessage: `${this.adapter.label} turn was stopped.` })
+      delete session.terminalOutcome
       this.finishTurn(session)
       await killProcessTree(child)
     }
@@ -236,10 +239,24 @@ export class StructuredCliEngine {
     child.stderr?.setEncoding('utf8')
     child.stderr?.on('data', (chunk: string) => this.options.log?.(`[${this.adapter.id}] ${chunk.trimEnd()}`))
     child.stdin?.end()
-    child.once('exit', (code, signal) => {
+    child.once('close', (code, signal) => {
       if (session.child !== child) return
+
+      // ChildProcess "close" fires after stdio streams are closed, so it is
+      // the safe point to flush a final JSON object that did not end in "\n".
+      const trailing = session.buffer.trim()
+      session.buffer = ''
+      if (trailing) this.handleWireLine(session, trailing)
+
       delete session.child
-      if (this.stopping || session.doneSeen) return
+      if (this.stopping) return
+
+      const terminalOutcome = session.terminalOutcome
+      delete session.terminalOutcome
+      if (terminalOutcome) {
+        session.turnSettled?.resolve(terminalOutcome)
+        return
+      }
       if (code === 0 && session.turnAssistantText.trim()) {
         session.turnSettled?.resolve({ status: 'success' })
       } else {
@@ -295,14 +312,14 @@ export class StructuredCliEngine {
       }
       if (event.kind === 'error') {
         session.doneSeen = true
-        session.turnSettled?.resolve({ status: 'failed', failureMessage: event.message })
+        session.terminalOutcome = { status: 'failed', failureMessage: event.message }
         continue
       }
       session.doneSeen = true
       if (!session.turnAssistantText.trim() && event.text?.trim()) this.recordAssistantMessage(session, event.text)
-      session.turnSettled?.resolve(event.failed
+      session.terminalOutcome = event.failed
         ? { status: 'failed', failureMessage: event.message ?? `${this.adapter.label} turn failed` }
-        : { status: 'success' })
+        : { status: 'success' }
     }
   }
 
