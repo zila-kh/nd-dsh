@@ -109,7 +109,10 @@ const gooseAdapter: StructuredCliAdapter = {
         }
       }
     }
-    if (type === 'complete') events.push({ kind: 'done', text: stringValue(wire.text) })
+    if (type === 'complete') {
+      const text = stringValue(wire.text)
+      events.push({ kind: 'done', ...(text ? { text } : {}) })
+    }
     if (type === 'error') events.push({ kind: 'error', message: stringValue(wire.message) ?? stringValue(wire.error) ?? 'Goose reported an error' })
     return events
   },
@@ -149,7 +152,10 @@ const jcodeAdapter: StructuredCliAdapter = {
       const callId = stringValue(wire.id) ?? stringValue(wire.call_id)
       events.push({ kind: 'tool-result', ...(callId ? { callId } : {}), output: wire.output ?? wire.result ?? null })
     }
-    if (type === 'done') events.push({ kind: 'done', text: stringValue(wire.text) })
+    if (type === 'done') {
+      const text = stringValue(wire.text)
+      events.push({ kind: 'done', ...(text ? { text } : {}) })
+    }
     if (type === 'error') events.push({ kind: 'error', message: stringValue(wire.message) ?? stringValue(wire.error) ?? 'JCode reported an error' })
     return events
   },
@@ -194,9 +200,10 @@ const hermesAdapter: StructuredCliAdapter = {
     }
     if (type === 'result') {
       const exitCode = typeof wire.exit_code === 'number' ? wire.exit_code : 0
+      const text = stringValue(wire.text)
       events.push({
         kind: 'done',
-        text: stringValue(wire.text),
+        ...(text ? { text } : {}),
         ...(exitCode !== 0 ? { failed: true, message: stringValue(wire.error) ?? `Hermes exited with code ${exitCode}` } : {}),
       })
     }
