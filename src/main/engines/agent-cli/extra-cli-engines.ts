@@ -80,7 +80,7 @@ export const opencodeAdapter: StructuredCliAdapter = {
   },
 }
 
-const gooseAdapter: StructuredCliAdapter = {
+export const gooseAdapter: StructuredCliAdapter = {
   id: GOOSE_CLI_ENGINE_ID,
   label: 'Goose',
   sessionPrefix: 'goose',
@@ -148,7 +148,7 @@ const gooseAdapter: StructuredCliAdapter = {
   },
 }
 
-const jcodeAdapter: StructuredCliAdapter = {
+export const jcodeAdapter: StructuredCliAdapter = {
   id: JCODE_CLI_ENGINE_ID,
   label: 'JCode',
   sessionPrefix: 'jcode',
@@ -203,7 +203,7 @@ const jcodeAdapter: StructuredCliAdapter = {
   },
 }
 
-const hermesAdapter: StructuredCliAdapter = {
+export const hermesAdapter: StructuredCliAdapter = {
   id: HERMES_CLI_ENGINE_ID,
   label: 'Hermes',
   sessionPrefix: 'hermes',
