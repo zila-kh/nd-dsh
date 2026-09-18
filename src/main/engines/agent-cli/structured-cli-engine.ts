@@ -19,6 +19,7 @@ import {
 export type StructuredCliEvent =
   | { kind: 'session'; sessionId: string }
   | { kind: 'text'; text: string }
+  | { kind: 'text-replace'; text: string }
   | { kind: 'tool-start'; callId?: string; name: string; input?: unknown }
   | { kind: 'tool-result'; callId?: string; name?: string; output: unknown; isError?: boolean }
   | { kind: 'done'; text?: string; failed?: boolean; message?: string }
@@ -30,7 +31,7 @@ export interface StructuredCliAdapter {
   sessionPrefix: string
   binary(): string | undefined
   unavailableMessage: string
-  buildArgs(input: { prompt: string; cwd: string; model?: string; nativeSessionId?: string }): string[]
+  buildArgs(input: { prompt: string; cwd: string; sessionId: string; isContinuation: boolean; model?: string; nativeSessionId?: string }): string[]
   parse(value: Record<string, unknown>): StructuredCliEvent[]
 }
 
@@ -55,6 +56,8 @@ interface StructuredCliSession {
   doneSeen: boolean
   turnAssistantText: string
   turnToolCalls: Set<string>
+  pendingToolCalls: Array<{ callId: string; name: string }>
+  continuationReady: boolean
   turnSettled?: Deferred<TurnOutcome>
   terminalOutcome?: TurnOutcome
 }
@@ -141,6 +144,8 @@ export class StructuredCliEngine {
       doneSeen: false,
       turnAssistantText: '',
       turnToolCalls: new Set<string>(),
+      pendingToolCalls: [],
+      continuationReady: false,
     })
     this.emitFrame({ kind: 'session-added', sessionId, meta: { engineId: this.adapter.id } })
     return { sessionId }
@@ -170,6 +175,7 @@ export class StructuredCliEngine {
     session.doneSeen = false
     session.turnAssistantText = ''
     session.turnToolCalls.clear()
+    session.pendingToolCalls = []
     delete session.terminalOutcome
     const userPrompt = stripWorkspaceContext(cleaned)
     this.recordUserMessage(session, userPrompt)
@@ -225,6 +231,8 @@ export class StructuredCliEngine {
     const args = this.adapter.buildArgs({
       prompt,
       cwd,
+      sessionId: session.sessionId,
+      isContinuation: session.continuationReady,
       ...(session.model === undefined ? {} : { model: session.model }),
       ...(session.nativeSessionId === undefined ? {} : { nativeSessionId: session.nativeSessionId }),
     })
@@ -255,6 +263,8 @@ export class StructuredCliEngine {
       if (this.stopping) return
 
       const terminalOutcome = session.terminalOutcome
+      if (code === 0 || terminalOutcome !== undefined) session.continuationReady = true
+      this.finalizeAssistantMessage(session)
       delete session.terminalOutcome
       if (terminalOutcome) {
         session.turnSettled?.resolve(terminalOutcome)
@@ -300,17 +310,32 @@ export class StructuredCliEngine {
         continue
       }
       if (event.kind === 'text') {
-        if (event.text) this.recordAssistantMessage(session, event.text)
+        if (event.text) this.recordAssistantChunk(session, event.text)
+        continue
+      }
+      if (event.kind === 'text-replace') {
+        session.turnAssistantText = event.text
         continue
       }
       if (event.kind === 'tool-start') {
         const callId = event.callId ?? `tool-${session.sequence + 1}`
         session.turnToolCalls.add(callId)
+        session.pendingToolCalls.push({ callId, name: event.name })
         this.recordToolCall(session, callId, event.name, event.input ?? null)
         continue
       }
       if (event.kind === 'tool-result') {
-        const callId = event.callId ?? `tool-${session.sequence + 1}`
+        let callId = event.callId
+        if (callId) {
+          const pendingIndex = session.pendingToolCalls.findIndex((pending) => pending.callId === callId)
+          if (pendingIndex >= 0) session.pendingToolCalls.splice(pendingIndex, 1)
+        } else {
+          const pendingIndex = event.name
+            ? session.pendingToolCalls.findIndex((pending) => pending.name === event.name)
+            : (session.pendingToolCalls.length ? 0 : -1)
+          if (pendingIndex >= 0) callId = session.pendingToolCalls.splice(pendingIndex, 1)[0]?.callId
+        }
+        callId ??= `tool-${session.sequence + 1}`
         // Some machine-readable CLIs (notably current OpenCode) only emit a
         // terminal tool event. Preserve ND's call/result pairing even when the
         // upstream stream omits a separate "started" event.
@@ -327,7 +352,7 @@ export class StructuredCliEngine {
         continue
       }
       session.doneSeen = true
-      if (!session.turnAssistantText.trim() && event.text?.trim()) this.recordAssistantMessage(session, event.text)
+      if (event.text?.trim()) session.turnAssistantText = event.text
       session.terminalOutcome = event.failed
         ? { status: 'failed', failureMessage: event.message ?? `${this.adapter.label} turn failed` }
         : { status: 'success' }
@@ -350,8 +375,17 @@ export class StructuredCliEngine {
     })
   }
 
-  private recordAssistantMessage(session: StructuredCliSession, text: string): void {
+  private recordAssistantChunk(session: StructuredCliSession, text: string): void {
     session.turnAssistantText += text
+    this.recordEnvelope(session, {
+      type: 'assistant/chunk',
+      data: { chunk: { content: [{ type: 'text', text }] } },
+    })
+  }
+
+  private finalizeAssistantMessage(session: StructuredCliSession): void {
+    const text = session.turnAssistantText
+    if (!text.trim()) return
     this.recordEnvelope(session, {
       type: 'assistant/message',
       data: { message: { role: 'assistant', content: [{ type: 'text', text }] } },
@@ -363,7 +397,14 @@ export class StructuredCliEngine {
   }
 
   private recordToolResult(session: StructuredCliSession, callId: string, output: string, isError: boolean): void {
-    this.recordEnvelope(session, { type: 'tool/result', data: { callId, output, isError } })
+    this.recordEnvelope(session, {
+      type: 'tool/result',
+      data: {
+        callId,
+        message: { content: [{ type: 'text', text: output }] },
+        ...(isError ? { error: output || 'Tool failed' } : {}),
+      },
+    })
   }
 
   private recordEnvelope(session: StructuredCliSession, event: Omit<SessionEventEnvelope, 'seq' | 'time'>): void {
