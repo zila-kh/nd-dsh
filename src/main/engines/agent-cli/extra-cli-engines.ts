@@ -23,6 +23,16 @@ function arrayValue(value: unknown): unknown[] {
   return Array.isArray(value) ? value : []
 }
 
+function errorMessage(value: unknown, fallback: string): string {
+  if (typeof value === 'string' && value.trim()) return value
+  const error = recordValue(value)
+  const data = recordValue(error?.data)
+  return stringValue(data?.message)
+    ?? stringValue(error?.message)
+    ?? stringValue(error?.name)
+    ?? fallback
+}
+
 const opencodeAdapter: StructuredCliAdapter = {
   id: OPENCODE_CLI_ENGINE_ID,
   label: 'OpenCode',
@@ -46,7 +56,7 @@ const opencodeAdapter: StructuredCliAdapter = {
       const text = stringValue(part.text)
       if (text) events.push({ kind: 'text', text })
     }
-    if (type === 'tool' && part) {
+    if ((type === 'tool_use' || type === 'tool') && part) {
       const name = stringValue(part.tool) ?? stringValue(part.name) ?? 'tool'
       const state = recordValue(part.state)
       const callId = stringValue(part.callID) ?? stringValue(part.callId) ?? stringValue(part.id)
@@ -65,7 +75,7 @@ const opencodeAdapter: StructuredCliAdapter = {
     }
     // OpenCode can emit step_finish for intermediate tool/agent steps. The
     // reusable engine therefore settles this adapter only when the CLI exits.
-    if (type === 'error') events.push({ kind: 'error', message: stringValue(wire.message) ?? 'OpenCode reported an error' })
+    if (type === 'error') events.push({ kind: 'error', message: errorMessage(wire.error ?? wire.message, 'OpenCode reported an error') })
     return events
   },
 }
