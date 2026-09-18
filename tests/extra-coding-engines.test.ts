@@ -3,7 +3,7 @@ import { PassThrough } from 'node:stream'
 import type { ChildProcess } from 'node:child_process'
 import { afterAll, describe, expect, it } from 'vitest'
 import { EngineSessionRouter } from '../src/main/engines/engine-session-router.js'
-import { createExtraCliEngines, opencodeAdapter } from '../src/main/engines/agent-cli/extra-cli-engines.js'
+import { createExtraCliEngines, gooseAdapter, hermesAdapter, jcodeAdapter, opencodeAdapter } from '../src/main/engines/agent-cli/extra-cli-engines.js'
 import { StructuredCliEngine, type StructuredCliAdapter } from '../src/main/engines/agent-cli/structured-cli-engine.js'
 import {
   buildExtraCodingEngineCatalog,
@@ -116,6 +116,66 @@ describe('extra coding engines', () => {
     })).toEqual([{ kind: 'error', message: 'authentication failed' }])
   })
 
+  it('matches current Goose nested tool payloads and stable named-session resume', () => {
+    const firstArgs = gooseAdapter.buildArgs({
+      prompt: 'first',
+      cwd: process.cwd(),
+      sessionId: 'goose-nd-session',
+      isContinuation: false,
+    })
+    expect(firstArgs).toEqual(expect.arrayContaining(['--name', 'goose-nd-session']))
+    expect(firstArgs).not.toContain('--resume')
+
+    const resumedArgs = gooseAdapter.buildArgs({
+      prompt: 'second',
+      cwd: process.cwd(),
+      sessionId: 'goose-nd-session',
+      isContinuation: true,
+    })
+    expect(resumedArgs).toEqual(expect.arrayContaining(['--name', 'goose-nd-session', '--resume']))
+
+    expect(gooseAdapter.parse({
+      type: 'message',
+      message: {
+        content: [
+          {
+            type: 'toolRequest',
+            id: 'goose-call-1',
+            toolCall: {
+              status: 'success',
+              value: { name: 'developer__shell', arguments: { command: 'pnpm test' } },
+            },
+          },
+          {
+            type: 'toolResponse',
+            id: 'goose-call-1',
+            toolResult: {
+              status: 'success',
+              value: { content: [{ type: 'text', text: 'passed' }] },
+            },
+          },
+        ],
+      },
+    })).toEqual([
+      { kind: 'tool-start', callId: 'goose-call-1', name: 'developer__shell', input: { command: 'pnpm test' } },
+      { kind: 'tool-result', callId: 'goose-call-1', output: { content: [{ type: 'text', text: 'passed' }] } },
+    ])
+  })
+
+  it('handles JCode replacement text and tool errors from the current NDJSON protocol', () => {
+    expect(jcodeAdapter.parse({ type: 'text_replace', text: 'clean prefix' }))
+      .toEqual([{ kind: 'text-replace', text: 'clean prefix' }])
+    expect(jcodeAdapter.parse({ type: 'tool_done', id: 'j1', name: 'shell', error: 'command failed' }))
+      .toEqual([{ kind: 'tool-result', callId: 'j1', name: 'shell', output: 'command failed', isError: true }])
+  })
+
+  it('keeps Hermes no-id tool use/result events correlated by tool name', () => {
+    expect(hermesAdapter.parse({ type: 'tool_use', name: 'terminal', input: { command: 'pwd' } }))
+      .toEqual([{ kind: 'tool-start', name: 'terminal', input: { command: 'pwd' } }])
+    expect(hermesAdapter.parse({ type: 'tool_result', name: 'terminal', output: 'ok' }))
+      .toEqual([{ kind: 'tool-result', name: 'terminal', output: 'ok' }])
+  })
+
   it('waits for process close, flushes trailing JSON, and pairs terminal-only tool results', async () => {
     const cli = new FakeStructuredCli()
     const adapter: StructuredCliAdapter = {
@@ -149,8 +209,48 @@ describe('extra coding engines', () => {
       await expect(run).resolves.toEqual({ sessionId })
 
       const eventTypes = engine.transcript(sessionId!).events.map((event) => event.type)
-      expect(eventTypes).toEqual(['user/message', 'assistant/message', 'tool/call', 'tool/result'])
+      expect(eventTypes).toEqual(['user/message', 'assistant/chunk', 'tool/call', 'tool/result', 'assistant/message'])
       expect(engine.listSessions()[0]?.running).toBe(false)
+    } finally {
+      await engine.close()
+    }
+  })
+
+  it('pairs no-id tool results with their pending tool call and emits ND-compatible result data', async () => {
+    const cli = new FakeStructuredCli()
+    const adapter: StructuredCliAdapter = {
+      id: 'no-id-cli',
+      label: 'No ID',
+      sessionPrefix: 'no-id',
+      binary: () => process.execPath,
+      unavailableMessage: 'missing',
+      buildArgs: () => [],
+      parse: (wire) => {
+        if (wire.type === 'tool_start') return [{ kind: 'tool-start', name: 'terminal', input: { command: 'pwd' } }]
+        if (wire.type === 'tool_result') return [{ kind: 'tool-result', name: 'terminal', output: 'ok' }]
+        if (wire.type === 'done') return [{ kind: 'done', text: 'complete' }]
+        return []
+      },
+    }
+    const engine = new StructuredCliEngine(adapter, { spawnProcess: cli.spawn() as never })
+    try {
+      const run = engine.run('do it', { cwd: process.cwd() })
+      await tick()
+      const sessionId = engine.listSessions()[0]!.sessionId
+      cli.raw(JSON.stringify({ type: 'tool_start' }) + '\n')
+      cli.raw(JSON.stringify({ type: 'tool_result' }) + '\n')
+      cli.raw(JSON.stringify({ type: 'done' }) + '\n')
+      cli.close(0, null)
+      await run
+
+      const transcript = engine.transcript(sessionId).events
+      const call = transcript.find((event) => event.type === 'tool/call')
+      const result = transcript.find((event) => event.type === 'tool/result')
+      expect(call?.data).toMatchObject({ name: 'terminal' })
+      expect(result?.data).toMatchObject({
+        callId: (call?.data as Record<string, unknown>)?.callId,
+        message: { content: [{ type: 'text', text: 'ok' }] },
+      })
     } finally {
       await engine.close()
     }
