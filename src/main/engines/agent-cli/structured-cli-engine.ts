@@ -54,6 +54,7 @@ interface StructuredCliSession {
   buffer: string
   doneSeen: boolean
   turnAssistantText: string
+  turnToolCalls: Set<string>
   turnSettled?: Deferred<TurnOutcome>
   terminalOutcome?: TurnOutcome
 }
@@ -139,6 +140,7 @@ export class StructuredCliEngine {
       buffer: '',
       doneSeen: false,
       turnAssistantText: '',
+      turnToolCalls: new Set<string>(),
     })
     this.emitFrame({ kind: 'session-added', sessionId, meta: { engineId: this.adapter.id } })
     return { sessionId }
@@ -167,6 +169,7 @@ export class StructuredCliEngine {
     session.turnSettled = settled
     session.doneSeen = false
     session.turnAssistantText = ''
+    session.turnToolCalls.clear()
     delete session.terminalOutcome
     const userPrompt = stripWorkspaceContext(cleaned)
     this.recordUserMessage(session, userPrompt)
@@ -302,11 +305,19 @@ export class StructuredCliEngine {
       }
       if (event.kind === 'tool-start') {
         const callId = event.callId ?? `tool-${session.sequence + 1}`
+        session.turnToolCalls.add(callId)
         this.recordToolCall(session, callId, event.name, event.input ?? null)
         continue
       }
       if (event.kind === 'tool-result') {
         const callId = event.callId ?? `tool-${session.sequence + 1}`
+        // Some machine-readable CLIs (notably current OpenCode) only emit a
+        // terminal tool event. Preserve ND's call/result pairing even when the
+        // upstream stream omits a separate "started" event.
+        if (!session.turnToolCalls.has(callId)) {
+          session.turnToolCalls.add(callId)
+          this.recordToolCall(session, callId, event.name ?? 'tool', null)
+        }
         this.recordToolResult(session, callId, summarize(event.output), event.isError === true)
         continue
       }
