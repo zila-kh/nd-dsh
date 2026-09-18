@@ -8,7 +8,6 @@ import { minimaxBinPath } from './extra-cli-paths.js'
 
 interface MiniMaxSession {
   sessionId: string
-  cwd?: string
   model?: string
   title: string
   createdAt: number
@@ -39,7 +38,6 @@ export class MiniMaxCliEngine {
       sessionId: session.sessionId,
       engineId: MINIMAX_CLI_ENGINE_ID,
       title: session.title,
-      ...(session.cwd === undefined ? {} : { cwd: session.cwd }),
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
       running: session.running,
@@ -57,7 +55,6 @@ export class MiniMaxCliEngine {
     const now = Date.now()
     this.sessions.set(sessionId, {
       sessionId,
-      ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
       ...(input.model === undefined ? {} : { model: input.model }),
       title: 'New MiniMax chat',
       createdAt: now,
@@ -78,14 +75,12 @@ export class MiniMaxCliEngine {
     if (options.sessionId !== undefined && !session) throw new Error(`Unknown ${MINIMAX_CLI_ENGINE_ID} session: ${options.sessionId}`)
     if (!session) {
       const created = await this.createSession({
-        ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
         ...(options.model === undefined ? {} : { model: options.model }),
       })
       session = this.sessions.get(created.sessionId)
     }
     if (!session) throw new Error('MiniMax session could not be created')
     if (session.running) throw new Error('This MiniMax chat already has an active turn')
-    if (options.cwd !== undefined) session.cwd = options.cwd
     if (options.model !== undefined) session.model = options.model
 
     const userText = stripWorkspaceContext(cleaned)
@@ -94,18 +89,27 @@ export class MiniMaxCliEngine {
     const settled = deferred<{ ok: boolean; message?: string }>()
     session.turnSettled = settled
     session.stdout = ''
-    this.spawnTurn(session, userText)
-    session.running = true
-    session.updatedAt = Date.now()
-    this.onEvent?.({ kind: 'session-status', sessionId: session.sessionId, running: true })
-    const result = await settled.promise
-    this.finish(session)
-    if (!result.ok) {
-      const message = result.message ?? 'MiniMax CLI turn failed'
-      this.onEvent?.({ kind: 'agent-error', sessionId: session.sessionId, message })
-      throw new Error(message)
+    try {
+      this.spawnTurn(session, userText)
+      session.running = true
+      session.updatedAt = Date.now()
+      this.onEvent?.({ kind: 'session-status', sessionId: session.sessionId, running: true })
+      const result = await settled.promise
+      this.finish(session)
+      if (!result.ok) {
+        const message = result.message ?? 'MiniMax CLI turn failed'
+        this.onEvent?.({ kind: 'agent-error', sessionId: session.sessionId, message })
+        throw new Error(message)
+      }
+      return { sessionId: session.sessionId }
+    } catch (error: unknown) {
+      if (session.turnSettled === settled) {
+        this.finish(session)
+        const message = error instanceof Error ? error.message : String(error)
+        this.onEvent?.({ kind: 'agent-error', sessionId: session.sessionId, message })
+      }
+      throw error
     }
-    return { sessionId: session.sessionId }
   }
 
   async stop(sessionId?: string): Promise<void> {
@@ -131,7 +135,7 @@ export class MiniMaxCliEngine {
     const child = spawnCliCommand(spawn, bin, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: engineEnvironment(),
-      cwd: session.cwd ?? process.cwd(),
+      cwd: process.cwd(),
       detached: process.platform !== 'win32',
     })
     session.child = child
@@ -144,7 +148,7 @@ export class MiniMaxCliEngine {
       delete session.child
       session.turnSettled?.resolve({ ok: false, message: error.message })
     })
-    child.once('exit', (code, signal) => {
+    child.once('close', (code, signal) => {
       if (session.child !== child) return
       delete session.child
       const text = session.stdout.trim()
