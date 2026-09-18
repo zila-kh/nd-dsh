@@ -18,6 +18,7 @@ import {
   rowValueText,
   StatusChip,
 } from './settings-primitives'
+import { betaDiagnostics } from '../lib/beta-diagnostics'
 import { cn } from '../lib/utils'
 import {
   generalSubTabFromLocation,
@@ -65,36 +66,6 @@ const THEME_OPTIONS: { mode: ThemeMode; label: string; Icon: typeof SunIcon }[] 
   { mode: 'dark', label: 'Dark', Icon: MoonIcon },
 ]
 
-export function betaDiagnostics(
-  appInfo: AppInfo | null,
-  workspace: WorkspaceState | null,
-  harness: HarnessStatus | null,
-  browser: BrowserState | null,
-): string {
-  const lines = [
-    'ND-DSH Beta Diagnostics',
-    `Captured: ${new Date().toISOString()}`,
-    `App: ${appInfo ? `${appInfo.name} ${appInfo.version}` : 'unknown'}`,
-    `Platform: ${appInfo?.platform ?? 'unknown'}`,
-    `Runtime state: ${harness?.state ?? 'unknown'}`,
-    `Runtime source ready: ${harness?.sourceReady ? 'yes' : 'no'}`,
-    `Provider: ${harness?.provider || 'unknown'}`,
-    `Model: ${harness?.model || 'unknown'}`,
-    `Credential status: ${harness?.apiKeyRequired ? (harness.apiKeyPresent ? 'configured' : 'required-missing') : 'not-required'}`,
-    `Browser bridge: ${browser?.agentBrowser ?? 'unknown'}`,
-    `Browser loading: ${browser?.loading ? 'yes' : 'no'}`,
-    `Workspace binding: ${workspace?.binding ?? 'unknown'}`,
-    `Project linked: ${workspace?.projectId ? 'yes' : 'no'}`,
-  ]
-  // Error strings can embed workspace paths, URLs, session ids, provider
-  // request details, or credentials. The clipboard report is intentionally
-  // privacy-safe, so preserve only the diagnostic signal and keep raw errors
-  // on-screen where the user can inspect them locally.
-  if (harness?.error) lines.push('Runtime error: present (details redacted)')
-  if (browser?.agentBrowserError) lines.push('Browser bridge error: present (details redacted)')
-  lines.push('', 'Privacy: credentials, session ids, workspace paths, project names, and current browser URLs are intentionally omitted.')
-  return lines.join('\n')
-}
 
 export function SettingsPane({
   theme,
