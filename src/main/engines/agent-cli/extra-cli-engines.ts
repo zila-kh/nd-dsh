@@ -33,7 +33,7 @@ function errorMessage(value: unknown, fallback: string): string {
     ?? fallback
 }
 
-const opencodeAdapter: StructuredCliAdapter = {
+export const opencodeAdapter: StructuredCliAdapter = {
   id: OPENCODE_CLI_ENGINE_ID,
   label: 'OpenCode',
   sessionPrefix: 'opencode',
