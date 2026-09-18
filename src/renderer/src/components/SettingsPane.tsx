@@ -65,7 +65,7 @@ const THEME_OPTIONS: { mode: ThemeMode; label: string; Icon: typeof SunIcon }[] 
   { mode: 'dark', label: 'Dark', Icon: MoonIcon },
 ]
 
-function betaDiagnostics(
+export function betaDiagnostics(
   appInfo: AppInfo | null,
   workspace: WorkspaceState | null,
   harness: HarnessStatus | null,
@@ -86,8 +86,12 @@ function betaDiagnostics(
     `Workspace binding: ${workspace?.binding ?? 'unknown'}`,
     `Project linked: ${workspace?.projectId ? 'yes' : 'no'}`,
   ]
-  if (harness?.error) lines.push(`Runtime error: ${harness.error.slice(0, 500)}`)
-  if (browser?.agentBrowserError) lines.push(`Browser bridge error: ${browser.agentBrowserError.slice(0, 500)}`)
+  // Error strings can embed workspace paths, URLs, session ids, provider
+  // request details, or credentials. The clipboard report is intentionally
+  // privacy-safe, so preserve only the diagnostic signal and keep raw errors
+  // on-screen where the user can inspect them locally.
+  if (harness?.error) lines.push('Runtime error: present (details redacted)')
+  if (browser?.agentBrowserError) lines.push('Browser bridge error: present (details redacted)')
   lines.push('', 'Privacy: credentials, session ids, workspace paths, project names, and current browser URLs are intentionally omitted.')
   return lines.join('\n')
 }
