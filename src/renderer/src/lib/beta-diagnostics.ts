@@ -1,4 +1,4 @@
-import type { AppInfo, BrowserState, HarnessStatus, WorkspaceState } from '../../../shared/contracts'
+import type { AppInfo, BrowserState, HarnessStatus, WorkspaceState } from '../../../shared/contracts.js'
 
 /**
  * Build a clipboard-safe support report. Never include raw error strings:
