@@ -36,6 +36,8 @@ jobs:
           corepack pnpm --dir vendor/deepseek-harness run build:lib:host
         env:
           CI: 'true'
+      - name: Audit production dependencies
+        run: corepack pnpm audit --prod --audit-level high
       - name: Verify repository invariants
         run: corepack pnpm verify
       - name: Verify release packaging configuration
