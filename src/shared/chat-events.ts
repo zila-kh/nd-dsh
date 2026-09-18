@@ -106,7 +106,11 @@ function foldEventInto(entries: ThreadEntry[], envelope: HistoryEventEnvelope): 
       return
     }
     case 'tool/result': {
-      const runningIndex = entries.findIndex((entry) => entry.kind === 'tool' && entry.status === 'running')
+      const callId = typeof data.callId === 'string' ? data.callId : undefined
+      const runningIndex = entries.findIndex((entry) =>
+        entry.kind === 'tool'
+        && entry.status === 'running'
+        && (callId === undefined || entry.callId === callId))
       const text = messageText(data.message) ?? ''
       const summary = typeof data.error === 'string' ? `Error: ${data.error}` : text.slice(0, RESULT_MAX_CHARS)
       if (runningIndex === -1) {

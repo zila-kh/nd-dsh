@@ -18,6 +18,7 @@ import {
   rowValueText,
   StatusChip,
 } from './settings-primitives'
+import { betaDiagnostics } from '../lib/beta-diagnostics'
 import { cn } from '../lib/utils'
 import {
   generalSubTabFromLocation,
@@ -65,32 +66,6 @@ const THEME_OPTIONS: { mode: ThemeMode; label: string; Icon: typeof SunIcon }[] 
   { mode: 'dark', label: 'Dark', Icon: MoonIcon },
 ]
 
-function betaDiagnostics(
-  appInfo: AppInfo | null,
-  workspace: WorkspaceState | null,
-  harness: HarnessStatus | null,
-  browser: BrowserState | null,
-): string {
-  const lines = [
-    'ND-DSH Beta Diagnostics',
-    `Captured: ${new Date().toISOString()}`,
-    `App: ${appInfo ? `${appInfo.name} ${appInfo.version}` : 'unknown'}`,
-    `Platform: ${appInfo?.platform ?? 'unknown'}`,
-    `Runtime state: ${harness?.state ?? 'unknown'}`,
-    `Runtime source ready: ${harness?.sourceReady ? 'yes' : 'no'}`,
-    `Provider: ${harness?.provider || 'unknown'}`,
-    `Model: ${harness?.model || 'unknown'}`,
-    `Credential status: ${harness?.apiKeyRequired ? (harness.apiKeyPresent ? 'configured' : 'required-missing') : 'not-required'}`,
-    `Browser bridge: ${browser?.agentBrowser ?? 'unknown'}`,
-    `Browser loading: ${browser?.loading ? 'yes' : 'no'}`,
-    `Workspace binding: ${workspace?.binding ?? 'unknown'}`,
-    `Project linked: ${workspace?.projectId ? 'yes' : 'no'}`,
-  ]
-  if (harness?.error) lines.push(`Runtime error: ${harness.error.slice(0, 500)}`)
-  if (browser?.agentBrowserError) lines.push(`Browser bridge error: ${browser.agentBrowserError.slice(0, 500)}`)
-  lines.push('', 'Privacy: credentials, session ids, workspace paths, project names, and current browser URLs are intentionally omitted.')
-  return lines.join('\n')
-}
 
 export function SettingsPane({
   theme,

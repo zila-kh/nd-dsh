@@ -589,29 +589,71 @@ function summarize(value: unknown): string {
 /** Terminate the whole child tree; SIGTERM first, then hard teardown. */
 async function killProcessTree(child: ChildProcess | undefined): Promise<void> {
   if (!child || child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return
-  await new Promise<void>((resolve) => {
-    const pid = child.pid as number
-    const timer = setTimeout(() => {
-      try {
-        if (process.platform === 'win32') {
-          spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' })
-        } else {
-          try { process.kill(-pid, 'SIGKILL') } catch { child.kill('SIGKILL') }
-        }
-      } catch {
-        // Already gone.
+  const pid = child.pid
+
+  if (process.platform === 'win32') {
+    await new Promise<void>((resolve) => {
+      let settled = false
+      const finish = (): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve()
       }
-      resolve()
-    }, 3_000)
-    child.once('exit', () => {
-      clearTimeout(timer)
-      resolve()
+      const timer = setTimeout(() => {
+        try { child.kill() } catch { /* Already gone. */ }
+        finish()
+      }, 3_000)
+      try {
+        const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+        killer.once('close', finish)
+        killer.once('error', () => {
+          try { child.kill() } catch { /* Already gone. */ }
+          finish()
+        })
+      } catch {
+        try { child.kill() } catch { /* Already gone. */ }
+        finish()
+      }
     })
-    try {
-      child.kill(process.platform === 'win32' ? undefined : 'SIGTERM')
-    } catch {
+    return
+  }
+
+  let groupSignalled = false
+  try {
+    process.kill(-pid, 'SIGTERM')
+    groupSignalled = true
+  } catch {
+    try { child.kill('SIGTERM') } catch { return }
+  }
+
+  await new Promise<void>((resolve) => {
+    let settled = false
+    const finish = (): void => {
+      if (settled) return
+      settled = true
       clearTimeout(timer)
       resolve()
     }
+    const timer = setTimeout(() => {
+      try {
+        if (groupSignalled) process.kill(-pid, 'SIGKILL')
+        else child.kill('SIGKILL')
+      } catch {
+        // Already gone.
+      }
+      finish()
+    }, 3_000)
+    child.once('exit', () => {
+      if (!groupSignalled) {
+        finish()
+        return
+      }
+      try {
+        process.kill(-pid, 0)
+      } catch {
+        finish()
+      }
+    })
   })
 }

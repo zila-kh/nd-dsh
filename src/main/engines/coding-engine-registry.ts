@@ -2,8 +2,10 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { CodingEngineDescriptor } from '../../shared/contracts.js'
 import { buildCodingEngineCatalog, chatGptWebEngineDescriptor, ND_HARNESS_ENGINE_ID } from '../../shared/coding-engines.js'
+import { buildExtraCodingEngineCatalog } from '../../shared/extra-coding-engines.js'
 import { antigravityBinPath, claudeBinPath, codexBinPath, cursorBinPath, dshPatchPath, harnessCliBinPath, harnessRoot, piBinPath, presetSourceDir, zcodeBinPath } from '../app-paths.js'
 import type { CapabilityAssignmentStore } from '../capabilities/capability-assignment-store.js'
+import { gooseBinPath, hermesBinPath, jcodeBinPath, minimaxBinPath, opencodeBinPath } from './agent-cli/extra-cli-paths.js'
 
 /**
  * ND control-plane registry for executable coding engines plus durable
@@ -44,6 +46,13 @@ export class CodingEngineRegistry {
         piCodingReady,
         cursorCliReady,
         claudeCodeCliReady,
+      }),
+      ...buildExtraCodingEngineCatalog({
+        opencodeCliReady: opencodeBinPath() !== undefined,
+        gooseCliReady: gooseBinPath() !== undefined,
+        jcodeCliReady: jcodeBinPath() !== undefined,
+        hermesCliReady: hermesBinPath() !== undefined,
+        minimaxCliReady: minimaxBinPath() !== undefined,
       }),
       chatGptWebEngineDescriptor(),
     ]

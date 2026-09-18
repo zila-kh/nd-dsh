@@ -17,6 +17,7 @@ import {
   PI_CODING_ENGINE_ID,
   ZCODE_CLI_ENGINE_ID,
 } from '../../shared/coding-engines.js'
+import { MINIMAX_CLI_ENGINE_ID } from '../../shared/extra-coding-engines.js'
 import type { BrowserController } from '../browser/browser-controller.js'
 import { appendWorkspaceContext } from '../../shared/workspace-context.js'
 import type { ExtensionRouter } from '../extensions/extension-router.js'
@@ -30,6 +31,7 @@ import type { AntigravityEngine } from './antigravity/antigravity-engine.js'
 import type { CursorCliEngine } from './cursor/cursor-cli-engine.js'
 import { ChatGptWebEngine } from './chatgpt-web/chatgpt-web-engine.js'
 import type { CodexCliEngine } from './codex/codex-cli-engine.js'
+import { createExtraCliEngines } from './agent-cli/extra-cli-engines.js'
 import type { PiCodingEngine } from './pi/pi-coding-engine.js'
 import type { ZcodeCliEngine } from './zcode/zcode-cli-engine.js'
 
@@ -55,6 +57,8 @@ export interface DirectWorkspaceEngine {
   handlesApproval(rpcId: string): boolean
   respond(rpcId: string, value: unknown): Promise<void>
   listModels(): Promise<EngineModelOption[]>
+  setEmitter?(emit: (frame: DshEventFrame) => void): void
+  close?(): Promise<void>
 }
 
 /**
@@ -84,6 +88,8 @@ export class EngineSessionRouter {
   private readonly chatGptWebLog: ((line: string) => void) | undefined
   /** Workspace-capable direct engines by catalog id, in catalog order. */
   private readonly directEngines = new Map<string, DirectWorkspaceEngine>()
+  /** Direct engines constructed by the router rather than Electron bootstrap. */
+  private readonly routerOwnedDirectEngines = new Set<DirectWorkspaceEngine>()
 
   constructor(
     private readonly harness: HarnessService,
@@ -102,6 +108,10 @@ export class EngineSessionRouter {
     if (pi) this.directEngines.set(PI_CODING_ENGINE_ID, pi)
     if (cursor) this.directEngines.set(CURSOR_CLI_ENGINE_ID, cursor)
     if (claude) this.directEngines.set(CLAUDE_CODE_CLI_ENGINE_ID, claude)
+    for (const [engineId, engine] of createExtraCliEngines((line) => console.warn(line))) {
+      this.directEngines.set(engineId, engine)
+      this.routerOwnedDirectEngines.add(engine)
+    }
     if (chatGptWebRuntime) {
       this.chatGptWebBrowser = chatGptWebRuntime.browser
       this.chatGptWebLog = chatGptWebRuntime.log
@@ -122,26 +132,11 @@ export class EngineSessionRouter {
   /** Every direct engine emits through the same ND organization/renderer fan-out. */
   setEmitter(emit: (frame: DshEventFrame) => void): void {
     this.chatGptWeb?.setEmitter(emit)
-    this.zcode?.setEmitter(emit)
-    this.pi?.setEmitter(emit)
-    this.cursor?.setEmitter(emit)
-    this.claude?.setEmitter(emit)
+    for (const direct of this.directEngines.values()) direct.setEmitter?.(emit)
   }
 
   private get zcode(): ZcodeCliEngine | undefined {
     return this.directEngines.get(ZCODE_CLI_ENGINE_ID) as ZcodeCliEngine | undefined
-  }
-
-  private get pi(): PiCodingEngine | undefined {
-    return this.directEngines.get(PI_CODING_ENGINE_ID) as PiCodingEngine | undefined
-  }
-
-  private get cursor(): CursorCliEngine | undefined {
-    return this.directEngines.get(CURSOR_CLI_ENGINE_ID) as CursorCliEngine | undefined
-  }
-
-  private get claude(): ClaudeCodeCliEngine | undefined {
-    return this.directEngines.get(CLAUDE_CODE_CLI_ENGINE_ID) as ClaudeCodeCliEngine | undefined
   }
 
   async run(prompt: string, options?: HarnessRunOptions): Promise<HarnessRunResult> {
@@ -152,7 +147,7 @@ export class EngineSessionRouter {
       ? options?.provider ?? this.harness.status().provider
       : undefined
     const directTarget = this.directEngines.get(requested)
-    if (directTarget && options?.sessionId) {
+    if (directTarget && this.isWorkspaceDirectEngine(requested) && options?.sessionId) {
       const session = directTarget.listSessions().find((item) => item.sessionId === options?.sessionId)
       if (!session?.cwd || !sessionInWorkspace(this.workspace.state().root, session.cwd)) throw new Error('Session belongs to a different project workspace')
     }
@@ -183,6 +178,12 @@ export class EngineSessionRouter {
     }
     const direct = this.directEngines.get(requested)
     if (direct) {
+      if (!this.isWorkspaceDirectEngine(requested)) {
+        return direct.run(optimizedPrompt, {
+          ...(options?.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
+          ...(options?.model !== undefined ? { model: options.model } : {}),
+        })
+      }
       this.workspace.assertUsable()
       const workspace = this.workspace.state()
       return direct.run(appendWorkspaceContext(optimizedPrompt, workspace), {
@@ -236,13 +237,17 @@ export class EngineSessionRouter {
    * worktrees; interactive chat keeps the active workspace default.
    */
   async createSession(engineId: string, cwd?: string): Promise<{ sessionId: string; engineId: string }> {
-    const targetCwd = cwd ?? this.workspace.state().root
     const direct = this.directEngines.get(engineId)
     if (direct) {
-      const sessionId = (await direct.createSession({ cwd: targetCwd })).sessionId
+      const sessionId = (await direct.createSession(
+        this.isWorkspaceDirectEngine(engineId)
+          ? { cwd: cwd ?? this.workspace.state().root }
+          : {},
+      )).sessionId
       this.logicalEngineBySession.set(sessionId, engineId)
       return { engineId, sessionId }
     }
+    const targetCwd = cwd ?? this.workspace.state().root
     if (engineId === CHATGPT_WEB_ENGINE_ID) {
       const sessionId = (await this.requireChatGptWeb().createSession({ cwd: targetCwd })).sessionId
       this.logicalEngineBySession.set(sessionId, engineId)
@@ -284,9 +289,10 @@ export class EngineSessionRouter {
     return this.harness.stop()
   }
 
-  /** Release router-owned resources without double-closing the other engines. */
+  /** Release router-owned resources without double-closing bootstrap-owned engines. */
   async close(): Promise<void> {
     await this.chatGptWeb?.close()
+    await Promise.all([...this.routerOwnedDirectEngines].map(async (direct) => { await direct.close?.() }))
   }
 
   /** Approval/question answers are routed by who issued the rpcId. */
@@ -300,11 +306,16 @@ export class EngineSessionRouter {
 
   sessions(): EngineSessionSummary[] {
     const workspaceRoot = this.workspace.state().root
-    const directSessions = [...this.directEngines.values()].flatMap((direct) => direct.listSessions())
-    return [
+    const workspaceSessions = [
       ...this.chatGptWeb?.listSessions() ?? [],
-      ...directSessions,
+      ...[...this.directEngines.entries()]
+        .filter(([engineId]) => this.isWorkspaceDirectEngine(engineId))
+        .flatMap(([, direct]) => direct.listSessions()),
     ].filter((session) => sessionInWorkspace(workspaceRoot, session.cwd))
+    const interactiveSessions = [...this.directEngines.entries()]
+      .filter(([engineId]) => !this.isWorkspaceDirectEngine(engineId))
+      .flatMap(([, direct]) => direct.listSessions())
+    return [...workspaceSessions, ...interactiveSessions]
   }
 
   transcript(sessionId: string): EngineSessionTranscript {
@@ -336,6 +347,10 @@ export class EngineSessionRouter {
     const zcode = this.zcode
     if (!zcode || zcode.listSessions().some((session) => session.running)) return
     await zcode.close()
+  }
+
+  private isWorkspaceDirectEngine(engineId: string): boolean {
+    return engineId !== MINIMAX_CLI_ENGINE_ID
   }
 
   private engineForSession(sessionId: string): string {

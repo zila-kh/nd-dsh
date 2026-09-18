@@ -75,6 +75,20 @@ describe('chat event folding', () => {
     ])
   })
 
+  it('matches parallel tool results to the correct call id', () => {
+    const entries = foldHistory([
+      { type: 'tool/call', seq: 1, data: { callId: 'c1', name: 'read', arguments: { path: 'one' } } },
+      { type: 'tool/call', seq: 2, data: { callId: 'c2', name: 'read', arguments: { path: 'two' } } },
+      { type: 'tool/result', seq: 3, data: { callId: 'c2', message: { content: 'two-result' } } },
+      { type: 'tool/result', seq: 4, data: { callId: 'c1', message: { content: 'one-result' } } },
+    ])
+
+    expect(entries).toEqual([
+      expect.objectContaining({ kind: 'tool', callId: 'c1', status: 'done', result: 'one-result' }),
+      expect.objectContaining({ kind: 'tool', callId: 'c2', status: 'done', result: 'two-result' }),
+    ])
+  })
+
   it('keeps Harness-injected context out of the user messages', () => {
     const entries = foldHistory([
       { type: 'user/message', seq: 1, data: { source: { kind: 'user' }, message: { content: 'hi' } } },
