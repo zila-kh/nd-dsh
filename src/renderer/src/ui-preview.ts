@@ -516,8 +516,6 @@ const desktopApi: DesktopApi = {
     setBounds: async () => undefined,
     setVisible: async () => undefined,
     reload: async () => undefined,
-    updateUpstream: async () => ({ updated: true, message: 'DSH upstream update is available in the desktop runtime.' }),
-    onUpdateLog: () => () => undefined,
     onState: () => () => undefined,
   },
   theme: {

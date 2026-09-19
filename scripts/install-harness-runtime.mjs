@@ -164,7 +164,10 @@ async function clearInstalledTree(runtimeRoot) {
   for (const name of ['node_modules', 'package-lock.json']) {
     const target = join(runtimeRoot, name)
     try {
-      await fs.rm(target, { recursive: true, force: true, maxRetries: 3 })
+      // The runtime child may have exited moments before this runs, and Windows
+      // releases its file handles asynchronously (antivirus can also briefly
+      // lock fresh files), so give the deletion room to ride out transient locks.
+      await fs.rm(target, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 })
     } catch (error) {
       throw new Error(
         `Could not clear the previous managed runtime at ${target} (${error.code ?? 'unknown error'}). `
