@@ -11,6 +11,7 @@ import {
   type WorkflowPluginsState,
   type WorkflowSnapshotEntry,
 } from '../../shared/workflow-plugins.js'
+import { quarantineFile } from '../logging/log-file.js'
 
 interface WorkflowPluginFile {
   version: 1
@@ -154,7 +155,10 @@ export class WorkflowPluginStore {
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        console.warn('Ignoring unreadable workflow plugin store; starting empty:', error)
+                // Starting empty and then persisting that snapshot is how a user loses
+        // data: the unreadable file is the only copy of what they had. Keep it
+        // aside for recovery and name it for support.
+        await quarantineFile(this.filePath, error)
       }
       this.value = structuredClone(EMPTY)
     }

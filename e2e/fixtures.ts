@@ -1,8 +1,40 @@
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
+
+/**
+ * A real, writable project workspace for specs that create an ND project.
+ *
+ * The project form requires an existing folder, so a spec must never name a
+ * machine-specific path: a hardcoded developer directory made the organization
+ * bootstrap fail on every CI runner and silently skipped the rest of its file.
+ * It is also a Git repository with one commit, because ND's Source Control
+ * surface only renders for a repository — a bare temp directory would drop that
+ * coverage without failing anything.
+ */
+export async function createWorkspaceDir(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'nd-dsh-e2e-workspace-'))
+  git(dir, ['init', '--initial-branch=main'])
+  await writeFile(join(dir, 'README.md'), '# ND-DSH e2e workspace\n', 'utf8')
+  git(dir, ['add', '.'])
+  git(dir, ['commit', '-m', 'chore: seed the e2e workspace'])
+  return dir
+}
+
+/** Git with an identity and no signing, so a runner's global config cannot matter. */
+function git(cwd: string, args: string[]): void {
+  const result = spawnSync('git', [
+    '-c', 'user.name=ND-DSH E2E',
+    '-c', 'user.email=e2e@nd-dsh.invalid',
+    '-c', 'commit.gpgsign=false',
+    ...args,
+  ], { cwd, encoding: 'utf8', windowsHide: true })
+  if (result.status !== 0) {
+    throw new Error(`git ${args.join(' ')} failed in ${cwd}: ${result.stderr?.trim() || String(result.status)}`)
+  }
+}
 
 /**
  * Pre-seed a providers.json into the throwaway userData dir so the app boots

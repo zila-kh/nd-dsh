@@ -67,7 +67,10 @@ if (!flags.has('--skip-dsh-build')) {
   // inside the vendored checkout are unwanted regardless.
   const harnessEnv = { CI: 'true' }
   await run('corepack', ['pnpm', 'install', '--frozen-lockfile'], harnessRoot, { env: harnessEnv })
-  await run('corepack', ['pnpm', 'run', 'build'], harnessRoot, { env: harnessEnv })
+  // ND's own build script rather than upstream's aggregate: upstream's client
+  // typecheck aborts on its own test files here and leaves the runtime without
+  // the client artifacts the web profile loads. See scripts/build-harness.mjs.
+  await run(process.execPath, ['scripts/build-harness.mjs', '--skip-install'], root, { env: harnessEnv })
 }
 
 if (flags.has('--build-nd-pencil')) {

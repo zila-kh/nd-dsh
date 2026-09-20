@@ -5,6 +5,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { CAPABILITIES_IPC, type CapabilityAssignmentSnapshot, type CapabilityKind, type CapabilitySubjectType } from '../shared/capabilities.js'
 import { IPC, type DesktopApi, type ModelProvider } from '../shared/contracts.js'
 import { EXTENSIONS_IPC, type AgentExtensionManifest, type ExtensionsDesktopApi } from '../shared/extensions.js'
+import { USAGE_IPC, type UsageDesktopApi, type UsageScope, type UsageSummary } from '../shared/usage.js'
 import {
   WORKFLOW_PLUGINS_IPC,
   type WorkflowDetectionPreview,
@@ -43,6 +44,11 @@ const workflowPluginsApi: WorkflowPluginsDesktopApi = {
     ipcRenderer.on(WORKFLOW_PLUGINS_IPC.changedEvent, handler)
     return () => ipcRenderer.removeListener(WORKFLOW_PLUGINS_IPC.changedEvent, handler)
   },
+}
+
+const usageApi: UsageDesktopApi = {
+  summary: (scope?: UsageScope, id?: string, since?: number) =>
+    ipcRenderer.invoke(USAGE_IPC.summary, scope, id, since) as Promise<UsageSummary>,
 }
 
 const api: DesktopApi = {
@@ -148,6 +154,7 @@ const api: DesktopApi = {
   workspace: {
     state: () => ipcRenderer.invoke(IPC.workspaceState),
     pick: () => ipcRenderer.invoke(IPC.workspacePick),
+    pickPath: () => ipcRenderer.invoke(IPC.workspacePickPath),
     setRoot: (path) => ipcRenderer.invoke(IPC.workspaceSetRoot, path),
     list: (relativePath) => ipcRenderer.invoke(IPC.workspaceList, relativePath),
     read: (relativePath) => ipcRenderer.invoke(IPC.workspaceRead, relativePath),
@@ -253,3 +260,4 @@ const api: DesktopApi = {
 contextBridge.exposeInMainWorld('ndDsh', api)
 contextBridge.exposeInMainWorld('ndDshExtensions', extensionsApi)
 contextBridge.exposeInMainWorld('ndDshWorkflowPlugins', workflowPluginsApi)
+contextBridge.exposeInMainWorld('ndDshUsage', usageApi)

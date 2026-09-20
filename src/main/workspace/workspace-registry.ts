@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs'
 import { basename, dirname, resolve } from 'node:path'
 import process from 'node:process'
 import type { SavedWorkspace, WorkspaceRegistryView } from '../../shared/contracts.js'
+import { quarantineFile } from '../logging/log-file.js'
 
 const MAX_ITEMS = 24
 const MAX_ROOT_LENGTH = 4_096
@@ -218,7 +219,10 @@ export class WorkspaceRegistry {
       this.activeId = activeId && items.some((item) => item.id === activeId) ? activeId : undefined
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        console.warn('Ignoring unreadable saved-workspace registry; it will be re-seeded from the current workspace:', error)
+                // Starting empty and then persisting that snapshot is how a user loses
+        // data: the unreadable file is the only copy of what they had. Keep it
+        // aside for recovery and name it for support.
+        await quarantineFile(this.filePath, error)
       }
       this.items = []
       this.activeId = undefined

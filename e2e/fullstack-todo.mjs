@@ -122,10 +122,14 @@ async function main() {
   // 5. Create the project pointed at the target workspace.
   await page.getByPlaceholder('New project').fill(PROJECT.name)
   await page.getByPlaceholder('Objective').fill(PROJECT.objective)
-  const wsInput = page.getByPlaceholder('Workspace path')
-  await wsInput.fill(TARGET_WS)
-  const filled = await wsInput.inputValue()
-  if (resolve(filled) !== resolve(TARGET_WS)) throw new Error(`workspace path field mismatch: ${filled}`)
+  // The workspace field is a native folder picker; stub the main-process dialog.
+  await app.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
+  }, TARGET_WS)
+  const browse = page.getByRole('button', { name: 'Browse for workspace folder' })
+  await browse.click()
+  const picked = (await browse.textContent())?.trim() ?? ''
+  if (resolve(picked) !== resolve(TARGET_WS)) throw new Error(`workspace folder mismatch: ${picked}`)
   await page.getByRole('button', { name: 'Add project' }).click()
   await waitForState('project row in org state', (s) => s.projects.some((p) => p.name === PROJECT.name), 45_000, page)
   log(`project created: ${PROJECT.name}`)

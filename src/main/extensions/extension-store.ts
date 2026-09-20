@@ -12,6 +12,7 @@ import {
   type ExtensionAdapter,
   type ExtensionRuntimeSpec,
 } from '../../shared/extensions.js'
+import { quarantineFile } from '../logging/log-file.js'
 
 interface ExtensionSnapshot {
   version: 1
@@ -124,7 +125,10 @@ export class ExtensionStore {
       this.value = { version: 1, extensions: mergeBuiltinDemos(loaded) }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        console.warn('Ignoring unreadable extension catalog; restoring built-in demos:', error)
+                // Starting empty and then persisting that snapshot is how a user loses
+        // data: the unreadable file is the only copy of what they had. Keep it
+        // aside for recovery and name it for support.
+        await quarantineFile(this.filePath, error)
       }
       this.value = { version: 1, extensions: cloneBuiltinExtensionDemos() }
     }

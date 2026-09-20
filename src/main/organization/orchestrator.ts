@@ -277,6 +277,31 @@ export class OrganizationOrchestrator {
   }
 
   /**
+   * Stop every live run for one project before the project is forgotten. Each
+   * run goes through the normal cancellation path, so its session is stopped,
+   * the task worktree is rolled back to its attempt baseline and the employee
+   * that owned it is released. Failures propagate: a project is never forgotten
+   * while an agent is still working on it.
+   */
+  async stopProjectWork(projectId: string): Promise<number> {
+    const state = await this.store.state()
+    const running = state.runs.filter((run) => run.projectId === projectId && run.status === 'running')
+    let stopped = 0
+    for (const run of running) {
+      try {
+        await this.cancelRun(run.id)
+        stopped += 1
+      } catch (error) {
+        // A run that finished on its own between the read and the cancel is done,
+        // not a failure to stop.
+        const stillRunning = await this.store.activeRun(projectId)
+        if (stillRunning) throw error
+      }
+    }
+    return stopped
+  }
+
+  /**
    * Called by the existing organization reconciliation loop. A stale session is
    * canceled, rolled back and retried only when Autopilot and bounded policy
    * allow it; the 30-minute task lease is never used as a stall detector.

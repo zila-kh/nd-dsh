@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import type { AppInfo, BrowserState, HarnessStatus, ThemeMode, ThemeState, WorkspaceState } from '../../../shared/contracts'
+import type { AppInfo, BrowserState, HarnessStatus, SavedWorkspace, ThemeMode, ThemeState, WorkspaceRegistryView, WorkspaceState } from '../../../shared/contracts'
 import { MonitorIcon, MoonIcon, SunIcon } from './Icons'
 import { BridgePill } from './bridge-pill'
 import { CapabilitySettings } from './CapabilitySettings'
@@ -7,6 +7,7 @@ import { EngineSettings } from './EngineSettings'
 import { ExtensionSettings } from './ExtensionSettings'
 import { ModelSettings } from './ModelSettings'
 import { PresetSettings } from './PresetSettings'
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog'
 import {
   SettingsButton,
   SettingsRow,
@@ -86,6 +87,8 @@ export function SettingsPane({
   const [pathDraft, setPathDraft] = useState('')
   const [internalSubTab, setInternalSubTab] = useState<GeneralSubTab>(generalSubTabFromLocation)
   const [diagnosticsCopied, setDiagnosticsCopied] = useState(false)
+  const [savedWorkspaces, setSavedWorkspaces] = useState<WorkspaceRegistryView | null>(null)
+  const [workspaceToRemove, setWorkspaceToRemove] = useState<SavedWorkspace | null>(null)
 
   const activeSubTab = propSubTab ?? internalSubTab
   const handleSelectSubTab = (selected: GeneralSubTab): void => {
@@ -105,6 +108,26 @@ export function SettingsPane({
   useEffect(() => {
     setPathDraft(workspace?.root ?? '')
   }, [workspace?.root])
+
+  // The saved list is only shown on the Workspace sub-tab, so it is read on demand.
+  useEffect(() => {
+    if (activeSubTab !== 'workspace') return
+    let mounted = true
+    void window.ndDsh.workspace.registry()
+      .then((value) => { if (mounted) setSavedWorkspaces(value) })
+      .catch(() => undefined)
+    return () => { mounted = false }
+  }, [activeSubTab, workspace?.root])
+
+  const removeSavedWorkspace = async (id: string): Promise<void> => {
+    try {
+      const next = await window.ndDsh.workspace.removeSaved(id)
+      setSavedWorkspaces(next)
+      setWorkspaceToRemove(null)
+    } catch (cause) {
+      onError(errorMessage(cause))
+    }
+  }
 
   const changeFolder = async (): Promise<void> => {
     try {
@@ -209,34 +232,61 @@ export function SettingsPane({
                 </div>
 
                 {activeSubTab === 'workspace' && (
-                  <SettingsSection title="Workspace" className="mt-3.5">
-                    <div className="space-y-1.5">
-                      <SettingsRow>
-                        <div className={rowStack}>
-                          <strong className={rowTitle}>Folder</strong>
-                          <span className={rowPathText} title={workspace?.root}>{workspace ? workspace.root : 'No workspace open'}</span>
+                  <>
+                    <SettingsSection title="Workspace" className="mt-3.5">
+                      <div className="space-y-1.5">
+                        <SettingsRow>
+                          <div className={rowStack}>
+                            <strong className={rowTitle}>Folder</strong>
+                            <span className={rowPathText} title={workspace?.root}>{workspace ? workspace.root : 'No workspace open'}</span>
+                          </div>
+                          <SettingsButton onClick={() => void changeFolder()}>Change folder</SettingsButton>
+                        </SettingsRow>
+                        <SettingsRow>
+                          <div className={rowStack}>
+                            <strong className={rowTitle}>Folder path</strong>
+                            <span className={rowDesc}>Open a project workspace by path.</span>
+                          </div>
+                          <form className="flex shrink-0 min-w-0 items-center gap-1.5" onSubmit={openPath}>
+                            <input
+                              aria-label="Workspace path"
+                              placeholder="/Users/you/your-project"
+                              value={pathDraft}
+                              onChange={(event) => setPathDraft(event.target.value)}
+                              spellCheck={false}
+                              className="h-[26px] w-[220px] min-w-0 rounded-md border border-border-strong bg-background px-[9px] font-mono text-[9px] text-soft outline-none focus:border-(--border-focus)"
+                            />
+                            <SettingsButton type="submit">Open</SettingsButton>
+                          </form>
+                        </SettingsRow>
+                      </div>
+                    </SettingsSection>
+
+                    {savedWorkspaces && savedWorkspaces.items.length > 0 ? (
+                      <SettingsSection title="Saved workspaces">
+                        <div className="space-y-1.5">
+                          {savedWorkspaces.items.map((item) => (
+                            <SettingsRow key={item.id}>
+                              <div className={rowStack}>
+                                <strong className={rowTitle}>
+                                  {item.name}
+                                  {item.id === savedWorkspaces.activeId ? <span className="ml-2 text-[9px] font-bold tracking-[0.08em] text-primary">CURRENT</span> : null}
+                                </strong>
+                                <span className={rowPathText} title={item.root}>{item.root}</span>
+                              </div>
+                              <SettingsButton
+                                aria-label={`Remove saved workspace ${item.name}`}
+                                className="hover:border-destructive/45 hover:text-destructive"
+                                onClick={() => setWorkspaceToRemove(item)}
+                              >
+                                Remove
+                              </SettingsButton>
+                            </SettingsRow>
+                          ))}
                         </div>
-                        <SettingsButton onClick={() => void changeFolder()}>Change folder</SettingsButton>
-                      </SettingsRow>
-                      <SettingsRow>
-                        <div className={rowStack}>
-                          <strong className={rowTitle}>Folder path</strong>
-                          <span className={rowDesc}>Open a project workspace by path.</span>
-                        </div>
-                        <form className="flex shrink-0 min-w-0 items-center gap-1.5" onSubmit={openPath}>
-                          <input
-                            aria-label="Workspace path"
-                            placeholder="/Users/you/your-project"
-                            value={pathDraft}
-                            onChange={(event) => setPathDraft(event.target.value)}
-                            spellCheck={false}
-                            className="h-[26px] w-[220px] min-w-0 rounded-md border border-border-strong bg-background px-[9px] font-mono text-[9px] text-soft outline-none focus:border-(--border-focus)"
-                          />
-                          <SettingsButton type="submit">Open</SettingsButton>
-                        </form>
-                      </SettingsRow>
-                    </div>
-                  </SettingsSection>
+                      </SettingsSection>
+                    ) : null}
+                  </>
                 )}
 
                 {activeSubTab === 'runtime' && (
@@ -393,6 +443,39 @@ export function SettingsPane({
           </div>
         )}
       </div>
+
+      <Dialog open={workspaceToRemove !== null} onOpenChange={(open) => { if (!open) setWorkspaceToRemove(null) }}>
+        <DialogContent className="sm:max-w-[470px]">
+          <DialogHeader>
+            <DialogTitle>Remove saved workspace?</DialogTitle>
+            <DialogDescription>
+              {workspaceToRemove
+                ? `“${workspaceToRemove.name}” will no longer be offered as a saved workspace. The folder and everything in it are left untouched.`
+                : ''}
+            </DialogDescription>
+          </DialogHeader>
+          {workspaceToRemove ? (
+            <p className="m-0 font-mono text-[10px] text-muted-foreground">{workspaceToRemove.root}</p>
+          ) : null}
+          <DialogFooter>
+            <DialogClose asChild>
+              <button
+                type="button"
+                className="shrink-0 rounded-md border border-border bg-secondary px-2.5 py-1.5 text-[10px] text-soft transition-colors hover:bg-accent hover:text-foreground"
+              >
+                Cancel
+              </button>
+            </DialogClose>
+            <button
+              type="button"
+              className="shrink-0 rounded-md border border-destructive/45 bg-secondary px-2.5 py-1.5 text-[10px] text-destructive transition-colors hover:bg-destructive/10"
+              onClick={() => { if (workspaceToRemove) void removeSavedWorkspace(workspaceToRemove.id) }}
+            >
+              Remove
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   )
 }

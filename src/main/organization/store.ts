@@ -61,6 +61,7 @@ export class OrganizationStore {
       case 'project.create': this.createProject(mutation); break
       case 'project.update': this.updateProject(mutation.id, mutation.patch); break
       case 'project.activate': this.activateProject(mutation.id); break
+      case 'project.remove': this.removeProject(mutation.id); break
       case 'team.create': this.createTeam(mutation); break
       case 'role.create': this.createRole(mutation); break
       case 'role.update': this.updateRole(mutation.id, mutation.patch); break
@@ -477,6 +478,35 @@ export class OrganizationStore {
     project.updatedAt = Date.now()
   }
   private activateProject(id: string): void { const project = this.project(id); this.value.activeProjectId = id; this.value.activeCompanyId = project.companyId }
+  /**
+   * Forget a project inside ND. Comparable to removing a folder from an editor
+   * workspace: the folder and its files are untouched, only ND's own records for
+   * the project disappear. A running run is refused so a live session can never
+   * be orphaned by removal.
+   */
+  private removeProject(id: string): void {
+    const project = this.project(id)
+    const live = this.value.runs.find((run) => run.projectId === id && run.status === 'running')
+    if (live) throw new Error(`Cancel the running ${live.kind} before removing this project`)
+    const taskIds = new Set(this.value.tasks.filter((task) => task.projectId === id).map((task) => task.id))
+    this.value.projects = this.value.projects.filter((item) => item.id !== id)
+    this.value.goals = this.value.goals.filter((item) => item.projectId !== id)
+    this.value.milestones = this.value.milestones.filter((item) => item.projectId !== id)
+    this.value.tasks = this.value.tasks.filter((item) => item.projectId !== id)
+    this.value.runs = this.value.runs.filter((item) => item.projectId !== id)
+    this.value.memory = this.value.memory.filter((item) => item.projectId !== id)
+    this.value.skills = this.value.skills.filter((item) => item.projectId !== id)
+    this.value.workflows = this.value.workflows.filter((item) => item.projectId !== id)
+    for (const agent of this.value.agents) {
+      if (agent.currentTaskId && taskIds.has(agent.currentTaskId)) { agent.status = 'idle'; delete agent.currentTaskId }
+    }
+    if (this.value.activeProjectId === id) {
+      const next = this.value.projects.find((item) => item.companyId === project.companyId)
+      if (next) this.value.activeProjectId = next.id
+      else delete this.value.activeProjectId
+    }
+    this.activity(project.companyId, undefined, 'project.removed', `Removed project “${project.name}” from ND. Files in its folder were not changed.`)
+  }
   private createTeam(input: Extract<OrganizationMutation, { type: 'team.create' }>): void { this.company(input.companyId); for (const roleId of input.roleIds ?? []) this.assertRoleCompany(roleId, input.companyId); this.value.teams.push({ id: randomUUID(), companyId: input.companyId, name: clean(input.name), purpose: clean(input.purpose), roleIds: input.roleIds ?? [], skillIds: input.skillIds ?? [] }) }
   private createRole(input: Extract<OrganizationMutation, { type: 'role.create' }>): void { this.company(input.companyId); this.value.roles.push({ id: randomUUID(), companyId: input.companyId, name: clean(input.name), responsibility: clean(input.responsibility), systemPrompt: clean(input.systemPrompt), skillIds: input.skillIds ?? [], ...(input.providerId ? { providerId: input.providerId } : {}), ...(input.modelId ? { modelId: input.modelId } : {}) }) }
   private updateRole(id: string, patch: Extract<OrganizationMutation, { type: 'role.update' }>['patch']): void { const role = must(this.value.roles.find((item) => item.id === id), 'Role'); Object.assign(role, patch) }

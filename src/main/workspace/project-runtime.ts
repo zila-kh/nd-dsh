@@ -391,20 +391,20 @@ async function killProcessTree(child: ChildProcess): Promise<void> {
         clearTimeout(timer)
         resolve()
       }
-      const timer = setTimeout(() => {
+      const fallback = (): void => {
         try { child.kill() } catch { /* Already gone. */ }
         finish()
-      }, 3_000)
+      }
+      // The start command runs through a shell, so the shell is the tree root and
+      // the real server is its child. Kill the tree while the root is still alive:
+      // killing the shell first orphans the server, which then keeps its port.
+      const timer = setTimeout(fallback, 5_000)
       try {
         const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
-        killer.once('close', finish)
-        killer.once('error', () => {
-          try { child.kill() } catch { /* Already gone. */ }
-          finish()
-        })
+        killer.once('close', (code) => { if (code === 0) finish(); else fallback() })
+        killer.once('error', fallback)
       } catch {
-        try { child.kill() } catch { /* Already gone. */ }
-        finish()
+        fallback()
       }
     })
     return

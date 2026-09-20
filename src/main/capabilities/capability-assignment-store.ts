@@ -4,6 +4,7 @@ import { dirname } from 'node:path'
 import process from 'node:process'
 import type { CapabilityAssignmentSnapshot, CapabilityKind, CapabilitySubjectType } from '../../shared/capabilities.js'
 import { CAPABILITY_KINDS, DEFAULT_CAPABILITY_PROVIDER } from '../../shared/capabilities.js'
+import { quarantineFile } from '../logging/log-file.js'
 
 const EMPTY: CapabilityAssignmentSnapshot = { version: 1, agents: {}, roles: {}, teams: {} }
 
@@ -99,7 +100,10 @@ export class CapabilityAssignmentStore {
       this.value = { version: 1, agents: maps.agents, roles: maps.roles, teams: maps.teams }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        console.warn('Ignoring unreadable capability assignments; default providers will be used until reassigned:', error)
+                // Starting empty and then persisting that snapshot is how a user loses
+        // data: the unreadable file is the only copy of what they had. Keep it
+        // aside for recovery and name it for support.
+        await quarantineFile(this.filePath, error)
         this.value = structuredClone(EMPTY)
       } else {
         this.value = await this.migrateLegacyEngineAssignments()

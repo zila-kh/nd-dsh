@@ -20,6 +20,7 @@ import { GatewayClient, pickFreePort } from '../dsh/gateway-client.js'
 import type { ProviderStore } from '../providers.js'
 import type { SessionArchiveStore } from '../sessions/session-archive-store.js'
 import { tokenSaverRuntime } from '../token-saver/token-saver-runtime.js'
+import type { UsageLedger } from '../usage/usage-ledger.js'
 import { ensureProfilePluginLinks } from './profile-plugin-links.js'
 import { scopeSessionListPayload } from './session-scope.js'
 import { SessionEventHub } from './session-event-hub.js'
@@ -64,6 +65,8 @@ export class HarnessService {
     private readonly providers: ProviderStore,
     private readonly externalElements: ExternalElementStage,
     private readonly sessionArchive: SessionArchiveStore,
+    /** ND's durable token accounting, folded from this service's event stream. */
+    private readonly usageLedger: UsageLedger,
   ) {
     this.statusValue = this.computeStatus('stopped')
   }
@@ -617,6 +620,12 @@ export class HarnessService {
   }
 
   private handleEvent(frame: DshEventFrame): void {
+    // Cost accounting reads the same stream the UI folds. The ledger owns the
+    // replay guard, so a reconnecting stream re-sending history cannot
+    // double-count it, and a frame without usage is simply not a model call.
+    if (frame.kind === 'session-event' && frame.sessionId && frame.event) {
+      this.usageLedger.recordEvent(frame.sessionId, frame.event)
+    }
     if (frame.kind === 'session-status') {
       if (frame.sessionId) {
         if (frame.running) {

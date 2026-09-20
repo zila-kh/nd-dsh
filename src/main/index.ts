@@ -1,5 +1,5 @@
 import 'dotenv/config'
-import { app, BrowserWindow, Menu, type MenuItemConstructorOptions } from 'electron'
+import { app, BrowserWindow, crashReporter, dialog, Menu, type MenuItemConstructorOptions } from 'electron'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
 import { dirname, join } from 'node:path'
@@ -42,6 +42,8 @@ import { OrganizationStore } from './organization/store.js'
 import { ProviderStore } from './providers.js'
 import { QaService } from './qa/qa-service.js'
 import { SessionArchiveStore } from './sessions/session-archive-store.js'
+import { LogFile, logFilePathFor } from './logging/log-file.js'
+import { UsageLedger } from './usage/usage-ledger.js'
 import { ThemeService } from './theme.js'
 import { registerTerminalIpc } from './terminal/ipc.js'
 import { TerminalManager } from './terminal/terminal-manager.js'
@@ -76,6 +78,17 @@ if (!hasSingleInstanceLock) app.quit()
 
 const theme = new ThemeService()
 
+// Diagnostics exist before anything else can fail: a packaged build has no
+// console, so without this a startup crash leaves nothing to inspect.
+const log = new LogFile({ path: logFilePathFor(app.getPath('userData')) })
+void log.open()
+try {
+  // Local dumps only; ND never uploads a customer's crash data on its own.
+  crashReporter.start({ uploadToServer: false })
+} catch (error) {
+  console.warn('Native crash reporting is unavailable:', error)
+}
+
 app.on('second-instance', () => {
   if (!mainWindow) return
   if (mainWindow.isMinimized()) mainWindow.restore()
@@ -92,6 +105,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   const providers = new ProviderStore()
   const userData = app.getPath('userData')
   const sessionArchive = new SessionArchiveStore(join(userData, 'session-archive.json'))
+  const usageLedger = new UsageLedger(join(userData, 'usage-ledger.jsonl'))
   const isMac = process.platform === 'darwin'
 
   const window = new BrowserWindow({
@@ -146,7 +160,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   const externalElements = new ExternalElementStage()
   const recentPicks = new RecentPickStore()
   const git = new GitService(workspace)
-  const harness = new HarnessService(workspace, browser, providers, externalElements, sessionArchive)
+  const harness = new HarnessService(workspace, browser, providers, externalElements, sessionArchive, usageLedger)
   const codexEngine = new CodexCliEngine({ log: (line) => console.log(line) })
   activeCodexEngine = codexEngine
   const antigravityEngine = new AntigravityEngine({ log: (line) => console.log(line) })
@@ -219,7 +233,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   const approvalGate = new OrganizationApprovalGate(organizationStore, harness)
   const qa = new QaService()
   qa.setProjectRoot(workspace.state().root)
-  const disposeIpc = registerIpc({ window, preloadPath: preload, browser, dshSurface, engines, engineRouter, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, qa, sessionArchive, capabilities, organizationStore })
+  const disposeIpc = registerIpc({ window, preloadPath: preload, browser, dshSurface, engines, engineRouter, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, qa, sessionArchive, usageLedger, capabilities, organizationStore })
   const disposeTerminalIpc = registerTerminalIpc(window, terminalManager)
   const disposeDesignIpc = registerDesignIpc(window, design, ndPencil)
   const disposeOrganizationIpc = registerOrganizationIpc(window, organizationStore, organization, projectWorkspace, projectRuntime)
@@ -513,11 +527,20 @@ app.on('before-quit', (event) => {
     activeNdPencil = undefined
     beginNdPencilClose(ndPencil)
   }
-  if (closingServices.size === 0) return
+  if (closingServices.size === 0) {
+    void log.flush()
+    return
+  }
   event.preventDefault()
   shutdownStarted = true
   const pending = [...closingServices]
+  const shutdownTimeout = setTimeout(() => {
+    console.warn('ND shutdown timed out waiting for background services; exiting forcefully.')
+    app.exit(0)
+  }, 5_000)
   void Promise.allSettled(pending).then((results) => {
+    clearTimeout(shutdownTimeout)
+    void log.flush()
     if (results.some((result) => result.status === 'rejected')) {
       shutdownStarted = false
       if (ndPencilForRetry) activeNdPencil = ndPencilForRetry
@@ -584,8 +607,19 @@ function trackClose(promise: Promise<void>): void {
 }
 
 function reportFatalStartupError(error: unknown): void {
+  // A packaged Windows build has no console: quitting silently is how the app
+  // "just vanishes" for a user. Name the failure, name the log, then exit.
+  const message = error instanceof Error ? error.message : String(error)
   console.error('ND-DSH failed to start:', error)
-  app.quit()
+  log.write('error', `fatal startup failure: ${message}`)
+  void log.flush().finally(() => {
+    try {
+      dialog.showErrorBox('ND-DSH could not start', `${message}\n\nA diagnostic log was written to:\n${log.path}`)
+    } catch {
+      // A dialog can fail before the app is ready; the log is the durable record.
+    }
+    app.quit()
+  })
 }
 
 function parsePort(value: string | undefined, fallback: number): number {

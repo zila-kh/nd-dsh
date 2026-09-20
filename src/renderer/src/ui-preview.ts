@@ -470,6 +470,7 @@ const desktopApi: DesktopApi = {
   workspace: {
     state: async () => workspace,
     pick: async () => workspace,
+    pickPath: async () => null,
     setRoot: async (root) => { workspace = { ...workspace, root, name: root.split(/[\\/]/).at(-1) || 'workspace' }; workspaceEvents.emit(workspace); return workspace },
     list: async (path = '.') => path === '.' ? [
       { name: 'src', relativePath: 'src', kind: 'directory' },

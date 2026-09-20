@@ -284,22 +284,22 @@ async function killProcessTree(child: ChildProcess, graceMs: number): Promise<vo
         if (settled) return
         settled = true
         clearTimeout(timer)
+        try { child.kill() } catch { /* Already gone. */ }
         resolve()
       }
-      const timer = setTimeout(() => {
-        try { child.kill() } catch { /* Already gone. */ }
-        finish()
-      }, graceMs)
+      child.once('exit', finish)
+      const timer = setTimeout(finish, graceMs)
       try {
         const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
         killer.once('close', finish)
-        killer.once('error', () => {
-          try { child.kill() } catch { /* Already gone. */ }
-          finish()
-        })
+        killer.once('error', finish)
       } catch {
-        try { child.kill() } catch { /* Already gone. */ }
-        finish()
+        // Already handled.
+      }
+      try {
+        child.kill()
+      } catch {
+        // Already gone.
       }
     })
     return

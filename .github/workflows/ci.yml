@@ -31,9 +31,14 @@ jobs:
       - name: Install desktop dependencies
         run: corepack pnpm install --frozen-lockfile
       - name: Prepare Harness runtime
-        run: |
-          corepack pnpm --dir vendor/deepseek-harness install --frozen-lockfile
-          corepack pnpm --dir vendor/deepseek-harness run build:lib:host
+        run: corepack pnpm --dir vendor/deepseek-harness install --frozen-lockfile
+        env:
+          CI: 'true'
+      # Host + client + web faces: the runtime cannot boot without the client
+      # artifacts the web profile loads, and the script fails loudly if any
+      # client package is left unemitted.
+      - name: Build Harness runtime
+        run: node scripts/build-harness.mjs --skip-install
         env:
           CI: 'true'
       - name: Audit production dependencies

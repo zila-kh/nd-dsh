@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs'
 import { dirname } from 'node:path'
 import process from 'node:process'
 import type { CapabilityPrerequisiteResult, CapabilityProviderStatus, CapabilitySetupState } from '../../shared/capabilities.js'
+import { quarantineFile } from '../logging/log-file.js'
 
 interface StatusSnapshot {
   version: 1
@@ -171,7 +172,10 @@ export class CapabilityStatusStore {
       this.value = { version: 1, providers }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        console.warn('Ignoring unreadable capability statuses; built-in defaults apply until re-verified:', error)
+                // Starting empty and then persisting that snapshot is how a user loses
+        // data: the unreadable file is the only copy of what they had. Keep it
+        // aside for recovery and name it for support.
+        await quarantineFile(this.filePath, error)
       }
       this.value = structuredClone(EMPTY)
     }

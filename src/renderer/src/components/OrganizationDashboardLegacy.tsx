@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
-import { MoreHorizontal } from 'lucide-react'
+import { MoreHorizontal, Trash2 } from 'lucide-react'
 import type { CodingEngineDescriptor, ModelProvider, WorkspaceState } from '../../../shared/contracts'
 import type { CapabilityAssignmentSnapshot, CapabilityDescriptor, CapabilityKind, CapabilityProviderStatus } from '../../../shared/capabilities'
 import { DEFAULT_CAPABILITY_PROVIDER } from '../../../shared/capabilities'
@@ -65,6 +65,8 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
   const [workflowView, setWorkflowView] = useState<WorkflowProjectView>({})
   const [showWorkflow, setShowWorkflow] = useState(false)
   const [repoTaskPath, setRepoTaskPath] = useState<string | null>(null)
+  const [removeProjectId, setRemoveProjectId] = useState<string | null>(null)
+  const [removalRuntime, setRemovalRuntime] = useState<ProjectRuntimeStatus | null>(null)
 
   useEffect(() => {
     let mounted = true
@@ -112,6 +114,45 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
   const policies = useMemo(() => state?.policies.filter((item) => item.companyId === company?.id) ?? [], [state, company?.id])
   const memory = useMemo(() => state?.memory.filter((item) => item.companyId === company?.id && (!item.projectId || item.projectId === project?.id)) ?? [], [state, company?.id, project?.id])
   const runs = useMemo(() => state?.runs.filter((item) => item.companyId === company?.id && (!project || item.projectId === project.id)).slice(0, 8) ?? [], [state, company?.id, project])
+  /** What ND would forget for a project: used to state the cost before removal. */
+  const removalTarget = useMemo(() => {
+    if (!removeProjectId || !state) return null
+    const candidate = state.projects.find((item) => item.id === removeProjectId)
+    if (!candidate) return null
+    return {
+      project: candidate,
+      tasks: state.tasks.filter((item) => item.projectId === candidate.id).length,
+      goals: state.goals.filter((item) => item.projectId === candidate.id).length,
+      milestones: state.milestones.filter((item) => item.projectId === candidate.id).length,
+      runs: state.runs.filter((item) => item.projectId === candidate.id).length,
+      activeRuns: state.runs.filter((item) => item.projectId === candidate.id && item.status === 'running').length,
+    }
+  }, [removeProjectId, state])
+
+  // Removal stops the project's live work, so the dialog says exactly what that is.
+  useEffect(() => {
+    if (!removeProjectId) {
+      setRemovalRuntime(null)
+      return
+    }
+    let mounted = true
+    void window.ndDshOrganization.projectRuntime(removeProjectId)
+      .then((status) => { if (mounted) setRemovalRuntime(status) })
+      .catch(() => { if (mounted) setRemovalRuntime(null) })
+    return () => { mounted = false }
+  }, [removeProjectId])
+
+  const removalStops = useMemo(() => {
+    if (!removalTarget) return ''
+    const parts: string[] = []
+    if (removalTarget.activeRuns > 0) {
+      parts.push(`${removalTarget.activeRuns} running run${removalTarget.activeRuns === 1 ? '' : 's'} will be cancelled first (session stopped, task worktree rolled back, employee released)`)
+    }
+    if (removalRuntime && removalRuntime.state !== 'stopped') {
+      parts.push(`the ND-managed server${removalRuntime.port ? ` on port ${removalRuntime.port}` : ''} will be stopped`)
+    }
+    return parts.length > 0 ? `Stopping first: ${parts.join(', and ')}.` : 'Nothing is running for this project.'
+  }, [removalTarget, removalRuntime])
   const activity = useMemo(() => state?.activity.filter((item) => item.companyId === company?.id && (!project || !item.projectId || item.projectId === project.id)).slice(0, 12) ?? [], [state, company?.id, project])
   // Repository cards project beside ND tasks but never merge into ND metrics.
   const repoBoard = useMemo(
@@ -225,6 +266,15 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
     await action('workspace-select', async () => {
       await window.ndDsh.workspace.pick()
     })
+  }
+
+  async function pickProjectWorkspace(): Promise<void> {
+    try {
+      const picked = await window.ndDsh.workspace.pickPath()
+      if (picked) setProjectDraft((value) => ({ ...value, workspacePath: picked }))
+    } catch (cause) {
+      onError(errorMessage(cause))
+    }
   }
 
   function retryRun(run: OrganizationRun): Promise<unknown> {
@@ -435,29 +485,92 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
       />
     ) : null}
 
+    <Dialog open={removalTarget !== null} onOpenChange={(open) => { if (!open) setRemoveProjectId(null) }}>
+      <DialogContent className="sm:max-w-[470px]">
+        <DialogHeader>
+          <DialogTitle>Remove project from ND?</DialogTitle>
+          <DialogDescription>
+            {removalTarget
+              ? `ND will forget “${removalTarget.project.name}” and the records it owns for it: ${removalTarget.tasks} task${removalTarget.tasks === 1 ? '' : 's'}, ${removalTarget.milestones} milestone${removalTarget.milestones === 1 ? '' : 's'}, ${removalTarget.goals} goal${removalTarget.goals === 1 ? '' : 's'}, ${removalTarget.runs} run receipt${removalTarget.runs === 1 ? '' : 's'}, plus project-scoped memory, skills and workflows.`
+              : ''}
+          </DialogDescription>
+        </DialogHeader>
+        <p className="m-0 text-xs/[1.5] text-muted-foreground">{removalStops}</p>
+        <p className="m-0 text-xs/[1.5] text-muted-foreground">
+          Files on disk are not changed
+          {removalTarget?.project.workspacePath ? <> — <span className="font-mono">{removalTarget.project.workspacePath}</span> stays exactly as it is</> : null}
+          , including task worktrees. Import the folder again any time to start a fresh project.
+        </p>
+        <DialogFooter>
+          <DialogClose asChild>
+            <button className={orgButton} type="button">Cancel</button>
+          </DialogClose>
+          <button
+            type="button"
+            className={cn(orgButton, 'border-destructive/45 text-destructive hover:bg-destructive/10 hover:text-destructive')}
+            disabled={busy !== null}
+            onClick={() => {
+              const id = removalTarget?.project.id
+              if (!id) return
+              void action(`remove-project-${id}`, async () => {
+                await mutate({ type: 'project.remove', id })
+                setRemoveProjectId(null)
+              })
+            }}
+          >
+            Remove project
+          </button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
     <div className="flex min-h-[46px] items-stretch overflow-x-auto border-b border-border-soft bg-surface-1">
       <strong className="flex items-center px-3 text-xs tracking-[0.1em] text-faint">PROJECTS</strong>
       {projects.length === 0 ? (
         <span role="status" className="flex items-center px-3 text-sm text-faint">No projects yet — create one below</span>
       ) : null}
       {projects.map((item) => (
-        <button
+        <div
           key={item.id}
           className={cn(
-            'flex min-w-[140px] flex-col justify-center gap-0.5 border-l border-border-soft px-3 text-left text-muted-foreground transition-colors hover:bg-accent',
-            item.id === project?.id ? 'bg-selected text-foreground hover:bg-selected' : '',
+            'group flex min-w-[140px] items-stretch border-l border-border-soft',
+            item.id === project?.id ? 'bg-selected' : '',
           )}
-          onClick={() => void action(`project-${item.id}`, () => mutate({ type: 'project.activate', id: item.id }))}
         >
-          <span className="truncate text-[15px] font-semibold">{item.name}</span>
-          <small className="text-xs text-faint">{item.progress}% · {item.status}</small>
-        </button>
+          <button
+            className={cn(
+              'flex min-w-0 flex-1 flex-col justify-center gap-0.5 px-3 text-left text-muted-foreground transition-colors hover:bg-accent',
+              item.id === project?.id ? 'text-foreground hover:bg-selected' : '',
+            )}
+            onClick={() => void action(`project-${item.id}`, () => mutate({ type: 'project.activate', id: item.id }))}
+          >
+            <span className="truncate text-[15px] font-semibold">{item.name}</span>
+            <small className="text-xs text-faint">{item.progress}% · {item.status}</small>
+          </button>
+          <button
+            type="button"
+            className="flex w-6 shrink-0 items-center justify-center text-faint transition-colors hover:text-destructive"
+            title={`Remove ${item.name} from ND`}
+            aria-label={`Remove project ${item.name} from ND`}
+            onClick={() => setRemoveProjectId(item.id)}
+          >
+            <Trash2 className="size-3.5" />
+          </button>
+        </div>
       ))}
     </div>
     <form className="grid grid-cols-[1fr_2fr_1.5fr_auto_auto] gap-[7px] border-b border-border-soft bg-secondary px-4 py-2" onSubmit={(event) => void createProject(event)}>
       <input placeholder="New project" value={projectDraft.name} onChange={(event) => setProjectDraft((value) => ({ ...value, name: event.target.value }))} required className={orgInput} />
       <input placeholder="Objective" value={projectDraft.objective} onChange={(event) => setProjectDraft((value) => ({ ...value, objective: event.target.value }))} required className={orgInput} />
-      <input placeholder="Workspace path" value={projectDraft.workspacePath} onChange={(event) => setProjectDraft((value) => ({ ...value, workspacePath: event.target.value }))} className={orgInput} />
+      <button
+        type="button"
+        aria-label="Browse for workspace folder"
+        title={projectDraft.workspacePath || 'Browse for the project workspace folder'}
+        className={cn(orgInput, 'truncate text-left', projectDraft.workspacePath ? '' : 'text-faint')}
+        onClick={() => void pickProjectWorkspace()}
+      >
+        {projectDraft.workspacePath || 'Browse for workspace folder…'}
+      </button>
       <button type="button" className={orgButton} disabled={!workspace?.root || busy !== null} onClick={() => setProjectDraft((value) => ({ ...value, workspacePath: workspace?.root ?? '' }))}>Use open workspace</button>
       <button className={orgButton}>Add project</button>
     </form>

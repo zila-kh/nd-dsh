@@ -30,8 +30,8 @@ await requireFile(join(harnessSource, 'pnpm-lock.yaml'), 'Harness lockfile')
 console.log('\nInstalling the Harness release dependency graph...')
 await run(corepack, ['pnpm', '--dir', harnessSource, 'install', '--frozen-lockfile'], root, harnessEnv)
 
-console.log('\nBuilding the Harness host runtime...')
-await run(corepack, ['pnpm', '--dir', harnessSource, 'run', 'build:lib:host'], root, harnessEnv)
+console.log('\nBuilding the Harness runtime (host, client, and web faces)...')
+await run(process.execPath, [join(root, 'scripts', 'build-harness.mjs'), '--skip-install'], root, harnessEnv)
 
 console.log('\nCreating the portable Harness production closure...')
 await fs.rm(harnessOutput, { recursive: true, force: true })
@@ -57,6 +57,11 @@ const required = [
   join(harnessOutput, 'lib', 'bin.js'),
   join(cordisGroupOutput, 'lib', 'index.js'),
   join(harnessOutput, 'node_modules', '@deepseek-ai', 'dsh-mcp-client', 'lib', 'index.js'),
+  // The web profile loads client plugins at boot; without their emitted entries
+  // the packaged runtime never becomes ready. Staging must not ship a host-only
+  // build again — that is what left the runtime unable to start.
+  join(harnessOutput, 'node_modules', '@deepseek-ai', 'dsh-client-ui-trajectory', 'lib', 'index.js'),
+  join(harnessOutput, 'node_modules', '@deepseek-ai', 'dsh-client-ui-chat', 'lib', 'index.js'),
   join(codexOutput, 'lib', 'index.js'),
   join(codexOutput, 'node_modules', '@openai', 'codex', 'package.json'),
   join(root, 'node_modules', 'agent-browser', 'bin', 'agent-browser.js'),
@@ -73,10 +78,22 @@ const rootManifest = await readJson(join(root, 'package.json'))
 const harnessManifest = await readJson(join(harnessOutput, 'package.json'))
 const agentBrowserManifest = await readJson(join(root, 'node_modules', 'agent-browser', 'package.json'))
 const pencilPin = await readJson(join(root, 'vendor', 'openpencil.json'))
+const harnessPin = await readJson(join(root, 'vendor', 'deepseek-harness.json'))
 const harnessCommit = await gitHead(harnessSource)
 const pencilCommit = await gitHead(join(root, 'vendor', 'openpencil'))
 if (pencilPin.commit !== pencilCommit) {
   throw new Error(`ND Pencil source pin mismatch: expected ${String(pencilPin.commit)}, found ${pencilCommit}`)
+}
+// The Harness tracks upstream during beta, so no frozen pin gates development.
+// A release is different: it must ship the exact commit that was recorded when
+// the runtime was last reviewed and synced, otherwise the provenance in the
+// manifest describes something nobody audited. `pnpm dsh:update` refreshes the
+// record as part of syncing.
+if (typeof harnessPin.lastSyncedCommit !== 'string' || harnessPin.lastSyncedCommit !== harnessCommit) {
+  throw new Error(
+    `Harness release mismatch: vendor/deepseek-harness.json records ${String(harnessPin.lastSyncedCommit)}, ` +
+    `the checkout is at ${harnessCommit}. Sync and review the runtime (corepack pnpm dsh:update) before staging a release.`,
+  )
 }
 
 const manifest = {

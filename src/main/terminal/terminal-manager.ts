@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto'
 import process from 'node:process'
 import type { TerminalCreateInput, TerminalExitEvent, TerminalOutputEvent, TerminalPaneLayout, TerminalSessionState, TerminalSnapshot, TerminalStateEvent } from '../../shared/terminal.js'
 import type { WorkspaceService } from '../workspace/workspace-service.js'
+import { quarantineFile } from '../logging/log-file.js'
 
 const nodeRequire = createRequire(import.meta.url)
 const MAX_BUFFER = 512 * 1024
@@ -64,7 +65,10 @@ export class TerminalManager {
     } catch (error) {
       this.sessions.clear()
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        console.warn('Ignoring unreadable terminal state; terminals will start fresh:', error instanceof Error ? error.message : String(error))
+                // Starting empty and then persisting that snapshot is how a user loses
+        // data: the unreadable file is the only copy of what they had. Keep it
+        // aside for recovery and name it for support.
+        await quarantineFile(this.options.storePath, error)
       }
     }
     this.initialized = true

@@ -123,6 +123,12 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
   }
 
   const updateSelected = (patch: Partial<ModelProvider>): void => {
+    // Editing anything a probe depends on voids a previous pass, so a stale
+    // green result can never unlock enabling against a changed config.
+    if ('baseUrl' in patch || 'apiFormat' in patch || 'headers' in patch || 'models' in patch) {
+      setPingResult(null)
+      setCompletionResult(null)
+    }
     commit(providers.map((provider) => (provider.id === selectedId ? { ...provider, ...patch, apiKey: '' } : provider)))
   }
 
@@ -160,6 +166,8 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
       setProviders(await window.ndDsh.providers.setApiKey(selected.id, apiKeyDraft))
       setApiKeyDraft('')
       setShowApiKey(false)
+      setPingResult(null)
+      setCompletionResult(null)
     } catch (cause) {
       onError(errorMessage(cause))
     } finally {
@@ -174,6 +182,8 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
       setProviders(await window.ndDsh.providers.clearApiKey(selected.id))
       setApiKeyDraft('')
       setShowApiKey(false)
+      setPingResult(null)
+      setCompletionResult(null)
     } catch (cause) {
       onError(errorMessage(cause))
     } finally {
@@ -346,6 +356,12 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
     return PING_RESULT_COLORS[ping.state]
   }
 
+  // Enable gate: the most recent provider-level probe must have reached the
+  // server AND been accepted with a stored credential. "Reachable · no stored
+  // credential" does not unlock enabling. Disabling is never gated.
+  const connectionVerified = pingResult?.state === 'ok' && pingResult.hasApiKey
+  const enableBlocked = !selected?.enabled && !connectionVerified
+
   return (
     <section className="models-scope grid h-full w-full grid-rows-[auto_minmax(0,1fr)] min-h-0 bg-(--models-bg) text-(--models-text)" aria-label="Model settings">
       <header className="flex items-start justify-between gap-3.5 px-6 pb-3 pt-[18px]">
@@ -401,7 +417,12 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 <span className={pillBadge(selected.enabled)}>{selected.enabled ? 'Enabled' : 'Disabled'}</span>
-                <button type="button" className={scopeButton} onClick={() => updateSelected({ enabled: !selected.enabled })}>{selected.enabled ? 'Disable' : 'Enable'}</button>
+                <button type="button" className={scopeButton} disabled={enableBlocked} onClick={() => { if (!enableBlocked) updateSelected({ enabled: !selected.enabled }) }}>{selected.enabled ? 'Disable' : 'Enable'}</button>
+                {enableBlocked ? (
+                  <span className="shrink-0 text-[10px] text-(--models-muted)" title="“Test connection” must pass with a stored credential before this provider can be enabled.">
+                    Pass “Test connection” to enable
+                  </span>
+                ) : null}
                 <button type="button" className={scopeButton} disabled={testing} onClick={() => void testConnection()}>{testing ? 'Testing…' : 'Test connection'}</button>
                 {pingResult ? <span className={cn('shrink-0 text-[10px] font-semibold', pingColor(pingResult))}>{pingLabel(pingResult)}</span> : null}
                 <button type="button" className={scopeButton} disabled={testingCompletion || !selected.models.some((model) => model.id.trim())} title="Send a tiny real completion with the stored credential" onClick={() => void testCompletion()}>{testingCompletion ? 'Generating…' : 'Test completion'}</button>

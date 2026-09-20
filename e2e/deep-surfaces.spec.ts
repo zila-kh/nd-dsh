@@ -6,14 +6,19 @@
 /// <reference lib="dom" />
 
 import { expect, test } from '@playwright/test'
-import { closeApp, launchApp, type LaunchedApp } from './fixtures.js'
+import { closeApp, createWorkspaceDir, launchApp, type LaunchedApp } from './fixtures.js'
 
 test.describe.configure({ mode: 'serial' })
 
 let launched: LaunchedApp
+let projectWorkspace: string
 const rendererErrors: string[] = []
 
 test.beforeAll(async () => {
+  // The project form needs a folder that exists on the machine running the
+  // suite. Naming a developer's checkout here failed the bootstrap on every CI
+  // runner, which skipped the rest of this file rather than reporting it.
+  projectWorkspace = await createWorkspaceDir()
   launched = await launchApp()
   launched.page.on('pageerror', (error) => rendererErrors.push(`pageerror: ${error.message}`))
   launched.page.on('console', (message) => {
@@ -42,7 +47,15 @@ test('Bootstrap: create company and project for deep-surface tests', async () =>
   await expect(projectForm).toBeVisible({ timeout: 15_000 })
   await projectForm.getByPlaceholder('New project').fill('Deep Surface Project')
   await projectForm.getByPlaceholder('Objective').fill('Cover every deep surface in the QA pass.')
-  await projectForm.getByPlaceholder('Workspace path').fill('C:\\Users\\dila\\Documents\\GitHub\\nd-dsh')
+  // The workspace field is a native folder picker. Stub the main-process dialog
+  // so the Browse click resolves to the throwaway workspace instead of a real
+  // dialog no automation can drive.
+  await launched.app.evaluate(({ dialog }, path) => {
+    (dialog as unknown as { showOpenDialog: (options: unknown) => Promise<{ canceled: boolean; filePaths: string[] }> }).showOpenDialog =
+      async () => ({ canceled: false, filePaths: [path] })
+  }, projectWorkspace)
+  await projectForm.getByRole('button', { name: 'Browse for workspace folder' }).click()
+  await expect(projectForm.getByRole('button', { name: 'Browse for workspace folder' })).toHaveText(/nd-dsh-e2e-workspace/, { timeout: 15_000 })
   await projectForm.getByRole('button', { name: 'Add project' }).click()
 
   // Confirm the project was created: it appears in the projects strip with its
@@ -101,6 +114,12 @@ test('Model settings: add-provider button appends a configurable provider', asyn
 
   // New provider starts disabled.
   await expect(page.getByText('Disabled', { exact: true })).toBeVisible()
+
+  // Enabling is gated on a passing connection probe: until "Test connection"
+  // passes with a stored credential, Enable is disabled and says why.
+  const enableButton = page.getByRole('button', { name: 'Enable', exact: true })
+  await expect(enableButton).toBeDisabled()
+  await expect(page.getByText('Pass “Test connection” to enable')).toBeVisible()
 
   expect(rendererErrors).toEqual([])
 })
@@ -380,13 +399,18 @@ test('Chat: model picker shows the seeded mimo-v2.5 route', async () => {
 
 test('Explorer: Files tab shows workspace root entries', async () => {
   const { page } = launched
+  // Navigate here rather than inheriting whatever surface the previous test
+  // left open; the explorer is not visible from every one of them.
+  await page.getByRole('navigation', { name: 'ND-DSH navigation' }).getByTitle('Agent').click()
+
   // Files tab is the default in the Agent explorer.
   const filesTab = page.getByRole('button', { name: 'Files' })
   await expect(filesTab).toBeVisible()
   await filesTab.click()
 
-  // The file tree should show at least one entry (package.json at root).
-  await expect(page.getByText('package.json', { exact: true })).toBeVisible({ timeout: 10_000 })
+  // The tree lists the project workspace root, so it shows the file the
+  // fixture seeded there.
+  await expect(page.getByText('README.md', { exact: true })).toBeVisible({ timeout: 10_000 })
 
   expect(rendererErrors).toEqual([])
 })

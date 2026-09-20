@@ -4,7 +4,7 @@
 /// <reference lib="dom" />
 
 import { expect, test } from '@playwright/test'
-import { closeApp, launchApp, type LaunchedApp } from './fixtures.js'
+import { closeApp, createWorkspaceDir, launchApp, type LaunchedApp } from './fixtures.js'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -24,6 +24,11 @@ test.afterAll(async () => {
 })
 
 test('QA: full work loop — company, project, PM plan, worker, reviewer, completion', async () => {
+  // This spec drives a real organization run, so it needs a live model route:
+  // the fixture seeds opencode-go from OPENCODE_API_KEY, and with no key the
+  // run can only fail. Skipping keeps the suite honest about what it covered —
+  // previously it simply failed on every keyless runner, including CI.
+  test.skip(!process.env.OPENCODE_API_KEY, 'requires OPENCODE_API_KEY for the live organization loop')
   test.setTimeout(300_000) // PM plan + worker + reviewer can take several minutes
   const { page } = launched
 
@@ -48,7 +53,14 @@ test('QA: full work loop — company, project, PM plan, worker, reviewer, comple
   const projectForm = page.locator('form').filter({ has: page.getByPlaceholder('New project') })
   await projectForm.getByPlaceholder('New project').fill('QA Feature Project')
   await projectForm.getByPlaceholder('Objective').fill('Build a feature with full test coverage.')
-  await projectForm.getByPlaceholder('Workspace path').fill('C:\\Users\\dila\\Documents\\GitHub\\nd-dsh')
+  // The workspace field is a native folder picker; stub the main-process dialog
+  // to resolve a throwaway repo rather than a machine-specific developer path.
+  const projectWorkspaceDir = await createWorkspaceDir()
+  await launched.app.evaluate(({ dialog }, path) => {
+    (dialog as unknown as { showOpenDialog: (options: unknown) => Promise<{ canceled: boolean; filePaths: string[] }> }).showOpenDialog =
+      async () => ({ canceled: false, filePaths: [path] })
+  }, projectWorkspaceDir)
+  await projectForm.getByRole('button', { name: 'Browse for workspace folder' }).click()
   await projectForm.getByRole('button', { name: 'Add project' }).click()
   await expect(page.getByText('Created project “QA Feature Project”')).toBeVisible({ timeout: 10_000 })
 

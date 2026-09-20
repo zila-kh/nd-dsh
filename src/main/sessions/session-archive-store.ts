@@ -3,6 +3,7 @@ import { messageText } from '../../shared/chat-events.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import { dirname } from 'node:path'
+import { quarantineFile } from '../logging/log-file.js'
 
 interface SessionArchiveSnapshot {
   version: 1
@@ -104,7 +105,10 @@ export class SessionArchiveStore {
       this.value = { version: 1, archived, ...(record.messages && typeof record.messages === 'object' && !Array.isArray(record.messages) ? { messages: record.messages as NonNullable<SessionArchiveSnapshot['messages']> } : {}) }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        console.warn('Ignoring unreadable chat archive state; sessions will appear unarchived until retoggled:', error)
+                // Starting empty and then persisting that snapshot is how a user loses
+        // data: the unreadable file is the only copy of what they had. Keep it
+        // aside for recovery and name it for support.
+        await quarantineFile(this.filePath, error)
       }
       this.value = structuredClone(EMPTY)
     }

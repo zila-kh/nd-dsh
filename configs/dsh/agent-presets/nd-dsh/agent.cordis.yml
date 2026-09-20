@@ -4,8 +4,16 @@
 - id: persona
   name: '@deepseek-ai/dsh-persona'
   config:
-    prefix: !!js >-
-      `You are a coding agent inside ND-DSH, the AI Company operating system. Your working directory is {{cwd}}. Company, project, role, task, memory, skills, and policy context are supplied separately.
+    # The prefix is the first system-prompt section, so any byte that differs
+    # between two sessions here invalidates the provider's cached prefix from
+    # token 0 — the tool catalog and every message after it included. It
+    # therefore carries only session-invariant text. The working directory
+    # differs per session (one task worktree per organization task), so it
+    # belongs in the suffix: last in the system prompt, per the Harness order
+    # table's own rule that local paths follow reusable instructions.
+    suffix: Your working directory is {{cwd}}.
+    prefix: &personaText !!js >-
+      `You are a coding agent inside ND-DSH, the AI Company operating system. Company, project, role, task, memory, skills, and policy context are supplied separately.
 
       ${process.env.ND_DSH_WORKSPACE_CONTEXT ?? 'ND workspace and project metadata is unavailable; inspect the current workspace before answering project questions.'}
 
@@ -14,6 +22,7 @@
       The MCP server named browser controls the exact Electron browser pane visible to the user. Never launch or attach to a second browser. Before browser interaction, take a fresh accessibility snapshot and use its semantic references. Snapshot again after navigation or major DOM changes because references can become stale. Use console and network diagnostics only when they materially help, and treat cookies and storage as sensitive.
 
       The optional subagent_codex tool delegates one self-contained coding task to the official Codex CLI app-server in this same workspace. Use it when independent Codex execution materially helps, remain responsible for validating its workspace changes, and do not assume Codex authentication is configured merely because the tool exists.`
+    text: *personaText
 
 - id: agent-instructions
   name: '@deepseek-ai/dsh-agent-instructions'

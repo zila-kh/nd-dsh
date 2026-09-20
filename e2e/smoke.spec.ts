@@ -58,15 +58,8 @@ test('header segment switches between ND and DSH coding surfaces', async () => {
   // A clean CI machine has to boot the real vendored Harness before this can
   // appear; allow cold-start headroom without substituting a fake gateway.
   await expect(dshSurface.getByText(/Gateway :\d+/)).toBeVisible({ timeout: 60_000 })
-  const updateButton = dshSurface.getByRole('button', { name: 'Install or update DSH' })
-  await expect(updateButton).toBeVisible()
-  await updateButton.click()
-  const updateDialog = page.getByRole('dialog', { name: 'DSH package install log' })
-  await expect(updateDialog).toBeVisible()
-  await expect(updateDialog.getByText(/Ready\. Select Run update/)).toBeVisible()
-  await expect(updateDialog.getByRole('button', { name: 'Run update', exact: true })).toBeVisible()
-  await updateDialog.getByRole('button', { name: 'Close', exact: true }).click()
-  await expect(updateDialog).toHaveCount(0)
+  await expect(dshSurface.getByRole('button', { name: 'Reload DSH coding surface' })).toBeVisible()
+  await expect(dshSurface.getByRole('button', { name: 'Open DSH coding surface externally' })).toBeVisible()
 
   await nd.click()
   await expect(nd).toHaveAttribute('aria-pressed', 'true')

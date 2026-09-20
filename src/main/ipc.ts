@@ -5,6 +5,7 @@ import type { BrowserBounds, DshSurface, HarnessRunOptions, InspectScope, ModelP
 import { IPC } from '../shared/contracts.js'
 import { EXTENSIONS_IPC } from '../shared/extensions.js'
 import type { OrganizationSnapshot } from '../shared/organization.js'
+import { USAGE_IPC, summarizeUsage, type UsageAttribution, type UsageScope, type UsageSummary } from '../shared/usage.js'
 import { WORKFLOW_PLUGINS_IPC } from '../shared/workflow-plugins.js'
 import { projectRoot, presetSourceDir } from './app-paths.js'
 import { NdSkillService } from './skills/nd-skill-service.js'
@@ -18,6 +19,7 @@ import type { EngineSessionRouter } from './engines/engine-session-router.js'
 import { readZcodeCliConfig, writeZcodeCliConfig } from './engines/zcode/zcode-config.js'
 import type { ZcodeCliConfigUpdate } from '../shared/zcode-config.js'
 import { ExtensionDemoService } from './extensions/extension-demo-service.js'
+import type { UsageLedger } from './usage/usage-ledger.js'
 import { registerExtensionIpc } from './extensions/ipc.js'
 import { ExtensionRouter } from './extensions/extension-router.js'
 import { ExtensionStore } from './extensions/extension-store.js'
@@ -52,6 +54,8 @@ interface IpcDependencies {
   git: GitService
   qa: QaService
   sessionArchive: SessionArchiveStore
+  /** ND's durable token accounting, captured from the runtime event stream. */
+  usageLedger: UsageLedger
   /** Read-only organization state used to resolve project ownership for workflow plugins. */
   organizationStore: { state(): Promise<OrganizationSnapshot> }
 }
@@ -110,6 +114,34 @@ export function registerIpc(deps: IpcDependencies): () => void {
   deps.engineRouter.setMessageStore(deps.sessionArchive)
   handle(IPC.skillsDetail, (_event, selectionId) => skills.detail(asString(selectionId, 'Skill selection', 64)))
   handle(IPC.skillsCatalog, (_event, projectId) => skills.catalog(projectId === null ? null : asString(projectId, 'Project id', 128)))
+
+  /**
+   * Join the usage ledger with organization ownership.
+   *
+   * The organization store holds `OrganizationRun.sessionId` for every planned,
+   * executed, and reviewed task, and that is the only record of which project a
+   * session served — the runtime itself knows nothing about projects. A session
+   * with no run (a plain chat thread) stays visible under the session scope and
+   * is reported as unattributed rather than folded into a project's cost.
+   */
+  const usageSummary = async (scope: unknown, id: unknown, since: unknown): Promise<UsageSummary> => {
+    const [sessions, organization] = await Promise.all([deps.usageLedger.perSession(), deps.organizationStore.state()])
+    const attribution = new Map<string, UsageAttribution>()
+    for (const run of [...organization.runs].sort((left, right) => left.startedAt - right.startedAt)) {
+      attribution.set(run.sessionId, {
+        companyId: run.companyId,
+        projectId: run.projectId,
+        ...(run.taskId === undefined ? {} : { taskId: run.taskId }),
+      })
+    }
+    return summarizeUsage({
+      sessions,
+      scope: isUsageScope(scope) ? scope : 'session',
+      attribution,
+      ...(typeof id === 'string' && id.trim() ? { id: id.trim().slice(0, 128) } : {}),
+      ...(typeof since === 'number' && Number.isFinite(since) ? { since } : {}),
+    })
+  }
   const disposeExtensionIpc = registerExtensionIpc(deps.window, extensionStore, extensionRouter, extensionDemos)
   extensionStore.setOnChanged((extensions) => {
     if (!deps.window.isDestroyed()) deps.window.webContents.send(EXTENSIONS_IPC.changedEvent, extensions)
@@ -285,6 +317,11 @@ export function registerIpc(deps: IpcDependencies): () => void {
   handle(IPC.sessionsSetArchivedMany, (_event, sessionIds, archived) =>
     deps.sessionArchive.setArchivedMany(asSessionIdList(sessionIds), archived === true))
 
+  // Token accounting rolled up by session, task, project, or company. The
+  // ledger knows the tokens; only the organization store knows which project a
+  // session belonged to, so the two are joined here rather than in either one.
+  handle(USAGE_IPC.summary, (_event, scope, id, since) => usageSummary(scope, id, since))
+
   // External element inspection attaches to another Electron app's loopback
   // debug port and injects the picker via CDP Runtime.evaluate. Self-window
   // inspection stays inside our renderer DOM and never crosses this IPC path.
@@ -387,6 +424,16 @@ export function registerIpc(deps: IpcDependencies): () => void {
     await deps.workspaces.openRoot(state.root)
     return state
   })
+  handle(IPC.workspacePickPath, async () => {
+    // Form-field helper: choose a folder without switching or pinning the active workspace.
+    const result = await dialog.showOpenDialog({
+      title: 'Choose workspace folder',
+      defaultPath: deps.projectWorkspace.state().root,
+      properties: ['openDirectory', 'createDirectory'],
+    })
+    const selected = result.filePaths[0]
+    return result.canceled || !selected ? null : selected
+  })
   handle(IPC.workspaceSetRoot, async (_event, value) => {
     const state = await deps.projectWorkspace.setRoot(asString(value, 'Workspace path', 4_096))
     await deps.workspaces.openRoot(state.root)
@@ -404,7 +451,7 @@ export function registerIpc(deps: IpcDependencies): () => void {
     if (!result.canceled && selected) await deps.workspaces.add(selected)
     return deps.workspaces.list()
   })
-  handle(IPC.workspaceRemoveSaved, (_event, value) => deps.workspaces.remove(asString(value, 'Workspace id', 128)))
+  handle(IPC.workspaceRemoveSaved, (_event, value) => deps.projectWorkspace.removeSavedWorkspace(asString(value, 'Workspace id', 128)))
   handle(IPC.workspaceOpenSaved, async (_event, value) => {
     const entry = deps.workspaces.get(asString(value, 'Workspace id', 128))
     if (!entry) throw new Error('Unknown saved workspace')
@@ -539,6 +586,10 @@ function asString(value: unknown, label: string, maxLength: number): string {
   if (!value.trim()) throw new Error(`${label} cannot be empty`)
   if (value.length > maxLength) throw new Error(`${label} exceeds ${maxLength.toLocaleString()} characters`)
   return value
+}
+
+function isUsageScope(value: unknown): value is UsageScope {
+  return value === 'session' || value === 'task' || value === 'project' || value === 'company'
 }
 
 function asSetupValues(value: unknown): Record<string, string> {

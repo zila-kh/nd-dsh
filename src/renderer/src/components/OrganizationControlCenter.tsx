@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import type {
   OrganizationControlSnapshot,
   OrganizationHumanAction,
   OrganizationManagementProjection,
   SignalDisposition,
 } from '../../../shared/organization-control'
+import { formatContextTokens } from '../../../shared/chat-context'
+import { billedInputTokens, cacheHitRate, type UsageSummary } from '../../../shared/usage'
 import { cn } from '../lib/utils'
 import { Card as UiCard } from './ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
@@ -36,23 +38,39 @@ export function OrganizationControlCenter({ companyId, projectId, agents, onErro
   const [humanDraft, setHumanDraft] = useState({ kind: 'action' as 'action' | 'gate', title: '', question: '', scope: '' })
   const [signalDraft, setSignalDraft] = useState({ source: 'user', title: '', summary: '' })
   const [budgetDraft, setBudgetDraft] = useState({ turns: '', workers: '' })
+  const [usage, setUsage] = useState<UsageSummary | null>(null)
 
-  const refresh = async (): Promise<void> => {
-    const [state, projection] = await Promise.all([
+  // Token accounting for this project (or the whole company when the view is
+  // company-wide). Cache hit rate is the number that decides what a turn
+  // costs, and only ND's ledger can answer it across sessions.
+  const usageQuery = useMemo(
+    () => (projectId ? { scope: 'project' as const, id: projectId } : { scope: 'company' as const, id: companyId }),
+    [companyId, projectId],
+  )
+
+  const refresh = useCallback(async (): Promise<void> => {
+    const [state, projection, tokens] = await Promise.all([
       window.ndDshControl.state(),
       window.ndDshControl.management(projectId),
+      window.ndDshUsage.summary(usageQuery.scope, usageQuery.id),
     ])
     setControl(state)
     setManagement(projection)
-  }
+    setUsage(tokens)
+  }, [projectId, usageQuery])
 
   useEffect(() => {
     let mounted = true
-    void Promise.all([window.ndDshControl.state(), window.ndDshControl.management(projectId)])
-      .then(([state, projection]) => {
+    void Promise.all([
+      window.ndDshControl.state(),
+      window.ndDshControl.management(projectId),
+      window.ndDshUsage.summary(usageQuery.scope, usageQuery.id),
+    ])
+      .then(([state, projection, tokens]) => {
         if (!mounted) return
         setControl(state)
         setManagement(projection)
+        setUsage(tokens)
         const budget = projection.budgets.find((item) => item.projectId === projectId)
           ?? projection.budgets.find((item) => !item.projectId)
         if (budget) setBudgetDraft({
@@ -62,15 +80,11 @@ export function OrganizationControlCenter({ companyId, projectId, agents, onErro
       })
       .catch((cause) => onError(errorMessage(cause)))
     const off = window.ndDshControl.onChanged(() => {
-      void window.ndDshControl.management(projectId)
-        .then((projection) => { if (mounted) setManagement(projection) })
-        .catch((cause) => onError(errorMessage(cause)))
-      void window.ndDshControl.state()
-        .then((state) => { if (mounted) setControl(state) })
-        .catch((cause) => onError(errorMessage(cause)))
+      if (!mounted) return
+      void refresh().catch((cause) => onError(errorMessage(cause)))
     })
     return () => { mounted = false; off() }
-  }, [onError, projectId])
+  }, [onError, projectId, refresh, usageQuery])
 
   const actions = useMemo(() => control?.humanActions.filter((item) => item.companyId === companyId && (!projectId || !item.projectId || item.projectId === projectId)) ?? [], [control, companyId, projectId])
   const signals = useMemo(() => control?.signals.filter((item) => item.companyId === companyId && (!projectId || !item.projectId || item.projectId === projectId)) ?? [], [control, companyId, projectId])
@@ -188,6 +202,7 @@ export function OrganizationControlCenter({ companyId, projectId, agents, onErro
             Used <strong className="text-foreground">{item.spentTurns}</strong>{item.dailyTurnLimit === undefined ? '' : ` / ${item.dailyTurnLimit}`} turns in the current window.
           </p>
         ))}
+        {usage ? <UsageLine usage={usage} projectScoped={Boolean(projectId)} /> : null}
       </ControlCard>
 
       <ControlCard title="Signal Inbox" badge={`${management?.metrics.newSignals ?? 0} new`} wide>
@@ -268,6 +283,35 @@ function ActionLine({ action }: { action: OrganizationHumanAction }) {
 }
 
 function Empty({ text }: { text: string }) { return <p className="px-1 py-5 text-center text-sm text-faint">{text}</p> }
+
+/**
+ * What the turns in the budget window actually cost.
+ *
+ * Cache hit rate is the share of billed input the provider served from its
+ * prefix cache, so raising it is the cheapest way to cut spend on repeated
+ * instructions, tool catalogs, and project memory.
+ */
+function UsageLine({ usage, projectScoped }: { usage: UsageSummary; projectScoped: boolean }) {
+  const hitRate = cacheHitRate(usage.totals)
+  const scopeLabel = projectScoped ? 'this project' : 'this company'
+  if (usage.totals.steps === 0) {
+    return <p className="m-0 mt-2 rounded-md border border-border-soft bg-surface-0 px-2 py-1.5 text-xs text-muted-foreground">No model calls recorded for {scopeLabel} yet.</p>
+  }
+  return (
+    <div className="mt-2 grid gap-1 rounded-md border border-border-soft bg-surface-0 px-2 py-1.5 text-xs text-muted-foreground">
+      <p className="m-0">
+        Cache hit rate <strong className="text-foreground">{hitRate === undefined ? '—' : `${hitRate.toFixed(0)}%`}</strong>
+        {' '}over <strong className="text-foreground">{usage.totals.steps}</strong> model calls in <strong className="text-foreground">{usage.attributedSessions}</strong> {usage.attributedSessions === 1 ? 'session' : 'sessions'}.
+      </p>
+      <p className="m-0">
+        Billed input {formatContextTokens(billedInputTokens(usage.totals))}, of which {formatContextTokens(usage.totals.cacheReadTokens)} was cached; output {formatContextTokens(usage.totals.outputTokens)}. The rest of the billed input ({formatContextTokens(usage.totals.uncachedInputTokens + usage.totals.cacheWriteTokens)}) was paid at full price.
+      </p>
+      {usage.unattributedSessions > 0
+        ? <p className="m-0">Chat sessions with no organization run are not part of {scopeLabel}'s totals.</p>
+        : null}
+    </div>
+  )
+}
 function evidenceClass(status: string): string {
   if (status === 'verified') return 'border-primary/30 bg-primary/10 text-primary'
   if (status === 'pending_review') return 'border-info/30 bg-info/10 text-info'

@@ -20,7 +20,7 @@ import { OrganizationStrategyPlane } from './strategy-plane.js'
 import type { OrganizationStore } from './store.js'
 
 const MUTATIONS = new Set([
-  'company.create', 'company.update', 'company.activate', 'project.create', 'project.update', 'project.activate',
+  'company.create', 'company.update', 'company.activate', 'project.create', 'project.update', 'project.activate', 'project.remove',
   'team.create', 'role.create', 'role.update', 'agent.create', 'agent.update', 'skill.create', 'workflow.create', 'goal.create', 'task.create',
   'task.update', 'memory.add', 'policy.set',
 ])
@@ -92,6 +92,12 @@ export function registerOrganizationIpc(
   handle(ORGANIZATION_IPC.mutate, async (_event, value) => {
     const mutation = asMutation(value)
     await projectWorkspace.assertCanMutate(mutation)
+    // Removal stops the project's live work first: agents, sessions and the
+    // ND-managed dev server must not keep running for a project ND forgets.
+    if (mutation.type === 'project.remove') {
+      await orchestrator.stopProjectWork(mutation.id)
+      if (projectRuntime) await projectRuntime.stop(mutation.id)
+    }
     const state = await store.mutate(mutation)
     await projectWorkspace.afterOrganizationMutation(mutation, state)
     const projectId = autopilotProjectId(mutation, state)

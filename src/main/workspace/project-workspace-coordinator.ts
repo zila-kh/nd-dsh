@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs'
 import { resolve } from 'node:path'
-import type { WorkspaceState } from '../../shared/contracts.js'
+import type { WorkspaceRegistryView, WorkspaceState } from '../../shared/contracts.js'
 import type { OrganizationMutation, OrganizationSnapshot, Project } from '../../shared/organization.js'
 import type { HarnessService } from '../harness/harness-service.js'
 import type { WorkspaceService } from './workspace-service.js'
@@ -37,6 +37,9 @@ export class ProjectWorkspaceCoordinator {
       || (mutation.type === 'project.update'
         && mutation.patch.workspacePath !== undefined
         && state.activeProjectId === mutation.id)
+      // Removing the project that owns the open workspace switches this window
+      // to another project, so it obeys the same no-live-run rule.
+      || (mutation.type === 'project.remove' && state.activeProjectId === mutation.id)
     if (!changesActiveWorkspace) return
     const active = state.runs.find((run) => run.status === 'running')
     if (active) throw new Error(`Cannot switch projects or workspaces while ${active.kind} is running. Cancel the active run first.`)
@@ -45,6 +48,15 @@ export class ProjectWorkspaceCoordinator {
   async afterOrganizationMutation(mutation: OrganizationMutation, state: OrganizationSnapshot): Promise<WorkspaceState> {
     if (ACTIVE_CONTEXT_MUTATIONS.has(mutation.type)) {
       const next = await this.syncToOrganization(state, true)
+      this.onContextChanged?.()
+      return next
+    }
+    if (mutation.type === 'project.remove') {
+      // The workspace context must stop naming a project that no longer exists.
+      // Only the harness session bound to that project's folder is closed, so a
+      // parallel run in another project keeps its gateway.
+      const ownedOpenWorkspace = this.workspace.state().projectId === mutation.id
+      const next = await this.syncToOrganization(state, ownedOpenWorkspace)
       this.onContextChanged?.()
       return next
     }
@@ -83,6 +95,19 @@ export class ProjectWorkspaceCoordinator {
 
   list(relativePath?: string) {
     return this.workspace.list(relativePath)
+  }
+
+  /**
+   * Forget a saved workspace entry. Pruning the folder that is currently open is
+   * allowed, but never while an organization run is working inside it.
+   */
+  async removeSavedWorkspace(id: string): Promise<WorkspaceRegistryView> {
+    if (!this.workspaceRegistry) throw new Error('Workspace registry is unavailable')
+    const entry = this.workspaceRegistry.get(id)
+    if (!entry) throw new Error('Unknown saved workspace')
+    const isOpenWorkspace = entry.root.replace(/[\\/]+$/, '') === this.workspace.state().root.replace(/[\\/]+$/, '')
+    if (isOpenWorkspace) await this.assertNoRunningOrganizationRun('remove the workspace that is currently open')
+    return this.workspaceRegistry.remove(id)
   }
 
   read(relativePath: string) {

@@ -259,6 +259,13 @@ export type OrganizationMutation =
   | { type: 'project.create'; companyId: string; name: string; objective: string; workspacePath?: string; repoUrls?: string[]; startCommand?: string; testCommand?: string; targetPort?: number; targetUrl?: string; healthCheckPath?: string }
   | { type: 'project.update'; id: string; patch: Partial<Pick<Project, 'name' | 'objective' | 'status' | 'workspacePath' | 'repoUrls' | 'teamIds' | 'startCommand' | 'testCommand' | 'targetPort' | 'targetUrl' | 'healthCheckPath'>> }
   | { type: 'project.activate'; id: string }
+  /**
+   * Forget a project inside ND: the project and the records ND owns for it
+   * (goals, milestones, tasks, run receipts, project-scoped memory, skills and
+   * workflows) are dropped. The folder on disk is never touched, so the source
+   * tree stays exactly as it is and the folder can be imported again later.
+   */
+  | { type: 'project.remove'; id: string }
   | { type: 'team.create'; companyId: string; name: string; purpose: string; roleIds?: string[]; skillIds?: string[] }
   | { type: 'role.create'; companyId: string; name: string; responsibility: string; systemPrompt: string; skillIds?: string[]; providerId?: string; modelId?: string }
   | { type: 'role.update'; id: string; patch: Partial<Pick<OrganizationRole, 'name' | 'responsibility' | 'systemPrompt' | 'skillIds' | 'providerId' | 'modelId'>> }
