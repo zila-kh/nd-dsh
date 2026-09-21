@@ -15,27 +15,45 @@ const runs = Math.max(2, Number(process.env.ND_DSH_BENCH_RUNS || 10))
 const backend = process.env.ND_DSH_BENCH_BACKEND || 'rust'
 const samples = []
 const records = []
+
 for (let index = 0; index < runs; index += 1) {
-  const dir = await mkdtemp(join(tmpdir(), 'nd-dsh-app-bench-'))
-  const output = join(dir, 'startup.json')
-  const child = spawn(resolve(executable), [], {
-    windowsHide: true,
-    stdio: 'ignore',
-    env: { ...process.env, ND_DSH_CORE_BACKEND: backend === 'legacy' ? 'legacy' : 'rust', ND_DSH_BENCHMARK_OUTPUT: output, ND_DSH_BENCHMARK_EXIT: '1', ND_DSH_WORKSPACE: dir },
-  })
-  const status = await new Promise((resolvePromise, reject) => {
-    const timer = setTimeout(() => { child.kill(); reject(new Error('packaged startup benchmark timed out')) }, 30_000)
-    child.once('error', reject)
-    child.once('exit', (code) => { clearTimeout(timer); resolvePromise(code) })
-  })
-  if (status !== 0) throw new Error('packaged ND exited with code ' + status)
-  const record = JSON.parse(await readFile(output, 'utf8'))
-  if (!Number.isFinite(record.marks?.usable)) throw new Error('packaged startup benchmark did not record usable mark')
-  if (backend !== 'legacy' && record.core?.protocolVersion !== 1) throw new Error('packaged startup did not report bundled ND Core readiness')
-  samples.push(record.marks.usable)
-  records.push(record)
-  await rm(dir, { recursive: true, force: true })
+  const workspace = await mkdtemp(join(tmpdir(), 'nd-dsh-app-bench-workspace-'))
+  const userData = await mkdtemp(join(tmpdir(), 'nd-dsh-app-bench-user-data-'))
+  const output = join(workspace, 'startup.json')
+  try {
+    const child = spawn(resolve(executable), [], {
+      windowsHide: true,
+      stdio: 'ignore',
+      env: {
+        ...safeEnvironment(),
+        ND_DSH_CORE_BACKEND: backend === 'legacy' ? 'legacy' : 'rust',
+        ND_DSH_BENCHMARK_OUTPUT: output,
+        ND_DSH_BENCHMARK_EXIT: '1',
+        ND_DSH_WORKSPACE: workspace,
+        ND_DSH_USER_DATA_DIR: userData,
+        ND_DSH_BROWSER_URL: 'about:blank',
+      },
+    })
+    const status = await new Promise((resolvePromise, reject) => {
+      const timer = setTimeout(() => {
+        try { child.kill() } catch {}
+        reject(new Error('packaged startup benchmark timed out'))
+      }, 30_000)
+      child.once('error', (error) => { clearTimeout(timer); reject(error) })
+      child.once('exit', (code) => { clearTimeout(timer); resolvePromise(code) })
+    })
+    if (status !== 0) throw new Error('packaged ND exited with code ' + status)
+    const record = JSON.parse(await readFile(output, 'utf8'))
+    if (!Number.isFinite(record.marks?.usable)) throw new Error('packaged startup benchmark did not record usable mark')
+    if (backend !== 'legacy' && record.core?.protocolVersion !== 1) throw new Error('packaged startup did not report bundled ND Core readiness')
+    samples.push(record.marks.usable)
+    records.push(record)
+  } finally {
+    await rm(workspace, { recursive: true, force: true })
+    await rm(userData, { recursive: true, force: true })
+  }
 }
+
 process.env.ND_DSH_BENCH_BACKEND = backend === 'legacy' ? 'legacy' : 'rust-core'
 const outputDir = resolve(process.env.ND_DSH_BENCH_OUTPUT || defaultOutputDir())
 const result = await writeResult(outputDir, 'app-startup', {
@@ -48,3 +66,12 @@ const result = await writeResult(outputDir, 'app-startup', {
   records,
 })
 console.log(JSON.stringify({ status: 'pass', outputDir, benchmark: result.benchmark, backend: result.backend, summaryMs: result.summaryMs }, null, 2))
+
+function safeEnvironment() {
+  const env = {}
+  for (const [key, value] of Object.entries(process.env)) {
+    if (typeof value !== 'string' || /(TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY|PRIVATE_KEY)/i.test(key)) continue
+    env[key] = value
+  }
+  return env
+}
