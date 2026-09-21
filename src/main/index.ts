@@ -44,6 +44,7 @@ import { registerOrganizationIpc } from './organization/ipc.js'
 import { OrganizationOrchestrator } from './organization/orchestrator.js'
 import { OrganizationStore } from './organization/store.js'
 import { ProviderStore } from './providers.js'
+import { flushStartupBenchmark, markStartup } from './perf/startup-metrics.js'
 import { QaService } from './qa/qa-service.js'
 import { SessionArchiveStore } from './sessions/session-archive-store.js'
 import { LogFile, logFilePathFor } from './logging/log-file.js'
@@ -55,6 +56,8 @@ import { ProjectWorkspaceCoordinator } from './workspace/project-workspace-coord
 import { ProjectRuntimeService } from './workspace/project-runtime.js'
 import { WorkspaceRegistry } from './workspace/workspace-registry.js'
 import { WorkspaceService } from './workspace/workspace-service.js'
+
+markStartup('main-module')
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url))
 const requestedCdpPort = parsePort(process.env.ND_DSH_CDP_PORT, 0)
@@ -121,6 +124,7 @@ async function createWindow(cdpPort: number): Promise<void> {
       })
   if (core) {
     await core.start()
+    markStartup('core-ready')
     activeCore = core
   } else {
     console.warn('[nd-core] legacy backend enabled for benchmark/rollback mode.')
@@ -422,10 +426,14 @@ async function createWindow(cdpPort: number): Promise<void> {
   })
   if (rendererUrl) await window.loadURL(rendererUrl)
   else await window.loadFile(rendererFile)
+  markStartup('renderer-loaded')
 
   await browser.initialize(startUrl).catch((error) => {
     console.warn('Initial browser navigation failed:', error)
   })
+  markStartup('usable')
+  await flushStartupBenchmark({ core: core?.health ?? null })
+  if (process.env.ND_DSH_BENCHMARK_EXIT === '1') setTimeout(() => app.quit(), 25)
   if (theme.surface() === 'dsh') harness.warmup()
   if (!window.isVisible()) {
     window.show()
@@ -494,6 +502,7 @@ if (hasSingleInstanceLock) {
     app.commandLine.appendSwitch('remote-debugging-port', String(cdpPort))
     app.commandLine.appendSwitch('remote-debugging-address', '127.0.0.1')
     await app.whenReady()
+    markStartup('app-ready')
     await createWindow(cdpPort)
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) void createWindow(cdpPort).catch(reportFatalStartupError)

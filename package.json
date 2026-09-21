@@ -29,7 +29,12 @@
     "nd-pencil:build": "node scripts/build-nd-pencil.mjs",
     "core:build:dev": "cargo build -p nd-core",
     "core:build": "cargo build --release -p nd-core",
-    "core:test": "cargo fmt --check && cargo clippy -p nd-core --all-targets -- -D warnings && cargo test -p nd-core"
+    "core:test": "cargo fmt --check && cargo clippy -p nd-core --all-targets -- -D warnings && cargo test -p nd-core",
+    "bench:smoke": "corepack pnpm core:build:dev && node benchmarks/run-suite.mjs --smoke",
+    "bench:record": "corepack pnpm core:build && cross-env ND_DSH_BENCH_PROFILE=release node benchmarks/run-suite.mjs",
+    "bench:compare": "node benchmarks/compare.mjs",
+    "bench:check": "node benchmarks/check-budgets.mjs",
+    "bench:app": "node benchmarks/app-startup.mjs"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
