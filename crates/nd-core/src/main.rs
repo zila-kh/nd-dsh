@@ -1,16 +1,25 @@
+mod cache;
+mod deadline;
 mod dispatcher;
+mod errors;
 mod git;
 mod metrics;
 mod process;
 mod protocol;
+mod revision;
 mod scheduler;
+mod search;
 mod terminal;
 #[cfg(windows)]
 mod windows_job;
 mod workspace;
 
 use anyhow::{Context, Result};
+use cache::ResponseCache;
+use deadline::{Deadline, Interrupt, InterruptGuard, InterruptRegistry};
 use dispatcher::{DispatchStats, Dispatcher, priority_for_method};
+use errors::{CODE_INVALID_PARAMS, CODE_METHOD_FAILED, CODE_RUNTIME_BUSY};
+use git::{GitExecParams, GitLogParams, GitQueryParams};
 use metrics::MetricsRegistry;
 use process::{CancelParams, CloseStdinParams, ProcessManager, SpawnParams, WriteParams};
 use protocol::{PROTOCOL_VERSION, ProtocolWriter, read_request};
@@ -22,8 +31,9 @@ use std::io::BufReader;
 use std::sync::Arc;
 use terminal::{
     TerminalCloseParams, TerminalCreateParams, TerminalManager, TerminalResizeParams,
-    TerminalWriteParams,
+    TerminalRestartParams, TerminalStateParams, TerminalWriteParams,
 };
+use workspace::{ListParams, ReadParams};
 
 struct AppState {
     writer: Arc<ProtocolWriter>,
@@ -31,6 +41,8 @@ struct AppState {
     processes: Arc<ProcessManager>,
     terminals: Arc<TerminalManager>,
     metrics: Arc<MetricsRegistry>,
+    cache: Arc<ResponseCache>,
+    interrupts: Arc<InterruptRegistry>,
     dispatch_stats: DispatchStats,
 }
 
@@ -49,11 +61,19 @@ impl AppState {
             processes,
             terminals,
             metrics: Arc::new(MetricsRegistry::new()),
+            cache: Arc::new(ResponseCache::new(
+                cache::DEFAULT_MAX_ENTRIES,
+                cache::DEFAULT_MAX_BYTES,
+            )),
+            interrupts: Arc::new(InterruptRegistry::new()),
             dispatch_stats,
         })
     }
 
     fn shutdown(&self) {
+        // Stopping in-flight work first is what lets shutdown finish: without it a
+        // dispatcher worker sitting in a Git deadline would hold the join.
+        self.interrupts.cancel_all();
         self.terminals.shutdown();
         self.processes.shutdown();
     }
@@ -81,30 +101,53 @@ fn main() -> Result<()> {
             }
         };
         let id = request.id.clone();
-        let rejection_id = id.clone();
         let method = request.method.clone();
+
+        // A deadline that cannot be honoured is rejected before any work starts, so
+        // an absurd value never becomes a queued request that runs unbounded.
+        let deadline = match Deadline::from_option(request.deadline_ms) {
+            Ok(deadline) => deadline,
+            Err(error) => {
+                let _ = state
+                    .writer
+                    .send_error(&id, CODE_INVALID_PARAMS, format!("{error:#}"));
+                continue;
+            }
+        };
+        let interrupt = state.interrupts.register(&id, deadline);
+        let guard = InterruptGuard::new(Arc::clone(&state.interrupts), id.clone());
+
         let priority = priority_for_method(&method);
         let state_for_job = Arc::clone(&state);
         let writer = Arc::clone(&state.writer);
+        let job_id = id.clone();
         if let Err(error) = dispatcher.submit(priority, move || {
-            match dispatch(state_for_job.clone(), method.as_str(), request.params) {
+            let _guard = guard;
+            match dispatch(
+                state_for_job.clone(),
+                &job_id,
+                &method,
+                request.params,
+                &interrupt,
+            ) {
                 Ok(result) => {
-                    if let Err(error) = state_for_job.writer.send_result(&id, &result) {
+                    if let Err(error) = state_for_job.writer.send_result(&job_id, &result) {
                         eprintln!("[nd-core] response write failed: {error:#}");
                     }
                 }
                 Err(error) => {
-                    if let Err(write_error) =
-                        state_for_job
-                            .writer
-                            .send_error(&id, "method_failed", format!("{error:#}"))
-                    {
+                    if let Err(write_error) = state_for_job.writer.send_error(
+                        &job_id,
+                        errors::code_of(&error),
+                        format!("{error:#}"),
+                    ) {
                         eprintln!("[nd-core] error response write failed: {write_error:#}");
                     }
                 }
             }
         }) {
-            let _ = writer.send_error(&rejection_id, "runtime_busy", format!("{error:#}"));
+            state.interrupts.finish(&id);
+            let _ = writer.send_error(&id, CODE_RUNTIME_BUSY, format!("{error:#}"));
         }
     }
 
@@ -113,7 +156,15 @@ fn main() -> Result<()> {
     eprintln!("[nd-core] stopped");
     Ok(())
 }
-fn dispatch(state: Arc<AppState>, method: &str, params: Value) -> Result<Value> {
+
+fn dispatch(
+    state: Arc<AppState>,
+    request_id: &str,
+    method: &str,
+    params: Value,
+    interrupt: &Interrupt,
+) -> Result<Value> {
+    interrupt.check(method)?;
     match method {
         "core.health" => {
             let dispatch = state.dispatch_stats.snapshot();
@@ -128,6 +179,11 @@ fn dispatch(state: Arc<AppState>, method: &str, params: Value) -> Result<Value> 
                     "terminal",
                     "git",
                     "workspace",
+                    "search",
+                    "revision",
+                    "cache",
+                    "deadline",
+                    "cancellation",
                     "metrics"
                 ],
                 "processCount": state.processes.process_count(),
@@ -135,6 +191,10 @@ fn dispatch(state: Arc<AppState>, method: &str, params: Value) -> Result<Value> 
                 "workspaceCount": state.metrics.workspace_count(),
                 "pendingRpcCount": dispatch.active + dispatch.queued_high + dispatch.queued_normal + dispatch.queued_background,
             }))
+        }
+        "core.cancel" => {
+            let params = from_params::<CancelRequestParams>(params)?;
+            Ok(json!({ "canceled": state.interrupts.cancel(&params.request_id) }))
         }
         "metrics.snapshot" => {
             let scheduler = state.scheduler.snapshot()?;
@@ -154,9 +214,12 @@ fn dispatch(state: Arc<AppState>, method: &str, params: Value) -> Result<Value> 
                 "workspaceCount": state.metrics.workspace_count(),
                 "processCount": state.processes.process_count(),
                 "terminalCount": state.terminals.terminal_count(),
-                "retainedTerminalBufferBytes": 0,
+                "retainedTerminalCount": state.terminals.retained_terminal_count(),
+                "retainedTerminalBufferBytes": state.terminals.retained_buffer_bytes(),
+                "inFlightRequestCount": state.interrupts.active_count(),
                 "pendingRpcCount": dispatch.active + dispatch.queued_high + dispatch.queued_normal + dispatch.queued_background,
                 "dispatcher": dispatch,
+                "cache": state.cache.snapshot(),
                 "outbound": outbound,
                 "queuedEventCount": queued_event_count,
                 "queuedEventBytes": queued_event_bytes,
@@ -201,6 +264,16 @@ fn dispatch(state: Arc<AppState>, method: &str, params: Value) -> Result<Value> 
             state.metrics.observe_workspace(&params.cwd);
             to_value(state.terminals.create(params)?)
         }
+        "terminal.restart" => to_value(
+            state
+                .terminals
+                .restart(from_params::<TerminalRestartParams>(params)?)?,
+        ),
+        "terminal.state" => to_value(
+            state
+                .terminals
+                .state(from_params::<TerminalStateParams>(params)?)?,
+        ),
         "terminal.write" => {
             state
                 .terminals
@@ -220,47 +293,66 @@ fn dispatch(state: Arc<AppState>, method: &str, params: Value) -> Result<Value> 
             Ok(json!({ "closed": closed }))
         }
         "git.exec" => {
-            let params = from_params::<git::GitExecParams>(params)?;
+            let params = from_params::<GitExecParams>(params)?;
             state.metrics.observe_workspace(&params.cwd);
-            to_value(git::exec(params)?)
+            to_value(git::exec(params, interrupt)?)
         }
         "git.status" => {
-            let params = from_params::<git::GitQueryParams>(params)?;
+            let params = from_params::<GitQueryParams>(params)?;
             state.metrics.observe_workspace(&params.cwd);
-            to_value(git::status(params)?)
+            git::cached_status(params, interrupt, &state.cache)
         }
         "git.log" => {
-            let params = from_params::<git::GitLogParams>(params)?;
+            let params = from_params::<GitLogParams>(params)?;
             state.metrics.observe_workspace(&params.cwd);
-            to_value(git::log(params)?)
-        }
-        "workspace.realpath" => {
-            let params = from_params::<workspace::PathParams>(params)?;
-            state.metrics.observe_workspace(&params.root);
-            to_value(workspace::realpath(params)?)
-        }
-        "workspace.stat" => {
-            let params = from_params::<workspace::PathParams>(params)?;
-            state.metrics.observe_workspace(&params.root);
-            to_value(workspace::stat(params)?)
-        }
-        "workspace.read" => {
-            let params = from_params::<workspace::ReadParams>(params)?;
-            state.metrics.observe_workspace(&params.root);
-            to_value(workspace::read(params)?)
+            git::cached_log(params, interrupt, &state.cache)
         }
         "workspace.list" => {
-            let params = from_params::<workspace::PathParams>(params)?;
+            let params = from_params::<ListParams>(params)?;
             state.metrics.observe_workspace(&params.root);
             to_value(workspace::list(params)?)
         }
-        "workspace.atomicWrite" => {
-            let params = from_params::<workspace::AtomicWriteParams>(params)?;
+        "workspace.read" => {
+            let params = from_params::<ReadParams>(params)?;
             state.metrics.observe_workspace(&params.root);
-            to_value(workspace::atomic_write(params)?)
+            to_value(workspace::read(params)?)
         }
-        _ => anyhow::bail!("unknown nd-core method: {method}"),
+        "workspace.revision" => {
+            let params = from_params::<RevisionParams>(params)?;
+            state.metrics.observe_workspace(&params.root);
+            let scope = revision::RevisionScope::parse(params.scope.as_deref())?;
+            to_value(revision::workspace_revision(
+                &params.root,
+                scope,
+                interrupt,
+            )?)
+        }
+        "workspace.search" => {
+            let params = from_params::<search::SearchParams>(params)?;
+            state.metrics.observe_workspace(&params.root);
+            to_value(search::search(params, interrupt)?)
+        }
+        other => {
+            let _ = request_id;
+            Err(errors::coded(
+                CODE_METHOD_FAILED,
+                format!("unknown nd-core method: {other}"),
+            ))
+        }
     }
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CancelRequestParams {
+    request_id: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RevisionParams {
+    root: String,
+    scope: Option<String>,
 }
 
 fn from_params<T: DeserializeOwned>(params: Value) -> Result<T> {

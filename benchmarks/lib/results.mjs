@@ -1,10 +1,11 @@
 import { execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import { join, resolve } from 'node:path'
 import process from 'node:process'
 import { promisify } from 'node:util'
 import { environmentMetadata } from './metrics.mjs'
-import { benchmarkRoot } from './core-rpc.mjs'
+import { benchmarkRoot, defaultCoreBinary } from './core-rpc.mjs'
 
 const execFileAsync = promisify(execFile)
 let commitPromise
@@ -19,7 +20,40 @@ export async function resultProvenance() {
     commit: process.env.GITHUB_SHA?.trim() || await repositoryCommit(),
     buildProfile: process.env.ND_DSH_BENCH_PROFILE?.trim() || 'release',
     fixtureRevision: process.env.ND_DSH_BENCH_FIXTURE_REVISION?.trim() || 'prd-0002-v1',
+    ndCore: await ndCoreProvenance(),
   }
+}
+
+/**
+ * Identify the nd-core executable the run is about to measure.
+ *
+ * `commit` and `buildProfile` identify the repository, not the binary: two
+ * nd-core builds from the same commit are indistinguishable in evidence without
+ * a hash, and a Rust measurement taken from a stale sidecar would still satisfy
+ * every relative budget. The recorder supplies the staged release manifest's
+ * hash for the packaged step (the executable bundled into the app), which also
+ * cross-checks that packaging copied the core it built.
+ */
+async function ndCoreProvenance() {
+  const declared = process.env.ND_DSH_BENCH_ND_CORE_SHA256?.trim()
+  if (declared) {
+    return {
+      sha256: declared.toLowerCase(),
+      source: process.env.ND_DSH_BENCH_ND_CORE_SOURCE?.trim() || 'declared',
+      path: process.env.ND_DSH_CORE_BIN?.trim() || null,
+    }
+  }
+  const binary = defaultCoreBinary()
+  try {
+    const bytes = await fs.readFile(binary)
+    return { sha256: hashOf(bytes), source: 'binary', path: binary, sizeBytes: bytes.byteLength }
+  } catch {
+    return null
+  }
+}
+
+function hashOf(bytes) {
+  return createHash('sha256').update(bytes).digest('hex')
 }
 
 export async function writeResult(outputDir, name, data) {

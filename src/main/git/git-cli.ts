@@ -8,8 +8,10 @@
 
 import { spawn as processSpawn, type ChildProcess } from 'node:child_process'
 import type { CoreClient } from '../core/core-client.js'
+import { isNdCoreDeadlineError } from '../core/core-protocol.js'
 
 export const GitErrorCodes = {
+  DeadlineExceeded: 'DeadlineExceeded',
   BadConfigFile: 'BadConfigFile',
   AuthenticationFailed: 'AuthenticationFailed',
   NotAGitRepository: 'NotAGitRepository',
@@ -444,6 +446,10 @@ interface CoreGitParsedResult {
   stderr: string
   durationMs: number
   truncated: boolean
+  /** Whether nd-core served this from its revision-keyed cache. */
+  cached?: boolean
+  /** The revision marker the response describes, when nd-core reported one. */
+  revision?: string
 }
 
 export interface GitExecOptions {
@@ -537,6 +543,11 @@ export class GitCli {
 
   private async execCore(cwd: string, args: string[], options: GitExecOptions): Promise<GitExecutionResult> {
     if (!this.core) throw new Error('ND Core Git backend is unavailable.')
+    const timeoutMs = options.timeoutMs ?? 60_000
+    // nd-core stops at this deadline and answers with `deadline_exceeded`; the
+    // client's own tolerance is only the later backstop for a sidecar that stopped
+    // answering. An expired command can no longer keep mutating the worktree in
+    // Rust while the caller believes it failed.
     const result = await this.core.request<GitExecutionResult & { truncated?: boolean }>('git.exec', {
       cwd: sanitizePath(cwd),
       args,
@@ -544,7 +555,20 @@ export class GitCli {
       env: { ...this.extraEnv, ...options.env },
       gitPath: this.path,
       maxOutputBytes: 24 * 1024 * 1024,
-    }, options.timeoutMs ?? 60_000)
+    }, timeoutMs).catch((error: unknown) => {
+      // The core stopped this command at its deadline. Reporting it as a Git failure
+      // with its own code is what lets the caller say "timed out" rather than show a
+      // bare failure string, and it is also why the work is known to have stopped.
+      if (isNdCoreDeadlineError(error)) {
+        throw new GitError({
+          message: 'Git command exceeded its deadline',
+          gitErrorCode: GitErrorCodes.DeadlineExceeded,
+          gitCommand: args[0],
+          gitArgs: args.slice(1),
+        })
+      }
+      throw error
+    })
     if (result.truncated) throw new Error('Git output exceeded the ND Core safety bound.')
     return { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr }
   }
@@ -605,7 +629,11 @@ export class GitCli {
 
   private finishParsedCoreCommand(args: string[], result: CoreGitParsedResult, startedAt: number): void {
     if (this.onOutput) {
-      this.onOutput(`> git ${args.join(' ')} [${Date.now() - startedAt}ms]\n`)
+      // A served response is labelled rather than passed off as freshly computed:
+      // the command log distinguishes a cache hit, and a caller reading the log can
+      // see which revision the reply described.
+      const served = result.cached ? ' cached' : ''
+      this.onOutput(`> git ${args.join(' ')} [${Date.now() - startedAt}ms${served}]\n`)
       if (result.stderr.length > 0) this.onOutput(`${result.stderr}\n`)
     }
     if (result.truncated) throw new Error('Git output exceeded the ND Core safety bound.')

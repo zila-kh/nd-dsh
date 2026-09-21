@@ -28,12 +28,16 @@ if (process.env.ND_DSH_BENCH_SKIP_PACKAGE_BUILD !== '1') {
 }
 
 const packagedApp = await resolvePortable()
+const staged = await stagedCoreIdentity()
 const shared = safeEnvironment()
 Object.assign(shared, {
   ND_DSH_BENCH_PROFILE: 'release',
   ND_DSH_BENCH_FIXTURE_REVISION: 'prd-0002-v1',
   ND_DSH_BENCH_RUNS: String(runs),
 })
+if (staged) {
+  console.log('Staged release manifest identifies nd-core ' + staged.sha256.slice(0, 12) + ' (from ' + staged.path + ').')
+}
 
 console.log('\nRecording release-profile nd-core suite...')
 await runNode(['benchmarks/run-suite.mjs'], { ...shared, ND_DSH_BENCH_BACKEND: 'rust-core', ND_DSH_BENCH_OUTPUT: coreDir })
@@ -50,6 +54,7 @@ await runNode(['benchmarks/app-startup.mjs'], {
   ND_DSH_BENCH_BACKEND: 'rust-core',
   ND_DSH_BENCH_OUTPUT: packagedDir,
   ND_DSH_BENCH_PACKAGED_APP: packagedApp,
+  ...(staged ? { ND_DSH_BENCH_ND_CORE_SHA256: staged.sha256, ND_DSH_BENCH_ND_CORE_SOURCE: 'release-manifest' } : {}),
 })
 
 const paths = {
@@ -114,6 +119,24 @@ async function resolvePortable() {
 
 async function readJson(path) {
   return JSON.parse(await fs.readFile(path, 'utf8'))
+}
+
+/**
+ * The nd-core executable the staged release bundles, straight from the release
+ * manifest. It is the identity the packaged evidence must claim; comparing it
+ * with the core the suite measured is what proves the packaged app ran the same
+ * sidecar build (see the `core-binary-identity` gate in lib/budgets.mjs).
+ */
+async function stagedCoreIdentity() {
+  const manifestPath = join(root, '.release', 'release-manifest.json')
+  try {
+    const manifest = await readJson(manifestPath)
+    const sha256 = manifest?.ndCore?.sha256
+    if (typeof sha256 !== 'string' || !sha256.trim()) return undefined
+    return { sha256: sha256.trim().toLowerCase(), path: relative(root, manifestPath).replaceAll('\\', '/') }
+  } catch {
+    return undefined
+  }
 }
 
 function runPnpm(args) {

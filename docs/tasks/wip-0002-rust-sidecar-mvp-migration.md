@@ -6,6 +6,33 @@
 > Branch: feat/rust-shared-core-mvp  
 > Updated: 2026-09-21  
 
+## Status reconciliation (2026-09-21)
+
+**The MVP was implemented and merged** — PR #20, merge commit `588f3ed`. The branches and handoff notes below are historical.
+
+The acceptance checkboxes were authored before implementation and were never reconciled with the merge. Read an unchecked box as **not individually recorded**, not as **not done**. What is verified, and what is genuinely still open, is enumerated with file-level evidence in [PRD 0002 §5.0](../prd/0002-rust-sidecar-mvp-migration.md#50-status-reconciliation-2026-09-21). Boxes below that are known-open carry an inline **OPEN** marker.
+
+Two findings from the reconciliation that change the state of this task:
+
+1. **`pnpm bench:smoke` fails on Windows — the terminal benchmark hangs and the suite exits 1.** Reproduced locally; it is the repository's own smoke gate, and the first benchmark gate any PR runs. Root cause is a benchmark-harness defect, not a product defect: Windows ConPTY emits an initial Device Status Report (`ESC[6n`) and withholds the child's output until the client answers it. A real terminal answers automatically (xterm.js does), but `benchmarks/lib/core-rpc.mjs` is a headless byte collector that never replies, so the PTY stalls, `MARKER` output never arrives, no `terminal.exit` is emitted, and the 30-second wait times out. Answering the query with a cursor-position report makes the same command complete normally (`exit code 0`, full output). CI runs `bench:smoke` on `ubuntu-latest` only, where no such handshake exists, which is why this has never been caught.
+2. **CI has never been green on this work.** Run `35592399694` (the MVP PR, non-draft) failed all three jobs: `validate` failed at "Desktop smoke tests" (`xvfb-run pnpm e2e`) with everything before it — including "Benchmark smoke" and "Unit tests" — passing; `windows-package` and `performance-evidence` both failed earlier, at release staging (`Release runtime file is missing: .release/harness/node_modules/@deepseek-ai/dsh-client-ui-trajectory/lib/index.js`). Because staging failed first, **the packaged Windows smoke that asserts a terminal marker never executed**, and no performance-evidence bundle was ever produced. The post-merge `main` run `35621569827` was cancelled after 1m26s.
+
+Consequence for this task: the packaged-Windows and benchmark-proof acceptance criteria are not merely unrecorded, they are **unproven**, and the gates that would prove them did not run. Closing this task now requires CI to go green on Windows, not just a doc update.
+
+## Task breakdown (2026-09-21)
+
+This task is now the umbrella record for the merged MVP. Its remaining acceptance criteria have been distributed into five claimable tickets, which are the source of truth for work in progress. The acceptance list below is retained as the original contract; where it and a ticket disagree, the ticket wins.
+
+The breakdown is deliberately coarse — one ticket per deliverable, not per technical finding. Each ticket carries its findings as internally ordered sections with a checklist, so partial progress is still visible without fragmenting the board. A finer-grained split (16 tickets) was drafted and then consolidated; if a ticket below proves too large to finish in one sitting, split it at a section boundary and give the new ticket the next free id.
+
+| Task | Pri | What it covers |
+| --- | --- | --- |
+| [wip-0004](wip-0004-restore-green-ci-and-evidence.md) | P0 | Green CI on Windows and trustworthy evidence: benchmark terminal handshake, release staging, desktop smoke, baselines/backend identity/binary hash |
+| [todo-0005](todo-0005-agent-task-measurement.md) | P1 | Agent-task metrics — makes the cost of a task measurable |
+| [wip-0006](wip-0006-nd-core-runtime-contract.md) | P1 | Finish the nd-core contract: workspace-RPC decision, core-side deadlines, protocol completeness, cache/revision, search — **implemented**, decisions in PRD 0002 §5.0.3 |
+| [todo-0007](todo-0007-retire-legacy-paths-and-dispatch.md) | P1 | Retire legacy runtime paths (node-pty, legacy backend switch) and unify autopilot dispatch |
+| [todo-0008](todo-0008-agent-fast-path.md) | P2 | Agent fast path: envelope conformance (unblocked), router + escalation, composite core operations (gated on 0005/0006) |
+
 ## Objective
 
 Implement the approved PRD 0002 as one reviewable MVP: a shared Rust core for system/runtime work, unified parallel-agent execution permits, process/PTY/Git/workspace migration, packaged runtime distribution, and reproducible performance proof.
@@ -38,13 +65,13 @@ Implement the approved PRD 0002 as one reviewable MVP: a shared Rust core for sy
 ### Terminal parity
 
 - [ ] Creating a terminal opens a real interactive shell through the Rust PTY backend.
-- [ ] Input, output, resize, restart, close, and multi-terminal session ownership behave the same from the renderer point of view.
+- [ ] Input, output, resize, restart, close, and multi-terminal session ownership behave the same from the renderer point of view. **OPEN** — `terminal.restart` is listed in PRD §4 but does not exist in the nd-core method table.
 - [ ] Terminal output sequencing remains ordered under sustained output.
 - [ ] Terminal output buffering is bounded and does not grow without limit.
 - [ ] Closing ND-DSH terminates Rust-owned PTY child trees.
 - [ ] Restarting ND-DSH never claims the old shell survived; recovery messaging/state remains truthful.
-- [ ] node-pty is no longer required by the packaged runtime after Rust PTY acceptance passes.
-- [ ] electron-builder.yml no longer needs the node-pty ASAR unpack rule.
+- [ ] node-pty is no longer required by the packaged runtime after Rust PTY acceptance passes. **OPEN** — excluded from packaging (`electron-builder.yml:15`) but still a devDependency at `package.json:76` with a live developer path at `src/main/terminal/terminal-manager.ts:286-298`.
+- [ ] electron-builder.yml no longer needs the node-pty ASAR unpack rule. **OPEN** — see above.
 
 ### Git parity
 
@@ -79,7 +106,7 @@ Implement the approved PRD 0002 as one reviewable MVP: a shared Rust core for sy
 - [ ] Review assignment rotates when multiple reviewers are available.
 - [ ] When multiple healthy reviewer routes exist, the selected reviewer does not use the same route as the worker being reviewed.
 - [ ] Manual Task Execute, manual Review, Autopilot fill, retry/failover, and rework all acquire an nd-core runtime permit through the same ExecutionCoordinator path.
-- [ ] Autopilot cannot exceed maxParallelWorkers; the existing direct-orchestrator capacity bypass is removed.
+- [ ] Autopilot cannot exceed maxParallelWorkers; the existing direct-orchestrator capacity bypass is removed. **OPEN** — the cap holds because `runTask` acquires capacity, but dispatch is still decided by the fixed loop bound plus error-message matching in `src/main/organization/orchestrator.ts:670-693` rather than by consulting coordinator availability.
 - [ ] Per-role/per-team execution caps hold under Autopilot.
 - [ ] Review capacity is independently configurable; a full review pool does not consume all execution slots.
 - [ ] Required project + role/team + kind pool slots are acquired atomically; partial capacity acquisition never dispatches a worker.
@@ -107,7 +134,7 @@ Implement the approved PRD 0002 as one reviewable MVP: a shared Rust core for sy
 
 - [ ] A repository-owned benchmarks/ suite exists and covers core startup, packaged app startup, memory scaling, terminal, Git, scheduler/multi-agent, cancellation/process cleanup, and Electron responsiveness.
 - [ ] package.json exposes bench:smoke, bench:record, bench:compare, and bench:check.
-- [ ] pnpm bench:smoke runs in normal CI and validates benchmark schema plus deterministic invariants.
+- [ ] pnpm bench:smoke runs in normal CI and validates benchmark schema plus deterministic invariants. **PARTIAL, and red on the release platform** — it runs in `validate` on `ubuntu-latest` and passes there, but fails on Windows: the terminal benchmark hangs because the headless RPC client never answers ConPTY's Device Status Report. See the status reconciliation above and [performance-benchmark-suite.md §12.6](../plan/performance-benchmark-suite.md#126-benchsmoke-is-red-on-windows-and-the-client-is-the-reason).
 - [ ] Full benchmark results are emitted as machine-readable JSON containing raw samples, summary statistics, machine metadata, commit/backend identity, and schema version.
 - [ ] Benchmark runs are isolated from the developer's real ND workspace/state/cache.
 - [ ] The MVP PR contains same-machine legacy-vs-Rust measurements; performance claims in the PR are generated from those results.

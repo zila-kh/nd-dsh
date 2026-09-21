@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { existsSync, promises as fs } from 'node:fs'
-import { dirname, join, relative, resolve } from 'node:path'
+import { dirname, join, relative, resolve, basename } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
@@ -85,6 +85,17 @@ const required = [
 ]
 for (const path of required) await requireFile(path, 'Release runtime file')
 
+// A file list can only catch a package that is absent; it cannot catch one
+// that is present but unreachable. The web profile loads every `dsh.client`
+// package its bundle declares, resolved the way Node resolves - walking
+// node_modules upward from the declaring package, which is also how the
+// Harness maintains its profile module fallback. Assert that reachability
+// here, where a gap names the package and the fix, instead of leaving it to a
+// packaged app that never becomes ready.
+console.log('\nVerifying the staged web-profile closure...')
+const closure = await verifyWebProfileClosure()
+console.log(`Web profile closure resolves ${closure.dependencies} dependencies, including ${closure.clientPackages} client face(s).`)
+
 // Exercise the deployed entry with plain Node before electron-builder copies it.
 await run(process.execPath, [join(harnessOutput, 'lib', 'bin.js'), '--help'], root)
 
@@ -132,10 +143,20 @@ console.log(`Manifest: ${join(stageRoot, 'release-manifest.json')}`)
 
 async function deploy(packageName, destination, productionOnly) {
   assertInsideRoot(destination)
+  // `--legacy` copies the selected project's own node_modules surface and stops
+  // there: a workspace dependency is copied without its dependencies, so the
+  // stage shipped `@deepseek-ai/dsh-web-app` with an empty node_modules and
+  // none of the 80 packages the web profile loads (every `dsh-client-ui-*`
+  // face among them). The injected install resolves the closure a published
+  // install would - workspace packages are injected as files - and the hoisted
+  // linker leaves the result free of symlinks, so it survives electron-builder
+  // copying the tree into the packaged app.
   await run(corepack, [
     'pnpm', '--dir', harnessSource, '--ignore-scripts',
     '--filter', packageName, ...(productionOnly ? ['--prod'] : []),
-    'deploy', '--legacy', destination,
+    '--config.inject-workspace-packages=true',
+    '--config.node-linker=hoisted',
+    'deploy', destination,
   ], root, harnessEnv)
 }
 
@@ -191,6 +212,86 @@ async function requireFile(path, label) {
 
 async function readJson(path) {
   return JSON.parse(await fs.readFile(path, 'utf8'))
+}
+
+/**
+ * Every dependency the staged web profile declares must resolve from inside
+ * the staged runtime, and every client face it loads must have the entry its
+ * manifest points at. Returns the counts for the staging log.
+ */
+async function verifyWebProfileClosure() {
+  const webApp = resolveStagedPackage(harnessOutput, '@deepseek-ai/dsh-web-app')
+  if (webApp === undefined) {
+    throw new Error(
+      'The staged Harness closure does not contain @deepseek-ai/dsh-web-app, the bundle the web profile boots. ' +
+      'Release staging must deploy the Harness app closure (see deploy() in scripts/stage-release.mjs).',
+    )
+  }
+  const manifest = await readJson(join(webApp, 'package.json'))
+  const declared = [
+    ...Object.keys(manifest.dependencies ?? {}),
+    ...Object.keys(manifest.peerDependencies ?? {}),
+  ]
+  const unresolvable = []
+  const brokenEntries = []
+  let clientPackages = 0
+  for (const name of declared) {
+    const directory = resolveStagedPackage(webApp, name)
+    if (directory === undefined) {
+      unresolvable.push(name)
+      continue
+    }
+    const child = await readJson(join(directory, 'package.json')).catch(() => undefined)
+    if (child?.dsh?.client === undefined) continue
+    clientPackages += 1
+    const entry = typeof child.main === 'string' ? child.main : undefined
+    if (entry === undefined || !existsSync(join(directory, entry))) {
+      brokenEntries.push(`${name} (main: ${entry ?? 'unset'})`)
+    }
+  }
+  if (unresolvable.length > 0 || brokenEntries.length > 0) {
+    const lines = []
+    if (unresolvable.length > 0) {
+      lines.push(
+        `${unresolvable.length} of ${declared.length} dependencies of @deepseek-ai/dsh-web-app are not resolvable from ` +
+        `the staged runtime (first: ${unresolvable.slice(0, 5).join(', ')}).`,
+      )
+    }
+    if (brokenEntries.length > 0) {
+      lines.push(`${brokenEntries.length} client face(s) resolve without the entry their manifest declares (first: ${brokenEntries.slice(0, 5).join(', ')}).`)
+    }
+    throw new Error(
+      'The staged Harness closure is incomplete. A packaged app would fail to boot the web profile, because the ' +
+      'profile loads these packages at startup.\n  ' + lines.join('\n  ') +
+      '\n  The deploy in scripts/stage-release.mjs must install the full dependency closure ' +
+      '(--config.inject-workspace-packages=true --config.node-linker=hoisted); a plain `pnpm deploy --legacy` copies ' +
+      'one level only.',
+    )
+  }
+  return { dependencies: declared.length, clientPackages }
+}
+
+/**
+ * Resolve one package the way Node resolves it from `fromDirectory`: every
+ * ancestor's node_modules, skipping a directory that is itself node_modules.
+ * Resolution is bounded to `root` so a developer checkout beside the staged
+ * runtime cannot stand in for a package the runtime does not ship.
+ */
+function resolveStagedPackage(fromDirectory, name) {
+  const root = resolve(harnessOutput)
+  let directory = resolve(fromDirectory)
+  while (true) {
+    if (basename(directory) !== 'node_modules') {
+      const candidate = join(directory, 'node_modules', ...name.split('/'))
+      if (existsSync(join(candidate, 'package.json'))) {
+        const inside = relative(root, resolve(candidate))
+        if (!inside.startsWith('..')) return candidate
+      }
+    }
+    const parent = dirname(directory)
+    if (parent === directory) return undefined
+    directory = parent
+  }
 }
 
 async function sha256(path) {

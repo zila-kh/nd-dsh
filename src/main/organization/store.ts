@@ -21,6 +21,7 @@ import type {
   Team,
   TaskStatus,
 } from '../../shared/organization.js'
+import { taskMetricsRecorder } from '../metrics/task-metrics.js'
 import { BUILTIN_SKILLS, defaultPolicies, defaultWorkflow } from './defaults.js'
 
 const EMPTY: OrganizationSnapshot = {
@@ -210,6 +211,9 @@ export class OrganizationStore {
 
     const run: OrganizationRun = { id: randomUUID(), companyId, projectId, kind, status: 'running', sessionId, ...(taskId ? { taskId } : {}), ...(goalId ? { goalId } : {}), startedAt: Date.now() }
     this.value.runs.unshift(run)
+    // Cost measurement starts where the run does, so a run that never reaches a
+    // terminal state is still visible as unfinished instead of absent.
+    taskMetricsRecorder()?.beginRun({ runId: run.id, sessionId, kind, ...(taskId ? { taskId } : {}), startedAt: run.startedAt })
     this.activity(companyId, projectId, `run.${kind}`, `${kind} started in session ${short(sessionId)}.`)
     await this.save()
     return clone(run)
@@ -222,6 +226,7 @@ export class OrganizationStore {
     if (output) run.output = output.slice(0, 40_000)
     if (error) run.error = error.slice(0, 8_000)
     run.completedAt = Date.now()
+    taskMetricsRecorder()?.finishRun(run.id, run.status === 'failed' ? run.error ?? 'Organization run failed.' : undefined)
     await this.save()
   }
 
@@ -244,6 +249,7 @@ export class OrganizationStore {
       run.error = `Interrupted: ${message}`.slice(0, 8_000)
       run.completedAt = now
       projects.add(run.projectId)
+      taskMetricsRecorder()?.interruptRun(run.id, run.error)
 
       if (run.taskId) {
         const task = this.value.tasks.find((item) => item.id === run.taskId)

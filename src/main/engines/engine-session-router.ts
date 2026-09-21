@@ -24,6 +24,7 @@ import { appendWorkspaceContext } from '../../shared/workspace-context.js'
 import type { ExtensionRouter } from '../extensions/extension-router.js'
 import type { GitService } from '../git/git-service.js'
 import type { HarnessService } from '../harness/harness-service.js'
+import { taskMetricsRecorder } from '../metrics/task-metrics.js'
 import { tokenSaverRuntime } from '../token-saver/token-saver-runtime.js'
 import { sessionInWorkspace } from '../workspace/path-utils.js'
 import type { WorkspaceService } from '../workspace/workspace-service.js'
@@ -78,6 +79,7 @@ export class EngineSessionRouter {
 
   private extensions: ExtensionRouter | undefined
   private skills: import('../skills/nd-skill-service.js').NdSkillService | undefined
+  private worktreeGuard: ((cwd: string) => boolean) | undefined
 
   setSkillService(service: import('../skills/nd-skill-service.js').NdSkillService): void {
     this.skills = service
@@ -131,6 +133,16 @@ export class EngineSessionRouter {
     this.extensions = router
   }
 
+  /**
+   * ND's isolated task worktrees live beside the project repository by design,
+   * so a session rooted in one is still this project's session even though it
+   * is not a descendant of the workspace root. The organization layer supplies
+   * the exact roots it created; nothing else widens the workspace boundary.
+   */
+  setWorktreeGuard(guard: ((cwd: string) => boolean) | undefined): void {
+    this.worktreeGuard = guard
+  }
+
   /** Every direct engine emits through the same ND organization/renderer fan-out. */
   setEmitter(emit: (frame: DshEventFrame) => void): void {
     this.chatGptWeb?.setEmitter(emit)
@@ -149,9 +161,13 @@ export class EngineSessionRouter {
       ? options?.provider ?? this.harness.status().provider
       : undefined
     const directTarget = this.directEngines.get(requested)
-    if (directTarget && this.isWorkspaceDirectEngine(requested) && options?.sessionId) {
-      const session = directTarget.listSessions().find((item) => item.sessionId === options?.sessionId)
-      if (!session?.cwd || !sessionInWorkspace(this.workspace.state().root, session.cwd)) throw new Error('Session belongs to a different project workspace')
+    const requestedSessionId = options?.sessionId
+    const workspaceDirect = Boolean(directTarget) && this.isWorkspaceDirectEngine(requested)
+    const sessionCwd = workspaceDirect && requestedSessionId
+      ? directTarget?.listSessions().find((item) => item.sessionId === requestedSessionId)?.cwd
+      : undefined
+    if (workspaceDirect && requestedSessionId) {
+      if (!sessionCwd || !this.sessionRootAllowed(sessionCwd)) throw new Error('Session belongs to a different project workspace')
     }
     const skill = await this.skills?.prepare(prompt, options?.skillScope, options?.skillSelectionId)
     if (skill && options?.sessionId && !directTarget && requested !== CHATGPT_WEB_ENGINE_ID) {
@@ -179,6 +195,18 @@ export class EngineSessionRouter {
       await this.messageStore.rememberSkillMessage(sessionId, appendWorkspaceContext(optimizedPrompt, this.workspace.state()), prompt, skill.mention)
     }
     const direct = this.directEngines.get(requested)
+    // Cost measurement sits at the shared engine boundary: the route the turn
+    // will use and the bytes ND actually hands to an engine are known here for
+    // every engine, before any vendor protocol is involved.
+    if (options?.sessionId) {
+      const metrics = taskMetricsRecorder()
+      metrics?.noteRoute(options.sessionId, {
+        engineId: requested,
+        ...(options.provider ? { provider: options.provider } : {}),
+        ...(options.model ? { model: options.model } : {}),
+      })
+      metrics?.notePrompt(options.sessionId, optimizedPrompt)
+    }
     if (direct) {
       if (!this.isWorkspaceDirectEngine(requested)) {
         return direct.run(optimizedPrompt, {
@@ -191,7 +219,12 @@ export class EngineSessionRouter {
       return direct.run(appendWorkspaceContext(optimizedPrompt, workspace), {
         ...(options?.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
         ...(options?.model !== undefined ? { model: options.model } : {}),
-        cwd: workspace.root,
+        // A session keeps the root it was created with. Re-rooting every turn
+        // at the active workspace would run an isolated task worktree's worker
+        // against the base checkout, which is exactly what per-task isolation
+        // exists to prevent; the workspace root is only the default for a
+        // session that has no root of its own.
+        cwd: sessionCwd ?? workspace.root,
       })
     }
     if (requested === CHATGPT_WEB_ENGINE_ID) {
@@ -353,6 +386,12 @@ export class EngineSessionRouter {
 
   private isWorkspaceDirectEngine(engineId: string): boolean {
     return engineId !== MINIMAX_CLI_ENGINE_ID
+  }
+
+  /** The active workspace, or a task worktree ND isolate-created for it. */
+  private sessionRootAllowed(cwd: string): boolean {
+    if (sessionInWorkspace(this.workspace.state().root, cwd)) return true
+    return this.worktreeGuard?.(cwd) === true
   }
 
   private engineForSession(sessionId: string): string {

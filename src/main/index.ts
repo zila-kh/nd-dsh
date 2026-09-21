@@ -22,6 +22,7 @@ import { ExternalElementStage, RecentPickStore } from './capture/external-inspec
 import { CoreClient } from './core/core-client.js'
 import { createCoreSpawn } from './core/core-child-process.js'
 import { createCorePtySpawner } from './core/core-pty.js'
+import { createCoreWorkspaceFileSystem } from './core/core-workspace.js'
 import { createCoreWorktreeGit } from './core/core-worktree-git.js'
 import { DesignService } from './design/design-service.js'
 import { registerDesignIpc } from './design/ipc.js'
@@ -39,6 +40,7 @@ import { ZcodeCliEngine } from './engines/zcode/zcode-cli-engine.js'
 import { GitService } from './git/git-service.js'
 import { HarnessService } from './harness/harness-service.js'
 import { registerIpc } from './ipc.js'
+import { setTaskMetricsRecorder, taskMetricsRecorder, TaskMetricsRecorder } from './metrics/task-metrics.js'
 import { OrganizationApprovalGate } from './organization/approval-gate.js'
 import { ExecutionCoordinator } from './organization/execution-coordinator.js'
 import { registerOrganizationIpc } from './organization/ipc.js'
@@ -46,6 +48,7 @@ import { OrganizationOrchestrator } from './organization/orchestrator.js'
 import { OrganizationStore } from './organization/store.js'
 import { TaskWorktreeManager } from './organization/task-worktree.js'
 import { ProviderStore } from './providers.js'
+import { agentTaskBenchmarkScenarioFromEnv, runAgentTaskBenchmark } from './perf/agent-task-benchmark.js'
 import { runPackagedRuntimeSmoke } from './perf/packaged-runtime-smoke.js'
 import { runRuntimeBenchmark } from './perf/runtime-benchmark.js'
 import { flushStartupBenchmark, markStartup } from './perf/startup-metrics.js'
@@ -119,6 +122,9 @@ async function createWindow(cdpPort: number): Promise<void> {
   const ndPencilPreload = join(currentDirectory, '../preload/nd-pencil.cjs')
   const workspace = new WorkspaceService(process.env.ND_DSH_WORKSPACE?.trim() || process.cwd())
   const providers = new ProviderStore()
+  // Per-task cost measurement is always on; it never waits for a benchmark to
+  // switch it on, and the benchmark reads these samples back.
+  setTaskMetricsRecorder(new TaskMetricsRecorder())
   const userData = app.getPath('userData')
   const legacyCoreBackend = process.env.ND_DSH_CORE_BACKEND?.trim().toLowerCase() === 'legacy'
   const core = legacyCoreBackend
@@ -133,6 +139,10 @@ async function createWindow(cdpPort: number): Promise<void> {
     await core.start()
     markStartup('core-ready')
     activeCore = core
+    // Workspace file browsing is the product consumer of the nd-core workspace
+    // primitives: bounded reads, bounded listings, and containment checks all run
+    // in the sidecar. The in-process path stays only for the legacy rollback mode.
+    workspace.attachFileSystem(createCoreWorkspaceFileSystem(core))
   } else {
     console.warn('[nd-core] legacy backend enabled for benchmark/rollback mode.')
   }
@@ -196,9 +206,24 @@ async function createWindow(cdpPort: number): Promise<void> {
   const organizationStore = new OrganizationStore(join(userData, 'organization.json'))
   const executionCoordinator = new ExecutionCoordinator(core)
   activeExecutionCoordinator = executionCoordinator
+  // Core RPCs are issued deep inside the organization work that owns them, so
+  // the active runtime permit — not the caller — attributes a crossing to a task.
+  taskMetricsRecorder()?.setPermitResolver(() => {
+    const permit = executionCoordinator.currentPermit()
+    if (!permit) return undefined
+    return { ...(permit.input.taskId ? { taskId: permit.input.taskId } : {}), ...(permit.sessionId ? { sessionId: permit.sessionId } : {}) }
+  })
   const interruptedRuns = await organizationStore.reconcileInterruptedRuns()
   if (interruptedRuns > 0) console.warn(`Recovered ${interruptedRuns} interrupted organization run(s) from the previous app session.`)
   const disposeCoreReady = core?.onEvent('core.ready', () => {
+    // A terminal whose shell belongs to a previous sidecar generation is gone, so
+    // the session stops claiming it is running instead of showing a live terminal
+    // that cannot accept input.
+    void terminalManager.reconcileShells()
+      .then((count) => {
+        if (count > 0) console.warn(`Marked ${count} terminal(s) exited after the ND Core restart.`)
+      })
+      .catch((error) => { console.error('Failed to reconcile session terminals after an ND Core restart:', error) })
     if (!executionCoordinator.recoveryRequired()) return
     void organizationStore.reconcileInterruptedRuns('ND Core exited before the run finished.')
       .then((count) => {
@@ -278,6 +303,10 @@ async function createWindow(cdpPort: number): Promise<void> {
   const ndPencil = new NdPencilController(window, workspace, projectRoot(), ndPencilPreload)
   await ndPencil.initialize()
   const taskWorktrees = new TaskWorktreeManager(core ? createCoreWorktreeGit(core) : undefined)
+  // Task worktrees are ND's own isolated checkouts for this project, so the
+  // engine router admits them by the exact roots ND created — never by a path
+  // shape a caller could construct.
+  engineRouter.setWorktreeGuard((cwd) => taskWorktrees.ownsRoot(cwd))
   const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter, projectRuntime, capabilities, executionCoordinator, taskWorktrees)
   const approvalGate = new OrganizationApprovalGate(organizationStore, harness)
   const qa = new QaService()
@@ -365,6 +394,10 @@ async function createWindow(cdpPort: number): Promise<void> {
     }).catch((error) => console.error('Chat event reconciliation failed:', error))
   }
   const dispatchRestoredFrame = (frame: DshEventFrame): void => {
+    // One fan-out for every engine, so tool calls and escalations are counted
+    // for harness and direct-engine sessions through the same production path
+    // the renderer and the organization orchestrator already consume.
+    taskMetricsRecorder()?.noteFrame(frame)
     void organization.handleHarnessEvent(frame).catch((error) => {
       console.error('Organization event handling failed:', error)
     })
@@ -456,6 +489,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   await flushStartupBenchmark({ core: core?.health ?? null, coreMetrics: startupCoreMetrics })
   const runtimeBenchmarkOutput = process.env.ND_DSH_RUNTIME_BENCH_OUTPUT?.trim()
   const packagedSmokeOutput = process.env.ND_DSH_PACKAGED_SMOKE_OUTPUT?.trim()
+  const agentTaskBenchmarkOutput = process.env.ND_DSH_AGENT_TASK_BENCH_OUTPUT?.trim()
   if (runtimeBenchmarkOutput) {
     try {
       await runRuntimeBenchmark({
@@ -488,6 +522,27 @@ async function createWindow(cdpPort: number): Promise<void> {
       setTimeout(() => app.quit(), 25)
     } catch (error) {
       console.error('Packaged runtime smoke failed:', error)
+      app.exit(1)
+      return
+    }
+  } else if (agentTaskBenchmarkOutput) {
+    try {
+      const metrics = taskMetricsRecorder()
+      if (!metrics) throw new Error('Agent-task benchmark requires the main-process task metrics recorder.')
+      await runAgentTaskBenchmark({
+        outputPath: agentTaskBenchmarkOutput,
+        scenario: agentTaskBenchmarkScenarioFromEnv(process.env.ND_DSH_AGENT_TASK_BENCH_SCENARIO),
+        store: organizationStore,
+        orchestrator: organization,
+        engines,
+        capabilities,
+        recorder: metrics,
+        workspaceRoot: workspace.state().root,
+      })
+      console.log('Agent-task benchmark completed.')
+      setTimeout(() => app.quit(), 25)
+    } catch (error) {
+      console.error('Agent-task benchmark failed:', error)
       app.exit(1)
       return
     }

@@ -14,6 +14,8 @@ export default defineConfig({
     },
   },
   test: {
-    include: ['tests/**/*.test.{ts,tsx}', 'src/**/*.test.{ts,tsx}'],
+    // `mjs` specs cover the benchmark tooling (result kinds and aggregation),
+    // which is plain ESM shared with the benchmark scripts themselves.
+    include: ['tests/**/*.test.{ts,tsx,mjs}', 'src/**/*.test.{ts,tsx}'],
   },
 })

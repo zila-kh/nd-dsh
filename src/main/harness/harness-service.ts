@@ -17,6 +17,7 @@ import { bundledResourceRoot, dshPatchPath, harnessCliBinPath, harnessRoot, pres
 import type { BrowserController } from '../browser/browser-controller.js'
 import { formatExternalElementContext, type ExternalElementStage } from '../capture/external-inspect.js'
 import { GatewayClient, pickFreePort } from '../dsh/gateway-client.js'
+import { noteModelUsage } from '../metrics/task-metrics.js'
 import type { ProviderStore } from '../providers.js'
 import type { SessionArchiveStore } from '../sessions/session-archive-store.js'
 import { tokenSaverRuntime } from '../token-saver/token-saver-runtime.js'
@@ -625,6 +626,14 @@ export class HarnessService {
     // double-count it, and a frame without usage is simply not a model call.
     if (frame.kind === 'session-event' && frame.sessionId && frame.event) {
       this.usageLedger.recordEvent(frame.sessionId, frame.event)
+      // The pinned runtime logs one assistant/message event per model call, so
+      // this event is the harness path's model-round-trip boundary for task
+      // cost. The ledger keeps UI totals; the task record counts the same
+      // events itself rather than reading those totals back.
+      if (frame.event.type === 'assistant/message') {
+        const data = frame.event.data as { usage?: unknown } | undefined
+        noteModelUsage(frame.sessionId, 'harness-events', data?.usage)
+      }
     }
     if (frame.kind === 'session-status') {
       if (frame.sessionId) {

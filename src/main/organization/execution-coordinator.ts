@@ -92,6 +92,14 @@ export class ExecutionCoordinator {
     return this.permitContext.getStore()?.id
   }
 
+  /**
+   * The permit that owns the current async context, if any. Cost attribution
+   * needs the whole permit (task and bound session), not just its id.
+   */
+  currentPermit(): RuntimePermit | undefined {
+    return this.permitContext.getStore()
+  }
+
   async bindSession(permit: RuntimePermit, sessionId: string, runId?: string): Promise<void> {
     if (!this.permits.has(permit.id)) throw new Error('Runtime permit is no longer active.')
     if (!sessionId.trim()) throw new Error('Runtime session id is required.')

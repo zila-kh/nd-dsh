@@ -5,9 +5,10 @@ import { join } from 'node:path'
 import process from 'node:process'
 import { performance } from 'node:perf_hooks'
 import { promisify } from 'node:util'
-import { CoreRpc, benchmarkRoot } from './lib/core-rpc.mjs'
+import { CoreRpc, attachTerminalHandshake, benchmarkRoot } from './lib/core-rpc.mjs'
 import { directorySize, pidAlive, processMemory, sleep, summarize } from './lib/metrics.mjs'
 import { defaultOutputDir, writeResult, writeSummary } from './lib/results.mjs'
+import { RECORD_BYTES, classifyTerminalStream, expectedPayload, payloadMismatch } from './lib/terminal-payload.mjs'
 
 const execFileAsync = promisify(execFile)
 const smoke = process.argv.includes('--smoke')
@@ -71,7 +72,14 @@ async function benchmarkMemoryAndScheduler() {
         permitIds.push(id)
         points.push({ kind: 'permit-latency', count: permitIds.length, ms: performance.now() - started })
       }
-      await client.request('workspace.stat', { root: workspace, path: '.' })
+      // Touch the workspace through the core's own listing so the shared
+      // workspace handle (and its metric) is created for every session count.
+      const listing = await client.request('workspace.list', { root: workspace, path: '.', maxEntries: 16 })
+      check(listing.truncated !== true, 'shared workspace listing was truncated at session count ' + count)
+      check(
+        Array.isArray(listing.entries) && listing.entries.some((entry) => entry.name === 'seed.txt'),
+        'shared workspace listing did not observe the fixture at session count ' + count,
+      )
       await sleep(30)
       const memory = await processMemory(client.pid)
       const scheduler = await client.request('scheduler.snapshot')
@@ -112,12 +120,14 @@ async function benchmarkMemoryAndScheduler() {
 
 async function benchmarkTerminal() {
   const client = await CoreRpc.launch()
+  const handshake = attachTerminalHandshake(client)
   const terminalCount = smoke ? 1 : 4
-  const bytesTarget = smoke ? 64 * 1024 : 1024 * 1024
+  const payloadBytesTarget = smoke ? 64 * 1024 : 1024 * 1024
   const fixture = join(benchmarkRoot, 'benchmarks', 'fixtures', 'terminal-flood.mjs')
+  const expected = expectedPayload(payloadBytesTarget)
   const state = new Map()
   const ids = Array.from({ length: terminalCount }, (_, index) => 'bench-terminal-' + index)
-  for (const id of ids) state.set(id, { bytes: 0, lastSeq: 0, reordered: 0 })
+  for (const id of ids) state.set(id, { capturedBytes: 0, lastSeq: 0, reordered: 0, chunks: [] })
 
   const listener = (frame) => {
     const item = state.get(frame.resourceId)
@@ -125,17 +135,23 @@ async function benchmarkTerminal() {
     const seq = Number(frame.seq || 0)
     if (seq !== item.lastSeq + 1) item.reordered += 1
     item.lastSeq = seq
-    item.bytes += frame.data.bytes?.byteLength ?? 0
+    const bytes = frame.data.bytes
+    if (!bytes) return
+    item.capturedBytes += bytes.byteLength
+    item.chunks.push(Buffer.from(bytes))
   }
   client.on('terminal.output', listener)
   const started = performance.now()
   try {
-    const exits = ids.map((id) => client.onceEvent('terminal.exit', (frame) => frame.resourceId === id, 30_000))
+    const exits = ids.map((id) => client.onceEvent('terminal.exit', (frame) => frame.resourceId === id, 30_000).then(
+      (frame) => ({ terminalId: id, exitCode: frame.data?.exitCode ?? null }),
+      (error) => ({ terminalId: id, error: error instanceof Error ? error.message : String(error) }),
+    ))
     const inputLatenciesMs = []
     for (const id of ids) {
       await client.request('terminal.create', {
         terminalId: id, sessionId: 'bench-session', shell: process.execPath,
-        args: [fixture, String(bytesTarget)], cwd: benchmarkRoot, cols: 80, rows: 24, env: {},
+        args: [fixture, String(payloadBytesTarget)], cwd: benchmarkRoot, cols: 80, rows: 24, env: {},
       })
       const inputStarted = performance.now()
       await client.request('terminal.write', { terminalId: id, data: '' })
@@ -147,19 +163,54 @@ async function benchmarkTerminal() {
       await client.request('terminal.resize', { terminalId: id, cols: 100, rows: 30 })
       resizeLatenciesMs.push(performance.now() - resizeStarted)
     }
-    await Promise.all(exits)
+    // A terminal the client stopped answering never emits again: report that as
+    // the handshake failure it is instead of waiting out the fixture timeout.
+    await handshake.progress(ids)
+    const settled = await Promise.all(exits)
     const elapsedMs = performance.now() - started
-    const terminals = ids.map((id) => ({ terminalId: id, ...state.get(id) }))
-    for (const terminal of terminals) {
-      check(terminal.bytes === bytesTarget, 'terminal byte integrity failed for ' + terminal.terminalId + ' expected=' + bytesTarget + ' actual=' + terminal.bytes)
-      check(terminal.reordered === 0, 'terminal output sequence reordered for ' + terminal.terminalId)
-    }
-    const totalBytes = terminals.reduce((sum, item) => sum + item.bytes, 0)
+    const terminals = ids.map((id, index) => {
+      const item = state.get(id)
+      const classified = classifyTerminalStream(Buffer.concat(item.chunks, item.capturedBytes))
+      const mismatch = classified.payload.equals(expected) ? null : payloadMismatch(expected, classified.payload)
+      const exit = settled[index]
+      check(mismatch === null, 'terminal payload integrity failed for ' + id + ': ' + mismatch)
+      check(classified.unterminatedEscapeBytes === 0, 'terminal stream ended inside an escape sequence for ' + id)
+      check(item.reordered === 0, 'terminal output sequence reordered for ' + id)
+      check(!exit.error, 'terminal ' + id + ' never reported exit: ' + exit.error)
+      check(exit.exitCode === 0, 'terminal ' + id + ' exited with code ' + String(exit.exitCode))
+      return {
+        terminalId: id,
+        payloadBytes: classified.payload.length,
+        payloadVerified: mismatch === null,
+        capturedBytes: item.capturedBytes,
+        controlBytes: classified.transportBytes,
+        escapeSequences: classified.escapeSequences,
+        carriageReturns: classified.carriageReturns,
+        lineFeeds: classified.lineFeeds,
+        otherControlBytes: classified.otherControlBytes,
+        eventFrames: item.lastSeq,
+        reordered: item.reordered,
+        exitCode: exit.exitCode,
+        ...(mismatch ? { payloadMismatch: mismatch } : {}),
+      }
+    })
+    const payloadBytesObserved = terminals.reduce((sum, item) => sum + item.payloadBytes, 0)
+    const capturedBytesObserved = terminals.reduce((sum, item) => sum + item.capturedBytes, 0)
     return writeResult(outputDir, 'terminal-throughput', {
       terminalCount,
-      bytesTargetPerTerminal: bytesTarget,
-      bytesTarget: bytesTarget * terminalCount,
-      bytesObserved: totalBytes,
+      recordBytes: RECORD_BYTES,
+      payloadBytesTargetPerTerminal: payloadBytesTarget,
+      payloadBytesTarget: payloadBytesTarget * terminalCount,
+      payloadBytesObserved,
+      payloadVerified: terminals.every((item) => item.payloadVerified),
+      // Everything the core framed: the fixture's payload plus the escape
+      // sequences and line endings the console host renders around it.
+      capturedBytesObserved,
+      controlBytesObserved: capturedBytesObserved - payloadBytesObserved,
+      escapeSequencesObserved: terminals.reduce((sum, item) => sum + item.escapeSequences, 0),
+      lineFeedsObserved: terminals.reduce((sum, item) => sum + item.lineFeeds, 0),
+      carriageReturnsObserved: terminals.reduce((sum, item) => sum + item.carriageReturns, 0),
+      conptyHandshake: { queriesAnswered: handshake.queriesAnswered, terminals: handshake.stats() },
       reordered: terminals.reduce((sum, item) => sum + item.reordered, 0),
       terminals,
       inputLatenciesMs,
@@ -167,10 +218,11 @@ async function benchmarkTerminal() {
       resizeLatenciesMs,
       resizeLatencySummaryMs: summarize(resizeLatenciesMs),
       elapsedMs,
-      bytesPerSecond: totalBytes / Math.max(0.001, elapsedMs / 1_000),
+      payloadBytesPerSecond: payloadBytesObserved / Math.max(0.001, elapsedMs / 1_000),
     })
   } finally {
     client.off('terminal.output', listener)
+    handshake.dispose()
     await client.close()
   }
 }

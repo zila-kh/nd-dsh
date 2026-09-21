@@ -194,10 +194,13 @@ fn spawn_worker(shared: Arc<Shared>, foreground_only: bool) -> JoinHandle<()> {
 pub fn priority_for_method(method: &str) -> Priority {
     match method {
         "core.health"
+        | "core.cancel"
         | "metrics.snapshot"
         | "terminal.write"
         | "terminal.resize"
         | "terminal.close"
+        | "terminal.state"
+        | "terminal.restart"
         | "process.write"
         | "process.closeStdin"
         | "process.cancel"

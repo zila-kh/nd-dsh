@@ -24,6 +24,10 @@ function arrayValue(value: unknown): unknown[] {
   return Array.isArray(value) ? value : []
 }
 
+function numberValue(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
 function errorMessage(value: unknown, fallback: string): string {
   if (typeof value === 'string' && value.trim()) return value
   const error = recordValue(value)
@@ -74,8 +78,21 @@ export const opencodeAdapter: StructuredCliAdapter = {
         })
       }
     }
-    // OpenCode can emit step_finish for intermediate tool/agent steps. The
-    // reusable engine therefore settles this adapter only when the CLI exits.
+    // OpenCode emits step_finish for every model call inside a run, with the
+    // tokens that call used. Reporting it is what lets ND count a turn's model
+    // round trips; the reusable engine still settles this adapter only when the
+    // CLI exits.
+    if (type === 'step_finish') {
+      const tokens = recordValue(part?.tokens)
+      const inputTokens = numberValue(tokens?.input) ?? numberValue(tokens?.inputTokens)
+      const outputTokens = numberValue(tokens?.output) ?? numberValue(tokens?.outputTokens)
+      events.push({
+        kind: 'step',
+        ...(inputTokens === undefined && outputTokens === undefined
+          ? {}
+          : { usage: { ...(inputTokens === undefined ? {} : { inputTokens }), ...(outputTokens === undefined ? {} : { outputTokens }) } }),
+      })
+    }
     if (type === 'error') events.push({ kind: 'error', message: errorMessage(wire.error ?? wire.message, 'OpenCode reported an error') })
     return events
   },
