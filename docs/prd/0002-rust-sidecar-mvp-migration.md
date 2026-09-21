@@ -1,7 +1,7 @@
 ---
 id: "0002"
 title: "Rust Shared Core + Parallel Agent Runtime MVP"
-status: draft
+status: approved
 last-audit: 2026-09-21
 ---
 
