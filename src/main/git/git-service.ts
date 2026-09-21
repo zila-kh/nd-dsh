@@ -8,6 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { GitBranch, GitCommitInfo, GitFileChange, GitStatusSnapshot, WorkspaceState } from '../../shared/contracts.js'
+import type { CoreClient } from '../core/core-client.js'
 import {
   GitCli,
   GitError,
@@ -29,6 +30,7 @@ export interface GitServiceOptions {
   gitPath?: string
   env?: Record<string, string>
   spawnProcess?: GitSpawnFunction
+  core?: Pick<CoreClient, 'request'>
   onOutput?(output: string): void
 }
 
