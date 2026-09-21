@@ -14,9 +14,9 @@ The user should manage outcomes, priorities, budget, and judgment. ND should man
 
 ## P2.1 — Parallel AI teams with per-task leases
 
-Detailed follow-on contract: [PRD 0003 — Engine-Neutral Agent Teams and Task Workspace Isolation](../prd/0003-engine-neutral-agent-teams-and-task-workspace-isolation.md). Maintained external references and future comparative benchmark questions: [agent-orchestration-reference-matrix.md](agent-orchestration-reference-matrix.md).
+Detailed follow-on contract: [PRD 0003 — Engine-Neutral Agent Teams and Task Workspace Isolation](../prd/0003-engine-neutral-agent-teams-and-task-workspace-isolation.md), approved 2026-09-22 and implemented on the feature branch pending repository CI. Maintained external references and future comparative benchmark questions: [agent-orchestration-reference-matrix.md](agent-orchestration-reference-matrix.md).
 
-Replace the one-active-run ceiling with safe parallel project execution.
+Run safe parallel project/company execution through task leases and isolated writable task transactions. Global planning mutations remain serialized; independent task execution/review is capacity-controlled instead of globally single-run.
 
 Target model:
 
