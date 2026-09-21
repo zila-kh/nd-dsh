@@ -283,12 +283,12 @@ export class EngineSessionRouter {
     const direct = this.directEngines.get(engineId)
     if (direct) {
       const workspaceDirect = this.isWorkspaceDirectEngine(engineId)
-      const targetCwd = cwd ?? this.workspace.state().root
+      const targetCwd = workspaceDirect ? (cwd ?? this.workspace.state().root) : undefined
       const sessionId = (await direct.createSession(
-        workspaceDirect ? { cwd: targetCwd } : {},
+        workspaceDirect && targetCwd ? { cwd: targetCwd } : {},
       )).sessionId
       this.logicalEngineBySession.set(sessionId, engineId)
-      if (workspaceDirect) this.workspaceRootBySession.set(sessionId, targetCwd)
+      if (workspaceDirect && targetCwd) this.workspaceRootBySession.set(sessionId, targetCwd)
       return { engineId, sessionId }
     }
     const targetCwd = cwd ?? this.workspace.state().root
