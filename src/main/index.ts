@@ -192,6 +192,17 @@ async function createWindow(cdpPort: number): Promise<void> {
   activeExecutionCoordinator = executionCoordinator
   const interruptedRuns = await organizationStore.reconcileInterruptedRuns()
   if (interruptedRuns > 0) console.warn(`Recovered ${interruptedRuns} interrupted organization run(s) from the previous app session.`)
+  const disposeCoreReady = core?.onEvent('core.ready', () => {
+    if (!executionCoordinator.recoveryRequired()) return
+    void organizationStore.reconcileInterruptedRuns('ND Core exited before the run finished.')
+      .then((count) => {
+        console.warn(`Reconciled ${count} organization run(s) after ND Core restart.`)
+        executionCoordinator.resumeAfterReconciliation()
+      })
+      .catch((error) => {
+        console.error('ND Core restarted, but organization reconciliation failed; dispatch remains blocked:', error)
+      })
+  })
   const engineSpawn = core ? createCoreSpawn(core, executionCoordinator) : spawn
   const git = new GitService(workspace, core ? { core } : {})
   const harness = new HarnessService(workspace, browser, providers, externalElements, sessionArchive, usageLedger)
