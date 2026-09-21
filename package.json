@@ -13,7 +13,7 @@
   },
   "scripts": {
     "bootstrap": "node scripts/bootstrap.mjs",
-    "dev": "electron-vite dev",
+    "dev": "corepack pnpm core:build:dev && electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
@@ -26,7 +26,10 @@
     "dist:win:portable": "corepack pnpm release:stage && corepack pnpm build && corepack pnpm release:verify && electron-builder --win portable",
     "dsh:build": "node scripts/build-harness.mjs",
     "dsh:update": "node scripts/update-harness.mjs",
-    "nd-pencil:build": "node scripts/build-nd-pencil.mjs"
+    "nd-pencil:build": "node scripts/build-nd-pencil.mjs",
+    "core:build:dev": "cargo build -p nd-core",
+    "core:build": "cargo build --release -p nd-core",
+    "core:test": "cargo fmt --check && cargo clippy -p nd-core --all-targets -- -D warnings && cargo test -p nd-core"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
@@ -45,7 +48,8 @@
     "sonner": "^2.0.8",
     "tailwind-merge": "^3.6.0",
     "ws": "^8.21.3",
-    "yaml": "^2.9.0"
+    "yaml": "^2.9.0",
+    "@msgpack/msgpack": "3.1.3"
   },
   "devDependencies": {
     "@playwright/test": "1.62.1",
