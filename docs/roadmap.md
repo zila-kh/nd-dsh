@@ -29,10 +29,10 @@ The `ai-company-workflow` branch already contains the product vertical slice:
 These are blockers for a downloadable public beta, not optional polish.
 
 
-### Approved implementation — PRD 0002 Rust Shared Core + Parallel Agent Runtime MVP
+### Active implementation — PRD 0002 Rust Shared Core + Parallel Agent Runtime MVP
 
-- PRD: [0002-rust-sidecar-mvp-migration.md](prd/0002-rust-sidecar-mvp-migration.md) — **approved**.
-- Task: [todo-0002-rust-sidecar-mvp-migration.md](tasks/todo-0002-rust-sidecar-mvp-migration.md) — P0, unassigned.
+- PRD: [0002-rust-sidecar-mvp-migration.md](prd/0002-rust-sidecar-mvp-migration.md) — **in-progress**.
+- Task: [wip-0002-rust-sidecar-mvp-migration.md](tasks/wip-0002-rust-sidecar-mvp-migration.md) — P0, ChatGPT, `feat/rust-shared-core-mvp`.
 - Benchmark contract: [performance-benchmark-suite.md](plan/performance-benchmark-suite.md).
 - Parallel-agent scope: [parallel-work-distribution.md](plan/parallel-work-distribution.md).
 
