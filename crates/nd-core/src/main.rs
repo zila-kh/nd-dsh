@@ -6,7 +6,7 @@ mod terminal;
 mod workspace;
 
 use anyhow::{Context, Result};
-use process::{CancelParams, ProcessManager, SpawnParams, WriteParams};
+use process::{CancelParams, CloseStdinParams, ProcessManager, SpawnParams, WriteParams};
 use protocol::{PROTOCOL_VERSION, ProtocolWriter, read_request};
 use scheduler::{AcquireParams, HeartbeatParams, ReleaseParams, Scheduler};
 use serde::Serialize;
@@ -134,6 +134,12 @@ fn dispatch(state: Arc<AppState>, method: &str, params: Value) -> Result<Value> 
                 .processes
                 .cancel(from_params::<CancelParams>(params)?)?;
             Ok(json!({ "canceled": canceled }))
+        }
+        "process.closeStdin" => {
+            let closed = state
+                .processes
+                .close_stdin(from_params::<CloseStdinParams>(params)?)?;
+            Ok(json!({ "closed": closed }))
         }
         "process.snapshot" => to_value(state.processes.snapshot()?),
         "terminal.create" => to_value(
