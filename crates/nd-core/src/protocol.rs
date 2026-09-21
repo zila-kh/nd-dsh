@@ -363,3 +363,62 @@ pub fn read_request<R: Read>(input: &mut R) -> Result<Option<RequestFrame>> {
     }
     Ok(Some(frame))
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::io::Cursor;
+
+    fn framed(value: serde_json::Value) -> Vec<u8> {
+        let payload = rmp_serde::to_vec_named(&value).unwrap();
+        let mut bytes = Vec::with_capacity(payload.len() + 4);
+        bytes.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        bytes.extend_from_slice(&payload);
+        bytes
+    }
+
+    #[test]
+    fn accepts_one_valid_request_frame() {
+        let bytes = framed(json!({
+            "version": PROTOCOL_VERSION,
+            "kind": "request",
+            "id": "request-1",
+            "method": "core.health",
+            "params": {}
+        }));
+        let request = read_request(&mut Cursor::new(bytes)).unwrap().unwrap();
+        assert_eq!(request.id, "request-1");
+        assert_eq!(request.method, "core.health");
+    }
+
+    #[test]
+    fn rejects_zero_and_oversized_frame_lengths() {
+        let zero = 0u32.to_be_bytes().to_vec();
+        assert!(read_request(&mut Cursor::new(zero)).is_err());
+
+        let oversized = (u32::try_from(MAX_FRAME_BYTES).unwrap() + 1)
+            .to_be_bytes()
+            .to_vec();
+        let error = read_request(&mut Cursor::new(oversized)).unwrap_err();
+        assert!(format!("{error:#}").contains("invalid protocol frame length"));
+    }
+
+    #[test]
+    fn rejects_malformed_messagepack_and_wrong_protocol_version() {
+        let mut malformed = 1u32.to_be_bytes().to_vec();
+        malformed.push(0xc1);
+        assert!(read_request(&mut Cursor::new(malformed)).is_err());
+
+        let wrong_version = framed(json!({
+            "version": PROTOCOL_VERSION + 1,
+            "kind": "request",
+            "id": "request-2",
+            "method": "core.health",
+            "params": {}
+        }));
+        let error = read_request(&mut Cursor::new(wrong_version)).unwrap_err();
+        assert!(format!("{error:#}").contains("protocol version mismatch"));
+    }
+}
