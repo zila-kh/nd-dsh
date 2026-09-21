@@ -296,7 +296,9 @@ function guardOrchestrator(
         })
       : undefined
     try {
-      const result = await runTask(taskId, explicit)
+      const result = executionCoordinator && permit
+        ? await executionCoordinator.runWithPermit(permit, () => runTask(taskId, explicit))
+        : await runTask(taskId, explicit)
       await bindRuntimePermit(executionCoordinator, permit, result.sessionId, store)
       await control.noteDispatch(result)
       return result
@@ -320,7 +322,9 @@ function guardOrchestrator(
         })
       : undefined
     try {
-      const result = await reviewTask(taskId, explicit)
+      const result = executionCoordinator && permit
+        ? await executionCoordinator.runWithPermit(permit, () => reviewTask(taskId, explicit))
+        : await reviewTask(taskId, explicit)
       await bindRuntimePermit(executionCoordinator, permit, result.sessionId, store)
       await control.noteDispatch(result)
       return result
