@@ -121,4 +121,38 @@ describe('organization control plane', () => {
     await control.mutate({ type: 'signal.triage', id: state.signals[0]!.id, disposition: 'evidence' })
     expect((await control.management('project-1')).metrics.newSignals).toBe(0)
   })
+
+  it('serializes declared overlapping advisory work scopes but leaves independent scopes runnable', async () => {
+    const { control, value } = await fixture()
+    const now = Date.now()
+    value.tasks.push(
+      {
+        id: 'active-task', companyId: 'company-1', projectId: 'project-1',
+        title: 'Shared API', description: 'Modify shared API', status: 'in_progress', priority: 'medium',
+        acceptanceCriteria: [], dependsOn: [], workScopes: ['src/shared/**'], createdAt: now, updatedAt: now,
+      },
+      {
+        id: 'overlap-task', companyId: 'company-1', projectId: 'project-1',
+        title: 'Shared API child', description: 'Modify nested API', status: 'ready', priority: 'medium',
+        acceptanceCriteria: [], dependsOn: [], workScopes: ['src/shared/api/**'], createdAt: now, updatedAt: now,
+      },
+      {
+        id: 'independent-task', companyId: 'company-1', projectId: 'project-1',
+        title: 'Docs', description: 'Update docs', status: 'ready', priority: 'medium',
+        acceptanceCriteria: [], dependsOn: [], workScopes: ['docs/**'], createdAt: now, updatedAt: now,
+      },
+    )
+    value.runs.push({
+      id: 'run-active', companyId: 'company-1', projectId: 'project-1', taskId: 'active-task',
+      kind: 'task-execution', status: 'running', sessionId: 'active-session', startedAt: now,
+    })
+
+    const overlap = await control.shouldRun('project-1', 'task.execute', 'overlap-task')
+    expect(overlap.route).toBe('wait')
+    expect(overlap.reason).toMatch(/work scope overlaps/i)
+
+    const independent = await control.shouldRun('project-1', 'task.execute', 'independent-task')
+    expect(independent.route).toBe('ready')
+  })
+
 })

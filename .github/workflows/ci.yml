@@ -32,6 +32,16 @@ jobs:
         run: corepack enable
       - name: Install desktop dependencies
         run: corepack pnpm install --frozen-lockfile
+      - name: Verify ND Core
+        run: corepack pnpm core:test
+      - name: Build ND Core for desktop smoke
+        run: corepack pnpm core:build:dev
+      - name: Typecheck Node and shared migration code
+        run: corepack pnpm exec tsc --noEmit -p tsconfig.node.json
+      - name: Migration unit tests
+        run: corepack pnpm exec vitest run tests/execution-coordinator.test.ts tests/organization-store.test.ts tests/organization-control-plane.test.ts tests/task-worktree.test.ts tests/verification-evidence.test.ts
+      - name: Benchmark smoke
+        run: corepack pnpm bench:smoke
       - name: Prepare Harness runtime
         run: corepack pnpm --dir vendor/deepseek-harness install --frozen-lockfile
         env:
@@ -43,12 +53,6 @@ jobs:
         run: node scripts/build-harness.mjs --skip-install
         env:
           CI: 'true'
-      - name: Verify ND Core
-        run: corepack pnpm core:test
-      - name: Build ND Core for desktop smoke
-        run: corepack pnpm core:build:dev
-      - name: Benchmark smoke
-        run: corepack pnpm bench:smoke
       - name: Audit production dependencies
         run: corepack pnpm audit --prod --audit-level high
       - name: Verify repository invariants

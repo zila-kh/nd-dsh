@@ -144,4 +144,99 @@ describe('OrganizationStore', () => {
       workspacePath: 'examples/todo',
     })).rejects.toThrow(/must be absolute/i)
   })
+
+  it('distributes independent same-role tasks by least-open-work without moving active work', async () => {
+    const store = await storeFixture()
+    let state = await store.mutate({ type: 'company.create', name: 'Parallel Co', mission: 'Distribute work fairly' })
+    const company = state.companies[0]!
+    const engineerRole = state.roles.find((item) => item.companyId === company.id && item.name === 'Software Engineer')!
+    const builder = state.agents.find((item) => item.companyId === company.id && item.roleId === engineerRole.id)!
+    await store.mutate({
+      type: 'agent.create',
+      companyId: company.id,
+      name: 'Builder 2',
+      roleId: engineerRole.id,
+      ...(builder.teamId ? { teamId: builder.teamId } : {}),
+    })
+    state = await store.mutate({ type: 'project.create', companyId: company.id, name: 'Parallel app', objective: 'Ship parallel work' })
+    const project = state.projects[0]!
+
+    const planned = Array.from({ length: 7 }, (_, index) => ({
+      title: `Independent ${index + 1}`,
+      description: `Build independent slice ${index + 1}`,
+      role: 'Software Engineer',
+    }))
+    await store.applyPlan(project.id, {
+      goal: { title: 'Parallel goal', description: 'Balance independent work' },
+      milestones: [{ title: 'Build', description: 'Build slices', tasks: planned }],
+    })
+
+    state = await store.state()
+    const engineers = state.agents.filter((item) => item.companyId === company.id && item.roleId === engineerRole.id)
+    const counts = engineers.map((agent) => state.tasks.filter((task) => task.assignedAgentId === agent.id).length)
+    expect(engineers).toHaveLength(2)
+    expect(Math.max(...counts)).toBeLessThanOrEqual(Math.ceil(planned.length / 2))
+    expect(Math.max(...counts) - Math.min(...counts)).toBeLessThanOrEqual(1)
+
+    const active = state.tasks[0]!
+    await store.markExecution(active.id, 'active-session')
+    await expect(store.mutate({ type: 'task.update', id: active.id, patch: { assignedAgentId: engineers[1]!.id } }))
+      .rejects.toThrow(/cannot reassign/i)
+  })
+
+  it('rotates idle reviewers after completed reviews', async () => {
+    const store = await storeFixture()
+    let state = await store.mutate({ type: 'company.create', name: 'Review Co', mission: 'Rotate independent reviews' })
+    const company = state.companies[0]!
+    const reviewerRole = state.roles.find((item) => item.companyId === company.id && item.name === 'Reviewer')!
+    const firstReviewer = state.agents.find((item) => item.companyId === company.id && item.roleId === reviewerRole.id)!
+    await store.mutate({ type: 'agent.update', id: firstReviewer.id, patch: { providerId: 'review-a', modelId: 'model-a' } })
+    await store.mutate({
+      type: 'agent.create', companyId: company.id, name: 'Reviewer 2', roleId: reviewerRole.id,
+      providerId: 'review-b', modelId: 'model-b',
+      ...(firstReviewer.teamId ? { teamId: firstReviewer.teamId } : {}),
+    })
+    state = await store.mutate({ type: 'project.create', companyId: company.id, name: 'Review app', objective: 'Review twice' })
+    const project = state.projects[0]!
+    await store.mutate({ type: 'task.create', companyId: company.id, projectId: project.id, title: 'Task 1', description: 'First' })
+    await store.mutate({ type: 'task.create', companyId: company.id, projectId: project.id, title: 'Task 2', description: 'Second' })
+    state = await store.state()
+    const [task1, task2] = state.tasks
+
+    const first = await store.reviewerForTask(task1!.id)
+    expect(first.agent?.id).toBe(firstReviewer.id)
+    await store.markReviewStarted(task1!.id, 'review-1', first.agent?.id)
+    await store.completeReview(task1!.id, true, 'passed')
+
+    const second = await store.reviewerForTask(task2!.id)
+    expect(second.agent?.id).not.toBe(first.agent?.id)
+  })
+
+  it('prefers a healthy reviewer route different from the worker route', async () => {
+    const store = await storeFixture()
+    let state = await store.mutate({ type: 'company.create', name: 'Route Co', mission: 'Keep review independent' })
+    const company = state.companies[0]!
+    const engineerRole = state.roles.find((item) => item.companyId === company.id && item.name === 'Software Engineer')!
+    const reviewerRole = state.roles.find((item) => item.companyId === company.id && item.name === 'Reviewer')!
+    const builder = state.agents.find((item) => item.companyId === company.id && item.roleId === engineerRole.id)!
+    const firstReviewer = state.agents.find((item) => item.companyId === company.id && item.roleId === reviewerRole.id)!
+    await store.mutate({ type: 'agent.update', id: builder.id, patch: { providerId: 'route-a', modelId: 'model-a' } })
+    await store.mutate({ type: 'agent.update', id: firstReviewer.id, patch: { providerId: 'route-a', modelId: 'model-a' } })
+    await store.mutate({
+      type: 'agent.create', companyId: company.id, name: 'Independent Reviewer', roleId: reviewerRole.id,
+      providerId: 'route-b', modelId: 'model-b',
+      ...(firstReviewer.teamId ? { teamId: firstReviewer.teamId } : {}),
+    })
+    state = await store.mutate({ type: 'project.create', companyId: company.id, name: 'Route app', objective: 'Independent route' })
+    const project = state.projects[0]!
+    state = await store.mutate({
+      type: 'task.create', companyId: company.id, projectId: project.id,
+      title: 'Review route task', description: 'Needs route diversity', assignedAgentId: builder.id,
+    })
+    const task = state.tasks[0]!
+    const reviewer = await store.reviewerForTask(task.id)
+    expect(reviewer.agent?.providerId).toBe('route-b')
+    expect(reviewer.agent?.modelId).toBe('model-b')
+  })
+
 })
