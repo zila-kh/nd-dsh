@@ -29,6 +29,7 @@ export async function flushStartupBenchmark(extra: Record<string, unknown> = {})
     arch: process.arch,
     node: process.version,
     electron: process.versions.electron,
+    mainRssBytes: process.memoryUsage().rss,
     marks,
     eventLoop: histogram ? {
       p50Ms: Number((histogram.percentile(50) / 1e6).toFixed(3)),
