@@ -5,9 +5,9 @@ mod process;
 mod protocol;
 mod scheduler;
 mod terminal;
-mod workspace;
 #[cfg(windows)]
 mod windows_job;
+mod workspace;
 
 use anyhow::{Context, Result};
 use dispatcher::{DispatchStats, Dispatcher, priority_for_method};

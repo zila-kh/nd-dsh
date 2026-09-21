@@ -1,5 +1,7 @@
 use crate::process::{filtered_environment, kill_process_tree};
 use crate::protocol::ProtocolWriter;
+#[cfg(windows)]
+use crate::windows_job::WindowsJob;
 use anyhow::{Context, Result, bail};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
@@ -9,8 +11,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use uuid::Uuid;
-#[cfg(windows)]
-use crate::windows_job::WindowsJob;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

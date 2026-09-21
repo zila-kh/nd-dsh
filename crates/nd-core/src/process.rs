@@ -1,5 +1,7 @@
 use crate::protocol::ProtocolWriter;
 use crate::scheduler::{Scheduler, now_ms};
+#[cfg(windows)]
+use crate::windows_job::WindowsJob;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -9,8 +11,6 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use uuid::Uuid;
-#[cfg(windows)]
-use crate::windows_job::WindowsJob;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
