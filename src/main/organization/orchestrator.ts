@@ -9,6 +9,7 @@ import { isRetryableExecutionFailure, MAX_EXECUTION_ATTEMPTS, retryBackoffMs, st
 import type { OrganizationStore } from './store.js'
 import { TaskWorktreeManager, type TaskWorktree } from './task-worktree.js'
 import { formatVerificationEvidence, runVerification } from './verification-evidence.js'
+import type { ExecutionCoordinator } from './execution-coordinator.js'
 
 interface ReviewVerdict {
   verdict: 'pass' | 'fail'
@@ -81,6 +82,7 @@ export class OrganizationOrchestrator {
     private readonly engineRuns?: Pick<EngineSessionRouter, 'createSession' | 'run' | 'stopSession'>,
     private readonly projectRuntime?: { check(projectId: string): Promise<unknown> },
     private readonly capabilities?: { assertUsableForAgent(agent?: { id?: string; roleId?: string; teamId?: string }): Promise<void> },
+    private readonly executionCoordinator?: Pick<ExecutionCoordinator, 'releaseSession'>,
   ) {}
 
   async planProject(projectId: string, explicit = true): Promise<OrganizationRunReceipt> {
@@ -175,15 +177,12 @@ export class OrganizationOrchestrator {
 
   async reviewTask(taskId: string, explicit = true): Promise<OrganizationRunReceipt> {
     const context = await this.store.taskContext(taskId)
-    const projectCtx = await this.store.projectContext(context.project.id)
     this.assertPolicy(await this.store.policy(context.company.id, 'task.review'), explicit, 'task review')
     if (!explicit && context.company.autonomyLevel < 3) throw new Error('Autonomy level 3+ is required for automatic review')
     if (context.task.status !== 'review') throw new Error('Task must be ready for review')
-    const reviewerAgent = projectCtx.agents.find((item) => {
-      const role = projectCtx.roles.find((r) => r.id === item.roleId)
-      return role?.name.toLowerCase().includes('reviewer')
-    })
-    const reviewerRole = reviewerAgent ? projectCtx.roles.find((r) => r.id === reviewerAgent.roleId) : projectCtx.roles.find((r) => r.name.toLowerCase().includes('reviewer'))
+    const reviewer = await this.store.reviewerForTask(taskId)
+    const reviewerAgent = reviewer.agent
+    const reviewerRole = reviewer.role
     const modelOpts = this.resolveAgentModel(reviewerAgent, reviewerRole)
     const taskWorktree = await this.taskWorktrees.existing(context.project.workspacePath, context.task.id)
     await this.assertTaskRunSlot(context.task.id, context.project.id, Boolean(taskWorktree))
@@ -201,7 +200,7 @@ export class OrganizationOrchestrator {
     )
     if (taskWorktree && reviewHead) this.reviewWorktrees.set(sessionId, { worktree: taskWorktree, head: reviewHead })
     this.lastProgressAt.set(sessionId, run.startedAt)
-    await this.store.markReviewStarted(taskId, sessionId)
+    await this.store.markReviewStarted(taskId, sessionId, reviewerAgent?.id)
     try {
       await this.harness.run(reviewPrompt(context.task, context, taskWorktree), { sessionId, ...modelOpts })
     } catch (cause) {
@@ -764,6 +763,9 @@ export class OrganizationOrchestrator {
   }
 
   private cleanupSession(sessionId: string): void {
+    void this.executionCoordinator?.releaseSession(sessionId).catch((error) => {
+      console.warn('Runtime permit release failed:', error instanceof Error ? error.message : String(error))
+    })
     this.finalText.delete(sessionId)
     this.structuredHandled.delete(sessionId)
     this.structuredInFlight.delete(sessionId)
