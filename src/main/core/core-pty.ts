@@ -8,19 +8,49 @@ interface CoreTerminalCreateResult {
   sessionId: string
   pid?: number
   shell: string
+  generation: number
+  restarted: boolean
 }
 
 interface CoreTerminalOutput {
   terminalId: string
   sessionId: string
+  generation: number
   bytes: Uint8Array
 }
 
 interface CoreTerminalExit {
   terminalId: string
   sessionId: string
+  generation: number
   exitCode: number
   signal?: string
+}
+
+interface CoreTerminalState {
+  terminalId: string
+  running: boolean
+  generation: number
+  restartCount: number
+  exitCode?: number
+  seq: number
+  firstRetainedSeq: number
+  droppedThroughSeq: number
+  retainedBytes: number
+  bytes: Uint8Array
+}
+
+/**
+ * What a core-managed terminal reports about the shell it currently owns.
+ *
+ * `generation` moves when the shell is replaced, so a caller can tell a restart
+ * from a stall, and a superseded shell is never reported as running.
+ */
+export interface CoreShellState {
+  running: boolean
+  generation: number
+  restartCount: number
+  exitCode?: number
 }
 
 export function createCorePtySpawner(core: CoreClient): PtySpawner {
@@ -41,8 +71,35 @@ export function createCorePtySpawner(core: CoreClient): PtySpawner {
   }
 }
 
+/**
+ * The shell state of a core terminal, or `undefined` when nd-core no longer knows
+ * the terminal at all — which is what a client sees for a terminal that belonged to
+ * a sidecar generation that has since restarted.
+ */
+export async function readCoreShellState(
+  core: Pick<CoreClient, 'request'>,
+  terminalId: string,
+): Promise<CoreShellState | undefined> {
+  try {
+    const state = await core.request<CoreTerminalState>(
+      'terminal.state',
+      { terminalId },
+      5_000,
+    )
+    return {
+      running: state.running,
+      generation: state.generation,
+      restartCount: state.restartCount,
+      ...(state.exitCode === undefined ? {} : { exitCode: state.exitCode }),
+    }
+  } catch {
+    return undefined
+  }
+}
+
 class CorePtyProcess implements PtyProcessLike {
-  readonly pid: number
+  pid: number
+  private terminal: CoreTerminalCreateResult
   private readonly dataListeners = new Set<(data: string) => void>()
   private readonly exitListeners = new Set<(event: { exitCode: number; signal?: number }) => void>()
   private readonly decoder = new TextDecoder()
@@ -52,11 +109,34 @@ class CorePtyProcess implements PtyProcessLike {
 
   constructor(
     private readonly core: CoreClient,
-    private readonly terminal: CoreTerminalCreateResult,
+    terminal: CoreTerminalCreateResult,
   ) {
+    this.terminal = terminal
     this.pid = terminal.pid ?? 0
     this.disposeOutput = core.onEvent<CoreTerminalOutput>('terminal.output', (frame) => this.output(frame))
     this.disposeExit = core.onEvent<CoreTerminalExit>('terminal.exit', (frame) => this.exited(frame))
+  }
+
+  /**
+   * Replace this terminal's shell without giving up its identity. nd-core keeps the
+   * terminal id, continues its output sequence, and reports a new generation; the
+   * listeners registered here stay attached to the same terminal.
+   */
+  async restart(cols: number, rows: number): Promise<number> {
+    if (this.closed) throw new Error('Terminal is not running')
+    const result = await this.core.request<CoreTerminalCreateResult>(
+      'terminal.restart',
+      { terminalId: this.terminal.terminalId, cols, rows },
+      30_000,
+    )
+    this.terminal = result
+    this.pid = result.pid ?? 0
+    return this.pid
+  }
+
+  /** Whether the shell behind this terminal is still alive, per nd-core. */
+  async shellState(): Promise<CoreShellState | undefined> {
+    return await readCoreShellState(this.core, this.terminal.terminalId)
   }
 
   write(data: string): void {
@@ -101,6 +181,9 @@ class CorePtyProcess implements PtyProcessLike {
 
   private exited(frame: NdCoreEventFrame<CoreTerminalExit>): void {
     if (frame.resourceId !== this.terminal.terminalId || this.closed) return
+    // A superseded generation ending is not this terminal ending: only the
+    // generation that is current may close the client-side terminal.
+    if (frame.data.generation < this.terminal.generation) return
     this.closed = true
     const tail = this.decoder.decode()
     if (tail) for (const listener of this.dataListeners) listener(tail)

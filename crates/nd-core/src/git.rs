@@ -1,13 +1,27 @@
-use crate::process::filtered_environment;
+use crate::cache::{self, ResponseCache};
+use crate::deadline::Interrupt;
+use crate::errors::coded;
+use crate::process::{filtered_environment, kill_process_tree};
+use crate::revision::RevisionScope;
 use crate::scheduler::now_ms;
+#[cfg(windows)]
+use crate::windows_job::WindowsJob;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::thread::{self, JoinHandle};
 
 const DEFAULT_MAX_OUTPUT: usize = 24 * 1024 * 1024;
+
+/// Held for the lifetime of one Git request. On Windows that is the Job Object whose
+/// close ends the tree; elsewhere the process group set at spawn is enough.
+#[cfg(windows)]
+type JobHandle = Option<WindowsJob>;
+#[cfg(not(windows))]
+type JobHandle = ();
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -90,16 +104,66 @@ pub struct GitLogResult {
     pub commits: Vec<GitLogEntry>,
 }
 
-pub fn status(params: GitQueryParams) -> Result<GitStatusResult> {
+/// `git status` reports on the working tree and the index, so its cache marker is the
+/// worktree fingerprint; `git log` depends only on refs, so its marker is the much
+/// cheaper Git-metadata one.
+pub fn cached_status(
+    params: GitQueryParams,
+    interrupt: &Interrupt,
+    cache: &ResponseCache,
+) -> Result<Value> {
+    let cwd = params.cwd.clone();
+    let revision = crate::revision::workspace_revision(&cwd, RevisionScope::Worktree, interrupt)?;
+    let key = format!("git.status:{cwd}");
+    if revision.safe_for_cache()
+        && let Some(hit) = cache.get(&key, &revision.value)
+    {
+        return Ok(hit);
+    }
+    let result = status(params, interrupt)?;
+    let mut value = serde_json::to_value(&result).context("encode git.status result")?;
+    cache::annotate(&mut value, &revision.value, false);
+    if revision.safe_for_cache() {
+        cache.put(&key, &revision.value, &value);
+    }
+    Ok(value)
+}
+
+pub fn cached_log(
+    params: GitLogParams,
+    interrupt: &Interrupt,
+    cache: &ResponseCache,
+) -> Result<Value> {
+    let cwd = params.cwd.clone();
+    let revision = crate::revision::workspace_revision(&cwd, RevisionScope::GitRefs, interrupt)?;
+    let key = format!("git.log:{cwd}:{}", params.limit);
+    if revision.safe_for_cache()
+        && let Some(hit) = cache.get(&key, &revision.value)
+    {
+        return Ok(hit);
+    }
+    let result = log(params, interrupt)?;
+    let mut value = serde_json::to_value(&result).context("encode git.log result")?;
+    cache::annotate(&mut value, &revision.value, false);
+    if revision.safe_for_cache() {
+        cache.put(&key, &revision.value, &value);
+    }
+    Ok(value)
+}
+
+pub fn status(params: GitQueryParams, interrupt: &Interrupt) -> Result<GitStatusResult> {
     let started_at = now_ms();
-    let result = exec(GitExecParams {
-        cwd: params.cwd,
-        args: vec!["status".into(), "-z".into(), "-uall".into()],
-        input: None,
-        env: params.env,
-        max_output_bytes: Some(DEFAULT_MAX_OUTPUT),
-        git_path: params.git_path,
-    })?;
+    let result = exec(
+        GitExecParams {
+            cwd: params.cwd,
+            args: vec!["status".into(), "-z".into(), "-uall".into()],
+            input: None,
+            env: params.env,
+            max_output_bytes: Some(DEFAULT_MAX_OUTPUT),
+            git_path: params.git_path,
+        },
+        interrupt,
+    )?;
     let entries = if result.exit_code == 0 && !result.truncated {
         parse_status(&result.stdout)?
     } else {
@@ -114,21 +178,24 @@ pub fn status(params: GitQueryParams) -> Result<GitStatusResult> {
     })
 }
 
-pub fn log(params: GitLogParams) -> Result<GitLogResult> {
+pub fn log(params: GitLogParams, interrupt: &Interrupt) -> Result<GitLogResult> {
     let started_at = now_ms();
     let limit = params.limit.clamp(1, 1000);
-    let result = exec(GitExecParams {
-        cwd: params.cwd,
-        args: vec![
-            "log".into(),
-            format!("-n{limit}"),
-            "--format=%H%x00%aN%x00%aE%x00%at%x00%B%x00".into(),
-        ],
-        input: None,
-        env: params.env,
-        max_output_bytes: Some(DEFAULT_MAX_OUTPUT),
-        git_path: params.git_path,
-    })?;
+    let result = exec(
+        GitExecParams {
+            cwd: params.cwd,
+            args: vec![
+                "log".into(),
+                format!("-n{limit}"),
+                "--format=%H%x00%aN%x00%aE%x00%at%x00%B%x00".into(),
+            ],
+            input: None,
+            env: params.env,
+            max_output_bytes: Some(DEFAULT_MAX_OUTPUT),
+            git_path: params.git_path,
+        },
+        interrupt,
+    )?;
     let commits = if result.exit_code == 0 && !result.truncated {
         parse_log(&result.stdout)?
     } else {
@@ -212,7 +279,8 @@ fn parse_log(raw: &str) -> Result<Vec<GitLogEntry>> {
     Ok(commits)
 }
 
-pub fn exec(params: GitExecParams) -> Result<GitExecResult> {
+pub fn exec(params: GitExecParams, interrupt: &Interrupt) -> Result<GitExecResult> {
+    interrupt.check("git.exec")?;
     if params.cwd.trim().is_empty() || params.cwd.len() > 4096 {
         bail!("invalid Git cwd");
     }
@@ -262,15 +330,54 @@ pub fn exec(params: GitExecParams) -> Result<GitExecResult> {
         command.env(key, value);
     }
 
+    // Own process group/job so an interrupt can end the whole Git tree, not just the
+    // process this request spawned.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        command.creation_flags(CREATE_NEW_PROCESS_GROUP);
+    }
+
     let mut child = command
         .spawn()
         .with_context(|| format!("spawn git command {}", params.args.join(" ")))?;
+    #[cfg(windows)]
+    // Held for the lifetime of the request: closing it kills anything still in the
+    // tree, which is what makes an interrupted Git command leave no descendants.
+    let mut job = {
+        use std::os::windows::io::AsRawHandle;
+        match WindowsJob::assign(child.as_raw_handle()) {
+            Ok(job) => Some(job),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error).context("attach Git child to kill-on-close job");
+            }
+        }
+    };
+    #[cfg(not(windows))]
+    let mut job = ();
+
     if let Some(input) = params.input {
         if input.len() > max_output {
+            let _ = child.kill();
+            let _ = child.wait();
             bail!("Git input exceeds configured bound");
         }
         if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(input.as_bytes())?;
+            let write_result = stdin.write_all(input.as_bytes());
+            drop(stdin);
+            if let Err(error) = write_result {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error).context("write Git stdin");
+            }
         }
     }
 
@@ -284,9 +391,34 @@ pub fn exec(params: GitExecParams) -> Result<GitExecResult> {
         .ok_or_else(|| anyhow::anyhow!("Git stderr pipe is unavailable"))?;
     let stdout_reader = spawn_bounded_reader(stdout, max_output);
     let stderr_reader = spawn_bounded_reader(stderr, max_output);
+
+    // The child is owned by this thread, which is what keeps the interrupt honest: a
+    // stop kills the tree this thread is waiting on, and no other thread ever holds a
+    // pid it could reuse after the child is reaped.
+    let stopped = loop {
+        if let Some(stop_reason) = interrupt.stop_reason() {
+            end_git_tree(&mut child, &mut job);
+            break Some(stop_reason);
+        }
+        match child.try_wait()? {
+            Some(_) => break None,
+            None => thread::sleep(interrupt.poll_slice()),
+        }
+    };
+
     let status = child.wait()?;
     let (stdout_bytes, stdout_truncated) = join_reader(stdout_reader, "stdout")?;
     let (stderr_bytes, stderr_truncated) = join_reader(stderr_reader, "stderr")?;
+
+    if let Some(stop_reason) = stopped {
+        return Err(coded(
+            stop_reason.code(),
+            format!(
+                "git command was stopped before it finished: {}",
+                params.args.join(" ")
+            ),
+        ));
+    }
 
     Ok(GitExecResult {
         exit_code: status.code().unwrap_or(-1),
@@ -295,6 +427,18 @@ pub fn exec(params: GitExecParams) -> Result<GitExecResult> {
         duration_ms: now_ms().saturating_sub(started_at),
         truncated: stdout_truncated || stderr_truncated,
     })
+}
+
+/// End the Git tree this request owns and reap the child, so a stopped request
+/// leaves neither a process nor a zombie behind.
+fn end_git_tree(child: &mut Child, job: &mut JobHandle) {
+    kill_process_tree(child.id());
+    let _ = child.kill();
+    #[cfg(windows)]
+    drop(job.take());
+    #[cfg(not(windows))]
+    let _ = job;
+    let _ = child.wait();
 }
 
 fn spawn_bounded_reader<R: Read + Send + 'static>(

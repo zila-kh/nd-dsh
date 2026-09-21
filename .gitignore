@@ -4,6 +4,7 @@ dist/
 .release/
 coverage/
 test-results/
+target/
 .DS_Store
 .env
 *.log

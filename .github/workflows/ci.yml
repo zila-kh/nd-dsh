@@ -54,6 +54,19 @@ jobs:
         run: corepack pnpm exec vitest run tests/execution-coordinator.test.ts tests/organization-store.test.ts tests/organization-control-plane.test.ts tests/task-worktree.test.ts tests/verification-evidence.test.ts
       - name: Benchmark smoke
         run: corepack pnpm bench:smoke
+      # Offline and cheap: validates the committed agent-task baseline against
+      # its schema, recomputes its summary from the raw samples, and re-checks
+      # every recorded task against the workload the fixture declared. No
+      # Electron and no provider, so a rotted baseline fails here rather than in
+      # a later "before → after" claim.
+      - name: Agent-task baseline check
+        run: corepack pnpm bench:tasks:check
+      # Identity gates: a swapped legacy/rust pair, or a pair whose runs used
+      # different nd-core executables, satisfies every relative budget in both
+      # directions. This proves on synthetic bundles that the labels and the
+      # binary hash refute it, and that bench:check exits non-zero when they do.
+      - name: Verify performance evidence identity gates
+        run: node benchmarks/verify-evidence-identity.mjs
       - name: Prepare Harness runtime
         run: corepack pnpm --dir vendor/deepseek-harness install --frozen-lockfile
         env:
@@ -103,6 +116,14 @@ jobs:
         run: corepack pnpm install --frozen-lockfile
       - name: Verify ND Core
         run: corepack pnpm core:test
+      # The Windows console host is where the benchmark client's terminal
+      # handshake is load-bearing: ConPTY withholds a child's output until the
+      # terminal answers its cursor-position query, and `validate` runs the same
+      # suite on Linux, where no query is ever sent.
+      - name: Benchmark smoke on Windows
+        run: corepack pnpm bench:smoke
+      - name: Prove the terminal handshake fails loudly
+        run: node benchmarks/terminal-handshake-proof.mjs
       - name: Build Windows portable beta
         run: corepack pnpm dist:win:portable
       - name: Prove forced sidecar process-tree cleanup

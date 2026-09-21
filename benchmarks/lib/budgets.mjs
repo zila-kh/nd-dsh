@@ -2,17 +2,61 @@ import { compareRuntime, comparisonRow } from './comparison.mjs'
 
 const MIB = 1024 * 1024
 
+/**
+ * Which backend must have produced each evidence document. Identity is checked
+ * before the numbers are trusted: a legacy/rust pair that is swapped, or a pair
+ * whose runs used different nd-core executables, satisfies every relative
+ * budget in both directions, so the labels - not the deltas - are what refute
+ * it. Every check carries a `kind` so a reader (and the failure list) can tell
+ * an identity mismatch from a budget violation.
+ */
+const EXPECTED_BACKENDS = {
+  coreSummary: 'rust-core',
+  legacyRuntime: 'legacy',
+  rustRuntime: 'rust-core',
+  packagedStartup: 'rust-core',
+}
+
 export function evaluateEvidence({ coreSummary, legacyRuntime, rustRuntime, packagedStartup }) {
   const comparison = compareRuntime(legacyRuntime, rustRuntime)
   const checks = []
   const observations = []
 
-  const add = (id, label, passed, actual, budget, detail) => {
-    checks.push({ id, label, passed: Boolean(passed), actual: finiteOrValue(actual), budget, ...(detail ? { detail } : {}) })
+  const add = (id, label, passed, actual, budget, detail, kind = 'budget') => {
+    checks.push({ id, kind, label, passed: Boolean(passed), actual: finiteOrValue(actual), budget, ...(detail ? { detail } : {}) })
   }
   const requireNumber = (id, label, value, predicate, budget, detail) => {
     add(id, label, Number.isFinite(value) && predicate(value), Number.isFinite(value) ? value : null, budget, detail)
   }
+
+  const evidence = { coreSummary, legacyRuntime, rustRuntime, packagedStartup }
+  const backendMismatches = Object.entries(EXPECTED_BACKENDS)
+    .filter(([document, expected]) => evidence[document]?.backend !== expected)
+    .map(([document, expected]) => document + ' is labelled backend=' + JSON.stringify(evidence[document]?.backend ?? null) + ', expected ' + JSON.stringify(expected))
+  add(
+    'backend-identity',
+    'Every document is labelled with the backend that produced it',
+    backendMismatches.length === 0,
+    backendMismatches,
+    'core/rust/packaged = rust-core, legacy = legacy',
+    'A swapped or mislabelled pair satisfies the relative budgets in both directions, so the labels decide which document is the baseline.',
+    'identity',
+  )
+
+  const coreHashes = Object.entries(evidence)
+    .map(([document, item]) => ({ document, sha256: typeof item?.ndCore?.sha256 === 'string' ? item.ndCore.sha256.toLowerCase() : null, source: item?.ndCore?.source ?? null }))
+  const missingHashes = ['coreSummary', 'rustRuntime', 'packagedStartup']
+    .filter((document) => coreHashes.find((entry) => entry.document === document)?.sha256 === null)
+  const distinctHashes = [...new Set(coreHashes.map((entry) => entry.sha256).filter((value) => value !== null))]
+  add(
+    'core-binary-identity',
+    'Rust evidence names one nd-core executable',
+    missingHashes.length === 0 && distinctHashes.length === 1,
+    { hashes: coreHashes, distinct: distinctHashes.length, missing: missingHashes },
+    'one sha256 across core, rust runtime, and packaged evidence',
+    'Commit and build profile identify the repository, not the executable that ran: without the binary hash, evidence from two different nd-core builds is indistinguishable.',
+    'identity',
+  )
 
   const startup = coreSummary.benchmarks?.['core-startup']
   requireNumber('core-startup-runs', 'Core startup has at least 10 measured runs', startup?.measuredRuns, (value) => value >= 10, '>= 10 runs')
@@ -53,10 +97,21 @@ export function evaluateEvidence({ coreSummary, legacyRuntime, rustRuntime, pack
   const terminal = coreSummary.benchmarks?.['terminal-throughput']
   add(
     'terminal-integrity',
-    'Terminal stress preserves bytes and event order',
-    terminal?.terminalCount >= 4 && terminal?.bytesObserved === terminal?.bytesTarget && terminal?.reordered === 0,
-    { terminalCount: terminal?.terminalCount, bytesObserved: terminal?.bytesObserved, bytesTarget: terminal?.bytesTarget, reordered: terminal?.reordered },
-    '4 terminals, exact bytes, reordered=0',
+    'Terminal stress delivers every payload byte, intact and in order',
+    terminal?.terminalCount >= 4
+      && terminal?.payloadVerified === true
+      && terminal?.payloadBytesObserved === terminal?.payloadBytesTarget
+      && terminal?.reordered === 0,
+    {
+      terminalCount: terminal?.terminalCount,
+      payloadBytesObserved: terminal?.payloadBytesObserved,
+      payloadBytesTarget: terminal?.payloadBytesTarget,
+      payloadVerified: terminal?.payloadVerified,
+      capturedBytesObserved: terminal?.capturedBytesObserved,
+      controlBytesObserved: terminal?.controlBytesObserved,
+      reordered: terminal?.reordered,
+    },
+    '4 terminals, byte-exact payload, reordered=0',
   )
   requireNumber('terminal-input-rpc-p95', 'Foreground terminal input RPC p95 is measured', terminal?.inputLatencySummaryMs?.p95, () => true, 'required measurement')
 
@@ -92,10 +147,10 @@ export function evaluateEvidence({ coreSummary, legacyRuntime, rustRuntime, pack
   requireNumber('legacy-runtime-runs', 'Legacy comparison has at least 10 measured runs', legacyRuntime?.measuredRuns, (value) => value >= 10, '>= 10 runs')
   requireNumber('rust-runtime-runs', 'Rust comparison has at least 10 measured runs', rustRuntime?.measuredRuns, (value) => value >= 10, '>= 10 runs')
   add('same-machine', 'Legacy and Rust evidence use the same machine/commit/profile/fixture', comparison.sameMachine, comparison.mismatches, 'no provenance mismatch')
-  const evidence = [coreSummary, legacyRuntime, rustRuntime, packagedStartup]
+  const documents = [coreSummary, legacyRuntime, rustRuntime, packagedStartup]
   const reference = rustRuntime
   const provenanceMismatches = []
-  for (const [index, item] of evidence.entries()) {
+  for (const [index, item] of documents.entries()) {
     for (const key of ['commit', 'buildProfile', 'fixtureRevision']) {
       if (item?.[key] !== reference?.[key]) provenanceMismatches.push(index + ':' + key)
     }
@@ -103,7 +158,7 @@ export function evaluateEvidence({ coreSummary, legacyRuntime, rustRuntime, pack
       if (item?.environment?.[key] !== reference?.environment?.[key]) provenanceMismatches.push(index + ':environment.' + key)
     }
   }
-  add('full-provenance', 'Core, legacy, Rust, and packaged evidence share one machine/commit/profile/fixture', provenanceMismatches.length === 0, provenanceMismatches, 'no provenance mismatch')
+  add('full-provenance', 'Core, legacy, Rust, and packaged evidence share one machine/commit/profile/fixture', provenanceMismatches.length === 0, provenanceMismatches, 'no provenance mismatch', undefined, 'identity')
 
   requireNumber(
     'electron-event-loop-p95',
@@ -159,7 +214,8 @@ export function evaluateEvidence({ coreSummary, legacyRuntime, rustRuntime, pack
     'protocolVersion=1 and usable mark for every run',
   )
 
-  const failures = checks.filter((check) => !check.passed).map((check) => check.label + ': expected ' + check.budget + ', got ' + formatActual(check.actual))
+  const failures = checks.filter((check) => !check.passed).map((check) =>
+    '[' + check.kind + '] ' + check.label + ': expected ' + check.budget + ', got ' + formatActual(check.actual))
   return {
     status: failures.length ? 'fail' : 'pass',
     checks,

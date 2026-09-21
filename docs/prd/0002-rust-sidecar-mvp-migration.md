@@ -3,6 +3,7 @@ id: "0002"
 title: "Rust Shared Core + Parallel Agent Runtime MVP"
 status: in-progress
 last-audit: 2026-09-21
+mvp-merge: "PR #20 (feat/rust-shared-core-mvp), merge commit 588f3ed"
 ---
 
 # Product Requirement Document (PRD): Rust Shared Core + Parallel Agent Runtime MVP
@@ -173,30 +174,48 @@ Example method families:
 
 ~~~text
 core.health
+core.cancel
 process.spawn
 process.write
 process.cancel
-process.kill
-scheduler.configure
+process.closeStdin
 scheduler.acquire
+scheduler.bind
 scheduler.heartbeat
 scheduler.release
 scheduler.snapshot
 terminal.create
 terminal.write
 terminal.resize
-terminal.close
 terminal.restart
 terminal.state
+terminal.close
 git.status
 git.log
 git.exec
-workspace.stat
-workspace.realpath
-workspace.read
 workspace.list
-workspace.atomicWrite
+workspace.read
+workspace.revision
+workspace.search
+metrics.snapshot
 ~~~
+
+Reconciled against the implementation on 2026-09-21 by task 0006. Four methods that
+were listed here are not part of the protocol, and the record of why is in
+[task 0006 §1 and §3](../tasks/wip-0006-nd-core-runtime-contract.md):
+
+- `process.kill` — `process.cancel` is the operation, and a second name for the same
+  call would be protocol surface with no distinct behaviour.
+- `scheduler.configure` — pool limits arrive with each `scheduler.acquire` claim;
+  a core-side configure would create a second, unsynchronized source of truth for
+  the capacity the organization layer already owns.
+- `workspace.realpath`, `workspace.stat` — no product caller needs a bare resolve or
+  stat without reading or listing, and resolution already happens inside
+  `workspace.read`/`workspace.list`; keeping them would be a method kept alive only
+  to justify itself.
+- `workspace.atomicWrite` — the product's durable writes are organization/registry
+  state owned by TypeScript stores, and the renderer workspace API is read-only, so
+  a general workspace write RPC has no consumer.
 
 Requirements:
 - stdout is protocol-only; sidecar logs go to stderr.
@@ -967,6 +986,61 @@ The source of truth remains machine-readable JSON.
 
 ## 5. Acceptance Criteria (Required for Convergence)
 
+### 5.0 Status reconciliation (2026-09-21)
+
+The MVP was implemented and merged as PR #20 (`feat/rust-shared-core-mvp`, merge `588f3ed`). The checklist below was written before implementation and was never reconciled with the merge, so an unchecked box here means **not recorded**, not **not done** — with the explicit exceptions in §5.0.2, which are genuinely open.
+
+#### 5.0.1 Verified against this revision
+
+| Area | Evidence |
+| --- | --- |
+| Rust build + unit tests | `cargo test -p nd-core` — 9 passed, 0 failed (protocol framing/version rejection, secret-env filtering, workspace parent-escape rejection, atomic multi-pool permit acquire, terminal oversized-input rejection, Git porcelain + NUL log parsing). |
+| Rust lint/format | `cargo clippy -p nd-core --all-targets -- -D warnings` clean; `cargo fmt --check` emits no diff. |
+| JS/TS gates | `pnpm verify` passed; `pnpm typecheck` passed; `pnpm test` — 719 passed, 8 skipped (91 files passed, 4 skipped). |
+| Sidecar startup + handshake | Live dev run: exactly one `[nd-core] launch` for the app instance, `[nd-core] ready v0.1.0 protocol=1 windows/x86_64`, Electron proceeds only after `core.health`. |
+| Fail-closed on missing binary | Observed in the live log: after the binary disappeared mid-session, the automatic restart failed with an actionable error ("ND Core binary is missing at ... Run pnpm core:build:dev"), and no Rust-backed operation reported success. |
+| Crash isolation + bounded restart | Same incident: the sidecar died, Electron main stayed alive, DevTools/CDP remained available, and the core restart was attempted exactly once rather than looping. |
+| Process supervision and cleanup | Rust process supervisor with permit-linked auto-cancel, Job Object `KILL_ON_JOB_CLOSE` for Windows descendants, PTY process-group cleanup; Windows forced-kill cleanup receipt in `benchmarks/windows-core-crash-cleanup.mjs`, wired into the CI Windows packaging job. |
+| Git through Rust | `git.exec`/`git.status`/`git.log` implemented and consumed by `GitCli` and task worktrees; real Git CLI (no libgit2). |
+| Parallel distribution | Least-open-work assignment with deterministic tie-break (`src/main/organization/store.ts:605-621`), reviewer rotation ordering busy → same-route → review-count (`store.ts:625-645`), project execution pool + role/team pools + separate review pool (`src/main/organization/control-plane.ts:168-183`), permits acquired through `ExecutionCoordinator`. |
+| Benchmarks + CI | `benchmarks/` suite, `bench:smoke|record|compare|check|app|runtime` scripts, budget checker, PR smoke in `ci.yml`, full evidence workflow `ci.yml#performance-evidence` and `benchmark-proof.yml`. |
+| Renderer isolation | No renderer/preload access to nd-core anywhere; main-process only, behind the context-isolated preload bridge. |
+
+#### 5.0.2 Genuinely open deltas — the remaining MVP work
+
+1. **node-pty is still present.** `package.json:76` (devDependency), the developer path at `src/main/terminal/terminal-manager.ts:286-298`, and the ASAR exclusion rule at `electron-builder.yml:15`. The packaged runtime does not ship it, but the removal condition is unmet. Owned by task 0007.
+2. **`workspace.*` has no product caller — RESOLVED 2026-09-21 by task 0006.** See §5.0.3. `workspace.list` and `workspace.read` are now the workspace filesystem the product uses; `realpath`, `stat`, and `atomicWrite` were removed from the protocol rather than kept alive for a caller invented to justify them.
+3. **No search or indexing service — RESOLVED 2026-09-21 by task 0006.** `workspace.search` exists: ignore-aware, bounded on results/files/file size, explicit about truncation, and it runs on the requesting dispatcher thread so a deadline or cancel can stop the walk without leaving a scanner behind. It is a scan, not an index; the recorded measurement behind that choice is in §5.0.3.
+4. **No core-side timeout and no per-request cancellation — RESOLVED 2026-09-21 by task 0006.** Requests carry a validated `deadlineMs`; `core.cancel` stops one request by id; `git.exec`, `git.status`, and `git.log` observe both, kill the process tree they own, and answer with a distinguishable code.
+5. **Event streaming is limited to `process.*` and `terminal.*`.** Resolved for recovery, not for subscription: `terminal.state` reports the current generation's shell plus the retained output sequence, so a client that missed events reaches the same view without a subscription/ack protocol. The rationale is recorded in §5.0.3; `workspace` and `git` stay request/response.
+6. **State/cache primitives are in-memory only — RESOLVED for the read path 2026-09-21 by task 0006.** Revision markers (`workspace.revision`) and a bounded, revision-keyed response cache now gate `git.status` and `git.log`. Still in-memory and process-lifetime: durable state remains out of scope.
+7. **PRD-listed methods that do not exist.** Reconciled: `terminal.restart` and `terminal.state` now exist with tests; `process.kill` and `scheduler.configure` were removed from the method list with recorded reasons (see the method-family section above).
+8. **Autopilot capacity is enforced reactively.** `fillParallelReadyTasks` decides how many tasks to launch from the fixed loop bound `MAX_AUTOPILOT_PARALLEL_FILL` and stops by matching an error message (`/capacity|active|isolated|worktree|leased/i`), rather than consulting coordinator availability; the orchestrator holds the coordinator as `Pick<ExecutionCoordinator, 'releaseSession'>` only (`src/main/organization/orchestrator.ts:85,670-693`). The cap itself holds, because `runTask` acquires capacity — what remains is the dispatch *decision* heuristic. Owned by task 0007.
+9. **The legacy backend switch is still live** (`src/main/index.ts:123-137`). §8.11 permits this as a temporary soak/rollback affordance; what is missing is a removal trigger and date. Owned by task 0007. Task 0006 kept both workspace and terminal paths honest under it: the in-process filesystem is the documented legacy path, not a silent fallback.
+10. **Benchmark evidence gaps** — no agent-task metrics, no committed baseline, no backend-identity assertion in the budget checker: [performance-benchmark-suite.md](../plan/performance-benchmark-suite.md) §12. Owned by tasks 0004 and 0005.
+
+Items 1-9 define what "finish the Rust-sidecar MVP" means; item 10 is Phase 3 of the current direction and must be closed before any fast-path claim can be made. Items 2, 3, 4, 6, and 7 are closed as of 2026-09-21; 1, 5 (subscription), 8, and 9 remain open and are owned by tasks 0007 and 0004.
+
+#### 5.0.3 Decision record — nd-core runtime contract (task 0006, 2026-09-21)
+
+These are the calls that must not be re-litigated. Evidence for each is in
+[task 0006](../tasks/wip-0006-nd-core-runtime-contract.md).
+
+| Decision | Choice | Why, and what would change it |
+| --- | --- | --- |
+| Which workspace primitives stay | `workspace.list` and `workspace.read` are product-facing; `realpath`, `stat`, and `atomicWrite` are removed | The workspace browser (`WorkspaceService`) is the only real consumer of per-file filesystem work, and it needs exactly list and read. A bare resolve or stat is always followed by a read in practice, and resolution already happens inside both kept methods. Writes are owned by the TypeScript stores. Revisit only if a product feature needs a workspace write path of its own. |
+| Where the deadline lives | On the request frame, not per method | Every method can then be bounded without a second convention, and `deadlineMs` is validated against core-side bounds before a request is queued. A method-specific parameter would have left every other method unbounded. |
+| Default deadline | The client's own tolerance minus 250 ms | The core has to lose the race, otherwise a client timer fires first and the caller sees an untagged timeout while Rust keeps working — the exact defect this closes. Sub-300 ms control calls send no deadline, and the client timer stays as the backstop for a sidecar that stopped answering. |
+| Cancellation granularity | Per request id (`core.cancel`), plus the existing process/terminal/permit cancels | A deadline that only abandons the response is not a deadline. Killing is done by the thread that owns the child handle, so no other thread can ever kill a recycled pid. |
+| Event model | The existing uniform envelope stays; recovery comes from `terminal.state`, not from subscriptions | The client is a single trusted local process whose subscriptions are fixed at startup, and the bounded priority output queues already provide backpressure — so a subscribe/ack protocol would add a second flow-control mechanism with no consumer. What was genuinely missing was recovering from *missed* events, which per-terminal sequence numbers plus a bounded retained tail answer directly. Revisit if a second concurrent client, event batching, or cross-resource replay is needed. |
+| Cache target | `git.log` against the refs marker, `git.status` against the worktree marker | Both are reads the product repeats on every workspace event, git action, and engine turn. Status also depends on the worktree, so it needs the full stat fingerprint; history depends only on refs, so it takes the much cheaper metadata-only marker. |
+| Revision semantics | A stat fingerprint (path, kind, size, mtime) over Git's own ignore-filtered file set, plus Git metadata | It is the same signal Git's index uses to decide a path needs re-reading, computed without a process spawn, and it moves for external adds, deletes, and content edits. A marker that could not be computed faithfully (truncated walk, unreadable entry) is reported non-authoritative and the cache is bypassed rather than serving an unverified hit. |
+| Staleness visibility | Every cached response carries `cached` and `revision`; a stopped search carries `stopReason` | A caller can always tell a served response from a computed one, and a capped result from a complete one. `metrics.snapshot.cache` reports hits, misses, invalidations, evictions, entries, and bytes. |
+| Search: scan or index | Scan, bounded and ignore-aware, on the requesting thread | Measuring first: a 123-file fixture returns 122 matches in 30 ms (p50), which is the same order as the stat-only revision read that guards a cache — an index would add a second source of truth and a background process to keep in step for a latency that is not yet the bottleneck. Revisit when a measured search on a real workspace is the dominant cost of a task. |
+| Search deadline behaviour | Partial result with `stopReason`, not an error | A search has partial value; a caller that wants an error can branch on `truncated`. `git.exec` reports an error instead, because a half-finished Git command has no partial result to return. |
+
+### Architecture and startup
+
 ### Architecture and startup
 
 - [ ] crates/nd-core builds successfully on MVP development/CI hosts used by the repository.
@@ -1208,6 +1282,10 @@ The product owner should explicitly approve or change these points before task b
 
 ## 9. Human Approval Gate
 
-This PRD is **draft**.
+**Closed — this PRD was approved and implemented.**
 
-Per kb-spec-feature, stop here for product-owner review. Per kb-task-triage, do not invent a task-board record while this repository has no canonical docs/tasks board and the PRD is still draft. Do not create a task file, mark this PRD approved, update the roadmap, or begin implementation until the product owner explicitly approves this draft.
+The §8 review decisions were approved by the product owner on 2026-09-21; task 0002 was created, claimed, and implemented on `feat/rust-shared-core-mvp`, and merged as PR #20 (`588f3ed`). The frontmatter `status` is `in-progress` because the §5.0.2 deltas remain, not because approval or implementation is pending.
+
+The earlier text of this section instructed readers that the PRD was a draft and that no task file, roadmap entry, or implementation should be created. That instruction was satisfied historically and is now **superseded** — it is retained here only so the contradiction is not reintroduced by a future reader. Do not re-apply it.
+
+Any future scope added to this PRD (for example a search/indexing service, core-side deadlines, or composite core operations) is new work against a merged baseline and should be cut as its own task rather than reopening this gate.

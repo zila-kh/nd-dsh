@@ -35,7 +35,11 @@
     "bench:compare": "node benchmarks/compare.mjs",
     "bench:check": "node benchmarks/check-budgets.mjs",
     "bench:app": "node benchmarks/app-startup.mjs",
-    "bench:runtime": "corepack pnpm core:build && corepack pnpm build && node benchmarks/app-runtime.mjs rust-core"
+    "bench:runtime": "corepack pnpm core:build && corepack pnpm build && node benchmarks/app-runtime.mjs rust-core",
+    "bench:contract": "corepack pnpm core:build:dev && node benchmarks/nd-core-contract.mjs",
+    "bench:tasks": "corepack pnpm core:build:dev && corepack pnpm build && node benchmarks/task-metrics.mjs",
+    "bench:tasks:baseline": "corepack pnpm core:build:dev && corepack pnpm build && node benchmarks/task-metrics.mjs --baseline",
+    "bench:tasks:check": "node benchmarks/task-metrics.mjs --verify benchmarks/baselines/agent-task-normal-loop.json"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",

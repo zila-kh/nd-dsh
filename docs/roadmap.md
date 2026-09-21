@@ -31,12 +31,40 @@ These are blockers for a downloadable public beta, not optional polish.
 
 ### Active implementation — PRD 0002 Rust Shared Core + Parallel Agent Runtime MVP
 
-- PRD: [0002-rust-sidecar-mvp-migration.md](prd/0002-rust-sidecar-mvp-migration.md) — **in-progress**.
-- Task: [wip-0002-rust-sidecar-mvp-migration.md](tasks/wip-0002-rust-sidecar-mvp-migration.md) — P0, ChatGPT, `feat/rust-shared-core-mvp`.
-- Benchmark contract: [performance-benchmark-suite.md](plan/performance-benchmark-suite.md).
-- Parallel-agent scope: [parallel-work-distribution.md](plan/parallel-work-distribution.md).
+- PRD: [0002-rust-sidecar-mvp-migration.md](prd/0002-rust-sidecar-mvp-migration.md) — **MVP merged; reconverging on open deltas** (see §5.0).
+- Task: [wip-0002-rust-sidecar-mvp-migration.md](tasks/wip-0002-rust-sidecar-mvp-migration.md) — P0, merged as PR #20 (`588f3ed`).
+- Benchmark contract: [performance-benchmark-suite.md](plan/performance-benchmark-suite.md) — implemented at runtime level; §12 records what is still unmeasurable.
+- Parallel-agent scope: [parallel-work-distribution.md](plan/parallel-work-distribution.md) — D1-D3 implemented; see the open-delta list.
+- Agent fast path: [agent-fast-path.md](plan/agent-fast-path.md) — proposed; **gated on measurement, not started**.
 
 This approved MVP is the active implementation vehicle for the runtime-distribution, PTY/process, Git/worktree, parallel-worker capacity, packaged Windows smoke, and reproducible performance-proof portions of the roadmap. Organization/business truth remains TypeScript-owned; nd-core owns shared runtime permits, native process/resource lifecycle, and system-heavy services.
+
+**Status:** the shared core, permits, PTY/Git/process migration, parallel distribution, and the benchmark suite all merged and run. The remaining work is convergence, not construction, and it is listed with file-level evidence in [PRD 0002 §5.0.2](prd/0002-rust-sidecar-mvp-migration.md#502-genuinely-open-deltas--the-remaining-mvp-work). Task 0006 closed the runtime-contract deltas — the `workspace.*` layer has a product consumer, core-side deadlines and per-request cancellation exist, `terminal.restart`/`terminal.state` exist, a revision-keyed cache backs `git.status`/`git.log`, and bounded search exists — with the decisions recorded in [PRD 0002 §5.0.3](prd/0002-rust-sidecar-mvp-migration.md#503-decision-record--nd-core-runtime-contract-task-0006-2026-09-21). Still open there: node-pty removal (0007), the legacy backend switch (0007), the autopilot dispatch heuristic (0007), and benchmark evidence gaps (0004/0005).
+
+**CI reality check:** CI has not been green on this work. The MVP PR failed all three jobs, and because release staging failed first, the packaged Windows smoke never ran and no performance-evidence bundle was ever produced. Separately, `pnpm bench:smoke` is red on Windows because the benchmark client never answers ConPTY's Device Status Report — it passes on the `ubuntu-latest` runner, so CI cannot see it. Both are recorded in [performance-benchmark-suite.md §12.6](plan/performance-benchmark-suite.md#126-benchsmoke-is-red-on-windows-and-the-client-is-the-reason). Do not treat any packaged-Windows or benchmark proof as established until these are closed.
+
+#### Current direction — four deliverables
+
+1. **`nd-core` Rust sidecar MVP** — finish the open deltas above. The goal is a fast native execution layer, not a TypeScript-to-Rust translation.
+2. **Remaining TODOs + [parallel-work-distribution.md](plan/parallel-work-distribution.md)** — integrated into that MVP rather than cut as a separate project.
+3. **Benchmark/performance suite** — extend the existing runtime-level suite (which is real and shipped) with agent-task metrics, committed baselines, and backend-identity assertions: [performance-benchmark-suite.md §12](plan/performance-benchmark-suite.md#12-remaining-gaps--agent-task-metrics-baselines-and-fast-path-proof). Agent-task metrics and the committed normal-loop baseline landed with task 0005 (`pnpm bench:tasks`, `pnpm bench:tasks:check`); the backend-identity assertions remain in task 0004.
+4. **Typed fast-agent path + escalation** — [agent-fast-path.md](plan/agent-fast-path.md). Cheap decision tier over a typed action space, composite core operations, escalation to a powerful model only when reasoning is required. Its action vocabulary must reuse the P3.2 normalized action envelope rather than forking a second one.
+
+Target: **fast native runtime + minimal round trips + structured agent actions + a powerful model only when reasoning is actually required.** Benchmark evidence decides what moves next; TypeScript stays where it is not the bottleneck.
+
+#### Task board — PRD 0002 breakdown
+
+| Task | Pri | Owner | What it unblocks |
+| --- | --- | --- | --- |
+| [wip-0004](tasks/wip-0004-restore-green-ci-and-evidence.md) | P0 | ZCode | CI actually runs its gates on Windows; performance claims become verifiable and swap-proof |
+| [wip-0007](tasks/wip-0007-retire-legacy-paths-and-dispatch.md) | P1 | ZCode | one terminal runtime path; legacy backend switch scheduled out; autopilot capacity decided by query |
+| [todo-0009](tasks/todo-0009-windows-cli-shim-prompt-truncation.md) | P1 | unassigned | shimmed CLI engines receive the whole prompt on Windows instead of its first line |
+| [todo-0010](tasks/todo-0010-desktop-smoke-teardown.md) | P1 | unassigned | names the desktop-smoke teardown leak so `validate` can go green |
+| [todo-0008](tasks/todo-0008-agent-fast-path.md) | P2 | unassigned | one action vocabulary (unblocked), then the router and composite ops once measurement exists |
+| [done-0005](tasks/done/done-0005-agent-task-measurement.md) | P1 | ZCode | **done, verified** — task cost measurable: result kind, offline fixture and normal-loop baseline |
+| [done-0006](tasks/done/done-0006-nd-core-runtime-contract.md) | P1 | ZCode | **done, verified** — sidecar declared scope delivered: filesystem layer resolved, deadlines, protocol completeness, cache/revision, search |
+
+Claim a task by setting `Owner` and taking the prefix to `wip-`; the full per-task detail, acceptance criteria, and evidence references live under [docs/tasks/](tasks/).
 
 
 ### 1. Runtime distribution

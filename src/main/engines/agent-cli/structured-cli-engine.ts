@@ -7,6 +7,7 @@ import type {
   SessionEventEnvelope,
 } from '../../../shared/contracts.js'
 import { stripWorkspaceContext } from '../../../shared/workspace-context.js'
+import { noteModelUsage } from '../../metrics/task-metrics.js'
 import {
   deferred,
   engineEnvironment,
@@ -20,6 +21,13 @@ export type StructuredCliEvent =
   | { kind: 'session'; sessionId: string }
   | { kind: 'text'; text: string }
   | { kind: 'text-replace'; text: string }
+  /**
+   * One model call completed inside the CLI's own agent loop. ND cannot see a
+   * CLI's model calls directly, so an engine whose wire exposes step
+   * boundaries reports them here; that is what makes a turn's model round
+   * trips countable instead of collapsing to "one turn".
+   */
+  | { kind: 'step'; usage?: { inputTokens?: number; outputTokens?: number } }
   | { kind: 'tool-start'; callId?: string; name: string; input?: unknown }
   | { kind: 'tool-result'; callId?: string; name?: string; output: unknown; isError?: boolean }
   | { kind: 'done'; text?: string; failed?: boolean; message?: string }
@@ -315,6 +323,10 @@ export class StructuredCliEngine {
       }
       if (event.kind === 'text-replace') {
         session.turnAssistantText = event.text
+        continue
+      }
+      if (event.kind === 'step') {
+        noteModelUsage(session.sessionId, 'cli-steps', event.usage)
         continue
       }
       if (event.kind === 'tool-start') {

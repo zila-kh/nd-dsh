@@ -17,6 +17,7 @@ export async function runPackagedRuntimeSmoke(options: PackagedRuntimeSmokeOptio
   const marker = 'ND_PACKAGED_TERMINAL_SMOKE'
   const sessionId = 'packaged-runtime-smoke'
   let terminalId: string | undefined
+  let observed: { shell: string; status: string; outputSeq: number; buffer: string } | undefined
   const receipt: Record<string, unknown> = {
     schemaVersion: 1,
     benchmark: 'packaged-runtime-smoke',
@@ -52,7 +53,14 @@ export async function runPackagedRuntimeSmoke(options: PackagedRuntimeSmokeOptio
       if (snapshot.status === 'error') throw new Error(snapshot.error ?? 'Packaged terminal entered an error state.')
       await new Promise((resolvePromise) => setTimeout(resolvePromise, 50))
     }
-    if (!snapshot.buffer.includes(marker)) throw new Error('Packaged Rust PTY did not produce the terminal smoke marker.')
+    if (!snapshot.buffer.includes(marker)) {
+      // A bare "no marker" is not evidence. Record what the PTY actually
+      // produced, so a packaged run that fails here names the defect - a shell
+      // that never started, a runtime that withheld output, or a command the
+      // shell could not read - instead of leaving it to the next investigator.
+      observed = snapshot
+      throw new Error('Packaged Rust PTY did not produce the terminal smoke marker.')
+    }
     receipt.terminal = {
       shell: snapshot.shell,
       outputSeq: snapshot.outputSeq,
@@ -80,6 +88,15 @@ export async function runPackagedRuntimeSmoke(options: PackagedRuntimeSmokeOptio
     await writeReceipt(options.outputPath, receipt)
   } catch (error) {
     receipt.error = error instanceof Error ? error.message : String(error)
+    if (observed) {
+      receipt.terminal = {
+        shell: observed.shell,
+        status: observed.status,
+        outputSeq: observed.outputSeq,
+        markerObserved: false,
+        bufferExcerpt: observed.buffer.slice(-2_000),
+      }
+    }
     receipt.completedAt = Date.now()
     receipt.durationMs = Date.now() - startedAt
     await writeReceipt(options.outputPath, receipt)
@@ -89,10 +106,23 @@ export async function runPackagedRuntimeSmoke(options: PackagedRuntimeSmokeOptio
   }
 }
 
+/**
+ * Print the marker and leave the shell running: this smoke closes the terminal
+ * after it has read the marker, which is what ends the shell.
+ *
+ * Asking the shell to `exit` on the same line is not equivalent. A shell that
+ * prints the marker and exits before the console host has flushed that output
+ * loses it — measured on Windows: `echo <marker>` + `exit` written as one input
+ * left the buffer holding the echoed command and the banner, with neither the
+ * marker nor any output after it, while the same command without `exit` was
+ * read in full (and at any write delay from 0 to 200 ms after create). The gate
+ * is "the packaged PTY produces the shell's output"; the early `exit` only made
+ * that unobservable.
+ */
 function terminalCommand(shell: string): string {
-  if (process.platform !== 'win32') return "printf 'ND_PACKAGED_%s\\n' \"$ND_DSH_SMOKE_SUFFIX\"; exit\n"
-  if (/powershell|pwsh/i.test(shell)) return 'Write-Output ("ND_PACKAGED_" + $env:ND_DSH_SMOKE_SUFFIX); exit\r\n'
-  return 'echo ND_PACKAGED_%ND_DSH_SMOKE_SUFFIX%\r\nexit\r\n'
+  if (process.platform !== 'win32') return "printf 'ND_PACKAGED_%s\\n' \"$ND_DSH_SMOKE_SUFFIX\"\n"
+  if (/powershell|pwsh/i.test(shell)) return 'Write-Output ("ND_PACKAGED_" + $env:ND_DSH_SMOKE_SUFFIX)\r\n'
+  return 'echo ND_PACKAGED_%ND_DSH_SMOKE_SUFFIX%\r\n'
 }
 
 async function writeReceipt(path: string, receipt: Record<string, unknown>): Promise<void> {

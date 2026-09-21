@@ -1,4 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { existsSync, readFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 
 /**
  * Shared plumbing for the direct CLI-agent engines (Claude Code, Cursor,
@@ -23,10 +25,61 @@ export function deferred<T>(): Deferred<T> {
   return { promise, resolve }
 }
 
+/** The node entry a Windows `.cmd`/`.bat` shim forwards to, when it can be found. */
+interface ShimTarget {
+  command: string
+  script: string
+}
+
+const SHIM_MAX_BYTES = 64 * 1024
+const SHIM_SCRIPT_PATTERN = /"([^"\r\n]*?(?:%~dp0|%dp0%)[^"\r\n]*?\.(?:c?js|mjs))"/i
+
+/**
+ * Resolve what a Windows shim actually runs.
+ *
+ * npm/pnpm-style shims forward to a node script through `%dp0%`/`%~dp0`, and
+ * `cmd.exe` is only ever on the path to do that forwarding. Reaching the script
+ * directly removes `cmd.exe` from argument transport, which matters because
+ * `cmd.exe` parses its command string line by line: a newline inside an argument
+ * ends the command there, so the child receives only the first line and any
+ * later text is parsed as further commands. Multi-line prompts are ND's normal
+ * case, and the truncation was silent — the CLI reported success.
+ *
+ * Returns undefined for anything that does not look like a node shim, and the
+ * caller falls back to the `cmd.exe` path.
+ */
+function resolveShimTarget(bin: string): ShimTarget | undefined {
+  if (process.platform !== 'win32') return undefined
+  let source: string
+  try {
+    source = readFileSync(bin, 'utf8')
+  } catch {
+    return undefined
+  }
+  if (source.length > SHIM_MAX_BYTES) return undefined
+  const match = SHIM_SCRIPT_PATTERN.exec(source)
+  if (!match) return undefined
+
+  // `%~dp0` expands to the shim's own directory *including* a trailing separator.
+  const dir = dirname(bin)
+  const captured = match[1]
+  if (!captured) return undefined
+  const script = resolve(captured.replace(/%~dp0|%dp0%/i, `${dir}\\`))
+  if (!existsSync(script)) return undefined
+
+  // Mirror the shim's own interpreter choice: a node.exe shipped beside it wins,
+  // otherwise a PATH `node`. `process.execPath` is Electron here and would need
+  // ELECTRON_RUN_AS_NODE to behave as node, which is not what the shim does.
+  const localNode = join(dir, 'node.exe')
+  return { command: existsSync(localNode) ? localNode : 'node', script }
+}
+
 /**
  * Spawn a resolved CLI entry. npm-installed CLIs resolve to `.cmd`/`.bat`
- * shims on Windows, which Node refuses to spawn directly, so those go
- * through `cmd.exe /d /s /c`; everything else spawns as-is.
+ * shims on Windows, which Node refuses to spawn directly. A node shim is
+ * resolved to its script and spawned without a shell; only a shim that cannot
+ * be resolved goes through `cmd.exe /d /s /c`, where multi-line arguments do
+ * not survive.
  */
 export function spawnCliCommand(
   spawnProcess: typeof spawn,
@@ -36,6 +89,8 @@ export function spawnCliCommand(
 ): ChildProcess {
   const shimmed = /\.(cmd|bat)$/i.test(bin)
   if (!shimmed) return spawnProcess(bin, args, options)
+  const target = resolveShimTarget(bin)
+  if (target) return spawnProcess(target.command, [target.script, ...args], options)
   const command = [bin, ...args].map((part) => (/[\s"^&|<>]/.test(part) ? `"${part.replace(/"/g, '""')}"` : part)).join(' ')
   return spawnProcess('cmd.exe', ['/d', '/s', '/c', command], { ...options, windowsVerbatimArguments: true })
 }

@@ -36,7 +36,21 @@ export class TaskIntegrationConflictError extends Error {
 }
 
 export class TaskWorktreeManager {
+  /**
+   * Task worktrees ND created or recovered in this session. The engine router
+   * uses this to tell ND's own isolated task checkouts apart from a foreign
+   * project folder; nothing else is admitted by that check.
+   */
+  private readonly knownRoots = new Set<string>()
+
   constructor(private readonly runGit: WorktreeGitRunner = git) {}
+
+  /** Whether ND owns this task worktree path for the current session. */
+  ownsRoot(path: string): boolean {
+    if (!path?.trim()) return false
+    return this.knownRoots.has(normalizeRoot(path))
+  }
+
   /**
    * Create or recover a deterministic worktree for a task. A new worktree is
    * created only from a clean base workspace so the branch cannot silently omit
@@ -53,7 +67,10 @@ export class TaskWorktreeManager {
     const repoRoot = await repositoryRoot(projectWorkspace, this.runGit).catch(() => bootstrapEmptyRepository(projectWorkspace, this.runGit))
     if (!repoRoot) return undefined
     const descriptor = describe(repoRoot, taskId)
-    if (await isAttachedWorktree(descriptor.root, this.runGit)) return descriptor
+    if (await isAttachedWorktree(descriptor.root, this.runGit)) {
+      this.knownRoots.add(normalizeRoot(descriptor.root))
+      return descriptor
+    }
 
     await fs.mkdir(dirname(descriptor.root), { recursive: true })
     if (await pathExists(descriptor.root)) {
@@ -63,12 +80,14 @@ export class TaskWorktreeManager {
     await this.runGit(repoRoot, ['worktree', 'prune'])
     if (await branchExists(repoRoot, descriptor.branch, this.runGit)) {
       await this.runGit(repoRoot, ['worktree', 'add', descriptor.root, descriptor.branch])
+      this.knownRoots.add(normalizeRoot(descriptor.root))
       return descriptor
     }
 
     const status = await this.runGit(repoRoot, ['status', '--porcelain=v1', '--untracked-files=all'])
     if (status.stdout.trim()) return undefined
     await this.runGit(repoRoot, ['worktree', 'add', '-b', descriptor.branch, descriptor.root, 'HEAD'])
+    this.knownRoots.add(normalizeRoot(descriptor.root))
     return descriptor
   }
 
@@ -77,7 +96,9 @@ export class TaskWorktreeManager {
     const repoRoot = await repositoryRoot(projectWorkspace, this.runGit).catch(() => undefined)
     if (!repoRoot) return undefined
     const descriptor = describe(repoRoot, taskId)
-    return await isAttachedWorktree(descriptor.root, this.runGit) ? descriptor : undefined
+    if (!await isAttachedWorktree(descriptor.root, this.runGit)) return undefined
+    this.knownRoots.add(normalizeRoot(descriptor.root))
+    return descriptor
   }
 
   /**
@@ -222,6 +243,12 @@ function safeTaskKey(taskId: string): string {
   const readable = taskId.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 24) || 'task'
   const digest = createHash('sha256').update(taskId).digest('hex').slice(0, 8)
   return `${readable}-${digest}`
+}
+
+/** Worktree paths are compared case-insensitively on Windows, like the filesystem. */
+function normalizeRoot(path: string): string {
+  const resolved = resolve(path)
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved
 }
 
 async function repositoryRoot(cwd: string, runGit: WorktreeGitRunner = git): Promise<string> {

@@ -21,10 +21,31 @@ export interface PtyProcessLike {
   kill(signal?: string): void
   onData(listener: (data: string) => void): { dispose(): void }
   onExit(listener: (event: { exitCode: number; signal?: number }) => void): { dispose(): void }
+  /**
+   * Replace the shell behind this terminal while keeping the terminal identity.
+   * Only a runtime that names its terminals (nd-core) can do this; without it a
+   * restart falls back to spawning a fresh shell.
+   */
+  restart?(cols: number, rows: number): Promise<number>
+  /**
+   * What the runtime that owns this shell reports about it. Used to tell a shell
+   * that is still alive from one whose owner has since restarted.
+   */
+  shellState?(): Promise<{ running: boolean; generation?: number; restartCount?: number; exitCode?: number } | undefined>
 }
 export interface PtySpawnOptions { name: string; cols: number; rows: number; cwd: string; env: Record<string, string> }
 export type PtySpawner = (file: string, args: string[], options: PtySpawnOptions) => PtyProcessLike | Promise<PtyProcessLike>
-interface Runtime { process: PtyProcessLike; data: { dispose(): void }; exit: { dispose(): void } }
+interface Runtime {
+  process: PtyProcessLike
+  data: { dispose(): void }
+  exit: { dispose(): void }
+  /**
+   * ConPTY's startup cursor-position handshake for this shell. `answered` keeps
+   * the reply to one per shell; `payloadSeen` closes the window in which a reply
+   * from this layer is more accurate than none.
+   */
+  handshake: { answered: boolean; payloadSeen: boolean }
+}
 
 export interface TerminalManagerOptions {
   storePath: string
@@ -142,12 +163,73 @@ export class TerminalManager {
 
   async restart(sessionId: string, terminalId: string): Promise<TerminalSessionState> {
     const terminal = await this.owned(sessionId, terminalId)
-    this.detach(terminal.sessionId, terminal.id, true)
-    terminal.status = 'starting'; terminal.updatedAt = Date.now(); delete terminal.pid; delete terminal.exitCode; delete terminal.error
+    const runtime = this.runtime(terminal.sessionId, terminal.id)
+    terminal.status = 'starting'; terminal.updatedAt = Date.now(); delete terminal.exitCode; delete terminal.error
     append(terminal, '\r\n\x1b[2m[ND] Restarted terminal.\x1b[0m\r\n')
+    if (runtime?.process.restart) {
+      // The runtime keeps the terminal's identity across the restart, so its output
+      // sequence and its listeners continue rather than starting a new terminal.
+      try {
+        // The shell that comes back is a new console host: it asks the startup
+        // cursor-position question again, so the answering window reopens.
+        runtime.handshake.answered = false
+        runtime.handshake.payloadSeen = false
+        const pid = await runtime.process.restart(terminal.cols, terminal.rows)
+        terminal.status = 'running'; terminal.pid = pid; delete terminal.recovered
+        this.changed(terminal.sessionId)
+        return cloneSession(this.sessions.get(terminal.sessionId)!)
+      } catch (error) {
+        this.detach(terminal.sessionId, terminal.id, true)
+        terminal.status = 'error'
+        terminal.error = `Failed to restart shell: ${error instanceof Error ? error.message : String(error)}`
+        delete terminal.pid
+        this.changed(terminal.sessionId)
+        throw new Error(terminal.error)
+      }
+    }
+    this.detach(terminal.sessionId, terminal.id, true)
+    delete terminal.pid
     await this.spawn(terminal, terminal.shell || undefined, false)
     this.changed(terminal.sessionId)
     return cloneSession(this.sessions.get(terminal.sessionId)!)
+  }
+
+  /**
+   * Re-check every live shell against the runtime that owns it and mark the ones
+   * that are gone. This is what keeps a session honest after the sidecar restarted:
+   * without it a terminal whose shell died with the old sidecar would keep showing
+   * as running.
+   */
+  async reconcileShells(): Promise<number> {
+    if (!this.initialized || this.closing) return 0
+    let reconciled = 0
+    for (const [sessionId, runtimes] of [...this.runtimes]) {
+      for (const [terminalId, runtime] of [...runtimes]) {
+        if (!runtime.process.shellState) continue
+        const terminal = this.sessions.get(sessionId)?.terminals.find((item) => item.id === terminalId)
+        if (!terminal || terminal.status !== 'running') continue
+        let state: Awaited<ReturnType<NonNullable<PtyProcessLike['shellState']>>> | undefined
+        try {
+          state = await runtime.process.shellState()
+        } catch {
+          state = undefined
+        }
+        if (state?.running && this.runtime(sessionId, terminalId) === runtime) continue
+        this.detach(sessionId, terminalId, false)
+        terminal.status = 'exited'
+        terminal.exitCode = state?.exitCode ?? terminal.exitCode ?? 1
+        terminal.updatedAt = Date.now()
+        delete terminal.pid
+        reconciled += 1
+        this.options.onExit?.({
+          sessionId,
+          terminalId,
+          exitCode: terminal.exitCode,
+        })
+        this.changed(sessionId)
+      }
+    }
+    return reconciled
   }
 
   async rename(sessionId: string, terminalId: string, title: string): Promise<TerminalSessionState> {
@@ -203,9 +285,10 @@ export class TerminalManager {
         })
         terminal.shell = attempt.file; terminal.status = 'running'; terminal.pid = pty.pid; terminal.updatedAt = Date.now()
         if (recovered) terminal.recovered = true; else delete terminal.recovered
-        const runtime: Runtime = { process: pty, data: { dispose() {} }, exit: { dispose() {} } }
+        const runtime: Runtime = { process: pty, data: { dispose() {} }, exit: { dispose() {} }, handshake: { answered: false, payloadSeen: false } }
         runtime.data = pty.onData((data) => {
           if (this.runtime(terminal.sessionId, terminal.id) !== runtime) return
+          answerStartupCursorQuery(pty, runtime.handshake, data)
           terminal.outputSeq += 1; terminal.updatedAt = Date.now(); append(terminal, data)
           this.options.onOutput?.({ sessionId: terminal.sessionId, terminalId: terminal.id, seq: terminal.outputSeq, data })
           this.schedulePersist()
@@ -310,6 +393,66 @@ function terminalEnv(sessionId: string, terminalId: string): Record<string, stri
 }
 function unique(values: Array<string | undefined>): string[] { return [...new Set(values.map((v) => v?.trim()).filter((v): v is string => Boolean(v)))] }
 function append(terminal: TerminalSnapshot, data: string): void { terminal.buffer = `${terminal.buffer}${data}`.slice(-MAX_BUFFER) }
+
+const CURSOR_QUERY = '\u001b[6n'
+const CURSOR_REPLY = '\u001b[1;1R'
+
+/**
+ * Answer ConPTY's startup cursor-position query when nothing else will.
+ *
+ * The Windows console host asks the terminal for its cursor position (`ESC[6n`)
+ * before it releases the child's output, and waits for the answer. A rendered
+ * xterm.js pane replies on its own, which is why the terminal pane is
+ * unaffected; a terminal that nothing renders — the packaged runtime smoke, an
+ * e2e spec driving the preload bridge, a session whose pane is not mounted —
+ * receives those four bytes and then silence, with the shell alive and its
+ * output withheld.
+ *
+ * The reply is deliberately limited to the startup handshake: it is written
+ * only while the shell has produced no payload yet, which is precisely when the
+ * console host is withholding output and the cursor is still at home. A later
+ * query is left to the emulator, because this layer cannot know where the
+ * cursor is, and a wrong position would move the console host's cursor under
+ * the user's terminal. POSIX PTYs never query, so this is a no-op there.
+ */
+function answerStartupCursorQuery(pty: PtyProcessLike, handshake: Runtime['handshake'], data: string): void {
+  if (process.platform !== 'win32' || handshake.answered || handshake.payloadSeen) return
+  const queryAt = data.indexOf(CURSOR_QUERY)
+  if (queryAt === -1) {
+    if (hasTerminalPayload(data)) handshake.payloadSeen = true
+    return
+  }
+  if (hasTerminalPayload(data.slice(0, queryAt))) {
+    handshake.payloadSeen = true
+    return
+  }
+  handshake.answered = true
+  try { pty.write(CURSOR_REPLY) } catch { /* the shell may already be gone; its exit event is the report */ }
+}
+
+/** True when a chunk carries anything but escape sequences and line endings. */
+function hasTerminalPayload(data: string): boolean {
+  for (let index = 0; index < data.length; index += 1) {
+    const code = data.charCodeAt(index)
+    if (code === 0x1b) {
+      const next = data.charCodeAt(index + 1)
+      if (next === 0x5b) {
+        let end = index + 2
+        while (end < data.length && !(data.charCodeAt(end) >= 0x40 && data.charCodeAt(end) <= 0x7e)) end += 1
+        index = end
+      } else if (next === 0x5d) {
+        let end = index + 2
+        while (end < data.length && data.charCodeAt(end) !== 0x07 && !(data.charCodeAt(end) === 0x1b && data.charCodeAt(end + 1) === 0x5c)) end += 1
+        index = data.charCodeAt(end) === 0x07 ? end : end + 1
+      } else {
+        index += 1
+      }
+      continue
+    }
+    if (code >= 0x20 && code !== 0x7f) return true
+  }
+  return false
+}
 function asId(value: string, label: string): string { const id = value?.trim(); if (!id || id.length > 256) throw new Error(`${label} is invalid`); return id }
 function cleanTitle(value?: string): string | undefined { const title = value?.trim().replace(/\s+/g, ' '); return title ? title.slice(0, 80) : undefined }
 function clamp(value: number | undefined, fallback: number, min: number, max: number): number { return typeof value === 'number' && Number.isFinite(value) ? Math.min(max, Math.max(min, Math.round(value))) : fallback }

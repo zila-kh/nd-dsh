@@ -38,6 +38,32 @@ describe('TerminalManager', () => {
     await manager.shutdown()
   })
 
+  it('answers ConPTY\'s startup cursor query for a terminal nothing renders', async () => {
+    const { manager, ptys } = await setup(); await manager.create({ sessionId: 'chat-a' })
+    ptys[0]!.emit('\u001b[6n')
+    // Windows withholds a shell's output until the terminal answers that query;
+    // a POSIX PTY never asks, so nothing may be written there.
+    expect(ptys[0]!.writes).toEqual(process.platform === 'win32' ? ['\u001b[1;1R'] : [])
+    await manager.shutdown()
+  })
+
+  it('answers the startup query when the shell has emitted only control sequences so far', async () => {
+    const { manager, ptys } = await setup(); await manager.create({ sessionId: 'chat-a' })
+    ptys[0]!.emit('\u001b[?9001h\u001b[?1004h')
+    ptys[0]!.emit('\u001b[6n')
+    expect(ptys[0]!.writes).toHaveLength(process.platform === 'win32' ? 1 : 0)
+    await manager.shutdown()
+  })
+
+  it('leaves cursor queries after real output to the terminal emulator', async () => {
+    const { manager, ptys } = await setup(); await manager.create({ sessionId: 'chat-a' })
+    ptys[0]!.emit('\u001b[6n'); ptys[0]!.emit('prompt> '); ptys[0]!.emit('\u001b[6n')
+    // One reply for the startup handshake; a later query is answered by the
+    // emulator, which knows where the cursor actually is.
+    expect(ptys[0]!.writes).toHaveLength(process.platform === 'win32' ? 1 : 0)
+    await manager.shutdown()
+  })
+
   it('retains bounded scrollback and output sequence for renderer reattachment', async () => {
     const { manager, ptys } = await setup(); const created = await manager.create({ sessionId: 'chat-a' }); const id = created.terminals[0]!.id
     ptys[0]!.emit('hello\r\n'); ptys[0]!.emit('world\r\n'); const state = await manager.state('chat-a')

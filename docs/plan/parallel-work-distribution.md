@@ -1,6 +1,6 @@
 # Parallel work distribution and specialist engineering roles
 
-Status: **draft — folded into PRD 0002 for human review.** No tasks scaffolded, no implementation started.
+Status: **implemented for D1-D3, merged with PRD 0002 (PR #20, `588f3ed`).** The distribution policy, reviewer rotation, and the execution/review pools are built; the acceptance checkboxes in §5 were written pre-implementation and are not individually reconciled — see [PRD 0002 §5.0](../prd/0002-rust-sidecar-mvp-migration.md#50-status-reconciliation-2026-09-21) for what is verified and what is open.
 Updated: 2026-09-21
 Related: [`../prd/0002-rust-sidecar-mvp-migration.md`](../prd/0002-rust-sidecar-mvp-migration.md) · [`../prd-full.md`](../prd-full.md) · [`ai-company-os.md`](../ai-company-os.md) · [`phase-2-agent-company-scale.md`](phase-2-agent-company-scale.md) (P2.1, P2.2, P2.6) · [`../roadmap.md`](../roadmap.md)
 

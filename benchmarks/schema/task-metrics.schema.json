@@ -1,0 +1,226 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ND agent-task metrics result",
+  "description": "Task-level result kind: one sample per organization run plus the aggregate a task-cost claim is made from. Runtime kinds answer 'is the core fast'; this kind answers 'what did one agent task cost'.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "benchmark",
+    "taskKind",
+    "timestamp",
+    "backend",
+    "commit",
+    "buildProfile",
+    "fixtureRevision",
+    "environment",
+    "wallTimeScope",
+    "fixture",
+    "passes",
+    "samples",
+    "summary",
+    "expectations"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "benchmark": { "const": "agent-task-metrics" },
+    "taskKind": {
+      "const": "agent-task",
+      "description": "Distinguishes this result kind from the runtime kinds in result.schema.json."
+    },
+    "timestamp": { "type": "string", "minLength": 1 },
+    "backend": { "type": "string", "minLength": 1 },
+    "commit": { "type": "string", "minLength": 1 },
+    "buildProfile": { "type": "string", "minLength": 1 },
+    "fixtureRevision": { "type": "string", "minLength": 1 },
+    "environment": {
+      "type": "object",
+      "required": ["os", "osVersion", "arch", "cpuModel", "logicalCpuCount", "physicalMemoryBytes", "nodeVersion"],
+      "additionalProperties": true
+    },
+    "wallTimeScope": {
+      "enum": ["excludes-model-latency", "includes-model-latency"],
+      "description": "Counters are comparable in either scope. A wall-time claim may only come from a run that includes real model latency, so an offline-fixture result states that its wall times are product overhead, not user-visible latency."
+    },
+    "runMode": {
+      "enum": ["offline-fixture", "live-model"],
+      "description": "How the tasks were produced. `offline-fixture` is deterministic and requires no provider."
+    },
+    "fixture": {
+      "type": "object",
+      "required": ["engineId", "cliPath", "cliSha256", "shim", "passes"],
+      "properties": {
+        "engineId": { "type": "string", "minLength": 1 },
+        "cliPath": { "type": "string", "minLength": 1 },
+        "cliSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+        "shim": {
+          "enum": ["cmd-exe", "posix-shell"],
+          "description": "Windows resolves an npm-style CLI through a .cmd shim, which cmd.exe parses; the shim therefore sees only the first line of a multi-line prompt."
+        },
+        "runtimePath": { "type": "string" },
+        "passes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["name", "tasks", "steps", "toolCalls", "stepMs", "verify", "failRun"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "tasks": { "type": "integer", "minimum": 1 },
+              "steps": { "type": "integer", "minimum": 0 },
+              "toolCalls": { "type": "integer", "minimum": 0 },
+              "stepMs": { "type": "integer", "minimum": 0 },
+              "verify": { "enum": ["pass", "fail"] },
+              "failRun": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    "passes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "tasks", "samples"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "tasks": { "type": "array" },
+          "samples": { "type": "integer", "minimum": 0 },
+          "workspaceRoot": { "type": "string" },
+          "droppedSamples": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "samples": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "runId", "sessionId", "kind", "startedAt", "finishedAt", "totalWallMs",
+          "modelRoundTrips", "roundTripSource", "toolCalls", "ipcCrossings",
+          "bytesToModel", "tokensToModel", "escalations", "outcome",
+          "verification", "completedTask", "finished"
+        ],
+        "properties": {
+          "runId": { "type": "string", "minLength": 1 },
+          "sessionId": { "type": "string", "minLength": 1 },
+          "taskId": { "type": "string" },
+          "kind": { "enum": ["pm-plan", "task-execution", "task-review"] },
+          "engineId": { "type": "string" },
+          "provider": { "type": "string" },
+          "model": { "type": "string" },
+          "startedAt": { "type": "number" },
+          "finishedAt": { "type": "number" },
+          "totalWallMs": { "type": "number", "minimum": 0 },
+          "modelRoundTrips": { "type": "integer", "minimum": 0 },
+          "roundTripSource": { "enum": ["harness-events", "cli-steps", "none"] },
+          "toolCalls": { "type": "integer", "minimum": 0 },
+          "ipcCrossings": { "type": "integer", "minimum": 0 },
+          "bytesToModel": { "type": "integer", "minimum": 0 },
+          "tokensToModel": { "type": "integer", "minimum": 0 },
+          "outputTokens": { "type": "integer", "minimum": 0 },
+          "escalations": { "type": "integer", "minimum": 0 },
+          "outcome": { "enum": ["completed", "failed", "canceled", "interrupted"] },
+          "verification": { "enum": ["passed", "failed", "skipped", "not-run"] },
+          "verificationDurationMs": { "type": "number", "minimum": 0 },
+          "completedTask": {
+            "type": "boolean",
+            "description": "True only when the run completed and its machine verification passed."
+          },
+          "finished": { "type": "boolean" },
+          "error": { "type": "string" }
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "wallTimeScope", "runs", "tasks", "completedTasks", "completionRate",
+        "unfinishedTasks", "outcomes", "verifications", "counters",
+        "perCompletedTask", "roundTripSources"
+      ],
+      "properties": {
+        "wallTimeScope": { "enum": ["excludes-model-latency", "includes-model-latency"] },
+        "runs": { "type": "integer", "minimum": 0 },
+        "tasks": { "type": "integer", "minimum": 0 },
+        "completedTasks": { "type": "integer", "minimum": 0 },
+        "completionRate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "unfinishedTasks": { "type": "integer", "minimum": 0 },
+        "outcomes": {
+          "type": "object",
+          "required": ["completed", "failed", "canceled", "interrupted"],
+          "properties": {
+            "completed": { "type": "integer", "minimum": 0 },
+            "failed": { "type": "integer", "minimum": 0 },
+            "canceled": { "type": "integer", "minimum": 0 },
+            "interrupted": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "verifications": {
+          "type": "object",
+          "required": ["passed", "failed", "skipped", "not-run"],
+          "properties": {
+            "passed": { "type": "integer", "minimum": 0 },
+            "failed": { "type": "integer", "minimum": 0 },
+            "skipped": { "type": "integer", "minimum": 0 },
+            "not-run": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "counters": {
+          "type": "object",
+          "required": ["totalWallMs", "modelRoundTrips", "toolCalls", "ipcCrossings", "bytesToModel", "tokensToModel", "escalations"],
+          "additionalProperties": {
+            "type": "object",
+            "required": ["total", "min", "max", "mean", "p50", "p95"],
+            "properties": {
+              "total": { "type": "number" },
+              "min": { "type": "number" },
+              "max": { "type": "number" },
+              "mean": { "type": "number" },
+              "p50": { "type": "number" },
+              "p95": { "type": "number" }
+            }
+          }
+        },
+        "perCompletedTask": {
+          "type": "object",
+          "description": "Mean counters over verified completions. These are the numbers a fast-path claim must reduce.",
+          "required": ["modelRoundTrips", "toolCalls", "ipcCrossings", "bytesToModel", "tokensToModel", "escalations", "totalWallMs"],
+          "additionalProperties": { "type": "number" }
+        },
+        "roundTripSources": {
+          "type": "object",
+          "required": ["harness-events", "cli-steps", "none"],
+          "properties": {
+            "harness-events": { "type": "integer", "minimum": 0 },
+            "cli-steps": { "type": "integer", "minimum": 0 },
+            "none": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "expectations": {
+      "type": "object",
+      "description": "The fixture declares what it did; the observed counters must match it. A deviation means the measurement is wrong, not that the task was fast.",
+      "required": ["checked", "deviations"],
+      "properties": {
+        "checked": { "type": "integer", "minimum": 0 },
+        "deviations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["taskId", "field", "expected", "observed"],
+            "properties": {
+              "taskId": { "type": "string" },
+              "field": { "type": "string" },
+              "expected": {},
+              "observed": {}
+            }
+          }
+        }
+      }
+    },
+    "notes": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": true
+}

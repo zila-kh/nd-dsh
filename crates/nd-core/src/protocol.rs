@@ -23,6 +23,11 @@ pub struct RequestFrame {
     pub kind: String,
     pub id: String,
     pub method: String,
+    /// How long nd-core may work on this request before it must stop. A request
+    /// without a deadline runs to completion; the client's own timeout is only a
+    /// backstop for a sidecar that stopped answering.
+    #[serde(default)]
+    pub deadline_ms: Option<u64>,
     #[serde(default)]
     pub params: Value,
 }
@@ -390,6 +395,21 @@ mod tests {
         let request = read_request(&mut Cursor::new(bytes)).unwrap().unwrap();
         assert_eq!(request.id, "request-1");
         assert_eq!(request.method, "core.health");
+        assert!(request.deadline_ms.is_none());
+    }
+
+    #[test]
+    fn carries_a_deadline_when_the_client_sends_one() {
+        let bytes = framed(json!({
+            "version": PROTOCOL_VERSION,
+            "kind": "request",
+            "id": "request-deadline",
+            "method": "git.exec",
+            "deadlineMs": 1_500,
+            "params": {}
+        }));
+        let request = read_request(&mut Cursor::new(bytes)).unwrap().unwrap();
+        assert_eq!(request.deadline_ms, Some(1_500));
     }
 
     #[test]

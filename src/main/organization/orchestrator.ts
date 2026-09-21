@@ -5,6 +5,7 @@ import type { CodingEngineRegistry } from '../engines/coding-engine-registry.js'
 import type { EngineSessionRouter } from '../engines/engine-session-router.js'
 import type { HarnessService } from '../harness/harness-service.js'
 import type { WorkspaceService } from '../workspace/workspace-service.js'
+import { taskMetricsRecorder } from '../metrics/task-metrics.js'
 import { isRetryableExecutionFailure, MAX_EXECUTION_ATTEMPTS, retryBackoffMs, stallTimeoutMs } from './execution-reliability.js'
 import type { OrganizationStore } from './store.js'
 import { TaskIntegrationConflictError, TaskWorktreeManager, type TaskWorktree } from './task-worktree.js'
@@ -398,6 +399,7 @@ export class OrganizationOrchestrator {
         const verification = context.task.evidenceKind === 'artifact'
           ? await runArtifactVerification(context.task.artifactPaths, worktree?.root ?? context.project.workspacePath)
           : await runVerification(context.project.testCommand, worktree?.root ?? context.project.workspacePath)
+        taskMetricsRecorder()?.noteVerification(sessionId, verification.status, verification.durationMs)
         const output = `${workerOutput}${formatVerificationEvidence(verification)}`
         if (verification.status === 'failed') {
           const message = `Machine verification failed: ${verification.reason ?? `exit ${verification.exitCode ?? 'unknown'}`}`
@@ -567,6 +569,7 @@ export class OrganizationOrchestrator {
 
   private async handleCanceledRun(run: OrganizationRun, sessionId: string): Promise<void> {
     const message = 'Canceled by user before the run completed.'
+    taskMetricsRecorder()?.noteCanceled(sessionId)
     if (run.kind === 'task-execution') await this.rollbackExecutionAttempt(sessionId)
     const output = `${this.finalText.get(sessionId) ?? ''}${this.routeEvidence(sessionId)}` || undefined
     await this.store.completeRun(run.id, output, message)

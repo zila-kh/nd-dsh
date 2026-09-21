@@ -2,19 +2,34 @@ import { decode, encode } from '@msgpack/msgpack'
 import { randomUUID } from 'node:crypto'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import process from 'node:process'
+import { taskMetricsRecorder } from '../metrics/task-metrics.js'
 import { assertNdCoreBinary } from './core-path.js'
 import {
+  ND_CORE_CLIENT_TIMEOUT_CODE,
   ND_CORE_MAX_FRAME_BYTES,
   ND_CORE_PROTOCOL_VERSION,
+  NdCoreError,
+  buildCoreRequestFrame,
   type NdCoreEventFrame,
   type NdCoreHealth,
   type NdCoreResponseFrame,
+  resolveCoreDeadlineMs,
 } from './core-protocol.js'
 
 interface PendingRequest {
   resolve(value: unknown): void
   reject(error: Error): void
   timer: ReturnType<typeof setTimeout>
+}
+
+export interface CoreRequestOptions {
+  /**
+   * How long nd-core may work on this request. Defaults to the client's own
+   * tolerance minus the margin that makes the core stop first, so a caller that
+   * waits `timeoutMs` receives a typed deadline error instead of an untagged
+   * timeout while the work carries on in Rust.
+   */
+  deadlineMs?: number
 }
 
 export interface CoreClientOptions {
@@ -58,9 +73,28 @@ export class CoreClient {
     }
   }
 
-  async request<T>(method: string, params: unknown = {}, timeoutMs = 30_000): Promise<T> {
+  async request<T>(
+    method: string,
+    params: unknown = {},
+    timeoutMs = 30_000,
+    options: CoreRequestOptions = {},
+  ): Promise<T> {
     await this.start()
-    return await this.sendRequest<T>(method, params, timeoutMs)
+    return await this.sendRequest<T>(method, params, timeoutMs, options)
+  }
+
+  /**
+   * Ask nd-core to stop working on an in-flight request. That request fails with
+   * the `canceled` code and every other request in flight is left alone.
+   */
+  async cancel(requestId: string, timeoutMs = 5_000): Promise<boolean> {
+    const result = await this.sendRequest<{ canceled: boolean }>(
+      'core.cancel',
+      { requestId },
+      timeoutMs,
+      {},
+    )
+    return result.canceled === true
   }
 
   onEvent<T = unknown>(event: string, listener: (frame: NdCoreEventFrame<T>) => void): () => void {
@@ -155,21 +189,26 @@ export class CoreClient {
     return health
   }
 
-  private sendRequest<T>(method: string, params: unknown, timeoutMs: number): Promise<T> {
+  private sendRequest<T>(
+    method: string,
+    params: unknown,
+    timeoutMs: number,
+    options: CoreRequestOptions = {},
+  ): Promise<T> {
     const child = this.child
     if (!child || child.killed || child.stdin.destroyed) {
       return Promise.reject(new Error('ND Core is not running.'))
     }
     if (!method || method.length > 128) return Promise.reject(new Error('Invalid ND Core method.'))
 
+    // Every request here is one main-process <-> nd-core crossing. Counting the
+    // attempt (not the successful reply) keeps a composite core operation's
+    // claim honest: failed and timed-out crossings cost the caller too.
+    taskMetricsRecorder()?.noteIpcCrossing()
+
     const id = randomUUID()
-    const encoded = Buffer.from(encode({
-      version: ND_CORE_PROTOCOL_VERSION,
-      kind: 'request',
-      id,
-      method,
-      params,
-    }))
+    const deadlineMs = resolveCoreDeadlineMs(timeoutMs, options.deadlineMs)
+    const encoded = Buffer.from(encode(buildCoreRequestFrame({ id, method, params, ...(deadlineMs === undefined ? {} : { deadlineMs }) })))
     if (encoded.length > ND_CORE_MAX_FRAME_BYTES) {
       return Promise.reject(new Error('ND Core request exceeds the protocol frame limit.'))
     }
@@ -179,7 +218,11 @@ export class CoreClient {
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id)
-        reject(new Error('ND Core request timed out: ' + method))
+        // The client timer is only a backstop for a sidecar that stopped answering,
+        // and it must not become the old defect of a caller giving up while the work
+        // continues in Rust: the request is told to stop as well.
+        void this.cancel(id).catch(() => undefined)
+        reject(new NdCoreError(ND_CORE_CLIENT_TIMEOUT_CODE, 'ND Core request timed out: ' + method))
       }, Math.max(250, timeoutMs))
       this.pending.set(id, {
         resolve: (value) => resolve(value as T),
@@ -235,7 +278,7 @@ export class CoreClient {
       if (!pending) return
       clearTimeout(pending.timer)
       this.pending.delete(frame.id)
-      if (frame.error) pending.reject(new Error('[' + frame.error.code + '] ' + frame.error.message))
+      if (frame.error) pending.reject(new NdCoreError(frame.error.code, frame.error.message))
       else pending.resolve(frame.result)
       return
     }
