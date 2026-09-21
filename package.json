@@ -31,10 +31,11 @@
     "core:build": "cargo build --release -p nd-core",
     "core:test": "cargo fmt --check && cargo clippy -p nd-core --all-targets -- -D warnings && cargo test -p nd-core",
     "bench:smoke": "corepack pnpm core:build:dev && node benchmarks/run-suite.mjs --smoke",
-    "bench:record": "corepack pnpm core:build && cross-env ND_DSH_BENCH_PROFILE=release node benchmarks/run-suite.mjs",
+    "bench:record": "node benchmarks/record.mjs",
     "bench:compare": "node benchmarks/compare.mjs",
     "bench:check": "node benchmarks/check-budgets.mjs",
-    "bench:app": "node benchmarks/app-startup.mjs"
+    "bench:app": "node benchmarks/app-startup.mjs",
+    "bench:runtime": "corepack pnpm core:build && corepack pnpm build && node benchmarks/app-runtime.mjs rust-core"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
