@@ -212,3 +212,59 @@ fn ensure_inside(root: &Path, target: &Path) -> Result<()> {
         bail!("workspace path escapes the root")
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    fn temp_root(label: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("nd-core-{label}-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn rejects_parent_escape_before_filesystem_access() {
+        let root = temp_root("workspace-parent");
+        let result = stat(PathParams {
+            root: root.to_string_lossy().into_owned(),
+            path: "../outside.txt".into(),
+        });
+        let _ = fs::remove_dir_all(&root);
+        assert!(result.is_err());
+        assert!(format!("{:#}", result.unwrap_err()).contains("escapes the root"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlink_read_and_write_escape() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_root("workspace-symlink-root");
+        let outside = temp_root("workspace-symlink-outside");
+        fs::write(outside.join("secret.txt"), "outside").unwrap();
+        symlink(&outside, root.join("link")).unwrap();
+
+        let read_result = read(ReadParams {
+            root: root.to_string_lossy().into_owned(),
+            path: "link/secret.txt".into(),
+            max_bytes: None,
+        });
+        assert!(read_result.is_err());
+        assert!(format!("{:#}", read_result.unwrap_err()).contains("escapes the root"));
+
+        let write_result = atomic_write(AtomicWriteParams {
+            root: root.to_string_lossy().into_owned(),
+            path: "link/new.txt".into(),
+            data: "blocked".into(),
+        });
+        assert!(write_result.is_err());
+        assert!(format!("{:#}", write_result.unwrap_err()).contains("escapes the root"));
+        assert!(!outside.join("new.txt").exists());
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&outside);
+    }
+}
