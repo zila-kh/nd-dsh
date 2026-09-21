@@ -385,7 +385,6 @@ fn validate_id(value: &str) -> Result<()> {
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
