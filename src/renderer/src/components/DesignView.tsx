@@ -296,7 +296,7 @@ export function DesignView({ active, workspace, browser, harness, onWorkspaceCha
           <ResizablePanelGroup direction={'horizontal' as const} className="h-full w-full">
             {/* Left Sidebar Panel */}
             {!sidebarCollapsed ? (
-              <ResizablePanel defaultSize={240} minSize={200} maxSize={420} groupResizeBehavior="preserve-pixel-size">
+              <ResizablePanel defaultSize={248} minSize={208} maxSize={420} groupResizeBehavior="preserve-pixel-size">
                 <aside aria-label="Design workspace" className="flex h-full w-full flex-col overflow-y-auto border-r border-border-soft bg-sidebar">
                   <div className="flex flex-col gap-1 border-b border-border-soft p-3">
                     <small className="text-[10px] font-bold tracking-widest text-primary uppercase">Workspace</small>
@@ -467,7 +467,7 @@ export function DesignView({ active, workspace, browser, harness, onWorkspaceCha
 
             {/* Right Inspector Panel */}
             {!inspectorCollapsed ? (
-              <ResizablePanel defaultSize={260} minSize={220} maxSize={480} groupResizeBehavior="preserve-pixel-size">
+              <ResizablePanel defaultSize={268} minSize={228} maxSize={480} groupResizeBehavior="preserve-pixel-size">
                 <aside aria-label="Design inspector" className="flex h-full w-full flex-col overflow-y-auto border-l border-border-soft bg-sidebar">
                   <header className="flex h-9 shrink-0 items-center justify-between border-b border-border-soft px-3">
                     <span className="text-[10px] font-bold tracking-widest text-faint uppercase">
