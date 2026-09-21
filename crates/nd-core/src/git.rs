@@ -183,7 +183,7 @@ fn parse_log(raw: &str) -> Result<Vec<GitLogEntry>> {
     let mut index = 0;
     while index + 4 < fields.len() {
         let hash = fields[index]
-            .trim_matches(|ch| ch == '\r' || ch == '\n')
+            .trim_matches(['\r', '\n'])
             .to_owned();
         if hash.is_empty() {
             index += 1;
@@ -201,7 +201,7 @@ fn parse_log(raw: &str) -> Result<Vec<GitLogEntry>> {
             .parse::<i64>()
             .context("parse Git author timestamp")?;
         let message = fields[index + 4]
-            .trim_end_matches(|ch| ch == '\r' || ch == '\n')
+            .trim_end_matches(['\r', '\n'])
             .to_owned();
         commits.push(GitLogEntry {
             hash,
@@ -314,7 +314,7 @@ mod tests {
 
     #[test]
     fn parses_nul_delimited_log_without_regex_scanning() {
-        let raw = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\0Jane Doe\0jane@example.test\01700000000\0Subject\n\nBody\n\0\n";
+        let raw = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\0Jane Doe\0jane@example.test\x001700000000\0Subject\n\nBody\n\0\n";
         let parsed = parse_log(raw).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].hash, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
