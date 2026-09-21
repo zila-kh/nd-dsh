@@ -111,6 +111,23 @@ export class OrganizationControlPlane {
       }
     }
 
+    if (taskId && action === 'task.execute') {
+      const task = organization.tasks.find((item) => item.id === taskId)
+      if (task?.workScopes?.length) {
+        const runningTaskIds = new Set(organization.runs
+          .filter((item) => item.status === 'running' && item.projectId === project.id && item.taskId && item.taskId !== taskId && item.kind === 'task-execution')
+          .map((item) => item.taskId as string))
+        const conflict = organization.tasks.find((item) => runningTaskIds.has(item.id) && scopesOverlap(task.workScopes ?? [], item.workScopes ?? []))
+        if (conflict) {
+          return {
+            route: 'wait', action, companyId: company.id, projectId: project.id, taskId,
+            reason: `Declared work scope overlaps active task “${conflict.title}”; ND is serializing these advisory scopes to reduce merge conflicts.`,
+            humanActionIds: [], ...(budget ? { budgetId: budget.id } : {}), checkedAt: Date.now(),
+          }
+        }
+      }
+    }
+
     if (taskId) {
       const lease = this.value.leases.find((item) => item.taskId === taskId && item.status === 'active' && item.expiresAt > Date.now())
       if (lease) {
@@ -554,6 +571,22 @@ function clone<T>(value: T): T { return structuredClone(value) }
 function clamp01(value: number): number { if (!Number.isFinite(value)) throw new Error('confidence must be finite'); return Math.max(0, Math.min(1, value)) }
 function nonNegative(value: number, label: string): number { if (!Number.isFinite(value) || value < 0) throw new Error(`${label} must be non-negative`); return value }
 function nonNegativeInteger(value: number, label: string): number { if (!Number.isInteger(value) || value < 0) throw new Error(`${label} must be a non-negative integer`); return value }
+function scopesOverlap(left: string[], right: string[]): boolean {
+  if (!left.length || !right.length) return false
+  return left.some((a) => right.some((b) => scopeBaseOverlaps(a, b)))
+}
+function scopeBaseOverlaps(left: string, right: string): boolean {
+  const base = (value: string): string => {
+    const normalized = value.replaceAll('\\', '/').replace(/^\.\//, '')
+    const wildcard = normalized.search(/[*?\[]/)
+    return (wildcard >= 0 ? normalized.slice(0, wildcard) : normalized).replace(/\/+$/, '')
+  }
+  const a = base(left)
+  const b = base(right)
+  if (!a || !b) return true
+  return a === b || a.startsWith(b + '/') || b.startsWith(a + '/')
+}
+
 function positiveInteger(value: number, label: string): number { if (!Number.isInteger(value) || value < 1) throw new Error(`${label} must be a positive integer`); return value }
 function positiveIntegerMap(value: Record<string, number>, label: string): Record<string, number> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object`)

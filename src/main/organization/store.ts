@@ -100,7 +100,9 @@ export class OrganizationStore {
           title: clean(input.title), description: clean(input.description),
           acceptanceCriteria: input.acceptanceCriteria?.map(clean).filter(Boolean) ?? ['Requested outcome is implemented and verified.'],
           priority: input.priority ?? 'medium', status: 'backlog', dependsOn: input.dependsOn ?? [],
-          ...(agent ? { assignedAgentId: agent.id } : {}), createdAt: Date.now(), updatedAt: Date.now(),
+          ...(agent ? { assignedAgentId: agent.id } : {}),
+          ...taskExecutionHints(input),
+          createdAt: Date.now(), updatedAt: Date.now(),
         })
       }
     }
@@ -539,7 +541,7 @@ export class OrganizationStore {
     const agent = input.assignedAgentId ? this.value.agents.find((item) => item.id === input.assignedAgentId) : this.pickAgent(input.companyId)
     if (agent?.teamId && !project.teamIds.includes(agent.teamId)) project.teamIds.push(agent.teamId)
     const now = Date.now()
-    this.value.tasks.push({ id: randomUUID(), companyId: input.companyId, projectId: input.projectId, title: clean(input.title), description: clean(input.description), acceptanceCriteria: input.acceptanceCriteria?.map(clean).filter(Boolean) ?? ['Requested outcome is implemented and verified.'], priority: input.priority ?? 'medium', status: 'backlog', dependsOn: input.dependsOn ?? [], ...(input.goalId ? { goalId: input.goalId } : {}), ...(input.milestoneId ? { milestoneId: input.milestoneId } : {}), ...(agent ? { assignedAgentId: agent.id } : {}), createdAt: now, updatedAt: now })
+    this.value.tasks.push({ id: randomUUID(), companyId: input.companyId, projectId: input.projectId, title: clean(input.title), description: clean(input.description), acceptanceCriteria: input.acceptanceCriteria?.map(clean).filter(Boolean) ?? ['Requested outcome is implemented and verified.'], priority: input.priority ?? 'medium', status: 'backlog', dependsOn: input.dependsOn ?? [], ...(input.goalId ? { goalId: input.goalId } : {}), ...(input.milestoneId ? { milestoneId: input.milestoneId } : {}), ...(agent ? { assignedAgentId: agent.id } : {}), ...taskExecutionHints(input), createdAt: now, updatedAt: now })
     this.refreshProject(input.projectId)
   }
   private updateTask(id: string, patch: Extract<OrganizationMutation, { type: 'task.update' }>['patch']): void {
@@ -549,7 +551,13 @@ export class OrganizationStore {
       throw new Error('Cannot reassign a task while it is in progress or review')
     }
     for (const dependency of patch.dependsOn ?? []) if (!this.value.tasks.some((item) => item.id === dependency && item.projectId === task.projectId)) throw new Error('Task dependency crosses project boundary')
-    Object.assign(task, patch)
+    const nextPatch = { ...patch }
+    if (patch.workScopes !== undefined) nextPatch.workScopes = normalizeWorkScopes(patch.workScopes)
+    if (patch.artifactPaths !== undefined) nextPatch.artifactPaths = normalizeArtifactPaths(patch.artifactPaths)
+    const effectiveEvidence = patch.evidenceKind ?? task.evidenceKind ?? ((nextPatch.artifactPaths ?? task.artifactPaths)?.length ? 'artifact' : 'code')
+    const effectiveArtifacts = nextPatch.artifactPaths ?? task.artifactPaths ?? []
+    if (effectiveEvidence === 'artifact' && effectiveArtifacts.length === 0) throw new Error('Artifact tasks require at least one artifact path')
+    Object.assign(task, nextPatch)
     task.updatedAt = Date.now()
     this.refreshProject(task.projectId)
   }
@@ -666,6 +674,31 @@ function must<T>(value: T | undefined, label: string): T { if (!value) throw new
 function clone<T>(value: T): T { return structuredClone(value) }
 function mergeBuiltins(skills: OrganizationSkill[]): OrganizationSkill[] { const custom = skills.filter((item) => item.scope !== 'builtin'); return [...clone(BUILTIN_SKILLS), ...custom] }
 function priority(value: OrganizationTask['priority']): number { return value === 'critical' ? 4 : value === 'high' ? 3 : value === 'medium' ? 2 : 1 }
+function taskExecutionHints(input: { workScopes?: string[]; evidenceKind?: OrganizationTask['evidenceKind']; artifactPaths?: string[] }): Partial<Pick<OrganizationTask, 'workScopes' | 'evidenceKind' | 'artifactPaths'>> {
+  const workScopes = normalizeWorkScopes(input.workScopes ?? [])
+  const artifactPaths = normalizeArtifactPaths(input.artifactPaths ?? [])
+  const evidenceKind = input.evidenceKind ?? (artifactPaths.length ? 'artifact' : 'code')
+  if (evidenceKind === 'artifact' && artifactPaths.length === 0) throw new Error('Artifact tasks require at least one artifact path')
+  return {
+    ...(workScopes.length ? { workScopes } : {}),
+    ...(evidenceKind === 'artifact' ? { evidenceKind } : {}),
+    ...(artifactPaths.length ? { artifactPaths } : {}),
+  }
+}
+function normalizeWorkScopes(values: string[]): string[] {
+  if (!Array.isArray(values) || values.length > 32) throw new Error('Task workScopes must contain at most 32 entries')
+  return [...new Set(values.map((value) => value.trim().replaceAll('\\', '/')).filter(Boolean).map((value) => {
+    if (value.length > 512 || /[\u0000-\u001f]/.test(value)) throw new Error('Task work scope is invalid')
+    return value.replace(/^\.\//, '')
+  }))]
+}
+function normalizeArtifactPaths(values: string[]): string[] {
+  if (!Array.isArray(values) || values.length > 32) throw new Error('Task artifactPaths must contain at most 32 entries')
+  return [...new Set(values.map((value) => value.trim().replaceAll('\\', '/')).filter(Boolean).map((value) => {
+    if (value.length > 512 || isAbsolute(value) || value.split('/').includes('..') || /[\u0000-\u001f]/.test(value)) throw new Error('Task artifact path must stay relative to the workspace')
+    return value.replace(/^\.\//, '')
+  }))]
+}
 function routeKey(agent?: OrganizationAgent, role?: OrganizationRole): string | undefined {
   const provider = agent?.providerId ?? role?.providerId
   const model = agent?.modelId ?? role?.modelId

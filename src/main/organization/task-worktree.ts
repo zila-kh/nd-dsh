@@ -31,6 +31,10 @@ export interface TaskWorktree {
 
 export type WorktreeGitRunner = (cwd: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
 
+export class TaskIntegrationConflictError extends Error {
+  readonly code = 'task-integration-conflict'
+}
+
 export class TaskWorktreeManager {
   constructor(private readonly runGit: WorktreeGitRunner = git) {}
   /**
@@ -70,7 +74,7 @@ export class TaskWorktreeManager {
 
   async existing(projectWorkspace: string | undefined, taskId: string): Promise<TaskWorktree | undefined> {
     if (!projectWorkspace) return undefined
-    const repoRoot = await repositoryRoot(projectWorkspace).catch(() => undefined)
+    const repoRoot = await repositoryRoot(projectWorkspace, this.runGit).catch(() => undefined)
     if (!repoRoot) return undefined
     const descriptor = describe(repoRoot, taskId)
     return await isAttachedWorktree(descriptor.root, this.runGit) ? descriptor : undefined
@@ -162,7 +166,7 @@ export class TaskWorktreeManager {
       ])
     } catch (error) {
       await this.runGit(repoRoot, ['merge', '--abort']).catch(() => undefined)
-      throw new Error(`Task integration conflict for ${taskId}; ND left the task branch intact for explicit rework. ${errorMessage(error)}`)
+      throw new TaskIntegrationConflictError(`Task integration conflict for ${taskId}; ND left the task branch intact. Rebase or re-plan this task against the current base before another execution attempt. ${errorMessage(error)}`)
     }
     return { merged: true, head: (await this.runGit(repoRoot, ['rev-parse', 'HEAD'])).stdout.trim() }
   }
