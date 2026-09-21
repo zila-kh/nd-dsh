@@ -7,6 +7,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { spawn as processSpawn, type ChildProcess } from 'node:child_process'
+import type { CoreClient } from '../core/core-client.js'
 
 export const GitErrorCodes = {
   BadConfigFile: 'BadConfigFile',
@@ -458,6 +459,7 @@ export interface GitCliOptions {
   gitPath?: string
   env?: Record<string, string>
   spawnProcess?: GitSpawnFunction
+  core?: Pick<CoreClient, 'request'>
   onOutput?(output: string): void
 }
 
@@ -465,11 +467,13 @@ export class GitCli {
   readonly path: string
   private readonly extraEnv: Record<string, string>
   private readonly spawnProcess: GitSpawnFunction
+  private readonly core: Pick<CoreClient, 'request'> | undefined
   private readonly onOutput: ((output: string) => void) | undefined
 
   constructor(options: GitCliOptions = {}) {
     this.path = options.gitPath ?? process.env.ND_DSH_GIT_BINARY ?? 'git'
     this.spawnProcess = options.spawnProcess ?? processSpawn
+    this.core = options.core
     this.onOutput = options.onOutput
     this.extraEnv = {
       LANGUAGE: 'en',
@@ -492,15 +496,9 @@ export class GitCli {
 
   async exec(cwd: string, args: string[], options: GitExecOptions = {}): Promise<GitExecutionResult> {
     const startedAt = Date.now()
-    const child = this.spawn(args, cwd, options.env)
-
-    if (options.input !== undefined) {
-      child.stdin?.end(options.input, 'utf8')
-    } else {
-      child.stdin?.end()
-    }
-
-    const buffered = await this.buffer(child, options.timeoutMs)
+    const buffered = this.core
+      ? await this.execCore(cwd, args, options)
+      : await this.execLegacy(cwd, args, options)
 
     if (this.onOutput) {
       this.onOutput(`> git ${args.join(' ')} [${Date.now() - startedAt}ms]\n`)
@@ -520,6 +518,27 @@ export class GitCli {
     }
 
     return buffered
+  }
+
+  private async execCore(cwd: string, args: string[], options: GitExecOptions): Promise<GitExecutionResult> {
+    if (!this.core) throw new Error('ND Core Git backend is unavailable.')
+    const result = await this.core.request<GitExecutionResult & { truncated?: boolean }>('git.exec', {
+      cwd: sanitizePath(cwd),
+      args,
+      ...(options.input === undefined ? {} : { input: options.input }),
+      env: { ...this.extraEnv, ...options.env },
+      gitPath: this.path,
+      maxOutputBytes: 24 * 1024 * 1024,
+    }, options.timeoutMs ?? 60_000)
+    if (result.truncated) throw new Error('Git output exceeded the ND Core safety bound.')
+    return { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr }
+  }
+
+  private async execLegacy(cwd: string, args: string[], options: GitExecOptions): Promise<GitExecutionResult> {
+    const child = this.spawn(args, cwd, options.env)
+    if (options.input !== undefined) child.stdin?.end(options.input, 'utf8')
+    else child.stdin?.end()
+    return await this.buffer(child, options.timeoutMs)
   }
 
   status(cwd: string): Promise<GitExecutionResult> {
