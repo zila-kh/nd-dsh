@@ -421,17 +421,3 @@ mod tests {
         assert!(format!("{error:#}").contains("protocol version mismatch"));
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Cursor;
-
-    #[test]
-    fn rejects_oversized_frame_before_allocating_payload() {
-        let length = (MAX_FRAME_BYTES as u32).saturating_add(1).to_be_bytes();
-        let mut input = Cursor::new(length.to_vec());
-        let error = read_request(&mut input).unwrap_err().to_string();
-        assert!(error.contains("invalid protocol frame length"));
-    }
-}
