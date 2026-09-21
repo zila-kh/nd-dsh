@@ -1,6 +1,6 @@
 use crate::process::filtered_environment;
 use crate::scheduler::now_ms;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Write;
