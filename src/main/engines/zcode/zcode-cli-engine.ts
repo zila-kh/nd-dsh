@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { resolve } from 'node:path'
 import { stripWorkspaceContext } from '../../../shared/workspace-context.js'
 import type {
   DshEventFrame,
@@ -195,7 +196,12 @@ export class ZcodeCliEngine {
     if (!session) throw new Error(`${ZCODE_CLI_ENGINE_ID} session could not be created`)
     const activeSession = session
     if (activeSession.running) throw new Error('This ZCode chat already has an active turn')
-    if (options.cwd !== undefined) activeSession.cwd = options.cwd
+    if (options.cwd !== undefined) {
+      if (activeSession.cwd !== undefined && normalizeWorkspaceRoot(activeSession.cwd) !== normalizeWorkspaceRoot(options.cwd)) {
+        throw new Error('ZCode session workspace is immutable; create a new session for a different task workspace')
+      }
+      if (activeSession.cwd === undefined) activeSession.cwd = options.cwd
+    }
 
     const settled = deferred<TurnOutcome>()
     activeSession.turnSettled = settled
@@ -758,63 +764,8 @@ async function killProcessTree(child: ChildProcess | undefined): Promise<void> {
       const finish = (): void => {
         if (settled) return
         settled = true
-        clearTimeout(timer)
-        try { child.kill() } catch { /* Already gone. */ }
-        resolve()
-      }
-      child.once('exit', finish)
-      const timer = setTimeout(finish, 3_000)
-      try {
-        const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
-        killer.once('close', finish)
-        killer.once('error', finish)
-      } catch {
-        // Already handled.
-      }
-      try {
-        child.kill()
-      } catch {
-        // Already gone.
-      }
-    })
-    return
-  }
 
-  let groupSignalled = false
-  try {
-    process.kill(-pid, 'SIGTERM')
-    groupSignalled = true
-  } catch {
-    try { child.kill('SIGTERM') } catch { return }
-  }
-
-  await new Promise<void>((resolve) => {
-    let settled = false
-    const finish = (): void => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      resolve()
-    }
-    const timer = setTimeout(() => {
-      try {
-        if (groupSignalled) process.kill(-pid, 'SIGKILL')
-        else child.kill('SIGKILL')
-      } catch {
-        // Already gone.
-      }
-      finish()
-    }, 3_000)
-    child.once('exit', () => {
-      if (!groupSignalled) {
-        finish()
-        return
-      }
-      try {
-        process.kill(-pid, 0)
-      } catch {
-        finish()
-      }
-    })
-  })
+function normalizeWorkspaceRoot(value: string): string {
+  const normalized = resolve(value)
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized
 }
