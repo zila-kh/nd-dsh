@@ -37,3 +37,5 @@ artifacts/
 examples/todo/cache/
 examples/todo/data/
 beta-qa-report-**
+# Local performance evidence; reviewed baselines are copied intentionally.
+benchmark-results/
