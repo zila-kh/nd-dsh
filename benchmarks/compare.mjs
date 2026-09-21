@@ -1,19 +1,20 @@
-import { readFile } from 'node:fs/promises'
+import { promises as fs } from 'node:fs'
 import process from 'node:process'
-const [baselinePath, candidatePath] = process.argv.slice(2)
+import { compareRuntime } from './lib/comparison.mjs'
+
+const [baselinePath, candidatePath, outputPath] = process.argv.slice(2)
 if (!baselinePath || !candidatePath) {
-  console.error('Usage: pnpm bench:compare <baseline-summary.json> <candidate-summary.json>')
+  console.error('Usage: pnpm bench:compare <legacy-electron-responsiveness.json> <rust-electron-responsiveness.json> [output.json]')
   process.exit(2)
 }
-const baseline = JSON.parse(await readFile(baselinePath, 'utf8'))
-const candidate = JSON.parse(await readFile(candidatePath, 'utf8'))
-const rows = []
-for (const [name, value] of Object.entries(candidate.benchmarks || {})) {
-  const before = baseline.benchmarks?.[name]
-  if (!before) continue
-  for (const [metric, left, right] of [['summaryMs.p50', before.summaryMs?.p50, value.summaryMs?.p50], ['elapsedMs', before.elapsedMs, value.elapsedMs], ['cancelToExitMs', before.cancelToExitMs, value.cancelToExitMs]]) {
-    if (!Number.isFinite(left) || !Number.isFinite(right)) continue
-    rows.push({ benchmark: name, metric, baseline: left, candidate: right, deltaPct: ((right - left) / left) * 100 })
-  }
+
+const baseline = JSON.parse(await fs.readFile(baselinePath, 'utf8'))
+const candidate = JSON.parse(await fs.readFile(candidatePath, 'utf8'))
+if (baseline.benchmark !== 'electron-responsiveness' || candidate.benchmark !== 'electron-responsiveness') {
+  throw new Error('bench:compare expects two electron-responsiveness result files.')
 }
-console.log(JSON.stringify({ baseline: baseline.backend, candidate: candidate.backend, rows }, null, 2))
+const comparison = compareRuntime(baseline, candidate)
+const text = JSON.stringify(comparison, null, 2) + '\n'
+if (outputPath) await fs.writeFile(outputPath, text, 'utf8')
+process.stdout.write(text)
+if (!comparison.sameMachine) process.exitCode = 1
