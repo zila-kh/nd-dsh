@@ -37,6 +37,7 @@ export class ExecutionCoordinator {
   private readonly sessionPermits = new Map<string, string>()
   private readonly localPermits = new Map<string, LocalPermit>()
   private readonly heartbeatTimer: ReturnType<typeof setInterval> | undefined
+  private coreChain: Promise<unknown> = Promise.resolve()
 
   constructor(private readonly core?: Pick<CoreClient, 'request'>) {
     if (core) {
@@ -53,7 +54,7 @@ export class ExecutionCoordinator {
     validatePools(input.pools)
     const id = randomUUID()
     if (this.core) {
-      const result = await this.core.request<CoreAcquireResult>('scheduler.acquire', {
+      const result = await this.coreRequest<CoreAcquireResult>('scheduler.acquire', {
         permitId: id,
         companyId: input.companyId,
         projectId: input.projectId,
@@ -109,6 +110,15 @@ export class ExecutionCoordinator {
     }
   }
 
+  private coreRequest<T = unknown>(method: string, params: unknown, timeoutMs: number): Promise<T> {
+    if (!this.core) return Promise.reject(new Error('ND Core is unavailable.'))
+    const operation = this.coreChain
+      .catch(() => undefined)
+      .then(() => this.core!.request<T>(method, params, timeoutMs))
+    this.coreChain = operation.then(() => undefined, () => undefined)
+    return operation
+  }
+
   private acquireLocal(id: string, pools: RuntimePoolClaim[]): void {
     for (const claim of pools) {
       const used = [...this.localPermits.values()]
@@ -125,7 +135,7 @@ export class ExecutionCoordinator {
     if (!this.permits.delete(permitId)) return
     this.localPermits.delete(permitId)
     if (!this.core) return
-    await this.core.request('scheduler.release', { permitId }, 5_000).catch((error) => {
+    await this.coreRequest('scheduler.release', { permitId }, 5_000).catch((error) => {
       console.warn('ND Core permit release failed:', error instanceof Error ? error.message : String(error))
     })
   }
@@ -134,7 +144,7 @@ export class ExecutionCoordinator {
     if (!this.core || this.permits.size === 0) return
     await Promise.all([...this.permits.keys()].map(async (permitId) => {
       try {
-        await this.core!.request('scheduler.heartbeat', { permitId, ttlMs: 120_000 }, 5_000)
+        await this.coreRequest('scheduler.heartbeat', { permitId, ttlMs: 120_000 }, 5_000)
       } catch (error) {
         const permit = this.permits.get(permitId)
         if (permit?.sessionId) this.sessionPermits.delete(permit.sessionId)
