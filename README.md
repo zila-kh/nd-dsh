@@ -41,7 +41,7 @@ ND owns identity, configuration, authorization, orchestration, and durable state
 
 One ND desktop can own **multiple companies**. Each company can own **multiple projects**, and each project can run **multiple workers/tasks** concurrently when dependencies, policy, capacity, and write-scope checks allow it.
 
-![Multi-company AI company workflow](docs/assets/multi-company-ai-workflow.webp)
+![Multi-company AI company workflow](docs/assets/multi-company-ai-workflow.svg)
 
 The operating hierarchy is:
 
