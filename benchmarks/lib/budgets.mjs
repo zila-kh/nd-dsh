@@ -92,6 +92,18 @@ export function evaluateEvidence({ coreSummary, legacyRuntime, rustRuntime, pack
   requireNumber('legacy-runtime-runs', 'Legacy comparison has at least 10 measured runs', legacyRuntime?.measuredRuns, (value) => value >= 10, '>= 10 runs')
   requireNumber('rust-runtime-runs', 'Rust comparison has at least 10 measured runs', rustRuntime?.measuredRuns, (value) => value >= 10, '>= 10 runs')
   add('same-machine', 'Legacy and Rust evidence use the same machine/commit/profile/fixture', comparison.sameMachine, comparison.mismatches, 'no provenance mismatch')
+  const evidence = [coreSummary, legacyRuntime, rustRuntime, packagedStartup]
+  const reference = rustRuntime
+  const provenanceMismatches = []
+  for (const [index, item] of evidence.entries()) {
+    for (const key of ['commit', 'buildProfile', 'fixtureRevision']) {
+      if (item?.[key] !== reference?.[key]) provenanceMismatches.push(index + ':' + key)
+    }
+    for (const key of ['os', 'osVersion', 'arch', 'cpuModel', 'logicalCpuCount', 'physicalMemoryBytes']) {
+      if (item?.environment?.[key] !== reference?.environment?.[key]) provenanceMismatches.push(index + ':environment.' + key)
+    }
+  }
+  add('full-provenance', 'Core, legacy, Rust, and packaged evidence share one machine/commit/profile/fixture', provenanceMismatches.length === 0, provenanceMismatches, 'no provenance mismatch')
 
   requireNumber(
     'electron-event-loop-p95',
