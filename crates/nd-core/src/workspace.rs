@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -141,7 +141,8 @@ pub fn atomic_write(params: AtomicWriteParams) -> Result<StatResult> {
     let parent = target
         .parent()
         .ok_or_else(|| anyhow::anyhow!("workspace write target has no parent"))?;
-    let canonical_parent = fs::canonicalize(parent).context("workspace write parent is unavailable")?;
+    let canonical_parent =
+        fs::canonicalize(parent).context("workspace write parent is unavailable")?;
     ensure_inside(&root, &canonical_parent)?;
 
     let file_name = target
