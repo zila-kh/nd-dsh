@@ -15,10 +15,10 @@ The `ai-company-workflow` branch already contains the product vertical slice:
 - Teams, roles, AI employees, scoped skills, workflows, goals, milestones, tasks, memory, policies, activities, and run receipts.
 - AI PM → assigned worker → independent reviewer workflow.
 - Dependency-aware progression, autonomy 3 continuation, bounded autonomy 4 rework.
-- Correct cancellation, restart/interruption recovery, backup organization state, and one-active-run runtime ownership.
+- Correct cancellation, restart/interruption recovery, backup organization state, and isolated parallel task-run ownership with project/role/team/review capacity pools.
 - Global runtime approval/question UI.
 - Product-owned coding-engine catalog.
-- ND Harness primary engine plus the pinned official Codex app-server adapter as a delegated one-shot coding engine.
+- Product-owned worker routing across ND Harness, direct Codex/ZCode/Claude Code/Cursor/Antigravity/Pi and registered installed CLI adapters, with delegated Codex fallback.
 - Durable per-employee engine routing in the Workforce UI.
 - Main-process company policy gate for approval-bearing organization runs.
 - Production renderer fails closed when the trusted runtime is missing; no mock company/session/workspace fallback.
@@ -63,7 +63,7 @@ Target: **fast native runtime + minimal round trips + structured agent actions +
 | [todo-0008](tasks/todo-0008-agent-fast-path.md) | P2 | unassigned | one action vocabulary (unblocked), then the router and composite ops once measurement exists |
 | [done-0005](tasks/done/done-0005-agent-task-measurement.md) | P1 | ZCode | **done, verified** — task cost measurable: result kind, offline fixture and normal-loop baseline |
 | [done-0006](tasks/done/done-0006-nd-core-runtime-contract.md) | P1 | ZCode | **done, verified locally** — sidecar declared scope delivered; post-merge Linux CI exposed a workspace-path contract failure that task 0004 must reconcile |
-| [todo-0011](tasks/todo-0011-agent-team-task-workspace-isolation.md) | P1 | unassigned | formalize engine-neutral task workspace/session isolation and team/subagent authority; PRD 0003 |
+| [todo-0011](tasks/todo-0011-agent-team-task-workspace-isolation.md) | P1 | ChatGPT | **implementation complete; CI gate pending** — engine-neutral task workspace/session isolation, coordination provenance and conflict-aware integration; PRD 0003 |
 
 Claim a task by setting `Owner` and taking the prefix to `wip-`; the full per-task detail, acceptance criteria, and evidence references live under [docs/tasks/](tasks/).
 
@@ -125,8 +125,8 @@ Success criterion: users can tell why an engine is not ready before starting wor
 
 ## P1 — engine-neutral agent teams and task workspace isolation
 
-- PRD: [0003-engine-neutral-agent-teams-and-task-workspace-isolation.md](prd/0003-engine-neutral-agent-teams-and-task-workspace-isolation.md) — draft.
-- Task: [todo-0011-agent-team-task-workspace-isolation.md](tasks/todo-0011-agent-team-task-workspace-isolation.md) — P1, unassigned.
+- PRD: [0003-engine-neutral-agent-teams-and-task-workspace-isolation.md](prd/0003-engine-neutral-agent-teams-and-task-workspace-isolation.md) — **approved 2026-09-22; implementation complete on feature branch, CI gate pending**.
+- Task: [todo-0011-agent-team-task-workspace-isolation.md](tasks/todo-0011-agent-team-task-workspace-isolation.md) — P1, implementation complete; archive after green CI.
 - Reference/benchmark matrix: [agent-orchestration-reference-matrix.md](plan/agent-orchestration-reference-matrix.md).
 
 This work formalizes the existing per-task worktree/checkpoint/review/integration foundation as an engine-neutral company contract. The direct ZCode-assisted PR #21 shared-checkout episode is retained as a regression story, **not** as an ND organization-run failure or a claim about ZCode architecture. Target invariant: teams share knowledge and structured handoffs; independent durable writable tasks keep independent transaction/workspace lineage.
