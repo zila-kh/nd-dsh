@@ -158,7 +158,9 @@ export class OrganizationOrchestrator {
         ...(taskWorktree ? { parallelTask: true } : {}),
         engineId: engine.id,
         workspaceKind: taskWorktree ? 'git-worktree' : 'project-workspace',
-        workspaceRoot: taskWorktree?.root ?? context.project.workspacePath,
+        ...((taskWorktree?.root ?? context.project.workspacePath)
+          ? { workspaceRoot: (taskWorktree?.root ?? context.project.workspacePath)! }
+          : {}),
         ...(taskWorktree ? { workspaceBranch: taskWorktree.branch } : {}),
         ...(attemptHead ? { baselineCommit: attemptHead } : {}),
         ...(this.executionCoordinator?.currentPermit()?.id ? { runtimePermitId: this.executionCoordinator.currentPermit()!.id } : {}),
