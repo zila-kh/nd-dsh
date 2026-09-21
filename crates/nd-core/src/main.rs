@@ -92,11 +92,11 @@ fn main() -> Result<()> {
                     }
                 }
                 Err(error) => {
-                    if let Err(write_error) = state_for_job.writer.send_error(
-                        &id,
-                        "method_failed",
-                        format!("{error:#}"),
-                    ) {
+                    if let Err(write_error) =
+                        state_for_job
+                            .writer
+                            .send_error(&id, "method_failed", format!("{error:#}"))
+                    {
                         eprintln!("[nd-core] error response write failed: {write_error:#}");
                     }
                 }

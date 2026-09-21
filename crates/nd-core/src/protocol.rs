@@ -180,7 +180,11 @@ impl ProtocolWriter {
     }
 
     pub fn snapshot(&self) -> ProtocolQueueSnapshot {
-        let state = self.shared.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         ProtocolQueueSnapshot {
             queued_frames: state.high.len() + state.normal.len() + state.background.len(),
             queued_bytes: state.high_bytes + state.normal_bytes + state.background_bytes,
@@ -251,7 +255,11 @@ impl ProtocolWriter {
 impl Drop for ProtocolWriter {
     fn drop(&mut self) {
         {
-            let mut state = self.shared.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = self
+                .shared
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
             state.closed = true;
             self.shared.ready.notify_all();
         }
@@ -267,7 +275,10 @@ fn writer_loop(shared: Arc<OutShared>) {
     let mut out = BufWriter::new(std::io::stdout());
     loop {
         let frame = {
-            let mut state = shared.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = shared
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
             loop {
                 if let Some(frame) = pop_frame(&mut state) {
                     shared.ready.notify_all();
@@ -285,7 +296,10 @@ fn writer_loop(shared: Arc<OutShared>) {
         };
         if let Err(error) = out.write_all(&frame).and_then(|_| out.flush()) {
             eprintln!("[nd-core] protocol stdout write failed: {error}");
-            let mut state = shared.state.lock().unwrap_or_else(|poison| poison.into_inner());
+            let mut state = shared
+                .state
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
             state.closed = true;
             state.high.clear();
             state.normal.clear();

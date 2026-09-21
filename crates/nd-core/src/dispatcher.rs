@@ -48,7 +48,11 @@ pub struct DispatchStats {
 
 impl DispatchStats {
     pub fn snapshot(&self) -> DispatchSnapshot {
-        let state = self.shared.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         DispatchSnapshot {
             worker_count: self.shared.worker_count,
             active: state.active,
@@ -129,7 +133,11 @@ impl Dispatcher {
 
     pub fn shutdown(self) {
         {
-            let mut state = self.shared.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = self
+                .shared
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
             state.closed = true;
             self.shared.ready.notify_all();
         }
@@ -140,38 +148,46 @@ impl Dispatcher {
 }
 
 fn spawn_worker(shared: Arc<Shared>, foreground_only: bool) -> JoinHandle<()> {
-    thread::spawn(move || loop {
-        let job = {
-            let mut state = shared.state.lock().unwrap_or_else(|error| error.into_inner());
-            loop {
-                let next = if foreground_only {
-                    state.high.pop_front()
-                } else {
-                    state
-                        .high
-                        .pop_front()
-                        .or_else(|| state.normal.pop_front())
-                        .or_else(|| state.background.pop_front())
-                };
-                if let Some(job) = next {
-                    state.active += 1;
-                    break job;
-                }
-                if state.closed {
-                    return;
-                }
-                state = shared
-                    .ready
-                    .wait(state)
+    thread::spawn(move || {
+        loop {
+            let job = {
+                let mut state = shared
+                    .state
+                    .lock()
                     .unwrap_or_else(|error| error.into_inner());
-            }
-        };
+                loop {
+                    let next = if foreground_only {
+                        state.high.pop_front()
+                    } else {
+                        state
+                            .high
+                            .pop_front()
+                            .or_else(|| state.normal.pop_front())
+                            .or_else(|| state.background.pop_front())
+                    };
+                    if let Some(job) = next {
+                        state.active += 1;
+                        break job;
+                    }
+                    if state.closed {
+                        return;
+                    }
+                    state = shared
+                        .ready
+                        .wait(state)
+                        .unwrap_or_else(|error| error.into_inner());
+                }
+            };
 
-        job();
+            job();
 
-        let mut state = shared.state.lock().unwrap_or_else(|error| error.into_inner());
-        state.active = state.active.saturating_sub(1);
-        shared.ready.notify_all();
+            let mut state = shared
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            state.active = state.active.saturating_sub(1);
+            shared.ready.notify_all();
+        }
     })
 }
 
