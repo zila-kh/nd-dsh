@@ -283,6 +283,8 @@ export class TerminalManager {
   private async ensureReady(): Promise<void> { if (!this.initialized) await this.initialize() }
 }
 
+// Developer-only legacy backend retained temporarily for same-machine migration benchmarks.
+// Production/default desktop startup injects the Rust PTY spawner and never reaches this path.
 function defaultSpawn(file: string, args: string[], options: PtySpawnOptions): PtyProcessLike {
   ensureSpawnHelper(); const pty = nodeRequire('node-pty') as typeof import('node-pty'); return pty.spawn(file, args, options)
 }
