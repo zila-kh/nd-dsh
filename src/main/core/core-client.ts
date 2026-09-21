@@ -32,6 +32,8 @@ export class CoreClient {
   private healthValue: NdCoreHealth | undefined
   private closing = false
   private restartAttempts = 0
+  private restartResetTimer: ReturnType<typeof setTimeout> | undefined
+  private unavailableReason: string | undefined
   private generation = 0
 
   constructor(private readonly options: CoreClientOptions = {}) {}
@@ -46,6 +48,7 @@ export class CoreClient {
 
   async start(): Promise<NdCoreHealth> {
     if (this.healthValue && this.child && !this.child.killed) return this.healthValue
+    if (this.unavailableReason) throw new Error(this.unavailableReason)
     if (this.starting) return this.starting
     this.starting = this.spawnAndHandshake()
     try {
@@ -76,6 +79,8 @@ export class CoreClient {
 
   async close(): Promise<void> {
     this.closing = true
+    if (this.restartResetTimer) clearTimeout(this.restartResetTimer)
+    this.restartResetTimer = undefined
     this.healthValue = undefined
     const child = this.child
     this.child = undefined
@@ -142,7 +147,7 @@ export class CoreClient {
       )
     }
     this.healthValue = health
-    this.restartAttempts = 0
+    if (this.restartAttempts > 0) this.armStableRestartReset(generation, child)
     this.options.log?.(
       '[nd-core] ready v' + health.binaryVersion + ' protocol=' + health.protocolVersion + ' ' + health.platform + '/' + health.arch,
     )
@@ -249,6 +254,8 @@ export class CoreClient {
 
   private handleExit(generation: number, code: number | null, signal: NodeJS.Signals | null): void {
     if (generation !== this.generation) return
+    if (this.restartResetTimer) clearTimeout(this.restartResetTimer)
+    this.restartResetTimer = undefined
     this.child = undefined
     this.healthValue = undefined
     this.rejectPending(new Error('ND Core exited unexpectedly (code=' + String(code) + ', signal=' + String(signal) + ').'))
@@ -258,6 +265,7 @@ export class CoreClient {
     this.emitSyntheticEvent('core.exit', 'high', { code, signal })
 
     if (this.restartAttempts >= 1) {
+      this.unavailableReason = 'ND Core crashed again before the recovery window became stable. Restart ND-DSH to restore native services.'
       this.options.log?.('[nd-core] restart budget exhausted; native services are unavailable.')
       return
     }
@@ -266,9 +274,23 @@ export class CoreClient {
     setTimeout(() => {
       if (this.closing) return
       void this.start().catch((error) => {
-        this.options.log?.('[nd-core] restart failed: ' + (error instanceof Error ? error.message : String(error)))
+        const message = error instanceof Error ? error.message : String(error)
+        this.unavailableReason = 'ND Core automatic restart failed: ' + message
+        this.options.log?.('[nd-core] restart failed: ' + message)
       })
     }, 100)
+  }
+
+  private armStableRestartReset(generation: number, child: ChildProcessWithoutNullStreams): void {
+    if (this.restartResetTimer) clearTimeout(this.restartResetTimer)
+    this.restartResetTimer = setTimeout(() => {
+      this.restartResetTimer = undefined
+      if (this.closing || generation !== this.generation || this.child !== child || !this.healthValue) return
+      this.restartAttempts = 0
+      this.unavailableReason = undefined
+      this.options.log?.('[nd-core] recovery remained stable; automatic restart budget reset.')
+    }, 30_000)
+    this.restartResetTimer.unref()
   }
 
   private failProtocol(error: Error): void {
