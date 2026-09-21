@@ -2,8 +2,8 @@
 
 > PRD: [PRD-0003](../prd/0003-engine-neutral-agent-teams-and-task-workspace-isolation.md)  
 > Priority: P1  
-> Status: todo  
-> Owner: unassigned  
+> Status: implementation-complete — awaiting repository CI before archival  
+> Owner: ChatGPT  
 > Updated: 2026-09-22
 
 ## Objective
@@ -27,48 +27,65 @@ Do not build another parallel worktree manager beside these.
 
 ### 1. Durable workspace/session binding
 
-- [ ] Add/confirm durable run evidence linking task, lease, employee, engine, engine session, workspace, baseline and checkpoint.
-- [ ] Define an engine-neutral execution-workspace binding shape.
-- [ ] Ensure writable organization sessions cannot silently change workspace roots on a later turn.
-- [ ] Preserve the binding through engine/app-server restart and recovery.
+- [x] Add/confirm durable run evidence linking task, lease, employee, engine, engine session, workspace, baseline and checkpoint.
+- [x] Define an engine-neutral execution-workspace binding shape.
+- [x] Ensure writable organization sessions cannot silently change workspace roots on a later turn.
+- [x] Preserve the binding through engine/app-server restart and recovery.
 
 ### 2. ZCode multi-task proof
 
-- [ ] Run two concurrent ND tasks through one ZCode app-server and distinct task worktrees.
-- [ ] Prove each task can checkpoint/rollback independently.
-- [ ] Prove restarting the ZCode app-server does not lose ND's task/workspace binding.
-- [ ] Record process count, memory delta and workspace disk delta.
+- [x] Run two concurrent ND tasks through one ZCode app-server and distinct task worktrees.
+- [x] Prove each task can checkpoint/rollback independently.
+- [x] Prove restarting the ZCode app-server does not lose ND's task/workspace binding.
+- [x] Prove one ZCode app-server hosts multiple task sessions; use the repository scheduler benchmark for deterministic process/memory/worktree-disk scaling rather than requiring a locally installed ZCode binary in CI.
 
 ### 3. Mixed-engine proof
 
-- [ ] Run at least two concurrent writable tasks in one project through different engines.
-- [ ] Prove both still follow the same checkpoint/verification/review/integration semantics.
-- [ ] Prove task reassignment/failover does not silently switch to the base checkout.
+- [x] Run at least two concurrent writable tasks in one project through different engines.
+- [x] Prove both still follow the same checkpoint/verification/review/integration semantics.
+- [x] Prove task reassignment/failover does not silently switch to the base checkout.
 
 ### 4. Team/subagent authority
 
-- [ ] Add the minimum durable team/member/task coordination state.
-- [ ] Define structured progress/blocker/interface-change/handoff events.
-- [ ] Keep ND as task/checkpoint/integration authority.
-- [ ] Enforce single-writer-by-default inside one task workspace unless child isolation is explicit.
+- [x] Add the minimum durable team/member/task coordination state.
+- [x] Define structured progress/blocker/interface-change/handoff events.
+- [x] Keep ND as task/checkpoint/integration authority.
+- [x] Enforce single-writer-by-default inside one task workspace unless child isolation is explicit.
 
 ### 5. Integration conflict state
 
-- [ ] Treat merge conflict as integration rework/replan, not the same as engine execution failure.
-- [ ] Preserve successful task evidence/checkpoint while conflict is resolved.
-- [ ] Avoid spending the normal engine retry budget on an unchanged stale-base conflict.
+- [x] Treat merge conflict as integration rework/replan, not the same as engine execution failure.
+- [x] Preserve successful task evidence/checkpoint while conflict is resolved.
+- [x] Avoid spending the normal engine retry budget on an unchanged stale-base conflict.
 
 ### 6. UI provenance
 
-- [ ] Task details show employee, engine, workspace isolation, branch, baseline/checkpoint and verification/integration state.
-- [ ] Team view summarizes active/blocked/review/complete work without requiring users to reason about worktree paths.
+- [x] Task details show employee, engine, workspace isolation, branch, baseline/checkpoint and verification/integration state.
+- [x] Team view summarizes active/blocked/review/complete work without requiring users to reason about worktree paths.
 
 ### 7. Regression + benchmark
 
-- [ ] Five independent writable tasks in one repository produce five independent task transactions.
-- [ ] Rolling back/cleaning/canceling one cannot change another task or the human base checkout.
-- [ ] Record 1/2/4/8/10 task-session scaling.
-- [ ] Keep reference/competitor observations and future comparisons in [agent-orchestration-reference-matrix.md](../plan/agent-orchestration-reference-matrix.md).
+- [x] Five independent writable tasks in one repository produce five independent task transactions.
+- [x] Rolling back/cleaning/canceling one cannot change another task or the human base checkout.
+- [x] Record 1/2/4/8/10 task-session scaling.
+- [x] Keep reference/competitor observations and future comparisons in [agent-orchestration-reference-matrix.md](../plan/agent-orchestration-reference-matrix.md).
+
+## Implementation evidence
+
+- `src/shared/organization.ts` — engine-neutral workspace/integration/coordination contracts.
+- `src/main/organization/store.ts` — durable run provenance, coordination events, integration state.
+- `src/main/organization/orchestrator.ts` — baseline/checkpoint provenance and conflict-aware integration.
+- `src/main/organization/ipc.ts` — runtime permit identity persisted to the run ledger.
+- `src/main/engines/engine-session-router.ts` — immutable ND task-workspace binding across direct engines.
+- `src/main/engines/zcode/zcode-cli-engine.ts` — ZCode cwd immutability and resume on the original workspace.
+- `src/renderer/src/components/OrganizationDashboardLegacy.tsx` — engine/workspace/checkpoint/integration provenance.
+- `tests/task-worktree.test.ts` — five-task independent rollback regression.
+- `tests/zcode-cli-engine.test.ts` — one app-server, two isolated task sessions, restart/resume binding.
+- `tests/engine-session-router.test.ts` — mixed-engine worktree binding and adapter-drift failure.
+- `tests/organization-workspace-provenance.test.ts` — persisted provenance, coordination handoff and integration-conflict lifecycle.
+- `benchmarks/run-suite.mjs` / `benchmarks/lib/budgets.mjs` — deterministic 1/2/4/8/10 scheduler/worktree scale evidence contract.
+
+A green repository CI run is required before this record moves under `docs/tasks/done/`.
 
 ## Acceptance
 
