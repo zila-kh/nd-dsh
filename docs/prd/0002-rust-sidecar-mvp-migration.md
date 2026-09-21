@@ -402,6 +402,8 @@ Reviewer route diversity remains a TypeScript assignment constraint: when multip
 
 #### L. Repository-owned performance benchmark suite
 
+See [docs/plan/performance-benchmark-suite.md](../plan/performance-benchmark-suite.md) for the detailed benchmark contract.
+
 Inspired by jcode's practice of keeping startup, memory, terminal, and budget-check scripts in the repository, ND must ship its own benchmark harness as part of this MVP.
 
 This is implementation scope, not documentation-only scope.
