@@ -163,6 +163,7 @@ export interface OrganizationTask {
   status: TaskStatus
   dependsOn: string[]
   assignedAgentId?: string
+  reviewerAgentId?: string
   executionSessionId?: string
   reviewSessionId?: string
   resultSummary?: string
