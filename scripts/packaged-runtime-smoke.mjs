@@ -12,6 +12,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const executable = await resolvePortable(process.argv[2])
 const outputDir = resolve(process.env.ND_DSH_PACKAGED_SMOKE_DIR || join(root, 'benchmark-results', 'packaged-smoke'))
 const workspace = await fs.mkdtemp(join(tmpdir(), 'nd-dsh-packaged-smoke-'))
+const userData = await fs.mkdtemp(join(tmpdir(), 'nd-dsh-packaged-user-data-'))
 const receipt = join(outputDir, 'packaged-runtime-smoke.json')
 const startup = join(outputDir, 'packaged-startup.json')
 
@@ -31,6 +32,7 @@ for (const [key, value] of Object.entries(process.env)) {
 Object.assign(safeEnv, {
   ND_DSH_CORE_BACKEND: 'rust',
   ND_DSH_WORKSPACE: workspace,
+  ND_DSH_USER_DATA_DIR: userData,
   ND_DSH_PACKAGED_SMOKE_OUTPUT: receipt,
   ND_DSH_BENCHMARK_OUTPUT: startup,
   ND_DSH_SMOKE_SUFFIX: 'TERMINAL_SMOKE',
@@ -77,6 +79,7 @@ try {
   throw error
 } finally {
   await fs.rm(workspace, { recursive: true, force: true })
+  await fs.rm(userData, { recursive: true, force: true })
 }
 
 async function resolvePortable(argument) {
