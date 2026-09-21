@@ -298,6 +298,7 @@ let organization: OrganizationSnapshot = {
   ],
   activity: [{ id: 'activity-review', companyId: 'company-nd', projectId: 'project-console', type: 'review.completed', message: 'Runtime contract review passed.', createdAt: now - 2 * 86_400_000 }],
   runs: [{ id: 'run-shell', companyId: 'company-nd', projectId: 'project-console', taskId: 'task-shell', goalId: 'goal-beta', kind: 'task-execution', status: 'running', sessionId: 'preview-session', startedAt: now - 180_000 }],
+  coordination: [],
 }
 
 let freeform: DesignFreeformState = { engine: 'nd-pencil', status: 'ready', available: true, visible: false, dirty: false, documentPath: '.nd/design/home.op', documentName: 'home.op', version: '0.8.4' }
