@@ -41,7 +41,7 @@ This approved MVP is the active implementation vehicle for the runtime-distribut
 
 **Status:** the shared core, permits, PTY/Git/process migration, parallel distribution, and the benchmark suite all merged and run. The remaining work is convergence, not construction, and it is listed with file-level evidence in [PRD 0002 §5.0.2](prd/0002-rust-sidecar-mvp-migration.md#502-genuinely-open-deltas--the-remaining-mvp-work). Task 0006 closed the runtime-contract deltas — the `workspace.*` layer has a product consumer, core-side deadlines and per-request cancellation exist, `terminal.restart`/`terminal.state` exist, a revision-keyed cache backs `git.status`/`git.log`, and bounded search exists — with the decisions recorded in [PRD 0002 §5.0.3](prd/0002-rust-sidecar-mvp-migration.md#503-decision-record--nd-core-runtime-contract-task-0006-2026-09-21). Still open there: node-pty removal (0007), the legacy backend switch (0007), the autopilot dispatch heuristic (0007), and benchmark evidence gaps (0004/0005).
 
-**CI reality check:** CI has not been green on this work. The MVP PR failed all three jobs, and because release staging failed first, the packaged Windows smoke never ran and no performance-evidence bundle was ever produced. Separately, `pnpm bench:smoke` is red on Windows because the benchmark client never answers ConPTY's Device Status Report — it passes on the `ubuntu-latest` runner, so CI cannot see it. Both are recorded in [performance-benchmark-suite.md §12.6](plan/performance-benchmark-suite.md#126-benchsmoke-is-red-on-windows-and-the-client-is-the-reason). Do not treat any packaged-Windows or benchmark proof as established until these are closed.
+**CI reality check (post-PR #21):** PR #21 merged to `main` as `101a855b`. The ConPTY benchmark/client fix, evidence-identity gates, agent-task baseline, and runtime-contract work are now on main. The first post-merge CI run (`35640378484`) still did **not** go green: Ubuntu `validate` failed inside `pnpm core:test` because `workspace_primitives_are_bounded_reject_escapes_and_are_the_only_ones_exposed` hit `workspace path is unavailable: No such file or directory (os error 2)`; the remaining validate steps were skipped. The Windows job was canceled during dependency installation, so its new benchmark/package gates did not execute, and `performance-evidence` was skipped. Treat the local Windows/package evidence as useful but keep CI/release proof open until a non-draft run completes all gates. See task 0004 and [performance-benchmark-suite.md §12](plan/performance-benchmark-suite.md#12-remaining-gaps--agent-task-metrics-baselines-and-fast-path-proof).
 
 #### Current direction — four deliverables
 
@@ -58,11 +58,12 @@ Target: **fast native runtime + minimal round trips + structured agent actions +
 | --- | --- | --- | --- |
 | [wip-0004](tasks/wip-0004-restore-green-ci-and-evidence.md) | P0 | ZCode | CI actually runs its gates on Windows; performance claims become verifiable and swap-proof |
 | [wip-0007](tasks/wip-0007-retire-legacy-paths-and-dispatch.md) | P1 | ZCode | one terminal runtime path; legacy backend switch scheduled out; autopilot capacity decided by query |
-| [todo-0009](tasks/todo-0009-windows-cli-shim-prompt-truncation.md) | P1 | unassigned | shimmed CLI engines receive the whole prompt on Windows instead of its first line |
+| [wip-0009](tasks/wip-0009-windows-cli-shim-prompt-truncation.md) | P1 | ZCode | implementation landed in PR #21; keep open until CI evidence is reconciled |
 | [todo-0010](tasks/todo-0010-desktop-smoke-teardown.md) | P1 | unassigned | names the desktop-smoke teardown leak so `validate` can go green |
 | [todo-0008](tasks/todo-0008-agent-fast-path.md) | P2 | unassigned | one action vocabulary (unblocked), then the router and composite ops once measurement exists |
 | [done-0005](tasks/done/done-0005-agent-task-measurement.md) | P1 | ZCode | **done, verified** — task cost measurable: result kind, offline fixture and normal-loop baseline |
-| [done-0006](tasks/done/done-0006-nd-core-runtime-contract.md) | P1 | ZCode | **done, verified** — sidecar declared scope delivered: filesystem layer resolved, deadlines, protocol completeness, cache/revision, search |
+| [done-0006](tasks/done/done-0006-nd-core-runtime-contract.md) | P1 | ZCode | **done, verified locally** — sidecar declared scope delivered; post-merge Linux CI exposed a workspace-path contract failure that task 0004 must reconcile |
+| [todo-0011](tasks/todo-0011-agent-team-task-workspace-isolation.md) | P1 | unassigned | formalize engine-neutral task workspace/session isolation and team/subagent authority; PRD 0003 |
 
 Claim a task by setting `Owner` and taking the prefix to `wip-`; the full per-task detail, acceptance criteria, and evidence references live under [docs/tasks/](tasks/).
 
@@ -121,6 +122,14 @@ Success criterion: sensitive actions are governed consistently across Harness, C
 - Surface actionable remediation before a user assigns an unavailable/unhealthy engine to an AI employee.
 
 Success criterion: users can tell why an engine is not ready before starting work and ND never fabricates readiness.
+
+## P1 — engine-neutral agent teams and task workspace isolation
+
+- PRD: [0003-engine-neutral-agent-teams-and-task-workspace-isolation.md](prd/0003-engine-neutral-agent-teams-and-task-workspace-isolation.md) — draft.
+- Task: [todo-0011-agent-team-task-workspace-isolation.md](tasks/todo-0011-agent-team-task-workspace-isolation.md) — P1, unassigned.
+- Reference/benchmark matrix: [agent-orchestration-reference-matrix.md](plan/agent-orchestration-reference-matrix.md).
+
+This work formalizes the existing per-task worktree/checkpoint/review/integration foundation as an engine-neutral company contract. The direct ZCode-assisted PR #21 shared-checkout episode is retained as a regression story, **not** as an ND organization-run failure or a claim about ZCode architecture. Target invariant: teams share knowledge and structured handoffs; independent durable writable tasks keep independent transaction/workspace lineage.
 
 ## Public Beta P1 — best-in-class AI development environment
 
