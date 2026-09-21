@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vitest'
 import type { ChildProcess } from 'node:child_process'
 import { ZcodeCliEngine } from '../src/main/engines/zcode/zcode-cli-engine.js'
 import type { DshEventFrame } from '../src/shared/contracts.js'
@@ -19,6 +19,7 @@ class FakeZcodeServer {
   responses: Array<{ id: string | number; result?: unknown }> = []
   nativeCounter = 0
   lastNativeId?: string
+  readonly nativeIds = new Set<string>()
   private buffer = ''
 
   constructor() {
@@ -61,12 +62,14 @@ class FakeZcodeServer {
       case 'session/create': {
         this.nativeCounter += 1
         this.lastNativeId = `sess_native_${this.nativeCounter}`
+        this.nativeIds.add(this.lastNativeId)
         this.respond(message.id, { session: { sessionId: this.lastNativeId, title: 'New ZCode chat' } })
         break
       }
       case 'session/resume': {
-        if (message.params?.sessionId === this.lastNativeId) {
-          this.respond(message.id, { session: { sessionId: this.lastNativeId, title: 'Resumed chat' } })
+        if (typeof message.params?.sessionId === 'string' && this.nativeIds.has(message.params.sessionId)) {
+          this.lastNativeId = message.params.sessionId
+          this.respond(message.id, { session: { sessionId: message.params.sessionId, title: 'Resumed chat' } })
         } else {
           this.respondError(message.id, { code: -32000, message: 'proto.sessionNotFound', data: { code: 'proto.sessionNotFound' } })
         }
@@ -120,13 +123,14 @@ afterAll(() => {
 async function makeEngine() {
   process.env.ND_DSH_ZCODE_BINARY = process.execPath
   const server = new FakeZcodeServer()
+  const spawnProcess = vi.fn(() => server.child)
   const engine = new ZcodeCliEngine({
     log: () => {},
-    spawnProcess: (() => server.child) as never,
+    spawnProcess: spawnProcess as never,
   })
   const frames: DshEventFrame[] = []
   engine.setEmitter((frame) => frames.push(frame))
-  return { engine, server, frames }
+  return { engine, server, frames, spawnProcess }
 }
 
 const frameTypes = (frames: DshEventFrame[], sessionId: string): Array<string | undefined> =>
@@ -175,6 +179,44 @@ describe('ZcodeCliEngine', () => {
       expect(types.filter((type) => type === 'assistant/message')).toHaveLength(1)
       expect(engine.listSessions()[0]?.running).toBe(false)
       expect(engine.listSessions()[0]?.title).toBe('fix the bug')
+    } finally {
+      await engine.close()
+    }
+  }, 15_000)
+
+  it('keeps each ZCode session immutably bound to the workspace it was created for', async () => {
+    const { engine } = await makeEngine()
+    try {
+      const { sessionId } = await engine.createSession({ cwd: '/workspace/task-a' })
+      await expect(engine.run('do not move me', { sessionId, cwd: '/workspace/task-b' })).rejects.toThrow(/workspace is immutable/i)
+      expect(engine.listSessions().find((item) => item.sessionId === sessionId)?.cwd).toBe('/workspace/task-a')
+    } finally {
+      await engine.close()
+    }
+  })
+
+  it('runs two task sessions in distinct workspaces through one ZCode app-server child', async () => {
+    const { engine, server, spawnProcess } = await makeEngine()
+    try {
+      const first = await engine.createSession({ cwd: '/workspace/task-a' })
+      const second = await engine.createSession({ cwd: '/workspace/task-b' })
+      const firstRun = engine.run('task a', { sessionId: first.sessionId })
+      await flush()
+      const secondRun = engine.run('task b', { sessionId: second.sessionId })
+      await flush()
+
+      const creates = server.requests.filter((request) => request.method === 'session/create')
+      expect(spawnProcess).toHaveBeenCalledTimes(1)
+      expect(creates).toHaveLength(2)
+      expect(creates[0]?.params.workspace).toEqual({ workspacePath: '/workspace/task-a', workspaceKey: '/workspace/task-a' })
+      expect(creates[1]?.params.workspace).toEqual({ workspacePath: '/workspace/task-b', workspaceKey: '/workspace/task-b' })
+
+      server.event('sess_native_1', 'turn.completed', { response: 'task a done' })
+      server.event('sess_native_2', 'turn.completed', { response: 'task b done' })
+      await expect(Promise.all([firstRun, secondRun])).resolves.toEqual([
+        { sessionId: first.sessionId },
+        { sessionId: second.sessionId },
+      ])
     } finally {
       await engine.close()
     }
@@ -296,6 +338,7 @@ describe('ZcodeCliEngine', () => {
       expect(createsAfter).toBe(createsBefore)
       const resume = server.requests.filter((request) => request.method === 'session/resume').at(-1)
       expect(resume?.params.sessionId).toBe('sess_native_1')
+      expect(resume?.params.workspace).toEqual({ workspacePath: '/workspace', workspaceKey: '/workspace' })
       const sends = server.requests.filter((request) => request.method === 'session/send')
       expect(sends.at(-1)?.params.sessionId).toBe('sess_native_1')
       expect(sends.at(-1)?.params.content).toContain('second task')
