@@ -46,6 +46,7 @@ import { OrganizationOrchestrator } from './organization/orchestrator.js'
 import { OrganizationStore } from './organization/store.js'
 import { TaskWorktreeManager } from './organization/task-worktree.js'
 import { ProviderStore } from './providers.js'
+import { runPackagedRuntimeSmoke } from './perf/packaged-runtime-smoke.js'
 import { flushStartupBenchmark, markStartup } from './perf/startup-metrics.js'
 import { QaService } from './qa/qa-service.js'
 import { SessionArchiveStore } from './sessions/session-archive-store.js'
@@ -447,7 +448,27 @@ async function createWindow(cdpPort: number): Promise<void> {
   })
   markStartup('usable')
   await flushStartupBenchmark({ core: core?.health ?? null })
-  if (process.env.ND_DSH_BENCHMARK_EXIT === '1') setTimeout(() => app.quit(), 25)
+  const packagedSmokeOutput = process.env.ND_DSH_PACKAGED_SMOKE_OUTPUT?.trim()
+  if (packagedSmokeOutput) {
+    if (!core) throw new Error('Packaged runtime smoke requires the Rust core backend.')
+    try {
+      await runPackagedRuntimeSmoke({
+        outputPath: packagedSmokeOutput,
+        workspaceRoot: workspace.state().root,
+        core,
+        terminal: terminalManager,
+        git,
+      })
+      console.log('Packaged runtime smoke passed.')
+      setTimeout(() => app.quit(), 25)
+    } catch (error) {
+      console.error('Packaged runtime smoke failed:', error)
+      app.exit(1)
+      return
+    }
+  } else if (process.env.ND_DSH_BENCHMARK_EXIT === '1') {
+    setTimeout(() => app.quit(), 25)
+  }
   if (theme.surface() === 'dsh') harness.warmup()
   if (!window.isVisible()) {
     window.show()
