@@ -9,6 +9,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use uuid::Uuid;
+#[cfg(windows)]
+use crate::windows_job::WindowsJob;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -84,6 +86,8 @@ struct ManagedProcess {
     stdin: Option<Arc<Mutex<ChildStdin>>>,
     permit_id: Option<String>,
     started_at: u64,
+    #[cfg(windows)]
+    _job: WindowsJob,
 }
 
 pub struct ProcessManager {
@@ -166,6 +170,17 @@ impl ProcessManager {
         let mut child = command
             .spawn()
             .with_context(|| format!("spawn {}", params.command))?;
+        #[cfg(windows)]
+        let job = {
+            use std::os::windows::io::AsRawHandle;
+            match WindowsJob::assign(child.as_raw_handle()) {
+                Ok(job) => job,
+                Err(error) => {
+                    let _ = child.kill();
+                    return Err(error).context("attach managed process to kill-on-close job");
+                }
+            }
+        };
         let pid = child.id();
         let stdin = child.stdin.take().map(|input| Arc::new(Mutex::new(input)));
         let stdout = child.stdout.take();
@@ -186,6 +201,8 @@ impl ProcessManager {
                     stdin,
                     permit_id: params.permit_id,
                     started_at,
+                    #[cfg(windows)]
+                    _job: job,
                 },
             );
         }

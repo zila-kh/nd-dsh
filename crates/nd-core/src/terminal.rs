@@ -9,6 +9,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use uuid::Uuid;
+#[cfg(windows)]
+use crate::windows_job::WindowsJob;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -80,6 +82,8 @@ struct TerminalRuntime {
     pid: Option<u32>,
     #[cfg(unix)]
     process_group: Option<i32>,
+    #[cfg(windows)]
+    _job: WindowsJob,
     seq: AtomicU64,
 }
 
@@ -146,6 +150,19 @@ impl TerminalManager {
             .slave
             .spawn_command(command)
             .with_context(|| format!("spawn terminal shell {}", params.shell))?;
+        #[cfg(windows)]
+        let job = {
+            let handle = child
+                .as_raw_handle()
+                .ok_or_else(|| anyhow::anyhow!("terminal child has no native Windows handle"))?;
+            match WindowsJob::assign(handle) {
+                Ok(job) => job,
+                Err(error) => {
+                    let _ = child.kill();
+                    return Err(error).context("attach terminal child to kill-on-close job");
+                }
+            }
+        };
         let pid = child.process_id();
         let killer = child.clone_killer();
         let reader = pair.master.try_clone_reader()?;
@@ -160,6 +177,8 @@ impl TerminalManager {
             pid,
             #[cfg(unix)]
             process_group,
+            #[cfg(windows)]
+            _job: job,
             seq: AtomicU64::new(0),
         });
 

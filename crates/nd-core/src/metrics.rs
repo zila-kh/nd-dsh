@@ -59,6 +59,31 @@ pub fn current_process_memory() -> ProcessMemory {
         }
     }
 
+    #[cfg(windows)]
+    {
+        use std::mem::size_of;
+        use windows_sys::Win32::System::ProcessStatus::{
+            K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX,
+        };
+        use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+        let mut counters = PROCESS_MEMORY_COUNTERS_EX::default();
+        let ok = unsafe {
+            K32GetProcessMemoryInfo(
+                GetCurrentProcess(),
+                (&mut counters as *mut PROCESS_MEMORY_COUNTERS_EX)
+                    .cast::<PROCESS_MEMORY_COUNTERS>(),
+                size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32,
+            )
+        };
+        if ok != 0 {
+            return ProcessMemory {
+                metric: "private-bytes",
+                bytes: Some(counters.PrivateUsage as u64),
+            };
+        }
+    }
+
     ProcessMemory {
         metric: "unavailable",
         bytes: None,
