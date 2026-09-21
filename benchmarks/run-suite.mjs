@@ -125,11 +125,15 @@ async function benchmarkTerminal() {
   const started = performance.now()
   try {
     const exits = ids.map((id) => client.onceEvent('terminal.exit', (frame) => frame.resourceId === id, 30_000))
+    const inputLatenciesMs = []
     for (const id of ids) {
       await client.request('terminal.create', {
         terminalId: id, sessionId: 'bench-session', shell: process.execPath,
         args: [fixture, String(bytesTarget)], cwd: benchmarkRoot, cols: 80, rows: 24, env: {},
       })
+      const inputStarted = performance.now()
+      await client.request('terminal.write', { terminalId: id, data: '\n' })
+      inputLatenciesMs.push(performance.now() - inputStarted)
     }
     const resizeLatenciesMs = []
     for (const id of ids) {
@@ -152,6 +156,8 @@ async function benchmarkTerminal() {
       bytesObserved: totalBytes,
       reordered: terminals.reduce((sum, item) => sum + item.reordered, 0),
       terminals,
+      inputLatenciesMs,
+      inputLatencySummaryMs: summarize(inputLatenciesMs),
       resizeLatenciesMs,
       resizeLatencySummaryMs: summarize(resizeLatenciesMs),
       elapsedMs,
