@@ -28,6 +28,17 @@ The `ai-company-workflow` branch already contains the product vertical slice:
 
 These are blockers for a downloadable public beta, not optional polish.
 
+
+### Approved implementation — PRD 0002 Rust Shared Core + Parallel Agent Runtime MVP
+
+- PRD: [0002-rust-sidecar-mvp-migration.md](prd/0002-rust-sidecar-mvp-migration.md) — **approved**.
+- Task: [todo-0002-rust-sidecar-mvp-migration.md](tasks/todo-0002-rust-sidecar-mvp-migration.md) — P0, unassigned.
+- Benchmark contract: [performance-benchmark-suite.md](plan/performance-benchmark-suite.md).
+- Parallel-agent scope: [parallel-work-distribution.md](plan/parallel-work-distribution.md).
+
+This approved MVP is the active implementation vehicle for the runtime-distribution, PTY/process, Git/worktree, parallel-worker capacity, packaged Windows smoke, and reproducible performance-proof portions of the roadmap. Organization/business truth remains TypeScript-owned; nd-core owns shared runtime permits, native process/resource lifecycle, and system-heavy services.
+
+
 ### 1. Runtime distribution
 
 - Package a Node-compatible runtime required by the Harness launcher, or remove the external Node dependency from the packaged path.
