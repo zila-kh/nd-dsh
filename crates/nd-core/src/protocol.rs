@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::{BufWriter, Read, Stdout, Write};
@@ -139,7 +139,8 @@ pub fn read_request<R: Read>(input: &mut R) -> Result<Option<RequestFrame>> {
     }
     let mut payload = vec![0u8; length];
     input.read_exact(&mut payload)?;
-    let frame: RequestFrame = rmp_serde::from_slice(&payload).context("decode MessagePack request")?;
+    let frame: RequestFrame =
+        rmp_serde::from_slice(&payload).context("decode MessagePack request")?;
     if frame.version != PROTOCOL_VERSION {
         bail!(
             "protocol version mismatch: expected {}, received {}",
