@@ -25,19 +25,25 @@ async function tempDir(prefix) {
 
 async function benchmarkStartup() {
   const samples = []
+  const healthRoundTripMs = []
   const readyMemory = []
   const runs = smoke ? 2 : 10
   for (let index = 0; index < runs; index += 1) {
     const client = await CoreRpc.launch()
     samples.push(client.startupMs)
+    const healthStarted = performance.now()
+    const readyHealth = await client.request('core.health')
+    healthRoundTripMs.push(performance.now() - healthStarted)
     readyMemory.push(await processMemory(client.pid))
-    check(client.health?.protocolVersion === 1, 'core startup handshake returned the wrong protocol')
+    check(client.health?.protocolVersion === 1 && readyHealth?.protocolVersion === 1, 'core startup handshake returned the wrong protocol')
     await client.close()
   }
   return writeResult(outputDir, 'core-startup', {
     measuredRuns: runs,
     samplesMs: samples,
     summaryMs: summarize(samples),
+    healthRoundTripMs,
+    healthRoundTripSummaryMs: summarize(healthRoundTripMs),
     readyMemory,
   })
 }
