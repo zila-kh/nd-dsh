@@ -5,6 +5,7 @@ import process from 'node:process'
 import type { CoreClient } from '../core/core-client.js'
 import { engineEnvironment, killProcessTree } from '../engines/agent-cli/agent-cli-support.js'
 import type { GitService } from '../git/git-service.js'
+import type { ExecutionCoordinator, RuntimePermit } from '../organization/execution-coordinator.js'
 import type { TerminalManager } from '../terminal/terminal-manager.js'
 import { projectRoot } from '../app-paths.js'
 
@@ -16,6 +17,7 @@ interface RuntimeBenchmarkOptions {
   core?: CoreClient
   terminal: TerminalManager
   git: GitService
+  coordinator: ExecutionCoordinator
   spawnProcess: SpawnLike
 }
 
@@ -25,13 +27,42 @@ export async function runRuntimeBenchmark(options: RuntimeBenchmarkOptions): Pro
   const cpuStarted = process.cpuUsage()
   const started = performance.now()
   const workers: import('node:child_process').ChildProcess[] = []
+  const sessionPermits: RuntimePermit[] = []
   let terminalId: string | undefined
   const sessionId = 'runtime-benchmark'
   let canceledChildPid: number | undefined
   let survivorChildPid: number | undefined
 
-  histogram.enable()
   try {
+    const idleCore = options.core ? await options.core.request<Record<string, unknown>>('metrics.snapshot', {}, 5_000) : undefined
+    const idleMainRssBytes = process.memoryUsage().rss
+    const idleBackendMemoryBytes = backendMemory(idleMainRssBytes, idleCore)
+    const sessionScaling = []
+    for (const count of [1, 2, 4, 8, 10]) {
+      while (sessionPermits.length < count) {
+        const index = sessionPermits.length
+        const permit = await options.coordinator.acquire({
+          kind: 'execution',
+          pools: [{ key: 'benchmark:logical-sessions', limit: 16 }],
+        })
+        await options.coordinator.bindSession(permit, 'benchmark-session-' + index, 'benchmark-run-' + index)
+        sessionPermits.push(permit)
+      }
+      if (count === 1) await options.git.refresh()
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 20))
+      const coreMetrics = options.core ? await options.core.request<Record<string, unknown>>('metrics.snapshot', {}, 5_000) : undefined
+      const mainRssBytes = process.memoryUsage().rss
+      sessionScaling.push({
+        count,
+        mainRssBytes,
+        coreMemory: coreProcessMemory(coreMetrics),
+        backendMemoryBytes: backendMemory(mainRssBytes, coreMetrics),
+        coreWorkspaceCount: numberField(coreMetrics, 'workspaceCount'),
+      })
+    }
+    for (const permit of sessionPermits.splice(0)) await options.coordinator.release(permit)
+
+    histogram.enable()
     const workerFixture = join(projectRoot(), 'benchmarks', 'fixtures', 'synthetic-worker.mjs')
     const workerEnv = { ...engineEnvironment(), ELECTRON_RUN_AS_NODE: '1' }
     const first = options.spawnProcess(process.execPath, [workerFixture], {
@@ -105,6 +136,10 @@ export async function runRuntimeBenchmark(options: RuntimeBenchmarkOptions): Pro
       durationMs: performance.now() - started,
       mainCpuMs: (cpu.user + cpu.system) / 1_000,
       mainRssBytes: process.memoryUsage().rss,
+      idleMainRssBytes,
+      idleCoreMemory: coreProcessMemory(idleCore),
+      idleBackendMemoryBytes,
+      sessionScaling,
       eventLoop: {
         p50Ms: histogram.percentile(50) / 1e6,
         p95Ms: histogram.percentile(95) / 1e6,
@@ -131,6 +166,7 @@ export async function runRuntimeBenchmark(options: RuntimeBenchmarkOptions): Pro
     await writeJson(options.outputPath, payload)
   } finally {
     histogram.disable()
+    for (const permit of sessionPermits.splice(0)) await options.coordinator.release(permit).catch(() => undefined)
     if (terminalId) await options.terminal.close(sessionId, terminalId).catch(() => undefined)
     await Promise.allSettled(workers.map(async (child) => { await killProcessTree(child) }))
   }
@@ -198,6 +234,26 @@ function shQuote(value: string): string {
 
 function psQuote(value: string): string {
   return "'" + value.replaceAll("'", "''") + "'"
+}
+
+
+function coreProcessMemory(metrics: Record<string, unknown> | undefined): { metric: string; bytes: number | null } | null {
+  const value = metrics?.processMemory
+  if (!value || typeof value !== 'object') return null
+  const record = value as Record<string, unknown>
+  return {
+    metric: typeof record.metric === 'string' ? record.metric : 'unavailable',
+    bytes: typeof record.bytes === 'number' && Number.isFinite(record.bytes) ? record.bytes : null,
+  }
+}
+
+function backendMemory(mainRssBytes: number, metrics: Record<string, unknown> | undefined): number {
+  return mainRssBytes + (coreProcessMemory(metrics)?.bytes ?? 0)
+}
+
+function numberField(record: Record<string, unknown> | undefined, key: string): number | null {
+  const value = record?.[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
 function pidAlive(pid: number): boolean {
