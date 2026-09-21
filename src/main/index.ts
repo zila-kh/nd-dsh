@@ -20,6 +20,7 @@ import { CapabilityStatusStore } from './capabilities/capability-status-store.js
 import { createHarnessSourceSetupAdapters } from './capabilities/harness-runtime-setup.js'
 import { ExternalElementStage, RecentPickStore } from './capture/external-inspect.js'
 import { CoreClient } from './core/core-client.js'
+import { createCoreSpawn } from './core/core-child-process.js'
 import { createCorePtySpawner } from './core/core-pty.js'
 import { DesignService } from './design/design-service.js'
 import { registerDesignIpc } from './design/ipc.js'
@@ -180,6 +181,12 @@ async function createWindow(cdpPort: number): Promise<void> {
   const dshSurface = new DshSurfaceController(window)
   const externalElements = new ExternalElementStage()
   const recentPicks = new RecentPickStore()
+  const organizationStore = new OrganizationStore(join(userData, 'organization.json'))
+  const executionCoordinator = new ExecutionCoordinator(core)
+  activeExecutionCoordinator = executionCoordinator
+  const interruptedRuns = await organizationStore.reconcileInterruptedRuns()
+  if (interruptedRuns > 0) console.warn(`Recovered ${interruptedRuns} interrupted organization run(s) from the previous app session.`)
+  const engineSpawn = core ? createCoreSpawn(core, executionCoordinator) : spawn
   const git = new GitService(workspace, core ? { core } : {})
   const harness = new HarnessService(workspace, browser, providers, externalElements, sessionArchive, usageLedger)
   const codexEngine = new CodexCliEngine({ log: (line) => console.log(line) })
@@ -190,7 +197,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   activeZcodeEngine = zcodeEngine
   const piEngine = new PiCodingEngine({ log: (line) => console.log(line) })
   activePiEngine = piEngine
-  const cursorEngine = new CursorCliEngine({ log: (line) => console.log(line) })
+  const cursorEngine = new CursorCliEngine({ log: (line) => console.log(line), spawnProcess: engineSpawn })
   activeCursorEngine = cursorEngine
   const claudeEngine = new ClaudeCodeCliEngine({ log: (line) => console.log(line) })
   activeClaudeEngine = claudeEngine
@@ -199,13 +206,8 @@ async function createWindow(cdpPort: number): Promise<void> {
     git,
     storePath: join(userData, 'chatgpt-web-sessions.json'),
     log: (line) => console.warn(line),
-  }, zcodeEngine, piEngine, cursorEngine, claudeEngine)
+  }, zcodeEngine, piEngine, cursorEngine, claudeEngine, engineSpawn)
   activeEngineRouter = engineRouter
-  const organizationStore = new OrganizationStore(join(userData, 'organization.json'))
-  const executionCoordinator = new ExecutionCoordinator(core)
-  activeExecutionCoordinator = executionCoordinator
-  const interruptedRuns = await organizationStore.reconcileInterruptedRuns()
-  if (interruptedRuns > 0) console.warn(`Recovered ${interruptedRuns} interrupted organization run(s) from the previous app session.`)
   const projectWorkspace = new ProjectWorkspaceCoordinator(
     organizationStore,
     workspace,

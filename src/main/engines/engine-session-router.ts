@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process'
 import type {
   DshEventFrame,
   EngineModelOption,
@@ -101,6 +102,7 @@ export class EngineSessionRouter {
     pi?: PiCodingEngine,
     cursor?: CursorCliEngine,
     claude?: ClaudeCodeCliEngine,
+    directSpawnProcess: typeof spawn = spawn,
   ) {
     this.directEngines.set(CODEX_CLI_ENGINE_ID, codex)
     if (antigravity) this.directEngines.set(ANTIGRAVITY_ENGINE_ID, antigravity)
@@ -108,7 +110,7 @@ export class EngineSessionRouter {
     if (pi) this.directEngines.set(PI_CODING_ENGINE_ID, pi)
     if (cursor) this.directEngines.set(CURSOR_CLI_ENGINE_ID, cursor)
     if (claude) this.directEngines.set(CLAUDE_CODE_CLI_ENGINE_ID, claude)
-    for (const [engineId, engine] of createExtraCliEngines((line) => console.warn(line))) {
+    for (const [engineId, engine] of createExtraCliEngines((line) => console.warn(line), directSpawnProcess)) {
       this.directEngines.set(engineId, engine)
       this.routerOwnedDirectEngines.add(engine)
     }

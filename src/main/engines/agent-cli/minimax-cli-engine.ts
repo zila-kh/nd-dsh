@@ -24,7 +24,10 @@ export class MiniMaxCliEngine {
   private readonly sessions = new Map<string, MiniMaxSession>()
   private onEvent: ((frame: DshEventFrame) => void) | undefined
 
-  constructor(private readonly log: (line: string) => void = (line) => console.warn(line)) {}
+  constructor(
+    private readonly log: (line: string) => void = (line) => console.warn(line),
+    private readonly spawnProcess: typeof spawn = spawn,
+  ) {}
 
   setEmitter(emit: (frame: DshEventFrame) => void): void { this.onEvent = emit }
   ready(): boolean { return minimaxBinPath() !== undefined }
@@ -132,7 +135,7 @@ export class MiniMaxCliEngine {
     const args = ['text', 'chat', '--non-interactive', '--quiet']
     if (session.model) args.push('--model', session.model)
     args.push('--message', `user:${prompt}`)
-    const child = spawnCliCommand(spawn, bin, args, {
+    const child = spawnCliCommand(this.spawnProcess, bin, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: engineEnvironment(),
       cwd: process.cwd(),
