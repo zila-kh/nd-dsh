@@ -38,8 +38,11 @@ export function createCoreSpawn(
     argsOrOptions?: readonly string[] | SpawnOptions,
     maybeOptions?: SpawnOptions,
   ): ChildProcess => {
-    const args = Array.isArray(argsOrOptions) ? [...argsOrOptions] : []
-    const options = (Array.isArray(argsOrOptions) ? maybeOptions : argsOrOptions) ?? {}
+    const withArgs = Array.isArray(argsOrOptions)
+    const args = withArgs ? [...argsOrOptions] : []
+    const options: SpawnOptions = withArgs
+      ? maybeOptions ?? {}
+      : (argsOrOptions as SpawnOptions | undefined) ?? {}
     return new CoreChildProcess(core, coordinator, command, args, options).asChildProcess()
   }) as SpawnLike
   return spawn
