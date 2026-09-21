@@ -30,6 +30,7 @@ try {
   for (let index = 0; index < runs; index += 1) {
     const userData = await mkdtemp(join(tmpdir(), 'nd-dsh-app-runtime-user-data-'))
     const raw = join(rawDir, backend + '-' + index + '.json')
+    const startupRaw = join(rawDir, backend + '-' + index + '-startup.json')
     try {
       const env = safeEnvironment()
       Object.assign(env, {
@@ -38,6 +39,7 @@ try {
         ND_DSH_WORKSPACE: workspace,
         ND_DSH_USER_DATA_DIR: userData,
         ND_DSH_RUNTIME_BENCH_OUTPUT: raw,
+        ND_DSH_BENCHMARK_OUTPUT: startupRaw,
         ND_DSH_BROWSER_URL: 'about:blank',
       })
       const child = spawn(electronExecutable, [benchmarkRoot, '--disable-gpu'], {
@@ -54,7 +56,10 @@ try {
       child.stderr?.on('data', (chunk) => { stderr = (stderr + chunk).slice(-12000) })
       const exitCode = await waitForExit(child, 90_000)
       if (exitCode !== 0) throw new Error('Electron runtime benchmark exited with code ' + String(exitCode) + '\n' + stdout + '\n' + stderr)
-      samples.push(JSON.parse(await readFile(raw, 'utf8')))
+      const runtime = JSON.parse(await readFile(raw, 'utf8'))
+      const startup = JSON.parse(await readFile(startupRaw, 'utf8'))
+      if (!Number.isFinite(startup.marks?.usable)) throw new Error(backend + ' startup record has no usable mark')
+      samples.push({ ...runtime, startup })
     } finally {
       await rm(userData, { recursive: true, force: true })
     }
@@ -77,8 +82,11 @@ try {
     measuredRuns: runs,
     samples,
     summary: {
+      usableStartupMs: summarize(samples.map((sample) => sample.startup?.marks?.usable)),
       mainCpuMs: summarize(samples.map((sample) => sample.mainCpuMs)),
       eventLoopP95Ms: summarize(samples.map((sample) => sample.eventLoop?.p95Ms)),
+      eventLoopMaxMs: summarize(samples.map((sample) => sample.eventLoop?.maxMs)),
+      terminalEventDeliveryP95Ms: summarize(samples.map((sample) => sample.terminal?.eventDeliveryP95Ms)),
       terminalToMarkerMs: summarize(samples.map((sample) => sample.terminal?.toMarkerMs)),
       gitP50Ms: summarize(samples.map((sample) => sample.git?.p50Ms)),
       cancelToExitMs: summarize(samples.map((sample) => sample.cancellation?.cancelToExitMs)),
