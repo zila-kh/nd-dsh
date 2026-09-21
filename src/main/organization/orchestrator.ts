@@ -214,7 +214,9 @@ export class OrganizationOrchestrator {
         ...(taskWorktree ? { parallelTask: true } : {}),
         engineId: ND_HARNESS_ENGINE_ID,
         workspaceKind: taskWorktree ? 'git-worktree' : 'project-workspace',
-        workspaceRoot: taskWorktree?.root ?? context.project.workspacePath,
+        ...((taskWorktree?.root ?? context.project.workspacePath)
+          ? { workspaceRoot: (taskWorktree?.root ?? context.project.workspacePath)! }
+          : {}),
         ...(taskWorktree ? { workspaceBranch: taskWorktree.branch } : {}),
         ...(this.executionCoordinator?.currentPermit()?.id ? { runtimePermitId: this.executionCoordinator.currentPermit()!.id } : {}),
       },
