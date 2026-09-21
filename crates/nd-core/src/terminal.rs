@@ -1,4 +1,5 @@
 use crate::process::{filtered_environment, kill_process_tree};
+use crate::scheduler::now_ms;
 use crate::protocol::ProtocolWriter;
 #[cfg(windows)]
 use crate::windows_job::WindowsJob;
@@ -62,6 +63,7 @@ pub struct TerminalCreateResult {
 struct TerminalOutput {
     terminal_id: String,
     session_id: String,
+    emitted_at: u64,
     #[serde(with = "serde_bytes")]
     bytes: Vec<u8>,
 }
@@ -352,6 +354,7 @@ fn stream_output(
                 let event = TerminalOutput {
                     terminal_id: terminal_id.clone(),
                     session_id: session_id.clone(),
+                    emitted_at: now_ms(),
                     bytes: buffer[..read].to_vec(),
                 };
                 if writer
