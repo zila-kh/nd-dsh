@@ -2,7 +2,7 @@ import 'dotenv/config'
 import { app, BrowserWindow, crashReporter, dialog, Menu, type MenuItemConstructorOptions } from 'electron'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { ND_ORG_MEMORY_ID, ND_WORKSPACE_CONTEXT_ID } from '../shared/capabilities.js'
@@ -68,6 +68,8 @@ const requestedCdpPort = parsePort(process.env.ND_DSH_CDP_PORT, 0)
 const startUrl = process.env.ND_DSH_BROWSER_URL?.trim() || DEFAULT_BROWSER_URL
 
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
+const userDataOverride = process.env.ND_DSH_USER_DATA_DIR?.trim()
+if (userDataOverride) app.setPath('userData', resolve(userDataOverride))
 app.enableSandbox()
 
 let mainWindow: BrowserWindow | undefined
