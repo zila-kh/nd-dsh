@@ -67,6 +67,19 @@ export async function pidAlive(pid) {
   try { process.kill(pid, 0); return true } catch { return false }
 }
 
+export async function directorySize(root) {
+  let total = 0
+  const visit = async (path) => {
+    const stat = await fs.lstat(path)
+    if (stat.isSymbolicLink()) return
+    if (stat.isFile()) { total += stat.size; return }
+    if (!stat.isDirectory()) return
+    for (const entry of await fs.readdir(path)) await visit(path + '/' + entry)
+  }
+  await visit(root)
+  return total
+}
+
 export async function sleep(ms) {
   await new Promise((resolvePromise) => setTimeout(resolvePromise, ms))
 }
