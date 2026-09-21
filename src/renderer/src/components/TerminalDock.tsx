@@ -19,7 +19,7 @@ type LayoutBranch = 'first' | 'second'
 
 export function TerminalDock({ open, sessionId, cwd, onOpenChange, onError }: Props) {
   // The terminal bridge is desktop-only. Keep the localhost UI preview usable
-  // when the node-pty-backed service is not available.
+  // when the native desktop PTY service is not available.
   const terminalApi = typeof window.ndDshTerminal === 'undefined' ? null : window.ndDshTerminal
   const [state, setState] = useState<TerminalSessionState | null>(null)
   const [loading, setLoading] = useState(false)

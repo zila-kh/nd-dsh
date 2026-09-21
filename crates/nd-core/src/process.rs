@@ -151,9 +151,9 @@ impl ProcessManager {
             if key.len() > 256 || value.len() > 64 * 1024 {
                 bail!("invalid process environment");
             }
-            if looks_secret(&key) {
-                continue;
-            }
+            // Explicit env comes from the owning TypeScript engine adapter.
+            // ND safeStorage credentials are never inserted here implicitly;
+            // user/CLI-owned auth variables may be intentionally forwarded.
             command.env(key, value);
         }
 

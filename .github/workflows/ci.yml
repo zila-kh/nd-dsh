@@ -115,7 +115,7 @@ jobs:
           if-no-files-found: error
 
   performance-evidence:
-    if: github.event_name == 'workflow_dispatch' && inputs.full_benchmark == true
+    if: (github.event_name == 'workflow_dispatch' && inputs.full_benchmark == true) || (github.event_name == 'pull_request' && github.event.action == 'ready_for_review' && github.event.pull_request.draft == false)
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
