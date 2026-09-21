@@ -79,6 +79,7 @@ fn main() -> Result<()> {
             }
         };
         let id = request.id.clone();
+        let rejection_id = id.clone();
         let method = request.method.clone();
         let priority = priority_for_method(&method);
         let state_for_job = Arc::clone(&state);
@@ -101,7 +102,7 @@ fn main() -> Result<()> {
                 }
             }
         }) {
-            let _ = writer.send_error(&request_id_for_error(&error, &request_id_placeholder()), "runtime_busy", format!("{error:#}"));
+            let _ = writer.send_error(&rejection_id, "runtime_busy", format!("{error:#}"));
         }
     }
 
@@ -110,18 +111,6 @@ fn main() -> Result<()> {
     eprintln!("[nd-core] stopped");
     Ok(())
 }
-
-// Kept tiny so queue-rejection handling stays outside the moved request closure.
-fn request_id_for_error<'a>(_error: &anyhow::Error, id: &'a str) -> &'a str {
-    id
-}
-
-fn request_id_placeholder() -> String {
-    // This function is replaced at call-site during compile-time refactoring;
-    // it should never be used as a real request id.
-    String::new()
-}
-
 fn dispatch(state: Arc<AppState>, method: &str, params: Value) -> Result<Value> {
     match method {
         "core.health" => {
@@ -149,6 +138,8 @@ fn dispatch(state: Arc<AppState>, method: &str, params: Value) -> Result<Value> 
             let scheduler = state.scheduler.snapshot()?;
             let dispatch = state.dispatch_stats.snapshot();
             let outbound = state.writer.snapshot();
+            let queued_event_count = outbound.queued_frames;
+            let queued_event_bytes = outbound.queued_bytes;
             let bound_sessions = scheduler
                 .permits
                 .iter()
@@ -165,8 +156,8 @@ fn dispatch(state: Arc<AppState>, method: &str, params: Value) -> Result<Value> 
                 "pendingRpcCount": dispatch.active + dispatch.queued_high + dispatch.queued_normal + dispatch.queued_background,
                 "dispatcher": dispatch,
                 "outbound": outbound,
-                "queuedEventCount": outbound.queued_frames,
-                "queuedEventBytes": outbound.queued_bytes,
+                "queuedEventCount": queued_event_count,
+                "queuedEventBytes": queued_event_bytes,
             }))
         }
         "scheduler.acquire" => to_value(state.scheduler.acquire(from_params(params)?)?),
