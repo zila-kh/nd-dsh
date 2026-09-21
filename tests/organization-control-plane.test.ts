@@ -155,4 +155,71 @@ describe('organization control plane', () => {
     expect(independent.route).toBe('ready')
   })
 
+
+  it('derives independent execution, role, team, and review runtime pools from the configured budget', async () => {
+    const { control, value } = await fixture()
+    const roleId = 'role-engineer'
+    const teamId = 'team-engineering'
+    const agentId = 'agent-builder'
+    const now = Date.now()
+    value.roles.push({
+      id: roleId,
+      companyId: 'company-1',
+      name: 'Software Engineer',
+      responsibility: 'Build product slices',
+      systemPrompt: 'Build verified software.',
+      skillIds: [],
+    })
+    value.teams.push({
+      id: teamId,
+      companyId: 'company-1',
+      name: 'Engineering',
+      purpose: 'Ship implementation work',
+      roleIds: [roleId],
+      skillIds: [],
+    })
+    value.agents.push({
+      id: agentId,
+      companyId: 'company-1',
+      name: 'Builder',
+      roleId,
+      teamId,
+      status: 'idle',
+      skillIds: [],
+    })
+    value.tasks.push({
+      id: 'task-capacity',
+      companyId: 'company-1',
+      projectId: 'project-1',
+      title: 'Capacity task',
+      description: 'Exercise native pool claims',
+      acceptanceCriteria: [],
+      priority: 'medium',
+      status: 'ready',
+      dependsOn: [],
+      assignedAgentId: agentId,
+      createdAt: now,
+      updatedAt: now,
+    })
+
+    await control.mutate({
+      type: 'budget.set',
+      companyId: 'company-1',
+      projectId: 'project-1',
+      maxParallelWorkers: 6,
+      maxReviewWorkers: 2,
+      roleWorkerLimits: { [roleId]: 3 },
+      teamWorkerLimits: { [teamId]: 4 },
+    })
+
+    await expect(control.runtimeClaims('project-1', 'task.execute', 'task-capacity')).resolves.toEqual([
+      { key: 'project:project-1:execution', limit: 6 },
+      { key: 'project:project-1:role:role-engineer', limit: 3 },
+      { key: 'project:project-1:team:team-engineering', limit: 4 },
+    ])
+    await expect(control.runtimeClaims('project-1', 'task.review', 'task-capacity')).resolves.toEqual([
+      { key: 'project:project-1:review', limit: 2 },
+    ])
+  })
+
 })
