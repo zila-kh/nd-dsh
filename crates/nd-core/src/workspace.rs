@@ -213,7 +213,6 @@ fn ensure_inside(root: &Path, target: &Path) -> Result<()> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
