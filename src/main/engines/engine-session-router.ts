@@ -355,7 +355,7 @@ export class EngineSessionRouter {
       ...[...this.directEngines.entries()]
         .filter(([engineId]) => this.isWorkspaceDirectEngine(engineId))
         .flatMap(([, direct]) => direct.listSessions()),
-    ].filter((session) => sessionInWorkspace(workspaceRoot, session.cwd))
+    ].filter((session) => session.cwd === undefined || sessionInWorkspace(workspaceRoot, session.cwd) || this.worktreeGuard?.(session.cwd) === true)
     const interactiveSessions = [...this.directEngines.entries()]
       .filter(([engineId]) => !this.isWorkspaceDirectEngine(engineId))
       .flatMap(([, direct]) => direct.listSessions())
