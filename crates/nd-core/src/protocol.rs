@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::VecDeque;
-use std::io::{BufWriter, Read, Stdout, Write};
+use std::io::{BufWriter, Read, Write};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 
