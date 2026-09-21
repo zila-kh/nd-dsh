@@ -50,6 +50,9 @@ if (!flags.has('--skip-install')) {
 console.log('\nBuilding the Harness host face...')
 await run('corepack', ['pnpm', '--dir', harnessRoot, 'run', 'build:lib:host'], root, harnessEnv)
 
+console.log('\nEmitting the Harness client package graph (without the aggregate client test program)...')
+await emitClientProjectGraph()
+
 console.log('\nBuilding the Harness client face (bundler pass)...')
 await run(process.execPath, [await tsdownEntry(), '--env.DSH_BUILD_FACE', 'client'], harnessRoot, harnessEnv)
 
@@ -88,6 +91,37 @@ async function unbuiltClientEntries() {
     if (!existsSync(join(dir, 'lib', 'index.js'))) missing.push(`packages/client/${entry.name}/lib/index.js`)
   }
   return missing
+}
+
+
+/**
+ * Upstream's root client project is intentionally noEmit and includes its test
+ * aggregate. ND only needs the referenced package projects emitted to
+ * lib/types before tsdown consumes them. Build those references directly so
+ * TypeScript still respects their project-reference graph without compiling
+ * the aggregate test program that is known to fail in this vendored layout.
+ */
+async function emitClientProjectGraph() {
+  const typescript = await import(pathToFileUrl(join(harnessRoot, 'node_modules', 'typescript', 'lib', 'typescript.js')))
+  const configPath = join(harnessRoot, 'tsconfig.client.json')
+  const read = typescript.readConfigFile(configPath, typescript.sys.readFile)
+  if (read.error) throw new Error('Could not read Harness tsconfig.client.json: ' + flattenTsDiagnostic(typescript, read.error))
+  const references = Array.isArray(read.config?.references)
+    ? read.config.references.map((entry) => entry?.path).filter((value) => typeof value === 'string' && value.trim())
+    : []
+  if (references.length === 0) throw new Error('Harness tsconfig.client.json declares no client project references to emit.')
+
+  const tsc = join(harnessRoot, 'node_modules', 'typescript', 'bin', 'tsc')
+  await run(process.execPath, [tsc, '-b', ...references], harnessRoot, harnessEnv)
+}
+
+function flattenTsDiagnostic(typescript, diagnostic) {
+  return typescript.flattenDiagnosticMessageText(diagnostic.messageText, '\n')
+}
+
+function pathToFileUrl(path) {
+  const normalized = resolve(path)
+  return new URL('file://' + (process.platform === 'win32' ? '/' : '') + normalized.replace(/\\/g, '/')).href
 }
 
 /** The bundler's own entry, resolved through the dependency's manifest. */
