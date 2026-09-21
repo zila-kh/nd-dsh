@@ -32,6 +32,12 @@ export async function runRuntimeBenchmark(options: RuntimeBenchmarkOptions): Pro
   const sessionId = 'runtime-benchmark'
   let canceledChildPid: number | undefined
   let survivorChildPid: number | undefined
+  const terminalDeliveryMs: number[] = []
+  const disposeTerminalLatency = options.core?.onEvent<{ emittedAt?: number }>('terminal.output', (frame) => {
+    const emittedAt = frame.data?.emittedAt
+    if (typeof emittedAt !== 'number' || !Number.isFinite(emittedAt)) return
+    terminalDeliveryMs.push(Math.max(0, Date.now() - emittedAt))
+  })
 
   try {
     const idleCore = options.core ? await options.core.request<Record<string, unknown>>('metrics.snapshot', {}, 5_000) : undefined
@@ -111,12 +117,20 @@ export async function runRuntimeBenchmark(options: RuntimeBenchmarkOptions): Pro
       }
     })()
 
-    await Promise.all([terminalDone, gitWork])
-    const terminalToMarkerMs = performance.now() - terminalStarted
+    // Exercise the normal product input path while terminal output and Git
+    // refresh are still in flight. Core-level acknowledgement latency is
+    // measured separately by benchmarks/run-suite.mjs.
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 15))
+    await options.terminal.write(sessionId, terminal.id, '\n')
 
+    // Cancellation is intentionally issued before the terminal/Git stress
+    // settles so foreground process control is measured under contention.
     const cancelStarted = performance.now()
     await killProcessTree(first)
     const cancelToExitMs = performance.now() - cancelStarted
+
+    await Promise.all([terminalDone, gitWork])
+    const terminalToMarkerMs = performance.now() - terminalStarted
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 100))
     const canceledOrphanAlive = canceledChildPid === undefined ? null : pidAlive(canceledChildPid)
     const survivorAliveAfterPeerCancel = second.exitCode === null && (survivorChildPid === undefined || pidAlive(survivorChildPid))
@@ -149,6 +163,10 @@ export async function runRuntimeBenchmark(options: RuntimeBenchmarkOptions): Pro
       terminal: {
         bytesRequested: 2 * 1024 * 1024,
         toMarkerMs: terminalToMarkerMs,
+        eventDeliverySamplesMs: terminalDeliveryMs,
+        eventDeliveryP50Ms: percentile(terminalDeliveryMs, 0.5),
+        eventDeliveryP95Ms: percentile(terminalDeliveryMs, 0.95),
+        eventDeliveryP99Ms: percentile(terminalDeliveryMs, 0.99),
       },
       git: {
         samplesMs: gitSamplesMs,
@@ -166,6 +184,7 @@ export async function runRuntimeBenchmark(options: RuntimeBenchmarkOptions): Pro
     await writeJson(options.outputPath, payload)
   } finally {
     histogram.disable()
+    disposeTerminalLatency?.()
     for (const permit of sessionPermits.splice(0)) await options.coordinator.release(permit).catch(() => undefined)
     if (terminalId) await options.terminal.close(sessionId, terminalId).catch(() => undefined)
     await Promise.allSettled(workers.map(async (child) => { await killProcessTree(child) }))
@@ -261,13 +280,17 @@ function pidAlive(pid: number): boolean {
 }
 
 function summarize(samples: number[]): { p50Ms: number; p95Ms: number; meanMs: number } {
-  const values = samples.slice().sort((a, b) => a - b)
-  const at = (p: number): number => values[Math.min(values.length - 1, Math.max(0, Math.ceil(values.length * p) - 1))] ?? 0
   return {
-    p50Ms: at(0.5),
-    p95Ms: at(0.95),
-    meanMs: values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length),
+    p50Ms: percentile(samples, 0.5),
+    p95Ms: percentile(samples, 0.95),
+    meanMs: samples.reduce((sum, value) => sum + value, 0) / Math.max(1, samples.length),
   }
+}
+
+function percentile(samples: number[], fraction: number): number {
+  const values = samples.filter(Number.isFinite).slice().sort((a, b) => a - b)
+  if (!values.length) return 0
+  return values[Math.min(values.length - 1, Math.max(0, Math.ceil(values.length * fraction) - 1))] ?? 0
 }
 
 async function writeJson(path: string, value: unknown): Promise<void> {
