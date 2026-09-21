@@ -193,10 +193,10 @@ Success criterion: ND can choose a model based on job requirements, budget, late
 
 ## P2 — richer coding engines
 
-- Direct persistent Codex app-server adapter with thread/resume/progress if the delegated one-shot route becomes limiting.
-- Claude Code or other coding-engine adapters behind the same ND contract.
-- Local/offline engine adapter.
-- Remote/cloud workers with the same company/task/policy receipts.
+- Harden restart/resume, health and capability reporting for the shipped direct Codex, ZCode, Claude Code, Cursor, Antigravity, Pi, OpenCode, Goose, JCode and Hermes adapters.
+- Add a local/offline worker behind the same task/workspace/evidence contract.
+- Add remote/cloud workers with the same company/task/policy receipts.
+- Keep browser-only/model-only adapters interactive until they can satisfy the organization workspace contract.
 
 No engine should require vendor-specific fields in Company, Project, Task, Role, Skill, or Workflow objects.
 
