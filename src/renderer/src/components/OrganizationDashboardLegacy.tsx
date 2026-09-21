@@ -1217,3 +1217,89 @@ function RepositoryTaskModal({ task, snapshot, onClose }: { task: RepositoryWork
               ))}
             </div>
           ) : null}
+
+          {snapshot ? (
+            <div className="grid gap-[5px]">
+              <small className={repoDetailLabel}>Scan context</small>
+              <small className={repoDetailDesc}>
+                Scanned {new Date(snapshot.scannedAt).toLocaleString()}
+                {snapshot.git.available ? ` · ${snapshot.git.branch ?? 'detached'} @ ${snapshot.git.head ? snapshot.git.head.slice(0, 10) : '?'}` : ' · git unavailable'}
+                {snapshot.git.dirty ? ' · dirty worktree' : ''}
+                {snapshot.stale ? ' · STALE' : ''}
+              </small>
+              {snapshot.lastError ? <small className={cn(repoDetailDesc, 'text-destructive')}>{snapshot.lastError}</small> : null}
+            </div>
+          ) : null}
+        </div>
+
+        <DialogFooter>
+          <DialogClose asChild>
+            <button type="button" className={orgButton}>Close</button>
+          </DialogClose>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/** List row with a two-line label block on the left and optional trailing control. */
+function Row({ left, right }: { left: ReactNode; right?: ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-[9px] border-b border-border-soft py-2 last:border-b-0">
+      <div className="flex min-w-0 flex-col gap-0.5">{left}</div>
+      {right}
+    </div>
+  )
+}
+
+/**
+ * Dashboard section card. Built on the shared shadcn Card shell; the className
+ * overrides map it back onto ND tokens (sidebar surface, soft border, 9px
+ * radius, no shadow/gap) so every call site keeps its exact look while picking
+ * up data-slot="card" and the primitive's layout contract.
+ */
+function Card({ title, action, wide = false, children }: { title: string; action?: ReactNode; wide?: boolean; children: ReactNode }) {
+  return (
+    <UiCard
+      className={cn(
+        'gap-0 overflow-hidden rounded-[9px] border-border-soft bg-sidebar py-0 shadow-none',
+        wide && 'col-span-full',
+      )}
+    >
+      <header className="flex min-h-10 items-center justify-between border-b border-border-soft px-[11px]">
+        <h2 className="m-0 text-[15px] font-semibold">{title}</h2>
+        {action}
+      </header>
+      <div className="px-[11px] py-[9px]">{children}</div>
+    </UiCard>
+  )
+}
+
+function Stat({ label, value, detail }: { label: string; value: string; detail: string }) {
+  return (
+    <div className="flex min-h-[78px] flex-col rounded-[9px] border border-border-soft bg-sidebar p-[11px]">
+      <small className="text-[11px] uppercase tracking-[0.08em] text-faint">{label}</small>
+      <strong className="mb-0.5 mt-[5px] truncate text-[28px] font-semibold">{value}</strong>
+      <span className="truncate text-xs text-muted-foreground">{detail}</span>
+    </div>
+  )
+}
+
+function Empty({ text }: { text: string }) {
+  return <p className="px-1 py-5 text-center text-sm text-faint">{text}</p>
+}
+
+function sectionLabel(value: Section): string { return value === 'workforce' ? 'Teams & Skills' : value === 'knowledge' ? 'Memory & Policies' : `${value[0]?.toUpperCase()}${value.slice(1)}` }
+function short(value: string): string { return value.length > 14 ? `${value.slice(0, 6)}…${value.slice(-5)}` : value }
+function clock(value: number): string { return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) }
+function runKindLabel(kind: OrganizationRun['kind']): string {
+  if (kind === 'pm-plan') return 'AI PM plan'
+  return kind === 'task-review' ? 'Independent review' : 'Builder execution'
+}
+function runtimeChipClass(state: ProjectRuntimeStatus['state'] | undefined): string {
+  if (state === 'ready') return 'border-primary/30 bg-primary/10 text-primary'
+  if (state === 'starting') return 'border-info/30 bg-info/10 text-info'
+  if (state === 'unreachable') return 'border-destructive/30 bg-destructive/[0.08] text-destructive'
+  return 'border-border-strong bg-secondary text-muted-foreground'
+}
+function errorMessage(cause: unknown): string { return cause instanceof Error ? cause.message : String(cause) }
