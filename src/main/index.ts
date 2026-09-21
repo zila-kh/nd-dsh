@@ -47,6 +47,7 @@ import { OrganizationStore } from './organization/store.js'
 import { TaskWorktreeManager } from './organization/task-worktree.js'
 import { ProviderStore } from './providers.js'
 import { runPackagedRuntimeSmoke } from './perf/packaged-runtime-smoke.js'
+import { runRuntimeBenchmark } from './perf/runtime-benchmark.js'
 import { flushStartupBenchmark, markStartup } from './perf/startup-metrics.js'
 import { QaService } from './qa/qa-service.js'
 import { SessionArchiveStore } from './sessions/session-archive-store.js'
@@ -448,8 +449,26 @@ async function createWindow(cdpPort: number): Promise<void> {
   })
   markStartup('usable')
   await flushStartupBenchmark({ core: core?.health ?? null })
+  const runtimeBenchmarkOutput = process.env.ND_DSH_RUNTIME_BENCH_OUTPUT?.trim()
   const packagedSmokeOutput = process.env.ND_DSH_PACKAGED_SMOKE_OUTPUT?.trim()
-  if (packagedSmokeOutput) {
+  if (runtimeBenchmarkOutput) {
+    try {
+      await runRuntimeBenchmark({
+        outputPath: runtimeBenchmarkOutput,
+        workspaceRoot: workspace.state().root,
+        ...(core ? { core } : {}),
+        terminal: terminalManager,
+        git,
+        spawnProcess: engineSpawn,
+      })
+      console.log('Runtime benchmark completed.')
+      setTimeout(() => app.quit(), 25)
+    } catch (error) {
+      console.error('Runtime benchmark failed:', error)
+      app.exit(1)
+      return
+    }
+  } else if (packagedSmokeOutput) {
     if (!core) throw new Error('Packaged runtime smoke requires the Rust core backend.')
     try {
       await runPackagedRuntimeSmoke({
