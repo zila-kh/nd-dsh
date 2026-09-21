@@ -7,6 +7,9 @@
     "benchmark",
     "timestamp",
     "backend",
+    "commit",
+    "buildProfile",
+    "fixtureRevision",
     "environment"
   ],
   "properties": {
@@ -18,13 +21,37 @@
       "minLength": 1
     },
     "timestamp": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1
     },
     "backend": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1
+    },
+    "commit": {
+      "type": "string",
+      "minLength": 1
+    },
+    "buildProfile": {
+      "type": "string",
+      "minLength": 1
+    },
+    "fixtureRevision": {
+      "type": "string",
+      "minLength": 1
     },
     "environment": {
-      "type": "object"
+      "type": "object",
+      "required": [
+        "os",
+        "osVersion",
+        "arch",
+        "cpuModel",
+        "logicalCpuCount",
+        "physicalMemoryBytes",
+        "nodeVersion"
+      ],
+      "additionalProperties": true
     }
   },
   "additionalProperties": true
