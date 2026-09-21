@@ -182,7 +182,7 @@ fn parse_log(raw: &str) -> Result<Vec<GitLogEntry>> {
     let mut commits = Vec::new();
     let mut index = 0;
     while index + 4 < fields.len() {
-        let hash = fields[index].trim_matches(['\r', '\n']).to_owned();
+        let hash = fields[index].trim_matches(|ch| ch == '\r' || ch == '\n').to_owned();
         if hash.is_empty() {
             index += 1;
             continue;
@@ -197,7 +197,7 @@ fn parse_log(raw: &str) -> Result<Vec<GitLogEntry>> {
             .parse::<i64>()
             .context("parse Git author timestamp")?;
         let message = fields[index + 4]
-            .trim_end_matches(['\r', '\n'])
+            .trim_end_matches(|ch| ch == '\r' || ch == '\n')
             .to_owned();
         commits.push(GitLogEntry {
             hash,
