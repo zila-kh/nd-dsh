@@ -364,7 +364,6 @@ pub fn read_request<R: Read>(input: &mut R) -> Result<Option<RequestFrame>> {
     Ok(Some(frame))
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
