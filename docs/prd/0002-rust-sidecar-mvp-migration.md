@@ -1,11 +1,11 @@
 ---
 id: "0002"
-title: "Rust Shared Core MVP Migration"
+title: "Rust Shared Core + Parallel Agent Runtime MVP"
 status: draft
 last-audit: 2026-09-21
 ---
 
-# Product Requirement Document (PRD): Rust Shared Core MVP Migration
+# Product Requirement Document (PRD): Rust Shared Core + Parallel Agent Runtime MVP
 
 ## 1. Goals & User Problem
 
@@ -31,6 +31,10 @@ The MVP should prove a safer backend boundary without attempting a broad rewrite
 10. Share expensive workspace resources across agents: one canonical workspace service, Git state holder, watcher/index seam, and future MCP/search pools per safe scope.
 11. Establish numeric startup, memory, latency, throughput, and Electron event-loop budgets before the Rust backend expands.
 12. Preserve explicit seams for a future native ND agent runtime and reconnectable core without requiring daemon persistence in this MVP.
+13. Fold the parallel-work distribution plan into this MVP: same-role work must distribute across available agents instead of concentrating on the first idle employee.
+14. Add explicit execution/review capacity pools so project, role/team, and review limits are enforced consistently for manual, Autopilot, retry, and review dispatch.
+15. Make nd-core the **runtime execution authority** for atomic capacity permits, process ownership, cancellation, and resource accounting while TypeScript remains the durable organization/business authority.
+16. Add conflict/resource-aware parallelism so increasing agent count does not simply multiply worktrees, package installs, process trees, and merge failures without measurement.
 
 ### Primary user problem
 
@@ -48,6 +52,10 @@ As ND-DSH adds terminals, Git, multiple coding engines, long-running agent jobs,
 - As a multi-agent user, I want ten agents in one workspace to share infrastructure rather than allocate ten copies of the same watcher/index/Git state.
 - As a contributor, I want performance regressions caught by repeatable budgets instead of discovered by feel.
 - As a future ND-agent user, I want the native core to be capable of owning agent/runtime services later without replacing the Electron-to-core contract.
+- As a company owner, when multiple agents share a role, I want independent tasks distributed across them instead of queued behind the first employee.
+- As an operator, I want separate bounded execution and review capacity so reviewers do not consume every builder slot.
+- As an operator, I want the same concurrency limits to hold whether work was started manually, by Autopilot, by retry/failover, or by rework.
+- As a reviewer, I want every organization run tied to one runtime permit and one resource receipt so I can see which agent/route/process/worktree consumed capacity.
 
 ## 2.1 Performance-First Architecture Rules
 
@@ -168,6 +176,11 @@ process.spawn
 process.write
 process.cancel
 process.kill
+scheduler.configure
+scheduler.acquire
+scheduler.heartbeat
+scheduler.release
+scheduler.snapshot
 terminal.create
 terminal.write
 terminal.resize
@@ -202,7 +215,14 @@ Implement a Rust process supervisor that provides:
 - platform-appropriate process group / job-object ownership,
 - exit status and structured failure events.
 
-The MVP only has to migrate callers needed by the Rust terminal and Git paths. Migrating every coding-engine adapter to Rust process supervision is not required by this PRD.
+The MVP must migrate terminal/Git subprocess ownership and must also provide a generic organization-run process path that coding-engine adapters can use without moving their engine-specific protocol logic into Rust.
+
+Required boundary:
+- TypeScript engine adapters may continue to build argv, parse engine events, and implement engine semantics.
+- nd-core owns OS child-process creation, process-tree/job-object lifetime, cancellation, exit/resource events, and filtered child environments for adapters migrated to the shared process path.
+- organization runs that spawn a dedicated CLI process (for example Codex/Claude/OpenCode-style adapters) should use the core process supervisor in this MVP where the adapter contract permits.
+- long-lived services such as Harness may remain product-managed in TypeScript for protocol/session semantics, but their OS process should adopt the shared supervisor when doing so does not break the one-shot migration.
+- no organization task is considered safely canceled merely because TypeScript stopped listening; owned child process trees must be explicitly terminated or proven detached by design.
 
 #### D. Terminal / PTY migration
 
@@ -297,12 +317,94 @@ MVP packaged target follows the repository current release configuration: Window
 
 Development mode may build or resolve a host-native nd-core binary through repository scripts.
 
+#### I. Parallel work distribution and specialist roles
+
+Fold docs/plan/parallel-work-distribution.md into this MVP.
+
+TypeScript organization/control-plane responsibilities remain authoritative for business semantics:
+
+- replace first-idle assignment with **least-open-work** as the default distribution policy for same-role agents,
+- retain deterministic round-robin and pinned-agent policy options where configured,
+- re-evaluate ownership for ready-but-not-started work without moving in-progress/review tasks,
+- rotate reviewers,
+- keep provider/model assignment on agents/roles rather than in nd-core,
+- add optional per-role/per-team execution limits alongside the existing project limit,
+- add a distinct review capacity pool,
+- preserve manual task reassignment as an operator override before work starts,
+- keep dependency truth and task lifecycle in the organization store.
+
+Specialist roles such as Frontend, Backend, DevOps, QA, Research, and Design remain organization concepts. nd-core must not encode vendor/model/role business rules.
+
+#### J. Unified execution coordinator and nd-core runtime permits
+
+Every task-execution and task-review dispatch path must converge on one TypeScript execution coordinator before engine invocation:
+
+~~~text
+manual / Autopilot / retry / review / rework
+                |
+                v
+      OrganizationControlPlane
+      - gates / budgets / leases
+      - assignment / route
+                |
+                v
+       ExecutionCoordinator
+                |
+                | scheduler.acquire
+                v
+             nd-core
+      - atomic runtime permit
+      - project pool
+      - role/team pool
+      - review/execute pool
+      - process ownership
+      - metrics
+~~~
+
+A runtime permit is a native execution lease, not durable task truth.
+
+Permit requirements:
+- unique permit id,
+- owning company/project/task/run/session/agent ids where applicable,
+- kind: execution or review,
+- generic pool keys and limits supplied by the TypeScript control plane,
+- acquired/heartbeat/released timestamps,
+- TTL/crash cleanup,
+- optional process ids/resources owned by the permit.
+
+All required pools are acquired atomically or the request returns wait/busy; partial acquisition is forbidden.
+
+The process supervisor must be able to require a valid permit for organization-run child processes. This makes the runtime limit difficult to bypass accidentally even if a future TypeScript caller skips a UI path.
+
+On nd-core restart, durable organization runs remain authoritative. Electron reconciles active runs, marks interrupted runtime permits dead, and either safely retries from existing attempt boundaries or surfaces interruption according to current recovery rules.
+
+#### K. Parallel workspace and conflict/resource accounting
+
+Parallel task safety continues to use per-task Git worktrees, but the Rust Git/workspace layer becomes the low-level implementation seam.
+
+MVP requirements:
+- task worktree create/status/baseline/reset/integration Git operations are eligible to use the Rust Git service while TypeScript retains organization semantics,
+- worktree disk/process cost is measured per active run,
+- disposable build/install directories are excluded from evidence as today,
+- task plans may carry optional advisory work/file scopes,
+- obviously overlapping declared scopes may be serialized or surfaced to the scheduler before dispatch,
+- integration conflicts use conflict-aware rework/replan semantics rather than blindly consuming all retries with the same stale base,
+- no scheduler claim implies that file-scope hints are a security boundary.
+
+For non-code specialist work, define a minimal artifact verification path instead of forcing code-only test evidence:
+- declared artifact/evidence paths,
+- artifact existence/fingerprint where applicable,
+- bounded human acceptance when machine verification is not meaningful,
+- no silent completion merely because a process exited zero.
+
+Reviewer route diversity remains a TypeScript assignment constraint: when multiple healthy review routes exist, avoid assigning the same reviewer/model route used by the worker under review.
+
 ### Out of Scope
 
 - Rewriting React, preload, or Electron UI code in Rust.
 - Rewriting BrowserWindow, WebContentsView, CDP, browser automation ownership, or Electron permission handling.
 - Moving safeStorage or provider secret decryption into Rust.
-- Rewriting organization/company/project/task orchestration in Rust.
+- Rewriting organization/company/project/task orchestration in Rust. Assignment, roles, budgets, task lifecycle, and review semantics remain TypeScript-owned even though this MVP improves them.
 - Rewriting provider HTTP/API integrations in Rust.
 - Rewriting all coding-engine adapters in Rust.
 - Replacing DeepSeek Harness, Codex, or other external engines.
@@ -329,6 +431,8 @@ Electron main (TypeScript)
   |-- browser + CDP ownership
   |-- permissions / safeStorage
   |-- organization orchestration
+  |-- assignment / role / review policy
+  |-- ExecutionCoordinator
   |-- provider + engine product routing
   |
   '-- ND Core client
@@ -336,10 +440,12 @@ Electron main (TypeScript)
           | stdio RPC
           v
       nd-core (Rust)
+        |-- scheduler / runtime permits
         |-- process supervisor
         |-- PTY / terminal
-        |-- Git CLI + parsing
-        '-- workspace filesystem primitives
+        |-- Git CLI + worktree primitives
+        |-- workspace filesystem primitives
+        '-- metrics / resource accounting
 ~~~
 
 ND remains the product/control plane. Rust is an implementation boundary, not a new product domain.
@@ -352,14 +458,18 @@ Within that PR, implementation should proceed in this order:
 
 1. Add Rust workspace, protocol types, build scripts, and core.health.
 2. Add Electron CoreClient supervision and dev/package binary resolution.
-3. Add Rust process supervisor.
-4. Port terminal/PTY service and switch the existing TS terminal IPC adapter to it.
-5. Port Git CLI execution/parsing and switch the existing TS Git adapter to it.
-6. Port only the workspace filesystem primitives required by migrated services.
-7. Add crash/restart/process-cleanup coverage.
-8. Wire release staging and electron-builder resources.
-9. Remove node-pty production dependency and unpack configuration after parity tests pass.
-10. Run full ND verification and packaged smoke tests.
+3. Add Rust process supervisor plus scheduler/runtime-permit service.
+4. Add the TypeScript ExecutionCoordinator and route every manual/Autopilot/retry/review/rework dispatch through it.
+5. Implement least-open-work distribution, reviewer rotation, per-role/team execution pools, and a separate review pool.
+6. Port terminal/PTY service and switch the existing TS terminal IPC adapter to it.
+7. Port Git CLI execution/parsing and task-worktree primitives and switch the existing TS Git/worktree adapters to them where contract-safe.
+8. Port only the workspace filesystem primitives required by migrated services.
+9. Move dedicated organization-run CLI child processes onto the shared Rust process supervisor without rewriting engine protocol logic.
+10. Add advisory task scope/conflict-aware scheduling and minimal non-code artifact evidence.
+11. Add crash/restart/permit-reconciliation/process-cleanup coverage.
+12. Wire release staging and electron-builder resources.
+13. Remove node-pty production dependency and unpack configuration after parity tests pass.
+14. Run multi-agent scaling benchmarks, full ND verification, and packaged smoke tests.
 
 No partial state may be merged where the default product requires old and new backends unpredictably.
 
@@ -511,7 +621,9 @@ Going from one to ten idle sessions in the same workspace must not create ten co
 Benchmark:
 1. one sustained-output terminal,
 2. four concurrent terminals,
-3. foreground input/cancel while output is saturated.
+3. foreground input/cancel while output is saturated,
+4. at least four concurrent organization runtime permits with distinct task/worktree ownership,
+5. ten logical agents attached to one shared workspace/core.
 
 Requirements:
 - no protocol-level dropped/reordered bytes,
@@ -569,6 +681,81 @@ Support diagnostics should distinguish:
 - PTY spawn failure,
 - protocol mismatch.
 
+### 4.9 Parallel agent runtime contract
+
+#### Authority split
+
+**TypeScript is authoritative for:**
+- company/project/task/role/team/agent state,
+- assignment policy,
+- dependency graph,
+- configured budgets/caps,
+- provider/model route selection,
+- reviewer independence policy,
+- task/review lifecycle,
+- durable leases/evidence/recovery decisions.
+
+**nd-core is authoritative for:**
+- currently granted native runtime permits,
+- atomic pool occupancy,
+- OS process ownership,
+- per-run child process trees,
+- cancellation delivery to owned processes,
+- runtime resource counters,
+- bounded event queues.
+
+Neither side may silently invent the other's state.
+
+#### Capacity pools
+
+For one organization run, the control plane may request several generic pool keys, for example:
+
+~~~text
+project:<projectId>:all
+project:<projectId>:execution
+project:<projectId>:role:<roleId>
+team:<teamId>:execution
+project:<projectId>:review
+~~~
+
+nd-core acquires all requested pool slots atomically.
+
+The product cap is never the Autopilot fill-loop iteration count. The same permit path is required for:
+- explicit Task Execute,
+- explicit Review,
+- Autopilot parallel fill,
+- automatic retry/failover,
+- automatic rework,
+- workflow continuation.
+
+#### No double scheduling authority
+
+OrganizationControlPlane remains the source of configured limits. nd-core receives a limit snapshot/revision with permit requests and enforces the active runtime occupancy. Rust does not decide that a Frontend Engineer should receive a task; it only enforces the generic pools the product layer asks it to enforce.
+
+#### Cancellation and recovery
+
+Canceling run A:
+- revokes run A permit,
+- cancels/terminates resources owned by run A,
+- does not revoke unrelated run B permits,
+- releases pool occupancy promptly,
+- preserves current attempt rollback/reconciliation semantics.
+
+A core crash invalidates all in-memory permits. Electron reconciles durable running runs against the dead core generation before new organization work can dispatch.
+
+#### Resource accounting
+
+For each active organization permit, expose where supported:
+- owned process count,
+- child/private memory metric,
+- CPU sample/time,
+- worktree path identity hash or opaque resource id (not raw private path in copied diagnostics),
+- elapsed time,
+- queued output bytes,
+- exit/cancel reason.
+
+This data feeds performance diagnostics and future budget UX; it is not billing truth by itself.
+
 ## 5. Acceptance Criteria (Required for Convergence)
 
 ### Architecture and startup
@@ -615,6 +802,29 @@ Support diagnostics should distinguish:
 - [ ] Managed child processes do not remain after normal app exit.
 - [ ] Managed child processes do not remain after forced sidecar termination in the supported Windows MVP path.
 - [ ] No silent fallback reports a Rust-backed operation as successful when the sidecar is unavailable.
+
+
+### Parallel work distribution and execution pools
+
+- [ ] With two idle agents of one role, N independent newly planned tasks are distributed so neither receives more than ceil(N / 2).
+- [ ] A single-agent company preserves current assignment behavior.
+- [ ] In-progress or review tasks cannot be silently reassigned by the distribution policy.
+- [ ] Review assignment rotates when multiple reviewers are available.
+- [ ] When multiple healthy reviewer routes exist, the selected reviewer does not use the same route as the worker being reviewed.
+- [ ] Manual Task Execute, manual Review, Autopilot fill, retry/failover, and rework all acquire an nd-core runtime permit through the same ExecutionCoordinator path.
+- [ ] Autopilot cannot exceed maxParallelWorkers; the existing direct-orchestrator capacity bypass is removed.
+- [ ] Per-role/per-team execution caps hold under Autopilot.
+- [ ] Review capacity is independently configurable; a full review pool does not consume all execution slots.
+- [ ] Required project + role/team + kind pool slots are acquired atomically; partial capacity acquisition never dispatches a worker.
+- [ ] Canceling one run releases only that run's permit/resources and leaves unrelated runs active.
+- [ ] A sidecar crash invalidates runtime permits and blocks new organization dispatch until durable-run reconciliation completes.
+- [ ] Dedicated CLI engine child processes migrated in this MVP are owned by the permit/process supervisor and leave no orphan process tree after cancel/exit.
+- [ ] The multi-model beta driver exercises every configured same-role route without a manual rebalance step.
+- [ ] Ten logical agents sharing one workspace still use one nd-core process and shared workspace/Git infrastructure.
+- [ ] Worktree/process resource measurements are captured for a parallel run benchmark.
+- [ ] Declared overlapping advisory file scopes are not blindly launched together when the scheduler has enough information to detect the conflict.
+- [ ] Integration conflicts enter conflict-aware rework/replan rather than immediately repeating the same stale attempt until the retry budget is exhausted.
+- [ ] A non-code specialist task can satisfy a typed artifact-evidence contract without pretending a code test command verified it.
 
 ### Performance and scaling
 
@@ -666,6 +876,9 @@ Reason:
 5. **Duplicate policy/security logic** — path/security checks can drift if TypeScript and Rust boundaries are unclear.
 6. **Migration scope creep** — moving organization/provider/renderer logic in the same PR would make rollback and review substantially harder.
 7. **Debug complexity** — failures now cross an RPC boundary and require correlated logs.
+8. **Dual-authority drift** — configured organization limits and native pool occupancy could diverge if the ExecutionCoordinator contract is bypassed.
+9. **Parallel resource amplification** — more workers can multiply installs, test runners, worktrees, and engine memory faster than user value if budgets are not measured.
+10. **Assignment regression** — least-open-work/reviewer rotation changes the hot path of plan and review assignment and can starve or misroute work if implemented inconsistently.
 
 ### Rollback path
 
@@ -708,7 +921,8 @@ Relevant remaining work is folded into this MVP only when it directly strengthen
 | Inactive-view mount lifecycle / keep-alive cleanup | **Defer** | separate renderer lifecycle project. |
 | Signing/notarization/update channel | **Defer** | release/security work independent of Rust-core architecture. |
 | Richer phase timeline/receipt rendering | **Defer** | observability UI follow-up; core supplies structured metrics/events needed later. |
-| Phase-2 project bootstrap/design lanes/delivery-cycle features | **Defer** | product workflow scope, not backend migration. |
+| Parallel work distribution / specialist engineering roles | **Include** | same-role assignment, reviewer rotation, role/team/review caps, unified execution permits, conflict/resource accounting, and non-code artifact evidence are part of this MVP. |
+| Phase-2 project bootstrap/design lanes/delivery-cycle features | **Defer** | product workflow scope outside the parallel-runtime slice, not backend migration. |
 
 ### Existing reliability behavior that must not regress
 
@@ -757,6 +971,10 @@ The product owner should explicitly approve or change these points before task b
 10. **Crash policy** — one automatic Rust-core restart, then fail visibly.
 11. **Rollback** — revert is primary; explicit developer-only legacy switch may remain temporarily for soak.
 12. **node-pty removal** — remove from production only after Rust PTY parity tests pass in the same feature PR.
+13. **Parallel-work inclusion** — docs/plan/parallel-work-distribution.md is part of PRD 0002 scope, not a later standalone Phase-2 implementation.
+14. **Authority split** — TypeScript owns assignment/roles/budgets/durable task truth; nd-core owns runtime permits/processes/resource occupancy.
+15. **Capacity model** — one project execution pool plus optional role/team pools and a distinct review pool, all enforced through one coordinator path.
+16. **Conflict/non-code minimum** — include advisory work scopes, conflict-aware rework, and a typed artifact-evidence path so parallel specialist roles are not code-only.
 
 ## 9. Human Approval Gate
 
