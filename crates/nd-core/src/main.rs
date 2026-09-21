@@ -224,6 +224,16 @@ fn dispatch(state: Arc<AppState>, method: &str, params: Value) -> Result<Value> 
             state.metrics.observe_workspace(&params.cwd);
             to_value(git::exec(params)?)
         }
+        "git.status" => {
+            let params = from_params::<git::GitQueryParams>(params)?;
+            state.metrics.observe_workspace(&params.cwd);
+            to_value(git::status(params)?)
+        }
+        "git.log" => {
+            let params = from_params::<git::GitLogParams>(params)?;
+            state.metrics.observe_workspace(&params.cwd);
+            to_value(git::log(params)?)
+        }
         "workspace.realpath" => {
             let params = from_params::<workspace::PathParams>(params)?;
             state.metrics.observe_workspace(&params.root);
