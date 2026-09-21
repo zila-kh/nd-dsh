@@ -70,7 +70,7 @@ export class TaskWorktreeManager {
 
   async existing(projectWorkspace: string | undefined, taskId: string): Promise<TaskWorktree | undefined> {
     if (!projectWorkspace) return undefined
-    const repoRoot = await repositoryRoot(projectWorkspace, this.runGit).catch(() => undefined)
+    const repoRoot = await repositoryRoot(projectWorkspace).catch(() => undefined)
     if (!repoRoot) return undefined
     const descriptor = describe(repoRoot, taskId)
     return await isAttachedWorktree(descriptor.root, this.runGit) ? descriptor : undefined
@@ -253,7 +253,7 @@ async function isAttachedWorktree(path: string, runGit: WorktreeGitRunner = git)
 
 async function branchExists(repoRoot: string, branch: string, runGit: WorktreeGitRunner = git): Promise<boolean> {
   try {
-    await this.runGit(repoRoot, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`])
+    await runGit(repoRoot, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`])
     return true
   } catch {
     return false
@@ -262,7 +262,7 @@ async function branchExists(repoRoot: string, branch: string, runGit: WorktreeGi
 
 async function isAncestor(repoRoot: string, ancestor: string, descendant: string, runGit: WorktreeGitRunner = git): Promise<boolean> {
   try {
-    await this.runGit(repoRoot, ['merge-base', '--is-ancestor', ancestor, descendant])
+    await runGit(repoRoot, ['merge-base', '--is-ancestor', ancestor, descendant])
     return true
   } catch {
     return false
