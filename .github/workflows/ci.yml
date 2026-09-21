@@ -22,6 +22,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+      - name: Rust 1.98.1
+        run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
       - name: Node 24
         uses: actions/setup-node@v4
         with:
@@ -41,6 +43,10 @@ jobs:
         run: node scripts/build-harness.mjs --skip-install
         env:
           CI: 'true'
+      - name: Verify ND Core
+        run: corepack pnpm core:test
+      - name: Build ND Core for desktop smoke
+        run: corepack pnpm core:build:dev
       - name: Audit production dependencies
         run: corepack pnpm audit --prod --audit-level high
       - name: Verify repository invariants
@@ -66,6 +72,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+      - name: Rust 1.98.1
+        run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
       - name: Node 24
         uses: actions/setup-node@v4
         with:
@@ -74,5 +82,7 @@ jobs:
         run: corepack enable
       - name: Install desktop dependencies
         run: corepack pnpm install --frozen-lockfile
+      - name: Verify ND Core
+        run: corepack pnpm core:test
       - name: Build Windows portable beta
         run: corepack pnpm dist:win:portable
