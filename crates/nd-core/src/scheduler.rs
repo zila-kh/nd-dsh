@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -112,7 +112,9 @@ impl Scheduler {
 
         let now = now_ms();
         let ttl = params.ttl_ms.unwrap_or(120_000).clamp(5_000, 3_600_000);
-        let id = params.permit_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+        let id = params
+            .permit_id
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
         validate_id(&id)?;
 
         let mut permits = self
