@@ -146,6 +146,7 @@ export class CoreClient {
     this.options.log?.(
       '[nd-core] ready v' + health.binaryVersion + ' protocol=' + health.protocolVersion + ' ' + health.platform + '/' + health.arch,
     )
+    this.emitSyntheticEvent('core.ready', 'high', health)
     return health
   }
 
@@ -254,15 +255,7 @@ export class CoreClient {
     if (this.closing) return
 
     this.options.onUnexpectedExit?.(code, signal)
-    for (const listener of this.listeners.get('core.exit') ?? []) {
-      listener({
-        version: ND_CORE_PROTOCOL_VERSION,
-        kind: 'event',
-        event: 'core.exit',
-        priority: 'high',
-        data: { code, signal },
-      })
-    }
+    this.emitSyntheticEvent('core.exit', 'high', { code, signal })
 
     if (this.restartAttempts >= 1) {
       this.options.log?.('[nd-core] restart budget exhausted; native services are unavailable.')
@@ -285,6 +278,18 @@ export class CoreClient {
     this.healthValue = undefined
     this.rejectPending(error)
     try { child?.kill() } catch { /* best effort */ }
+  }
+
+  private emitSyntheticEvent(event: string, priority: string, data: unknown): void {
+    const frame: NdCoreEventFrame = {
+      version: ND_CORE_PROTOCOL_VERSION,
+      kind: 'event',
+      event,
+      priority,
+      data,
+    }
+    for (const listener of this.listeners.get(event) ?? []) listener(frame)
+    for (const listener of this.listeners.get('*') ?? []) listener(frame)
   }
 
   private rejectPending(error: Error): void {
