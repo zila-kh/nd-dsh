@@ -15,8 +15,10 @@ ND company / project / role / AI employee / task
                  |
                  `---- employee engine ---> ND engine registry
                                              |-- ND Harness
-                                             |-- Codex CLI
-                                             `-- future engines
+                                             |-- Codex / ZCode app-servers
+                                             |-- Claude Code / Cursor / Antigravity / Pi
+                                             |-- OpenCode / Goose / JCode / Hermes
+                                             `-- future local / remote engines
 ```
 
 Engine-specific filesystem paths, process protocols, authentication details, or sandbox vocabulary stay inside adapters/probes. Company/task/workflow semantics do not branch on vendor package names.
@@ -28,6 +30,23 @@ ND persists explicit non-default employee assignments in `engine-assignments.jso
 The Workforce UI reads the engine catalog from the main process and lets the user select only available engines. Before an organization task creates a run receipt, the orchestrator resolves the assigned employee's engine and checks availability. This prevents an unavailable engine from leaving a false running task behind.
 
 The current engine route applies to **assigned task execution**. PM planning and independent review remain on the primary ND Harness path for this beta. That boundary is intentional and should be generalized only when additional engines expose equivalent structured planning/review contracts.
+
+## Task workspace contract
+
+For organization work, the coding engine never chooses the writable transaction boundary. ND resolves the task, lease/capacity, and task workspace first, then creates the engine session at that exact root.
+
+```text
+ND task
+  -> lease / runtime permit
+  -> task worktree + baseline
+  -> engine session bound to that root
+  -> checkpoint
+  -> machine verification
+  -> review
+  -> integration
+```
+
+Direct workspace-engine sessions are immutable with respect to their ND-bound root. If an adapter later reports a different cwd, the session router fails closed instead of silently moving the worker to the base checkout. Multiple ZCode native sessions can share one app-server while retaining separate task workspaces.
 
 ## Current engines
 
@@ -77,6 +96,10 @@ ND does not yet advertise persistent sessions across restarts (threads live in m
 
 Engine-specific execution guidance for organization workers lives on each descriptor (`workerInstructions`) rather than in workflow code: plan/review still run on the primary ND Harness path, while assigned task execution creates its session directly on the assigned engine through the session router.
 
+### Other direct workspace engines
+
+The current catalog also contains ZCode CLI, Antigravity CLI, Pi CLI, Cursor CLI and Claude Code CLI, plus optional installed OpenCode, Goose, JCode and Hermes adapters. They share the same ND session/workspace boundary but keep authentication, model/provider selection and native tool/permission policy inside their adapters. MiniMax and ChatGPT Web remain interactive-only when they cannot satisfy the writable ND workspace contract.
+
 ## Capability registry
 
 The renderer never decides engine availability. `CodingEngineRegistry` probes the installed/built runtime and returns `CodingEngineDescriptor` values through narrow IPC.
@@ -89,11 +112,11 @@ Engine state should eventually distinguish:
 - rate-limited
 - policy-compatible for the requested task
 
-Today the registry implements installation/build availability and durable employee routing. Authentication/health probes are a public-beta release follow-up.
+Today the registry implements installation/build availability and durable employee routing across the shipped adapters. Deeper authentication/health/rate-limit probes remain public-beta hardening work.
 
 ## Target direct-adapter contract
 
-The delegated Codex path reuses the pinned Harness provider, while `codex-cli` already implements the direct shape: ND owns the child process lifecycle and translates its protocol into ND-owned events. Both engines sit behind the same seams — the catalog (descriptors + capability honesty), the registry (availability probes + durable routing), and the session router (which engine owns which session) — so Company, Project, Role, Task, Skill, or Workflow data never changes shape when another local/remote coding engine is added.
+The delegated Codex path reuses the pinned Harness provider, while direct engines implement a common session shape: ND owns or supervises the adapter lifecycle, translates protocol activity into ND-owned events, and binds writable organization sessions to ND-selected task workspaces. All engines sit behind the same seams — catalog, registry, session router, task workspace provenance — so Company, Project, Role, Task, Skill, or Workflow data never changes shape when another local/remote coding engine is added.
 
 ## Skills and MCP
 
