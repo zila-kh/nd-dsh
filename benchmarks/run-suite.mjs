@@ -200,18 +200,30 @@ async function benchmarkGit() {
   const client = await CoreRpc.launch()
   try {
     const operations = []
-    for (const [name, args] of [
-      ['status', ['status', '--porcelain=v1', '--untracked-files=all']],
-      ['log', ['log', '--oneline', '-50']],
-      ['diff', ['diff', '--no-ext-diff']],
-    ]) {
-      const started = performance.now()
-      const result = await client.request('git.exec', { cwd: fixture.root, args })
-      const callerMs = performance.now() - started
-      check(result.exitCode === 0, 'git ' + name + ' failed: ' + result.stderr)
-      check(result.truncated !== true, 'git ' + name + ' output truncated')
-      operations.push({ name, callerMs, coreDurationMs: result.durationMs, stdoutBytes: Buffer.byteLength(result.stdout || '') })
-    }
+
+    const statusStarted = performance.now()
+    const status = await client.request('git.status', { cwd: fixture.root, env: {}, gitPath: 'git' })
+    const statusCallerMs = performance.now() - statusStarted
+    check(status.exitCode === 0, 'git status failed: ' + status.stderr)
+    check(status.truncated !== true, 'git status output truncated')
+    check(Array.isArray(status.entries) && status.entries.length >= fixture.dirty, 'git status parser returned too few entries')
+    operations.push({ name: 'status', callerMs: statusCallerMs, coreDurationMs: status.durationMs, parsedEntries: status.entries.length })
+
+    const logStarted = performance.now()
+    const log = await client.request('git.log', { cwd: fixture.root, limit: 50, env: {}, gitPath: 'git' })
+    const logCallerMs = performance.now() - logStarted
+    check(log.exitCode === 0, 'git log failed: ' + log.stderr)
+    check(log.truncated !== true, 'git log output truncated')
+    check(Array.isArray(log.commits) && log.commits.length > 0, 'git history parser returned no commits')
+    operations.push({ name: 'log', callerMs: logCallerMs, coreDurationMs: log.durationMs, parsedEntries: log.commits.length })
+
+    const diffStarted = performance.now()
+    const diff = await client.request('git.exec', { cwd: fixture.root, args: ['diff', '--no-ext-diff'] })
+    const diffCallerMs = performance.now() - diffStarted
+    check(diff.exitCode === 0, 'git diff failed: ' + diff.stderr)
+    check(diff.truncated !== true, 'git diff output truncated')
+    operations.push({ name: 'diff', callerMs: diffCallerMs, coreDurationMs: diff.durationMs, stdoutBytes: Buffer.byteLength(diff.stdout || '') })
+
     return writeResult(outputDir, 'git-workload', { fixture: { files: fixture.files, dirty: fixture.dirty }, operations })
   } finally { await client.close() }
 }
