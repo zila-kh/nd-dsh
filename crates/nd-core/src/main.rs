@@ -7,11 +7,11 @@ mod workspace;
 
 use anyhow::{Context, Result};
 use process::{CancelParams, ProcessManager, SpawnParams, WriteParams};
-use protocol::{read_request, ProtocolWriter, PROTOCOL_VERSION};
+use protocol::{PROTOCOL_VERSION, ProtocolWriter, read_request};
 use scheduler::{AcquireParams, HeartbeatParams, ReleaseParams, Scheduler};
-use serde::de::DeserializeOwned;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde::de::DeserializeOwned;
+use serde_json::{Value, json};
 use std::io::BufReader;
 use std::sync::Arc;
 use std::thread;
@@ -81,7 +81,9 @@ fn main() -> Result<()> {
                 }
                 Err(error) => {
                     if let Err(write_error) =
-                        state.writer.send_error(&id, "method_failed", format!("{error:#}"))
+                        state
+                            .writer
+                            .send_error(&id, "method_failed", format!("{error:#}"))
                     {
                         eprintln!("[nd-core] error response write failed: {write_error:#}");
                     }
@@ -116,7 +118,9 @@ fn dispatch(state: Arc<AppState>, method: &str, params: Value) -> Result<Value> 
         "scheduler.acquire" => to_value(state.scheduler.acquire(from_params(params)?)?),
         "scheduler.heartbeat" => to_value(state.scheduler.heartbeat(from_params(params)?)?),
         "scheduler.release" => {
-            let released = state.scheduler.release(from_params::<ReleaseParams>(params)?)?;
+            let released = state
+                .scheduler
+                .release(from_params::<ReleaseParams>(params)?)?;
             Ok(json!({ "released": released }))
         }
         "scheduler.snapshot" => to_value(state.scheduler.snapshot()?),
