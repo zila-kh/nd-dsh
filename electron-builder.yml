@@ -19,6 +19,8 @@ files:
 extraResources:
   - from: .release/release-manifest.json
     to: release-manifest.json
+  - from: .release/nd-core
+    to: nd-core
   - from: .release/harness
     to: vendor/deepseek-harness
   - from: configs/dsh
