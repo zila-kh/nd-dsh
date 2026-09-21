@@ -163,6 +163,7 @@ export class AgentBrowserClient {
     if (!this.sessionTouched) return
     if (!this.closing) {
       this.closing = this.run(['close'], [], SHUTDOWN_TIMEOUT_MS)
+        .then(() => undefined)
         .catch((error) => {
           console.warn('[agent-browser] session cleanup failed:', error instanceof Error ? error.message : String(error))
         })
