@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import type { CoreClient } from '../core/core-client.js'
 
 export interface RuntimePoolClaim {
@@ -36,6 +37,7 @@ export class ExecutionCoordinator {
   private readonly permits = new Map<string, RuntimePermit>()
   private readonly sessionPermits = new Map<string, string>()
   private readonly localPermits = new Map<string, LocalPermit>()
+  private readonly permitContext = new AsyncLocalStorage<RuntimePermit>()
   private readonly heartbeatTimer: ReturnType<typeof setInterval> | undefined
   private coreChain: Promise<unknown> = Promise.resolve()
 
@@ -73,6 +75,15 @@ export class ExecutionCoordinator {
     const permit: RuntimePermit = { id, input }
     this.permits.set(id, permit)
     return permit
+  }
+
+  runWithPermit<T>(permit: RuntimePermit, operation: () => Promise<T>): Promise<T> {
+    if (!this.permits.has(permit.id)) return Promise.reject(new Error('Runtime permit is no longer active.'))
+    return this.permitContext.run(permit, operation)
+  }
+
+  currentPermitId(): string | undefined {
+    return this.permitContext.getStore()?.id
   }
 
   bindSession(permit: RuntimePermit, sessionId: string): void {
