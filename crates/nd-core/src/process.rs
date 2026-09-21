@@ -37,6 +37,12 @@ pub struct CancelParams {
     pub process_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloseStdinParams {
+    pub process_id: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpawnResult {
@@ -281,6 +287,20 @@ impl ProcessManager {
             let _ = child.kill();
         }
         Ok(true)
+    }
+
+    pub fn close_stdin(&self, params: CloseStdinParams) -> Result<bool> {
+        let stdin = {
+            let mut processes = self
+                .processes
+                .lock()
+                .map_err(|_| anyhow::anyhow!("process registry lock poisoned"))?;
+            let Some(record) = processes.get_mut(&params.process_id) else {
+                return Ok(false);
+            };
+            record.stdin.take()
+        };
+        Ok(stdin.is_some())
     }
 
     pub fn snapshot(&self) -> Result<Vec<ProcessSnapshot>> {
