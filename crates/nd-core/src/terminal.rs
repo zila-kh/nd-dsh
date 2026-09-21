@@ -1,6 +1,6 @@
 use crate::process::{filtered_environment, kill_process_tree};
-use crate::scheduler::now_ms;
 use crate::protocol::ProtocolWriter;
+use crate::scheduler::now_ms;
 #[cfg(windows)]
 use crate::windows_job::WindowsJob;
 use anyhow::{Context, Result, bail};
