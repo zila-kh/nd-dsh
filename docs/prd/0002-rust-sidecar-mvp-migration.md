@@ -35,6 +35,7 @@ The MVP should prove a safer backend boundary without attempting a broad rewrite
 14. Add explicit execution/review capacity pools so project, role/team, and review limits are enforced consistently for manual, Autopilot, retry, and review dispatch.
 15. Make nd-core the **runtime execution authority** for atomic capacity permits, process ownership, cancellation, and resource accounting while TypeScript remains the durable organization/business authority.
 16. Add conflict/resource-aware parallelism so increasing agent count does not simply multiply worktrees, package installs, process trees, and merge failures without measurement.
+17. Ship a first-class benchmark suite in this repository so performance claims are backed by reproducible before/after measurements, not architecture claims or manual impressions.
 
 ### Primary user problem
 
@@ -399,6 +400,170 @@ For non-code specialist work, define a minimal artifact verification path instea
 
 Reviewer route diversity remains a TypeScript assignment constraint: when multiple healthy review routes exist, avoid assigning the same reviewer/model route used by the worker under review.
 
+#### L. Repository-owned performance benchmark suite
+
+Inspired by jcode's practice of keeping startup, memory, terminal, and budget-check scripts in the repository, ND must ship its own benchmark harness as part of this MVP.
+
+This is implementation scope, not documentation-only scope.
+
+Required repository layout:
+
+~~~text
+benchmarks/
+  README.md
+  schema/
+    result.schema.json
+  fixtures/
+    generate-large-git-fixture.mjs
+    synthetic-engine.mjs
+  lib/
+    process-metrics.mjs
+    statistics.mjs
+    benchmark-env.mjs
+  core-startup.mjs
+  app-startup.mjs
+  memory-scaling.mjs
+  terminal-throughput.mjs
+  git-workload.mjs
+  scheduler-multi-agent.mjs
+  cancellation-latency.mjs
+  compare.mjs
+  check-budgets.mjs
+  baselines/
+    README.md
+~~~
+
+The implementation may adjust filenames if needed, but the same coverage must exist.
+
+Required package scripts:
+
+~~~text
+pnpm bench:smoke
+pnpm bench:record
+pnpm bench:compare
+pnpm bench:check
+~~~
+
+Definitions:
+- **bench:smoke**: short deterministic run proving every benchmark harness works; suitable for normal CI.
+- **bench:record**: full reference run that writes machine-readable JSON with environment metadata.
+- **bench:compare**: runs or compares legacy TypeScript/native paths against Rust-core paths on the same machine and fixture.
+- **bench:check**: evaluates a recorded result against absolute and relative budgets and exits non-zero on regression.
+
+Benchmark code must not depend on a live model/provider network call. Use deterministic local fixtures/synthetic engine processes for performance gates. Real-provider/project acceptance may be reported separately but is not a stable speed gate.
+
+The temporary benchmark workspace, runtime directory, cache directory, and organization state must be isolated from the developer's real ND data.
+
+Checked-in baselines must record provenance:
+- ND commit,
+- backend mode,
+- OS/version,
+- architecture,
+- CPU model/logical CPU count where available,
+- physical memory,
+- Node/Electron version,
+- Rust toolchain,
+- release/debug profile,
+- run count,
+- benchmark schema version.
+
+Raw per-run samples plus p50/p95/p99/mean/min/max must be retained in JSON. README summaries may display only the most useful values.
+
+#### Mandatory benchmark scenarios
+
+1. **Core startup**
+   - process spawn -> protocol handshake,
+   - health RPC after ready.
+
+2. **Packaged Electron startup**
+   - process launch -> main ready,
+   - preload bridge ready,
+   - first renderer-ready marker,
+   - first usable workspace shell.
+   - Measure with the packaged build, not only Vite/dev mode.
+
+3. **Memory scaling**
+   - 1 logical session,
+   - 2,
+   - 4,
+   - 8,
+   - 10,
+   - same-workspace and multi-workspace variants.
+   - Report nd-core separately from Electron and external engine children.
+
+4. **Terminal throughput/latency**
+   - sustained output bytes/sec,
+   - event -> Electron handler latency,
+   - input -> PTY write latency,
+   - 1 and 4 concurrent terminals,
+   - cancellation/input while output is saturated,
+   - dropped/reordered byte check.
+
+5. **Git workload**
+   - generated repository with thousands of files and deterministic dirty changes,
+   - status,
+   - log,
+   - diff,
+   - stage/unstage,
+   - worktree create/baseline/reset/integration primitives.
+   - Separate Git subprocess time, Rust parse time, and IPC time.
+
+6. **Parallel-agent scheduler**
+   - 1/2/4/8/10 logical workers,
+   - permit acquire/release latency,
+   - same-role distribution,
+   - project/role/review pool enforcement,
+   - shared-resource counts,
+   - per-worker memory/resource delta,
+   - worktree disk growth.
+
+7. **Cancellation/process cleanup**
+   - cancel one synthetic long-running worker among several,
+   - cancellation request -> process-tree exit latency,
+   - permit release latency,
+   - assert unrelated workers continue,
+   - assert zero orphan processes.
+
+8. **Electron responsiveness under load**
+   - main-process event-loop lag,
+   - renderer input responsiveness where measurable,
+   - terminal + Git + multi-agent load concurrently.
+
+#### Before/after proof
+
+The MVP PR must include a benchmark report from the same reference machine comparing:
+
+~~~text
+legacy backend
+vs
+Rust shared core backend
+~~~
+
+The comparison must use the same ND commit when practical, the same fixture data, the same run counts, and the same packaged/dev mode.
+
+At minimum report:
+- startup,
+- memory,
+- Electron main CPU/event-loop impact,
+- terminal throughput/latency,
+- Git workload time,
+- cancellation latency,
+- 1 -> 10 session scaling,
+- parallel scheduler overhead.
+
+Do not claim a percentage improvement if the benchmark does not measure it.
+
+#### CI and reference-machine policy
+
+Shared GitHub runners are too noisy for tight absolute timing budgets. Therefore:
+
+- normal PR CI runs **bench:smoke** and validates invariants/schema,
+- benchmark scripts always support a local/reference-machine **bench:check** mode,
+- release/MVP acceptance requires one recorded full run on a documented reference Windows machine,
+- if a stable self-hosted performance runner is added later, **bench:check** becomes an automated required status without changing benchmark formats.
+
+Correctness invariants such as one-core-many-sessions, no dropped terminal bytes, pool caps, no orphan processes, and bounded resource counts may be hard CI gates even on shared runners.
+
 ### Out of Scope
 
 - Rewriting React, preload, or Electron UI code in Rust.
@@ -756,6 +921,48 @@ For each active organization permit, expose where supported:
 
 This data feeds performance diagnostics and future budget UX; it is not billing truth by itself.
 
+### 4.10 Benchmark methodology and regression policy
+
+Performance evidence must be reproducible enough that another developer can rerun it and understand why a result changed.
+
+#### Measurement rules
+
+- Use release builds for performance claims unless the metric explicitly targets development workflow.
+- Warm-up runs are separated from measured runs.
+- Use at least 10 measured runs for startup/short-latency benchmarks in the final MVP report.
+- Use a long enough sample window for throughput/memory workloads to observe steady-state behavior.
+- Record raw samples; do not publish only one best run.
+- Report p50 and p95 at minimum; include p99 for event-loop/input/cancel latency where sample count supports it.
+- Memory reports identify the OS metric: Linux PSS/RSS as available; Windows private bytes/private working set as available.
+- Process-tree memory is reported separately from nd-core-only memory.
+- Network/model latency is excluded from deterministic core speed gates.
+- Benchmarks fail loudly when required measurement facilities are unavailable; they do not silently substitute fabricated zeros.
+
+#### Relative migration gates
+
+On the same reference machine and deterministic fixture, Rust-core mode must demonstrate:
+
+- **Electron main work reduction:** terminal/Git stress must materially reduce main-process CPU/event-loop work versus legacy; target >= 25% reduction in measured main-process CPU time for at least one defined high-volume workload while still meeting absolute responsiveness gates.
+- **No idle-memory explosion:** Electron + nd-core idle backend memory must not regress by more than 20% versus the comparable legacy backend without an explicitly approved explanation.
+- **Better multi-session scaling:** total ND backend memory growth from session 1 -> 10 must be lower than legacy mode for the same synthetic workload.
+- **Cancellation not slower:** p95 synthetic worker cancel -> process-tree exit must not regress by more than 10% and must remain inside the absolute cleanup budget.
+- **Git/terminal no-regression:** no hot-path benchmark may regress by >10% p50 without a documented tradeoff approved in review.
+
+These relative gates complement, rather than replace, the absolute budgets already defined in Section 4.7.
+
+#### Benchmark artifact
+
+The implementation PR must attach or commit a concise generated Markdown summary derived from the JSON result, including:
+- baseline and candidate commit/backend,
+- machine fingerprint,
+- metric table,
+- percent delta,
+- PASS/FAIL budget result,
+- notable outliers,
+- links/paths to raw JSON artifacts.
+
+The source of truth remains machine-readable JSON.
+
 ## 5. Acceptance Criteria (Required for Convergence)
 
 ### Architecture and startup
@@ -835,6 +1042,25 @@ This data feeds performance diagnostics and future budget UX; it is not billing 
 - [ ] Terminal/Git stress tests record Electron main event-loop lag and meet the p95 target.
 - [ ] High-priority cancel/input is not starved by saturated terminal/background event traffic.
 
+
+### Benchmark suite and measured proof
+
+- [ ] A repository-owned benchmarks/ suite exists and covers core startup, packaged app startup, memory scaling, terminal, Git, scheduler/multi-agent, cancellation/process cleanup, and Electron responsiveness.
+- [ ] package.json exposes bench:smoke, bench:record, bench:compare, and bench:check.
+- [ ] pnpm bench:smoke runs in normal CI and validates benchmark schema plus deterministic invariants.
+- [ ] Full benchmark results are emitted as machine-readable JSON containing raw samples, summary statistics, machine metadata, commit/backend identity, and schema version.
+- [ ] Benchmark runs are isolated from the developer's real ND workspace/state/cache.
+- [ ] The MVP PR contains same-machine legacy-vs-Rust measurements; performance claims in the PR are generated from those results.
+- [ ] Final startup/short-latency evidence uses at least 10 measured runs and reports p50/p95.
+- [ ] Memory reports separate nd-core, Electron, and external coding-engine child processes.
+- [ ] Session-scaling report includes 1/2/4/8/10 logical-session points.
+- [ ] Parallel-agent benchmark includes 1/2/4/8/10 worker points and reports permit latency, resource counts, memory delta, and worktree disk cost.
+- [ ] Terminal benchmark detects dropped/reordered bytes rather than reporting throughput alone.
+- [ ] Cancellation benchmark proves canceling one worker leaves unrelated workers alive and leaves zero orphan process trees.
+- [ ] Packaged-app startup benchmark runs against the actual packaged Windows artifact.
+- [ ] bench:check fails non-zero when an absolute/relative performance budget is violated.
+- [ ] No README/PR performance percentage is accepted unless its underlying JSON artifact and methodology are available.
+
 ### Packaging
 
 - [ ] Release staging builds/copies the correct nd-core executable.
@@ -909,6 +1135,7 @@ Relevant remaining work is folded into this MVP only when it directly strengthen
 | Runtime distribution / installed app must not require dev tooling | **Include** | nd-core is staged, hashed, packaged, health-checked, and requires no Cargo on the user machine. |
 | Packaged Windows E2E | **Include** | packaged executable must launch the bundled core and smoke health + terminal + Git. |
 | Performance telemetry | **Include** | startup, memory/session scaling, terminal/Git latency, queue sizes, and Electron event-loop lag become explicit budgets. |
+| Reproducible performance benchmark suite | **Include** | repo-owned benchmark scripts, fixtures, JSON results, legacy-vs-Rust comparison, CI smoke, and hard budget checker are mandatory MVP deliverables. |
 | PTY terminal + process-group cleanup | **Include** | Rust PTY + process supervisor is core MVP scope. |
 | Terminal permission mode / organization action tagging | **Include at boundary** | migrated terminal/process requests must carry session/workspace/origin metadata and preserve current policy decisions; full universal action normalization remains separate. |
 | Provider credential isolation from autonomous child processes | **Include at boundary** | ProcessService receives explicit child environments; provider secrets must not be inherited accidentally or logged by Rust. |
@@ -975,6 +1202,7 @@ The product owner should explicitly approve or change these points before task b
 14. **Authority split** — TypeScript owns assignment/roles/budgets/durable task truth; nd-core owns runtime permits/processes/resource occupancy.
 15. **Capacity model** — one project execution pool plus optional role/team pools and a distinct review pool, all enforced through one coordinator path.
 16. **Conflict/non-code minimum** — include advisory work scopes, conflict-aware rework, and a typed artifact-evidence path so parallel specialist roles are not code-only.
+17. **Benchmark proof** — performance acceptance requires the repository-owned benchmark suite and same-machine legacy-vs-Rust evidence; architecture claims alone cannot satisfy the MVP.
 
 ## 9. Human Approval Gate
 
