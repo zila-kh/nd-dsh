@@ -92,3 +92,12 @@ jobs:
         run: corepack pnpm core:test
       - name: Build Windows portable beta
         run: corepack pnpm dist:win:portable
+      - name: Smoke packaged Rust core, terminal, and Git
+        run: node scripts/packaged-runtime-smoke.mjs
+      - name: Upload packaged smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: packaged-runtime-smoke
+          path: benchmark-results/packaged-smoke
+          if-no-files-found: error
