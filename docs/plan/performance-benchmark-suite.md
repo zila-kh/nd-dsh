@@ -622,3 +622,9 @@ invalidation under an external mutation and an external commit), bounded search 
 and payload size, explicit truncation reporting, cancel-to-stop latency, and core deadline
 expiry. Its results are written through the same envelope and provenance path as the rest
 of the suite, and it exits non-zero when a claim does not hold on the machine it ran on.
+
+### 12.8 Post-PR #21 CI status and orchestration comparison backlog
+
+PR #21 merged to `main` as `101a855b`. The first push CI run (`35640378484`) did not reach the newly added ordinary benchmark/evidence gates because `pnpm core:test` failed first on Ubuntu: the protocol contract `workspace_primitives_are_bounded_reject_escapes_and_are_the_only_ones_exposed` received `workspace path is unavailable: No such file or directory (os error 2)`. The unit suite itself passed 38/38 and the protocol contract reached 15/16 before that failure. The Windows job was canceled during dependency installation, and the full `performance-evidence` job was skipped. Therefore local Windows/package results remain evidence, but CI proof is still open.
+
+Agent/company-scale comparisons are broader than the Rust-runtime suite in this document. Keep the maintained external reference set and candidate metrics in [agent-orchestration-reference-matrix.md](agent-orchestration-reference-matrix.md). That matrix currently retains QM, AWS sample-codex-agent-team, Orca, Paperclip, Gajae Code, LazyCodex, and jcode with observed revisions. Comparative claims must use equivalent verified-completion definitions and preserve exact upstream revision/configuration; this suite's internal Rust-vs-legacy evidence remains a separate benchmark class.
