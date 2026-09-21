@@ -1,8 +1,9 @@
 ---
 id: "0003"
 title: "Engine-Neutral Agent Teams and Task Workspace Isolation"
-status: draft
+status: approved
 last-audit: 2026-09-22
+approved: 2026-09-22
 ---
 
 # Product Requirement Document (PRD): Engine-Neutral Agent Teams and Task Workspace Isolation
@@ -357,6 +358,25 @@ ND deliberately combines ideas rather than cloning one system:
 
 See [agent-orchestration-reference-matrix.md](../plan/agent-orchestration-reference-matrix.md).
 
-## 19. Rollback
+## 19. Implementation status
+
+Approved on 2026-09-22. The implementation is carried by `feat/engine-neutral-agent-teams` and deliberately extends the existing task-worktree/control-plane path rather than creating a second scheduler.
+
+Implemented surfaces:
+
+- organization run provenance now records engine, workspace kind/root/branch, baseline, checkpoint and runtime permit identity;
+- direct engine sessions have an ND-owned immutable workspace binding and fail closed if an adapter reports a different cwd;
+- ZCode keeps one app-server while multiple native sessions retain distinct task workspaces; restart/resume keeps the session workspace;
+- organization state carries structured team/task coordination events and explicit integration pending/integrated/conflict state;
+- integration conflicts preserve the task branch/checkpoint and route to explicit rework instead of generic stale retry;
+- Company task/run UI exposes engine, workspace kind, task branch, baseline/checkpoint and integration-conflict provenance;
+- regression coverage proves five writable tasks in one repository remain independently rollbackable;
+- mixed-engine contract coverage proves Codex/ZCode task sessions retain distinct ND worktree roots;
+- the existing `scheduler-multi-agent` benchmark already records 1/2/4/8/10 workers, core/child memory, permit latency, process/workspace counts and worktree disk growth;
+- the maintained external reference/benchmark set remains in [agent-orchestration-reference-matrix.md](../plan/agent-orchestration-reference-matrix.md).
+
+Verification remains governed by repository CI and the separate full performance-evidence policy; approval of this PRD does not turn an unrun external-engine benchmark into a performance claim.
+
+## 20. Rollback
 
 This work is additive around current organization/worktree execution. If new team coordination or extended binding regresses behavior, disable the new fan-out and fall back to current dependency-aware scheduling while preserving per-task worktrees and recorded evidence. Never fall back to one shared dirty checkout for independent writable company tasks.
