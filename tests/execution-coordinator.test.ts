@@ -46,6 +46,33 @@ describe('ExecutionCoordinator', () => {
     await coordinator.close()
   })
 
+  it('invalidates permits on core exit and blocks dispatch until durable reconciliation resumes it', async () => {
+    const listeners = new Map<string, Set<(frame: never) => void>>()
+    const core = {
+      request: async () => ({ granted: true, permit: { id: 'native-permit' } }),
+      onEvent: (event: string, listener: (frame: never) => void) => {
+        let set = listeners.get(event)
+        if (!set) { set = new Set(); listeners.set(event, set) }
+        set.add(listener)
+        return () => set?.delete(listener)
+      },
+    }
+    const coordinator = new ExecutionCoordinator(core as never)
+    const permit = await coordinator.acquire({ kind: 'execution', pools: [{ key: 'project:p:execution', limit: 1 }] })
+    expect(coordinator.snapshot().activePermits).toBe(1)
+
+    for (const listener of listeners.get('core.exit') ?? []) listener({} as never)
+    expect(coordinator.snapshot().activePermits).toBe(0)
+    expect(coordinator.recoveryRequired()).toBe(true)
+    await expect(coordinator.acquire({ kind: 'execution', pools: [{ key: 'project:p:execution', limit: 1 }] }))
+      .rejects.toThrow(/must be reconciled/i)
+
+    coordinator.resumeAfterReconciliation()
+    expect(coordinator.recoveryRequired()).toBe(false)
+    await coordinator.close()
+    expect(permit.id).toBeTruthy()
+  })
+
   it('keeps review and execution pools independent', async () => {
     const coordinator = new ExecutionCoordinator()
     const execution = await coordinator.acquire({
