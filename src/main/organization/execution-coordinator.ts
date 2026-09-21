@@ -39,10 +39,15 @@ export class ExecutionCoordinator {
   private readonly localPermits = new Map<string, LocalPermit>()
   private readonly permitContext = new AsyncLocalStorage<RuntimePermit>()
   private readonly heartbeatTimer: ReturnType<typeof setInterval> | undefined
+  private readonly disposeCoreExit: (() => void) | undefined
   private coreChain: Promise<unknown> = Promise.resolve()
+  private blockedReason: string | undefined
 
-  constructor(private readonly core?: Pick<CoreClient, 'request'>) {
+  constructor(private readonly core?: Pick<CoreClient, 'request' | 'onEvent'>) {
     if (core) {
+      this.disposeCoreExit = core.onEvent('core.exit', () => {
+        this.invalidateForCoreRestart('ND Core restarted while organization work was active. Durable runs must be reconciled before new dispatch.')
+      })
       this.heartbeatTimer = setInterval(() => {
         void this.heartbeat().catch((error) => {
           console.warn('ND Core permit heartbeat failed:', error instanceof Error ? error.message : String(error))
@@ -53,6 +58,7 @@ export class ExecutionCoordinator {
   }
 
   async acquire(input: RuntimePermitInput): Promise<RuntimePermit> {
+    if (this.blockedReason) throw new Error(this.blockedReason)
     validatePools(input.pools)
     const id = randomUUID()
     if (this.core) {
@@ -114,7 +120,23 @@ export class ExecutionCoordinator {
     await this.releaseById(permit.id)
   }
 
+  invalidateForCoreRestart(reason: string): void {
+    this.blockedReason = reason
+    this.permits.clear()
+    this.sessionPermits.clear()
+    this.localPermits.clear()
+  }
+
+  recoveryRequired(): boolean {
+    return this.blockedReason !== undefined
+  }
+
+  resumeAfterReconciliation(): void {
+    this.blockedReason = undefined
+  }
+
   async close(): Promise<void> {
+    this.disposeCoreExit?.()
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
     const permits = [...this.permits.values()]
     await Promise.allSettled(permits.map((permit) => this.release(permit)))
