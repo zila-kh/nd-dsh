@@ -121,4 +121,105 @@ describe('organization control plane', () => {
     await control.mutate({ type: 'signal.triage', id: state.signals[0]!.id, disposition: 'evidence' })
     expect((await control.management('project-1')).metrics.newSignals).toBe(0)
   })
+
+  it('serializes declared overlapping advisory work scopes but leaves independent scopes runnable', async () => {
+    const { control, value } = await fixture()
+    const now = Date.now()
+    value.tasks.push(
+      {
+        id: 'active-task', companyId: 'company-1', projectId: 'project-1',
+        title: 'Shared API', description: 'Modify shared API', status: 'in_progress', priority: 'medium',
+        acceptanceCriteria: [], dependsOn: [], workScopes: ['src/shared/**'], createdAt: now, updatedAt: now,
+      },
+      {
+        id: 'overlap-task', companyId: 'company-1', projectId: 'project-1',
+        title: 'Shared API child', description: 'Modify nested API', status: 'ready', priority: 'medium',
+        acceptanceCriteria: [], dependsOn: [], workScopes: ['src/shared/api/**'], createdAt: now, updatedAt: now,
+      },
+      {
+        id: 'independent-task', companyId: 'company-1', projectId: 'project-1',
+        title: 'Docs', description: 'Update docs', status: 'ready', priority: 'medium',
+        acceptanceCriteria: [], dependsOn: [], workScopes: ['docs/**'], createdAt: now, updatedAt: now,
+      },
+    )
+    value.runs.push({
+      id: 'run-active', companyId: 'company-1', projectId: 'project-1', taskId: 'active-task',
+      kind: 'task-execution', status: 'running', sessionId: 'active-session', startedAt: now,
+    })
+
+    const overlap = await control.shouldRun('project-1', 'task.execute', 'overlap-task')
+    expect(overlap.route).toBe('wait')
+    expect(overlap.reason).toMatch(/work scope overlaps/i)
+
+    const independent = await control.shouldRun('project-1', 'task.execute', 'independent-task')
+    expect(independent.route).toBe('ready')
+  })
+
+
+  it('derives independent execution, role, team, and review runtime pools from the configured budget', async () => {
+    const { control, value } = await fixture()
+    const roleId = 'role-engineer'
+    const teamId = 'team-engineering'
+    const agentId = 'agent-builder'
+    const now = Date.now()
+    value.roles.push({
+      id: roleId,
+      companyId: 'company-1',
+      name: 'Software Engineer',
+      responsibility: 'Build product slices',
+      systemPrompt: 'Build verified software.',
+      skillIds: [],
+    })
+    value.teams.push({
+      id: teamId,
+      companyId: 'company-1',
+      name: 'Engineering',
+      purpose: 'Ship implementation work',
+      roleIds: [roleId],
+      skillIds: [],
+    })
+    value.agents.push({
+      id: agentId,
+      companyId: 'company-1',
+      name: 'Builder',
+      roleId,
+      teamId,
+      status: 'idle',
+      skillIds: [],
+    })
+    value.tasks.push({
+      id: 'task-capacity',
+      companyId: 'company-1',
+      projectId: 'project-1',
+      title: 'Capacity task',
+      description: 'Exercise native pool claims',
+      acceptanceCriteria: [],
+      priority: 'medium',
+      status: 'ready',
+      dependsOn: [],
+      assignedAgentId: agentId,
+      createdAt: now,
+      updatedAt: now,
+    })
+
+    await control.mutate({
+      type: 'budget.set',
+      companyId: 'company-1',
+      projectId: 'project-1',
+      maxParallelWorkers: 6,
+      maxReviewWorkers: 2,
+      roleWorkerLimits: { [roleId]: 3 },
+      teamWorkerLimits: { [teamId]: 4 },
+    })
+
+    await expect(control.runtimeClaims('project-1', 'task.execute', 'task-capacity')).resolves.toEqual([
+      { key: 'project:project-1:execution', limit: 6 },
+      { key: 'project:project-1:role:role-engineer', limit: 3 },
+      { key: 'project:project-1:team:team-engineering', limit: 4 },
+    ])
+    await expect(control.runtimeClaims('project-1', 'task.review', 'task-capacity')).resolves.toEqual([
+      { key: 'project:project-1:review', limit: 2 },
+    ])
+  })
+
 })

@@ -20,10 +20,12 @@ import type { OrganizationRun, OrganizationRunKind, OrganizationRunReceipt, Orga
 import type { OrganizationStore } from './store.js'
 import { taskEvidenceWorkspace } from './task-worktree.js'
 import { captureWorkspaceEvidence } from './worktree-evidence.js'
+import type { RuntimePoolClaim } from './execution-coordinator.js'
 
 const DAY_MS = 24 * 60 * 60 * 1_000
 const DEFAULT_LEASE_MS = 30 * 60 * 1_000
 const DEFAULT_MAX_PARALLEL_WORKERS = 2
+const DEFAULT_MAX_REVIEW_WORKERS = 2
 const EMPTY: OrganizationControlSnapshot = {
   version: 1,
   turns: [],
@@ -109,14 +111,19 @@ export class OrganizationControlPlane {
       }
     }
 
-    if (taskId && (action === 'task.execute' || action === 'task.review')) {
-      const maxParallelWorkers = budget?.maxParallelWorkers ?? DEFAULT_MAX_PARALLEL_WORKERS
-      const runningTaskTurns = organization.runs.filter((item) => item.status === 'running' && item.projectId === project.id && item.taskId && item.taskId !== taskId).length
-      if (runningTaskTurns >= maxParallelWorkers) {
-        return {
-          route: 'wait', action, companyId: company.id, projectId: project.id, taskId,
-          reason: `Parallel worker capacity reached (${runningTaskTurns}/${maxParallelWorkers}).`,
-          humanActionIds: [], ...(budget ? { budgetId: budget.id } : {}), checkedAt: Date.now(),
+    if (taskId && action === 'task.execute') {
+      const task = organization.tasks.find((item) => item.id === taskId)
+      if (task?.workScopes?.length) {
+        const runningTaskIds = new Set(organization.runs
+          .filter((item) => item.status === 'running' && item.projectId === project.id && item.taskId && item.taskId !== taskId && item.kind === 'task-execution')
+          .map((item) => item.taskId as string))
+        const conflict = organization.tasks.find((item) => runningTaskIds.has(item.id) && scopesOverlap(task.workScopes ?? [], item.workScopes ?? []))
+        if (conflict) {
+          return {
+            route: 'wait', action, companyId: company.id, projectId: project.id, taskId,
+            reason: `Declared work scope overlaps active task “${conflict.title}”; ND is serializing these advisory scopes to reduce merge conflicts.`,
+            humanActionIds: [], ...(budget ? { budgetId: budget.id } : {}), checkedAt: Date.now(),
+          }
         }
       }
     }
@@ -144,6 +151,40 @@ export class OrganizationControlPlane {
     const decision = await this.shouldRun(projectId, action, taskId)
     if (decision.route !== 'ready') throw new Error(decision.reason)
     return decision
+  }
+
+  async runtimeClaims(projectId: string, action: 'task.execute' | 'task.review', taskId: string): Promise<RuntimePoolClaim[]> {
+    await this.sync()
+    const organization = await this.store.state()
+    const project = organization.projects.find((item) => item.id === projectId)
+    if (!project) throw new Error('Project not found')
+    const task = organization.tasks.find((item) => item.id === taskId && item.projectId === projectId)
+    if (!task) throw new Error('Task not found')
+    const budget = this.effectiveBudget(project.companyId, project.id)
+
+    if (action === 'task.review') {
+      return [{
+        key: `project:${project.id}:review`,
+        limit: budget?.maxReviewWorkers ?? DEFAULT_MAX_REVIEW_WORKERS,
+      }]
+    }
+
+    const claims: RuntimePoolClaim[] = [{
+      key: `project:${project.id}:execution`,
+      limit: budget?.maxParallelWorkers ?? DEFAULT_MAX_PARALLEL_WORKERS,
+    }]
+    const agent = task.assignedAgentId
+      ? organization.agents.find((item) => item.id === task.assignedAgentId)
+      : undefined
+    if (agent) {
+      const roleLimit = budget?.roleWorkerLimits?.[agent.roleId]
+      if (roleLimit !== undefined) claims.push({ key: `project:${project.id}:role:${agent.roleId}`, limit: roleLimit })
+      if (agent.teamId) {
+        const teamLimit = budget?.teamWorkerLimits?.[agent.teamId]
+        if (teamLimit !== undefined) claims.push({ key: `project:${project.id}:team:${agent.teamId}`, limit: teamLimit })
+      }
+    }
+    return claims
   }
 
   async noteDispatch(receipt: OrganizationRunReceipt): Promise<void> {
@@ -431,6 +472,12 @@ export class OrganizationControlPlane {
     else target.dailyCostUsd = nonNegative(input.dailyCostUsd, 'dailyCostUsd')
     if (input.maxParallelWorkers === undefined) delete target.maxParallelWorkers
     else target.maxParallelWorkers = positiveInteger(input.maxParallelWorkers, 'maxParallelWorkers')
+    if (input.maxReviewWorkers === undefined) delete target.maxReviewWorkers
+    else target.maxReviewWorkers = positiveInteger(input.maxReviewWorkers, 'maxReviewWorkers')
+    if (input.roleWorkerLimits === undefined) delete target.roleWorkerLimits
+    else target.roleWorkerLimits = positiveIntegerMap(input.roleWorkerLimits, 'roleWorkerLimits')
+    if (input.teamWorkerLimits === undefined) delete target.teamWorkerLimits
+    else target.teamWorkerLimits = positiveIntegerMap(input.teamWorkerLimits, 'teamWorkerLimits')
     target.updatedAt = now
     if (!existing) this.value.budgets.push(target)
   }
@@ -524,4 +571,30 @@ function clone<T>(value: T): T { return structuredClone(value) }
 function clamp01(value: number): number { if (!Number.isFinite(value)) throw new Error('confidence must be finite'); return Math.max(0, Math.min(1, value)) }
 function nonNegative(value: number, label: string): number { if (!Number.isFinite(value) || value < 0) throw new Error(`${label} must be non-negative`); return value }
 function nonNegativeInteger(value: number, label: string): number { if (!Number.isInteger(value) || value < 0) throw new Error(`${label} must be a non-negative integer`); return value }
+function scopesOverlap(left: string[], right: string[]): boolean {
+  if (!left.length || !right.length) return false
+  return left.some((a) => right.some((b) => scopeBaseOverlaps(a, b)))
+}
+function scopeBaseOverlaps(left: string, right: string): boolean {
+  const base = (value: string): string => {
+    const normalized = value.replaceAll('\\', '/').replace(/^\.\//, '')
+    const wildcard = normalized.search(/[*?\[]/)
+    return (wildcard >= 0 ? normalized.slice(0, wildcard) : normalized).replace(/\/+$/, '')
+  }
+  const a = base(left)
+  const b = base(right)
+  if (!a || !b) return true
+  return a === b || a.startsWith(b + '/') || b.startsWith(a + '/')
+}
+
 function positiveInteger(value: number, label: string): number { if (!Number.isInteger(value) || value < 1) throw new Error(`${label} must be a positive integer`); return value }
+function positiveIntegerMap(value: Record<string, number>, label: string): Record<string, number> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object`)
+  const result: Record<string, number> = {}
+  for (const [key, limit] of Object.entries(value)) {
+    const id = key.trim()
+    if (!id || id.length > 256) throw new Error(`${label} contains an invalid id`)
+    result[id] = positiveInteger(limit, `${label}.${id}`)
+  }
+  return result
+}

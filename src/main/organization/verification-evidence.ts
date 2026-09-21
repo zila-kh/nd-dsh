@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto'
 import { execFile, spawn } from 'node:child_process'
-import { resolve, sep } from 'node:path'
+import { promises as fs } from 'node:fs'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
@@ -18,6 +20,7 @@ export interface VerificationEvidence {
   stdout?: string
   stderr?: string
   reason?: string
+  artifacts?: Array<{ path: string; kind: 'file' | 'directory'; size: number; sha256: string }>
 }
 
 /**
@@ -107,6 +110,61 @@ export async function runVerification(command: string | undefined, cwd: string |
     }, timeoutMs)
     timer.unref()
   })
+}
+
+export async function runArtifactVerification(paths: string[] | undefined, cwd: string | undefined): Promise<VerificationEvidence> {
+  const startedAt = Date.now()
+  if (!cwd) return finish({ status: 'failed', startedAt, reason: 'Artifact verification has no project workspace.' })
+  const requested = [...new Set((paths ?? []).map((value) => value.trim()).filter(Boolean))]
+  if (!requested.length) return finish({ status: 'failed', cwd, startedAt, reason: 'Artifact task declared no artifact paths.' })
+  const root = resolve(cwd)
+  const artifacts: NonNullable<VerificationEvidence['artifacts']> = []
+  try {
+    for (const requestedPath of requested) {
+      if (isAbsolute(requestedPath)) throw new Error('Artifact path must be relative: ' + requestedPath)
+      const target = resolve(root, requestedPath)
+      const rel = relative(root, target)
+      if (rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) throw new Error('Artifact path escapes the task workspace: ' + requestedPath)
+      artifacts.push(await fingerprintArtifact(root, target, requestedPath))
+    }
+    return finish({ status: 'passed', cwd, startedAt, artifacts })
+  } catch (error) {
+    return finish({ status: 'failed', cwd, startedAt, artifacts, reason: `Artifact verification failed: ${errorMessage(error)}` })
+  }
+}
+
+async function fingerprintArtifact(root: string, target: string, displayPath: string): Promise<NonNullable<VerificationEvidence['artifacts']>[number]> {
+  const stat = await fs.lstat(target)
+  if (stat.isSymbolicLink()) throw new Error('Artifact path may not be a symbolic link: ' + displayPath)
+  const hash = createHash('sha256')
+  let size = 0
+  if (stat.isFile()) {
+    const bytes = await fs.readFile(target)
+    size = bytes.length
+    hash.update(bytes)
+    return { path: displayPath, kind: 'file', size, sha256: hash.digest('hex') }
+  }
+  if (!stat.isDirectory()) throw new Error('Artifact path is not a regular file or directory: ' + displayPath)
+  const walk = async (directory: string): Promise<void> => {
+    const entries = (await fs.readdir(directory, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))
+    for (const entry of entries) {
+      const candidate = resolve(directory, entry.name)
+      const rel = relative(root, candidate).replaceAll('\\', '/')
+      if (entry.isSymbolicLink()) throw new Error('Artifact directory contains a symbolic link: ' + rel)
+      hash.update(rel + '\0')
+      if (entry.isDirectory()) {
+        await walk(candidate)
+        continue
+      }
+      if (!entry.isFile()) throw new Error('Artifact directory contains an unsupported entry: ' + rel)
+      const bytes = await fs.readFile(candidate)
+      size += bytes.length
+      if (size > 64 * 1024 * 1024) throw new Error('Artifact evidence exceeds the 64 MiB verification bound')
+      hash.update(bytes)
+    }
+  }
+  await walk(target)
+  return { path: displayPath, kind: 'directory', size, sha256: hash.digest('hex') }
 }
 
 export function formatVerificationEvidence(evidence: VerificationEvidence): string {

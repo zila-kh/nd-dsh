@@ -9,8 +9,10 @@
  * three configured models are exactly the three selectable ones.
  *
  * Builds a 5-agent / 3-team company, assigns each agent one of the three
- * combos, then runs the autopilot pipeline (PM plan -> parallel worker
- * execution in per-task Git worktrees -> independent review):
+ * combos, then runs the autopilot pipeline (PM plan -> automatic least-open-work
+ * distribution -> parallel worker execution in per-task Git worktrees ->
+ * independent review). The driver never reassigns planned work manually: it
+ * fails if both same-role builder routes are not exercised by ND itself:
  *
  *   AI PM      -> combo-free1   (cx/gpt-5.6-luna)
  *   Builder    -> combo-free    (ocg/mimo-v2.5)
@@ -251,7 +253,6 @@ async function main() {
   let lastNudgeAt = 0
   let terminal = null
   let maxParallel = 0
-  let rebalanced = false
   const routeUse = {}
 
   while (Date.now() - startedAt < DEADLINE_MS) {
@@ -310,34 +311,9 @@ async function main() {
 
     if (project.status === 'completed') { terminal = 'completed'; break }
 
-    // Spread not-yet-started work across same-role agents. ND assigns each task
-    // to the first idle agent of its role at plan time, so one builder owns the
-    // whole backlog and the other combo never runs; a manager-style rebalance
-    // puts the second route to work.
-    if (!rebalanced && tasks.length >= 5) {
-      rebalanced = true
-      const rebalancedRows = await page.evaluate((projectId) => window.ndDshOrganization.state().then(async (snap) => {
-        const agents = snap.agents
-        const builder = agents.find((a) => a.name === 'Builder')
-        const builder2 = agents.find((a) => a.name === 'Builder 2')
-        const researcher = agents.find((a) => a.name === 'Researcher')
-        const backlog = snap.tasks.filter((t) => t.projectId === projectId && t.status === 'backlog')
-        const moved = []
-        for (let index = 0; index < backlog.length; index += 1) {
-          const task = backlog[index]
-          let target
-          if (researcher && /document|readme|guide|doc/i.test(task.title)) target = researcher
-          else if (builder && builder2 && task.assignedAgentId === builder.id && index % 2 === 1) target = builder2
-          if (!target || task.assignedAgentId === target.id) continue
-          await window.ndDshOrganization.mutate({ type: 'task.update', id: task.id, patch: { assignedAgentId: target.id } })
-          moved.push({ title: task.title, agent: target.name, model: target.modelId })
-        }
-        return moved
-      }), projectId).catch((error) => { log(`rebalance failed: ${error.message.split('\n')[0]}`); return [] })
-      for (const row of rebalancedRows) log(`  rebalanced "${row.title.slice(0, 44)}" -> ${row.agent}@${row.model}`)
-      log(`work rebalanced across ${new Set(rebalancedRows.map((r) => r.agent)).size} agents`)
-    }
-
+    // Assignment is intentionally left untouched. This beta driver is an
+    // acceptance test for ND's automatic least-open-work distribution, not a
+    // manager script that repairs the plan after the fact.
     const idleFor = Date.now() - Math.max(lastChangeAt, lastNudgeAt)
     const blockedTask = tasks.find((t) => t.status === 'blocked')
     if (activeRuns.length === 0 && nudges < MAX_NUDGES && Date.now() - lastNudgeAt > NUDGE_IDLE_MS * 2) {
@@ -371,15 +347,30 @@ async function main() {
   const taskSummary = tasks.map((t) => {
     const agent = finalState.agents.find((a) => a.id === t.assignedAgentId)
     const runs = finalState.runs.filter((r) => r.taskId === t.id)
-    const route = runs.find((r) => r.output?.includes('<nd-dsh-execution-route>'))?.output?.match(/<nd-dsh-execution-route>(.*?)<\/nd-dsh-execution-route>/s)?.[1]
-    return { title: t.title, status: t.status, agent: agent?.name, model: agent?.modelId, attempts: runs.length, route }
+    const executionRuns = runs.filter((r) => r.kind === 'task-execution')
+    const route = executionRuns.find((r) => r.output?.includes('<nd-dsh-execution-route>'))?.output?.match(/<nd-dsh-execution-route>(.*?)<\/nd-dsh-execution-route>/s)?.[1]
+    return { title: t.title, status: t.status, agent: agent?.name, model: agent?.modelId, attempts: runs.length, executionAttempts: executionRuns.length, route }
   })
+  const builderModelsRequired = new Set([AGENT_MODELS.Builder, AGENT_MODELS['Builder 2']])
+  const builderModelsObserved = new Set(taskSummary
+    .filter((row) => (row.agent === 'Builder' || row.agent === 'Builder 2') && row.executionAttempts > 0 && row.model)
+    .map((row) => row.model))
+  const missingBuilderRoutes = [...builderModelsRequired].filter((model) => !builderModelsObserved.has(model))
+  if (terminal === 'completed' && missingBuilderRoutes.length > 0) {
+    terminal = 'distribution-failed'
+    log(`automatic same-role distribution did not exercise builder route(s): ${missingBuilderRoutes.join(', ')}`)
+  }
   const dumpPath = join(RUN_ROOT, 'final-state.json')
   writeFileSync(dumpPath, JSON.stringify({
     terminal,
     elapsedMinutes: Number(((Date.now() - startedAt) / 60_000).toFixed(1)),
     maxParallelTaskRuns: maxParallel,
     routeUse,
+    automaticBuilderRoutes: {
+      required: [...builderModelsRequired],
+      observed: [...builderModelsObserved],
+      missing: missingBuilderRoutes,
+    },
     agentAssignments: AGENT_MODELS,
     targetWorkspaceFiles: countWorkspaceFiles(TARGET_WS),
     tasks: taskSummary,
@@ -389,6 +380,7 @@ async function main() {
 
   log(`terminal: ${terminal} | elapsed=${((Date.now() - startedAt) / 60_000).toFixed(1)}min | max parallel task runs=${maxParallel}`)
   log(`route usage: ${JSON.stringify(routeUse)}`)
+  log(`automatic builder routes: required=${JSON.stringify([...builderModelsRequired])} observed=${JSON.stringify([...builderModelsObserved])}`)
   for (const t of taskSummary) log(`  task "${t.title}" [${t.status}] ${t.agent ?? 'unassigned'}@${t.model ?? 'default'}${t.route ? ` route=${t.route}` : ''}`)
   log(`diagnostics written to ${dumpPath}`)
   if (rendererErrors.length) {

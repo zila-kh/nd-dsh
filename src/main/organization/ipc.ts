@@ -14,6 +14,7 @@ import {
 import type { ProjectRuntimeService } from '../workspace/project-runtime.js'
 import type { ProjectWorkspaceCoordinator } from '../workspace/project-workspace-coordinator.js'
 import { OrganizationControlPlane } from './control-plane.js'
+import type { ExecutionCoordinator, RuntimePermit } from './execution-coordinator.js'
 import type { OrganizationOrchestrator } from './orchestrator.js'
 import { materializeOrganizationSignal } from './signal-materializer.js'
 import { OrganizationStrategyPlane } from './strategy-plane.js'
@@ -38,6 +39,7 @@ export function registerOrganizationIpc(
   orchestrator: OrganizationOrchestrator,
   projectWorkspace: ProjectWorkspaceCoordinator,
   projectRuntime?: ProjectRuntimeService,
+  executionCoordinator?: ExecutionCoordinator,
 ): () => void {
   const channels: string[] = []
   const control = new OrganizationControlPlane(join(app.getPath('userData'), 'organization-control.json'), store)
@@ -53,7 +55,7 @@ export function registerOrganizationIpc(
   // orchestrator calls its public methods for autonomy-3/4 continuation, so
   // wrapping them here makes later automatic turns obey the same gates,
   // budgets, leases and evidence ledger as user-started work.
-  const restoreOrchestrator = guardOrchestrator(orchestrator, store, control)
+  const restoreOrchestrator = guardOrchestrator(orchestrator, store, control, executionCoordinator)
 
   // Organization runs finish on engine event streams, outside renderer IPC.
   // Reconcile independently so evidence, typed results, leases, quotas and
@@ -267,6 +269,7 @@ function guardOrchestrator(
   orchestrator: OrganizationOrchestrator,
   store: OrganizationStore,
   control: OrganizationControlPlane,
+  executionCoordinator?: ExecutionCoordinator,
 ): () => void {
   const planProject = orchestrator.planProject.bind(orchestrator)
   const runTask = orchestrator.runTask.bind(orchestrator)
@@ -282,16 +285,53 @@ function guardOrchestrator(
   orchestrator.runTask = async (taskId: string, explicit = true) => {
     const context = await store.taskContext(taskId)
     await control.assertRunnable(context.project.id, 'task.execute', taskId)
-    const result = await runTask(taskId, explicit)
-    await control.noteDispatch(result)
-    return result
+    const permit = executionCoordinator
+      ? await executionCoordinator.acquire({
+          companyId: context.company.id,
+          projectId: context.project.id,
+          taskId,
+          ...(context.agent?.id ? { agentId: context.agent.id } : {}),
+          kind: 'execution',
+          pools: await control.runtimeClaims(context.project.id, 'task.execute', taskId),
+        })
+      : undefined
+    try {
+      const result = executionCoordinator && permit
+        ? await executionCoordinator.runWithPermit(permit, () => runTask(taskId, explicit))
+        : await runTask(taskId, explicit)
+      await bindRuntimePermit(executionCoordinator, permit, result.sessionId, result.runId, store)
+      await control.noteDispatch(result)
+      return result
+    } catch (error) {
+      if (executionCoordinator && permit) await executionCoordinator.release(permit)
+      throw error
+    }
   }
   orchestrator.reviewTask = async (taskId: string, explicit = true) => {
     const context = await store.taskContext(taskId)
     await control.assertRunnable(context.project.id, 'task.review', taskId)
-    const result = await reviewTask(taskId, explicit)
-    await control.noteDispatch(result)
-    return result
+    const reviewer = await store.reviewerForTask(taskId)
+    const permit = executionCoordinator
+      ? await executionCoordinator.acquire({
+          companyId: context.company.id,
+          projectId: context.project.id,
+          taskId,
+          ...(reviewer.agent?.id ? { agentId: reviewer.agent.id } : {}),
+          kind: 'review',
+          pools: await control.runtimeClaims(context.project.id, 'task.review', taskId),
+        })
+      : undefined
+    try {
+      const result = executionCoordinator && permit
+        ? await executionCoordinator.runWithPermit(permit, () => reviewTask(taskId, explicit))
+        : await reviewTask(taskId, explicit)
+      await bindRuntimePermit(executionCoordinator, permit, result.sessionId, result.runId, store)
+      await control.noteDispatch(result)
+      return result
+    } catch (error) {
+      if (executionCoordinator && permit) await executionCoordinator.release(permit)
+      throw error
+    }
   }
   orchestrator.runNext = async (projectId?: string, explicit = true) => {
     const state = await store.state()
@@ -310,6 +350,20 @@ function guardOrchestrator(
     orchestrator.reviewTask = reviewTask
     orchestrator.runNext = runNext
   }
+}
+
+
+async function bindRuntimePermit(
+  coordinator: ExecutionCoordinator | undefined,
+  permit: RuntimePermit | undefined,
+  sessionId: string,
+  runId: string,
+  store: OrganizationStore,
+): Promise<void> {
+  if (!coordinator || !permit) return
+  await coordinator.bindSession(permit, sessionId, runId)
+  const active = await store.runBySession(sessionId)
+  if (!active) await coordinator.release(permit)
 }
 
 async function reconcileControlState(store: OrganizationStore, control: OrganizationControlPlane): Promise<void> {

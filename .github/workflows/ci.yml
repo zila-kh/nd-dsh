@@ -5,16 +5,28 @@ on:
     branches:
       - main
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      full_benchmark:
+        description: Run the full Windows legacy-vs-Rust performance evidence suite
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # Keep draft synchronization isolated from the expensive ready-for-review run.
+  # Otherwise a tiny draft push starts a skipped workflow that still cancels the
+  # in-flight convergence jobs before their job-level draft guards are evaluated.
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name == 'pull_request' && github.event.pull_request.draft == true && 'draft' || 'active' }}
   cancel-in-progress: true
 
 jobs:
   validate:
+    if: (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event_name != 'workflow_dispatch' || inputs.full_benchmark == false)
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -22,6 +34,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+      - name: Rust 1.98.1
+        run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
       - name: Node 24
         uses: actions/setup-node@v4
         with:
@@ -30,6 +44,16 @@ jobs:
         run: corepack enable
       - name: Install desktop dependencies
         run: corepack pnpm install --frozen-lockfile
+      - name: Verify ND Core
+        run: corepack pnpm core:test
+      - name: Build ND Core for desktop smoke
+        run: corepack pnpm core:build:dev
+      - name: Typecheck Node and shared migration code
+        run: corepack pnpm exec tsc --noEmit -p tsconfig.node.json
+      - name: Migration unit tests
+        run: corepack pnpm exec vitest run tests/execution-coordinator.test.ts tests/organization-store.test.ts tests/organization-control-plane.test.ts tests/task-worktree.test.ts tests/verification-evidence.test.ts
+      - name: Benchmark smoke
+        run: corepack pnpm bench:smoke
       - name: Prepare Harness runtime
         run: corepack pnpm --dir vendor/deepseek-harness install --frozen-lockfile
         env:
@@ -59,6 +83,7 @@ jobs:
         run: xvfb-run --auto-servernum corepack pnpm e2e
 
   windows-package:
+    if: (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event_name != 'workflow_dispatch' || inputs.full_benchmark == false)
     runs-on: windows-latest
     timeout-minutes: 55
     steps:
@@ -66,6 +91,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+      - name: Rust 1.98.1
+        run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
       - name: Node 24
         uses: actions/setup-node@v4
         with:
@@ -74,5 +101,60 @@ jobs:
         run: corepack enable
       - name: Install desktop dependencies
         run: corepack pnpm install --frozen-lockfile
+      - name: Verify ND Core
+        run: corepack pnpm core:test
       - name: Build Windows portable beta
         run: corepack pnpm dist:win:portable
+      - name: Prove forced sidecar process-tree cleanup
+        run: node benchmarks/windows-core-crash-cleanup.mjs
+      - name: Smoke packaged Rust core, terminal, and Git
+        run: node scripts/packaged-runtime-smoke.mjs
+      - name: Upload packaged smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: packaged-runtime-smoke
+          path: benchmark-results/packaged-smoke
+          if-no-files-found: error
+
+  performance-evidence:
+    if: (github.event_name == 'workflow_dispatch' && inputs.full_benchmark == true) || (github.event_name == 'pull_request' && github.event.action == 'ready_for_review' && github.event.pull_request.draft == false)
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Rust 1.98.1
+        run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
+      - name: Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Enable Corepack
+        run: corepack enable
+      - name: Install desktop dependencies
+        run: corepack pnpm install --frozen-lockfile
+      - name: Record full Windows performance evidence
+        run: corepack pnpm bench:record
+        env:
+          CI: 'true'
+          ND_DSH_BENCH_RUNS: '10'
+      - name: Verify benchmark budgets
+        if: always()
+        shell: pwsh
+        run: |
+          $summary = Get-ChildItem benchmark-results -Filter summary.json -Recurse |
+            Where-Object { (Get-Content $_.FullName -Raw) -match '"kind"\s*:\s*"nd-performance-evidence"' } |
+            Sort-Object LastWriteTime |
+            Select-Object -Last 1
+          if (-not $summary) { throw "No combined benchmark summary.json was produced." }
+          corepack pnpm bench:check $summary.FullName
+      - name: Upload full performance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prd-0002-performance-evidence
+          path: benchmark-results/**
+          if-no-files-found: error

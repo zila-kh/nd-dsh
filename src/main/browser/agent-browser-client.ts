@@ -19,23 +19,38 @@ const MAX_CAPTURE_CHARS = 2_000_000
 const BIND_COMMAND_TIMEOUT_MS = 10_000
 const BIND_RETRY_DELAY_MS = 2_500
 const SMOKE_TEST_TIMEOUT_MS = 15_000
+const SHUTDOWN_TIMEOUT_MS = 5_000
+const DAEMON_EXIT_GRACE_MS = 1_000
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
 }
 
 export class AgentBrowserClient {
   readonly cdpPort: number
   readonly sessionName = 'nd-dsh-visible-browser'
   readonly configPath: string
+  readonly socketDir: string
   readonly binary: string
   readonly entryPath: string
   private readonly electronNodeMode: boolean
   private statusValue: AgentBrowserStatus = { state: 'binding' }
+  private sessionTouched = false
+  private closing: Promise<void> | undefined
 
   constructor(cdpPort: number, projectRoot: string) {
     this.cdpPort = cdpPort
     this.configPath = join(app.getPath('userData'), 'agent-browser.visible.json')
+    this.socketDir = join(app.getPath('userData'), 'agent-browser-runtime')
     this.binary = this.resolveBinary(projectRoot)
     this.entryPath = resolve(
       process.env.ND_DSH_AGENT_BROWSER_ENTRY
@@ -75,7 +90,10 @@ export class AgentBrowserClient {
 
   async prepareConfig(): Promise<void> {
     const artifactDirectory = join(app.getPath('userData'), 'browser-artifacts')
-    await fs.mkdir(artifactDirectory, { recursive: true })
+    await Promise.all([
+      fs.mkdir(artifactDirectory, { recursive: true }),
+      fs.mkdir(this.socketDir, { recursive: true }),
+    ])
     const config = {
       $schema: 'https://agent-browser.dev/schema.json',
       cdp: String(this.cdpPort),
@@ -104,6 +122,7 @@ export class AgentBrowserClient {
       // pane; one transparent retry keeps that off the agent's tool path
       // instead of surfacing as an unavailable browser mid-session.
       try {
+        this.sessionTouched = true
         await this.bindPinnedTab(targetId)
       } catch {
         this.statusValue = { state: 'binding' }
@@ -155,6 +174,24 @@ export class AgentBrowserClient {
     return result.json ?? result.stdout
   }
 
+  async close(): Promise<void> {
+    if (!this.sessionTouched) return
+    if (!this.closing) {
+      this.closing = (async () => {
+        try {
+          await this.run(['close'], [], SHUTDOWN_TIMEOUT_MS)
+        } catch (error) {
+          console.warn('[agent-browser] graceful session cleanup failed:', error instanceof Error ? error.message : String(error))
+        }
+        await this.ensureDaemonStopped()
+      })().finally(() => {
+        this.sessionTouched = false
+        this.closing = undefined
+      })
+    }
+    return this.closing
+  }
+
   environment(): NodeJS.ProcessEnv {
     return {
       ND_DSH_AGENT_BROWSER_BIN: this.binary,
@@ -163,6 +200,44 @@ export class AgentBrowserClient {
       ND_DSH_AGENT_BROWSER_SESSION: this.sessionName,
       AGENT_BROWSER_CONFIG: this.configPath,
       AGENT_BROWSER_SESSION: this.sessionName,
+      AGENT_BROWSER_SOCKET_DIR: this.socketDir,
+    }
+  }
+
+  private async ensureDaemonStopped(): Promise<void> {
+    const pidPath = join(this.socketDir, `${this.sessionName}.pid`)
+    let pid: number
+    try {
+      const raw = await fs.readFile(pidPath, 'utf8')
+      pid = Number.parseInt(raw.trim(), 10)
+    } catch {
+      return
+    }
+    if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid) return
+
+    const deadline = Date.now() + DAEMON_EXIT_GRACE_MS
+    while (Date.now() < deadline) {
+      if (!isProcessAlive(pid)) return
+      await sleep(50)
+    }
+
+    console.warn(`[agent-browser] daemon ${pid} did not exit after close; forcing cleanup`)
+    if (process.platform === 'win32') {
+      await new Promise<void>((resolvePromise) => {
+        const killer = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], {
+          stdio: 'ignore',
+          windowsHide: true,
+        })
+        const done = (): void => resolvePromise()
+        killer.once('error', done)
+        killer.once('close', done)
+      })
+    } else {
+      try { process.kill(pid, 'SIGTERM') } catch { return }
+      await sleep(250)
+      if (isProcessAlive(pid)) {
+        try { process.kill(pid, 'SIGKILL') } catch { /* already exited */ }
+      }
     }
   }
 
@@ -196,6 +271,7 @@ export class AgentBrowserClient {
           PATH: process.env.PATH?.split(delimiter).filter(Boolean).join(delimiter),
           AGENT_BROWSER_CONFIG: this.configPath,
           AGENT_BROWSER_SESSION: this.sessionName,
+          AGENT_BROWSER_SOCKET_DIR: this.socketDir,
           ...(this.electronNodeMode ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
         },
       })

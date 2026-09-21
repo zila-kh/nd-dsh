@@ -2,7 +2,7 @@ import 'dotenv/config'
 import { app, BrowserWindow, crashReporter, dialog, Menu, type MenuItemConstructorOptions } from 'electron'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { ND_ORG_MEMORY_ID, ND_WORKSPACE_CONTEXT_ID } from '../shared/capabilities.js'
@@ -19,6 +19,10 @@ import { CapabilityRegistry } from './capabilities/capability-registry.js'
 import { CapabilityStatusStore } from './capabilities/capability-status-store.js'
 import { createHarnessSourceSetupAdapters } from './capabilities/harness-runtime-setup.js'
 import { ExternalElementStage, RecentPickStore } from './capture/external-inspect.js'
+import { CoreClient } from './core/core-client.js'
+import { createCoreSpawn } from './core/core-child-process.js'
+import { createCorePtySpawner } from './core/core-pty.js'
+import { createCoreWorktreeGit } from './core/core-worktree-git.js'
 import { DesignService } from './design/design-service.js'
 import { registerDesignIpc } from './design/ipc.js'
 import { NdPencilController } from './design/nd-pencil-controller.js'
@@ -36,10 +40,15 @@ import { GitService } from './git/git-service.js'
 import { HarnessService } from './harness/harness-service.js'
 import { registerIpc } from './ipc.js'
 import { OrganizationApprovalGate } from './organization/approval-gate.js'
+import { ExecutionCoordinator } from './organization/execution-coordinator.js'
 import { registerOrganizationIpc } from './organization/ipc.js'
 import { OrganizationOrchestrator } from './organization/orchestrator.js'
 import { OrganizationStore } from './organization/store.js'
+import { TaskWorktreeManager } from './organization/task-worktree.js'
 import { ProviderStore } from './providers.js'
+import { runPackagedRuntimeSmoke } from './perf/packaged-runtime-smoke.js'
+import { runRuntimeBenchmark } from './perf/runtime-benchmark.js'
+import { flushStartupBenchmark, markStartup } from './perf/startup-metrics.js'
 import { QaService } from './qa/qa-service.js'
 import { SessionArchiveStore } from './sessions/session-archive-store.js'
 import { LogFile, logFilePathFor } from './logging/log-file.js'
@@ -52,15 +61,20 @@ import { ProjectRuntimeService } from './workspace/project-runtime.js'
 import { WorkspaceRegistry } from './workspace/workspace-registry.js'
 import { WorkspaceService } from './workspace/workspace-service.js'
 
+markStartup('main-module')
+
 const currentDirectory = dirname(fileURLToPath(import.meta.url))
 const requestedCdpPort = parsePort(process.env.ND_DSH_CDP_PORT, 0)
 const startUrl = process.env.ND_DSH_BROWSER_URL?.trim() || DEFAULT_BROWSER_URL
 
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
+const userDataOverride = process.env.ND_DSH_USER_DATA_DIR?.trim()
+if (userDataOverride) app.setPath('userData', resolve(userDataOverride))
 app.enableSandbox()
 
 let mainWindow: BrowserWindow | undefined
 let activeHarness: HarnessService | undefined
+let activeBrowser: BrowserController | undefined
 let activeCodexEngine: CodexCliEngine | undefined
 let activeAntigravityEngine: AntigravityEngine | undefined
 let activeZcodeEngine: ZcodeCliEngine | undefined
@@ -70,6 +84,8 @@ let activeClaudeEngine: ClaudeCodeCliEngine | undefined
 let activeEngineRouter: EngineSessionRouter | undefined
 let activeNdPencil: NdPencilController | undefined
 let activeTerminalManager: TerminalManager | undefined
+let activeCore: CoreClient | undefined
+let activeExecutionCoordinator: ExecutionCoordinator | undefined
 let shutdownStarted = false
 const closingServices = new Set<Promise<void>>()
 
@@ -104,6 +120,22 @@ async function createWindow(cdpPort: number): Promise<void> {
   const workspace = new WorkspaceService(process.env.ND_DSH_WORKSPACE?.trim() || process.cwd())
   const providers = new ProviderStore()
   const userData = app.getPath('userData')
+  const legacyCoreBackend = process.env.ND_DSH_CORE_BACKEND?.trim().toLowerCase() === 'legacy'
+  const core = legacyCoreBackend
+    ? undefined
+    : new CoreClient({
+        log: (line) => console.log(line),
+        onUnexpectedExit: (code, signal) => {
+          console.error('ND Core exited unexpectedly:', { code, signal })
+        },
+      })
+  if (core) {
+    await core.start()
+    markStartup('core-ready')
+    activeCore = core
+  } else {
+    console.warn('[nd-core] legacy backend enabled for benchmark/rollback mode.')
+  }
   const sessionArchive = new SessionArchiveStore(join(userData, 'session-archive.json'))
   const usageLedger = new UsageLedger(join(userData, 'usage-ledger.jsonl'))
   const isMac = process.platform === 'darwin'
@@ -132,6 +164,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   const terminalManager = new TerminalManager({
     storePath: join(userData, 'terminals.json'),
     workspace,
+    ...(core ? { spawn: createCorePtySpawner(core) } : {}),
     onOutput: (event) => { if (!window.isDestroyed()) window.webContents.send(TERMINAL_IPC.outputEvent, event) },
     onExit: (event) => { if (!window.isDestroyed()) window.webContents.send(TERMINAL_IPC.exitEvent, event) },
     onState: (event) => { if (!window.isDestroyed()) window.webContents.send(TERMINAL_IPC.stateEvent, event) },
@@ -156,33 +189,48 @@ async function createWindow(cdpPort: number): Promise<void> {
   }
 
   const browser = new BrowserController(window, cdpPort, projectRoot(), { reservedOrigin })
+  activeBrowser = browser
   const dshSurface = new DshSurfaceController(window)
   const externalElements = new ExternalElementStage()
   const recentPicks = new RecentPickStore()
-  const git = new GitService(workspace)
+  const organizationStore = new OrganizationStore(join(userData, 'organization.json'))
+  const executionCoordinator = new ExecutionCoordinator(core)
+  activeExecutionCoordinator = executionCoordinator
+  const interruptedRuns = await organizationStore.reconcileInterruptedRuns()
+  if (interruptedRuns > 0) console.warn(`Recovered ${interruptedRuns} interrupted organization run(s) from the previous app session.`)
+  const disposeCoreReady = core?.onEvent('core.ready', () => {
+    if (!executionCoordinator.recoveryRequired()) return
+    void organizationStore.reconcileInterruptedRuns('ND Core exited before the run finished.')
+      .then((count) => {
+        console.warn(`Reconciled ${count} organization run(s) after ND Core restart.`)
+        executionCoordinator.resumeAfterReconciliation()
+      })
+      .catch((error) => {
+        console.error('ND Core restarted, but organization reconciliation failed; dispatch remains blocked:', error)
+      })
+  })
+  const engineSpawn = core ? createCoreSpawn(core, executionCoordinator) : spawn
+  const git = new GitService(workspace, core ? { core } : {})
   const harness = new HarnessService(workspace, browser, providers, externalElements, sessionArchive, usageLedger)
-  const codexEngine = new CodexCliEngine({ log: (line) => console.log(line) })
+  const codexEngine = new CodexCliEngine({ log: (line) => console.log(line), spawnProcess: engineSpawn })
   activeCodexEngine = codexEngine
-  const antigravityEngine = new AntigravityEngine({ log: (line) => console.log(line) })
+  const antigravityEngine = new AntigravityEngine({ log: (line) => console.log(line), spawnProcess: engineSpawn })
   activeAntigravityEngine = antigravityEngine
-  const zcodeEngine = new ZcodeCliEngine({ log: (line) => console.log(line) })
+  const zcodeEngine = new ZcodeCliEngine({ log: (line) => console.log(line), spawnProcess: engineSpawn })
   activeZcodeEngine = zcodeEngine
-  const piEngine = new PiCodingEngine({ log: (line) => console.log(line) })
+  const piEngine = new PiCodingEngine({ log: (line) => console.log(line), spawnProcess: engineSpawn })
   activePiEngine = piEngine
-  const cursorEngine = new CursorCliEngine({ log: (line) => console.log(line) })
+  const cursorEngine = new CursorCliEngine({ log: (line) => console.log(line), spawnProcess: engineSpawn })
   activeCursorEngine = cursorEngine
-  const claudeEngine = new ClaudeCodeCliEngine({ log: (line) => console.log(line) })
+  const claudeEngine = new ClaudeCodeCliEngine({ log: (line) => console.log(line), spawnProcess: engineSpawn })
   activeClaudeEngine = claudeEngine
   const engineRouter = new EngineSessionRouter(harness, codexEngine, workspace, antigravityEngine, {
     browser,
     git,
     storePath: join(userData, 'chatgpt-web-sessions.json'),
     log: (line) => console.warn(line),
-  }, zcodeEngine, piEngine, cursorEngine, claudeEngine)
+  }, zcodeEngine, piEngine, cursorEngine, claudeEngine, engineSpawn)
   activeEngineRouter = engineRouter
-  const organizationStore = new OrganizationStore(join(userData, 'organization.json'))
-  const interruptedRuns = await organizationStore.reconcileInterruptedRuns()
-  if (interruptedRuns > 0) console.warn(`Recovered ${interruptedRuns} interrupted organization run(s) from the previous app session.`)
   const projectWorkspace = new ProjectWorkspaceCoordinator(
     organizationStore,
     workspace,
@@ -229,14 +277,15 @@ async function createWindow(cdpPort: number): Promise<void> {
   const design = new DesignService(workspace, browser)
   const ndPencil = new NdPencilController(window, workspace, projectRoot(), ndPencilPreload)
   await ndPencil.initialize()
-  const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter, projectRuntime, capabilities)
+  const taskWorktrees = new TaskWorktreeManager(core ? createCoreWorktreeGit(core) : undefined)
+  const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter, projectRuntime, capabilities, executionCoordinator, taskWorktrees)
   const approvalGate = new OrganizationApprovalGate(organizationStore, harness)
   const qa = new QaService()
   qa.setProjectRoot(workspace.state().root)
   const disposeIpc = registerIpc({ window, preloadPath: preload, browser, dshSurface, engines, engineRouter, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, qa, sessionArchive, usageLedger, capabilities, organizationStore })
   const disposeTerminalIpc = registerTerminalIpc(window, terminalManager)
   const disposeDesignIpc = registerDesignIpc(window, design, ndPencil)
-  const disposeOrganizationIpc = registerOrganizationIpc(window, organizationStore, organization, projectWorkspace, projectRuntime)
+  const disposeOrganizationIpc = registerOrganizationIpc(window, organizationStore, organization, projectWorkspace, projectRuntime, executionCoordinator)
   mainWindow = window
   activeHarness = harness
   activeNdPencil = ndPencil
@@ -397,10 +446,54 @@ async function createWindow(cdpPort: number): Promise<void> {
   })
   if (rendererUrl) await window.loadURL(rendererUrl)
   else await window.loadFile(rendererFile)
+  markStartup('renderer-loaded')
 
   await browser.initialize(startUrl).catch((error) => {
     console.warn('Initial browser navigation failed:', error)
   })
+  markStartup('usable')
+  const startupCoreMetrics = core ? await core.request('metrics.snapshot', {}, 5_000).catch(() => null) : null
+  await flushStartupBenchmark({ core: core?.health ?? null, coreMetrics: startupCoreMetrics })
+  const runtimeBenchmarkOutput = process.env.ND_DSH_RUNTIME_BENCH_OUTPUT?.trim()
+  const packagedSmokeOutput = process.env.ND_DSH_PACKAGED_SMOKE_OUTPUT?.trim()
+  if (runtimeBenchmarkOutput) {
+    try {
+      await runRuntimeBenchmark({
+        outputPath: runtimeBenchmarkOutput,
+        workspaceRoot: workspace.state().root,
+        ...(core ? { core } : {}),
+        terminal: terminalManager,
+        git,
+        coordinator: executionCoordinator,
+        spawnProcess: engineSpawn,
+      })
+      console.log('Runtime benchmark completed.')
+      setTimeout(() => app.quit(), 25)
+    } catch (error) {
+      console.error('Runtime benchmark failed:', error)
+      app.exit(1)
+      return
+    }
+  } else if (packagedSmokeOutput) {
+    if (!core) throw new Error('Packaged runtime smoke requires the Rust core backend.')
+    try {
+      await runPackagedRuntimeSmoke({
+        outputPath: packagedSmokeOutput,
+        workspaceRoot: workspace.state().root,
+        core,
+        terminal: terminalManager,
+        git,
+      })
+      console.log('Packaged runtime smoke passed.')
+      setTimeout(() => app.quit(), 25)
+    } catch (error) {
+      console.error('Packaged runtime smoke failed:', error)
+      app.exit(1)
+      return
+    }
+  } else if (process.env.ND_DSH_BENCHMARK_EXIT === '1') {
+    setTimeout(() => app.quit(), 25)
+  }
   if (theme.surface() === 'dsh') harness.warmup()
   if (!window.isVisible()) {
     window.show()
@@ -439,7 +532,7 @@ async function createWindow(cdpPort: number): Promise<void> {
     if (activeNdPencil === ndPencil) activeNdPencil = undefined
     void ndPencil.destroy()
     if (activeEngineRouter === engineRouter) { activeEngineRouter = undefined; beginEngineRouterClose(engineRouter) }
-    browser.destroy()
+    if (activeBrowser === browser) { activeBrowser = undefined; beginBrowserClose(browser) }
     dshSurface.destroy()
     if (mainWindow === window) mainWindow = undefined
     if (activeHarness === harness) activeHarness = undefined
@@ -450,6 +543,8 @@ async function createWindow(cdpPort: number): Promise<void> {
     if (activeCursorEngine === cursorEngine) activeCursorEngine = undefined
     if (activeClaudeEngine === claudeEngine) activeClaudeEngine = undefined
     if (activeTerminalManager === terminalManager) { activeTerminalManager = undefined; beginTerminalClose(terminalManager) }
+    if (activeExecutionCoordinator === executionCoordinator) { activeExecutionCoordinator = undefined; beginExecutionCoordinatorClose(executionCoordinator) }
+    if (core && activeCore === core) { activeCore = undefined; beginCoreClose(core) }
     beginCodexClose(codexEngine)
     beginAntigravityClose(antigravityEngine)
     beginZcodeClose(zcodeEngine)
@@ -467,6 +562,7 @@ if (hasSingleInstanceLock) {
     app.commandLine.appendSwitch('remote-debugging-port', String(cdpPort))
     app.commandLine.appendSwitch('remote-debugging-address', '127.0.0.1')
     await app.whenReady()
+    markStartup('app-ready')
     await createWindow(cdpPort)
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) void createWindow(cdpPort).catch(reportFatalStartupError)
@@ -481,6 +577,11 @@ app.on('before-quit', (event) => {
     const harness = activeHarness
     activeHarness = undefined
     beginHarnessClose(harness)
+  }
+  if (activeBrowser) {
+    const browser = activeBrowser
+    activeBrowser = undefined
+    beginBrowserClose(browser)
   }
   if (activeCodexEngine) {
     const codexEngine = activeCodexEngine
@@ -522,6 +623,16 @@ app.on('before-quit', (event) => {
     activeTerminalManager = undefined
     beginTerminalClose(terminalManager)
   }
+  if (activeExecutionCoordinator) {
+    const executionCoordinator = activeExecutionCoordinator
+    activeExecutionCoordinator = undefined
+    beginExecutionCoordinatorClose(executionCoordinator)
+  }
+  if (activeCore) {
+    const core = activeCore
+    activeCore = undefined
+    beginCoreClose(core)
+  }
   if (activeNdPencil) {
     const ndPencil = activeNdPencil
     activeNdPencil = undefined
@@ -554,6 +665,18 @@ app.on('before-quit', (event) => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
+
+function beginBrowserClose(browser: BrowserController): void {
+  trackClose(browser.destroy().catch((error) => console.error('Failed to close the browser integration cleanly:', error)))
+}
+
+function beginExecutionCoordinatorClose(coordinator: ExecutionCoordinator): void {
+  trackClose(coordinator.close().catch((error) => console.error('Failed to close ND runtime permits cleanly:', error)))
+}
+
+function beginCoreClose(core: CoreClient): void {
+  trackClose(core.close().catch((error) => console.error('Failed to close ND Core cleanly:', error)))
+}
 
 function beginHarnessClose(harness: HarnessService): void {
   trackClose(harness.close().catch((error) => console.error('Failed to close ND runtime cleanly:', error)))

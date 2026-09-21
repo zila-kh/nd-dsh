@@ -23,7 +23,7 @@ export interface PtyProcessLike {
   onExit(listener: (event: { exitCode: number; signal?: number }) => void): { dispose(): void }
 }
 export interface PtySpawnOptions { name: string; cols: number; rows: number; cwd: string; env: Record<string, string> }
-export type PtySpawner = (file: string, args: string[], options: PtySpawnOptions) => PtyProcessLike
+export type PtySpawner = (file: string, args: string[], options: PtySpawnOptions) => PtyProcessLike | Promise<PtyProcessLike>
 interface Runtime { process: PtyProcessLike; data: { dispose(): void }; exit: { dispose(): void } }
 
 export interface TerminalManagerOptions {
@@ -197,7 +197,7 @@ export class TerminalManager {
     let lastError: unknown
     for (const attempt of shellAttempts(requestedShell)) {
       try {
-        const pty = this.spawnPty(attempt.file, attempt.args, {
+        const pty = await this.spawnPty(attempt.file, attempt.args, {
           name: 'xterm-256color', cols: terminal.cols, rows: terminal.rows, cwd: terminal.cwd,
           env: terminalEnv(terminal.sessionId, terminal.id),
         })
@@ -283,6 +283,8 @@ export class TerminalManager {
   private async ensureReady(): Promise<void> { if (!this.initialized) await this.initialize() }
 }
 
+// Developer-only legacy backend retained temporarily for same-machine migration benchmarks.
+// Production/default desktop startup injects the Rust PTY spawner and never reaches this path.
 function defaultSpawn(file: string, args: string[], options: PtySpawnOptions): PtyProcessLike {
   ensureSpawnHelper(); const pty = nodeRequire('node-pty') as typeof import('node-pty'); return pty.spawn(file, args, options)
 }

@@ -7,6 +7,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { spawn as processSpawn, type ChildProcess } from 'node:child_process'
+import type { CoreClient } from '../core/core-client.js'
 
 export const GitErrorCodes = {
   BadConfigFile: 'BadConfigFile',
@@ -430,6 +431,21 @@ export interface GitExecutionResult {
   stderr: string
 }
 
+export interface ParsedGitCommit {
+  hash: string
+  message: string
+  authorName: string
+  authorEmail: string
+  authorTimestamp: number
+}
+
+interface CoreGitParsedResult {
+  exitCode: number
+  stderr: string
+  durationMs: number
+  truncated: boolean
+}
+
 export interface GitExecOptions {
   input?: string
   env?: Record<string, string>
@@ -458,6 +474,7 @@ export interface GitCliOptions {
   gitPath?: string
   env?: Record<string, string>
   spawnProcess?: GitSpawnFunction
+  core?: Pick<CoreClient, 'request'>
   onOutput?(output: string): void
 }
 
@@ -465,11 +482,13 @@ export class GitCli {
   readonly path: string
   private readonly extraEnv: Record<string, string>
   private readonly spawnProcess: GitSpawnFunction
+  private readonly core: Pick<CoreClient, 'request'> | undefined
   private readonly onOutput: ((output: string) => void) | undefined
 
   constructor(options: GitCliOptions = {}) {
     this.path = options.gitPath ?? process.env.ND_DSH_GIT_BINARY ?? 'git'
     this.spawnProcess = options.spawnProcess ?? processSpawn
+    this.core = options.core
     this.onOutput = options.onOutput
     this.extraEnv = {
       LANGUAGE: 'en',
@@ -492,15 +511,9 @@ export class GitCli {
 
   async exec(cwd: string, args: string[], options: GitExecOptions = {}): Promise<GitExecutionResult> {
     const startedAt = Date.now()
-    const child = this.spawn(args, cwd, options.env)
-
-    if (options.input !== undefined) {
-      child.stdin?.end(options.input, 'utf8')
-    } else {
-      child.stdin?.end()
-    }
-
-    const buffered = await this.buffer(child, options.timeoutMs)
+    const buffered = this.core
+      ? await this.execCore(cwd, args, options)
+      : await this.execLegacy(cwd, args, options)
 
     if (this.onOutput) {
       this.onOutput(`> git ${args.join(' ')} [${Date.now() - startedAt}ms]\n`)
@@ -522,12 +535,90 @@ export class GitCli {
     return buffered
   }
 
+  private async execCore(cwd: string, args: string[], options: GitExecOptions): Promise<GitExecutionResult> {
+    if (!this.core) throw new Error('ND Core Git backend is unavailable.')
+    const result = await this.core.request<GitExecutionResult & { truncated?: boolean }>('git.exec', {
+      cwd: sanitizePath(cwd),
+      args,
+      ...(options.input === undefined ? {} : { input: options.input }),
+      env: { ...this.extraEnv, ...options.env },
+      gitPath: this.path,
+      maxOutputBytes: 24 * 1024 * 1024,
+    }, options.timeoutMs ?? 60_000)
+    if (result.truncated) throw new Error('Git output exceeded the ND Core safety bound.')
+    return { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr }
+  }
+
+  private async execLegacy(cwd: string, args: string[], options: GitExecOptions): Promise<GitExecutionResult> {
+    const child = this.spawn(args, cwd, options.env)
+    if (options.input !== undefined) child.stdin?.end(options.input, 'utf8')
+    else child.stdin?.end()
+    return await this.buffer(child, options.timeoutMs)
+  }
+
   status(cwd: string): Promise<GitExecutionResult> {
     return this.exec(cwd, ['status', '-z', '-uall'], { env: { GIT_OPTIONAL_LOCKS: '0' } })
   }
 
   log(cwd: string, limit: number): Promise<GitExecutionResult> {
     return this.exec(cwd, ['log', `-n${limit}`, `--format=${COMMIT_FORMAT}`])
+  }
+
+  async statusEntries(cwd: string): Promise<IFileStatus[]> {
+    if (!this.core) {
+      const result = await this.status(cwd)
+      const parser = new GitStatusParser()
+      parser.update(result.stdout)
+      return parser.status
+    }
+    const startedAt = Date.now()
+    const result = await this.core.request<CoreGitParsedResult & { entries: IFileStatus[] }>('git.status', {
+      cwd: sanitizePath(cwd),
+      env: { ...this.extraEnv, GIT_OPTIONAL_LOCKS: '0' },
+      gitPath: this.path,
+    }, 60_000)
+    this.finishParsedCoreCommand(['status', '-z', '-uall'], result, startedAt)
+    return result.entries
+  }
+
+  async logEntries(cwd: string, limit: number): Promise<ParsedGitCommit[]> {
+    if (!this.core) {
+      const result = await this.log(cwd, limit)
+      return parseGitCommits(result.stdout).map((commit) => ({
+        hash: commit.hash,
+        message: commit.message,
+        authorName: commit.authorName ?? '',
+        authorEmail: commit.authorEmail ?? '',
+        authorTimestamp: Math.floor((commit.authorDate ?? commit.commitDate ?? new Date(0)).getTime() / 1000),
+      }))
+    }
+    const startedAt = Date.now()
+    const result = await this.core.request<CoreGitParsedResult & { commits: ParsedGitCommit[] }>('git.log', {
+      cwd: sanitizePath(cwd),
+      limit,
+      env: this.extraEnv,
+      gitPath: this.path,
+    }, 60_000)
+    this.finishParsedCoreCommand(['log', `-n${limit}`], result, startedAt)
+    return result.commits
+  }
+
+  private finishParsedCoreCommand(args: string[], result: CoreGitParsedResult, startedAt: number): void {
+    if (this.onOutput) {
+      this.onOutput(`> git ${args.join(' ')} [${Date.now() - startedAt}ms]\n`)
+      if (result.stderr.length > 0) this.onOutput(`${result.stderr}\n`)
+    }
+    if (result.truncated) throw new Error('Git output exceeded the ND Core safety bound.')
+    if (result.exitCode !== 0) {
+      throw new GitError({
+        message: 'Failed to execute git',
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+        gitErrorCode: getGitErrorCode(result.stderr),
+        gitCommand: args[0],
+        gitArgs: args.slice(1),
+      })
+    }
   }
 
   private spawn(args: string[], cwd: string | undefined, envOverride?: Record<string, string>): ChildProcess {

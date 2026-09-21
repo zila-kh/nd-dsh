@@ -20,6 +20,8 @@ for (const marker of [
   'appId: com.nddsh.desktop',
   'from: .release/harness',
   'to: vendor/deepseek-harness',
+  'from: .release/nd-core',
+  'to: nd-core',
   'from: node_modules/agent-browser',
   'from: resources/nd-pencil',
 ]) {
@@ -42,6 +44,7 @@ verifyProductionRendererIsolation()
 if (!configOnly) {
   const requiredFiles = [
     '.release/release-manifest.json',
+    `.release/nd-core/${process.platform === 'win32' ? 'nd-core.exe' : 'nd-core'}`,
     '.release/harness/lib/bin.js',
     '.release/harness/LICENSE',
     '.release/harness/THIRD_PARTY_NOTICES.md',
@@ -63,6 +66,9 @@ if (!configOnly) {
     throw new Error('Release manifest does not match the current build platform')
   }
   if (manifest.nodeRuntime?.mode !== 'electron-run-as-node') throw new Error('Packaged Node runtime mode is not declared')
+  if (manifest.ndCore?.protocolVersion !== 1 || typeof manifest.ndCore?.sha256 !== 'string' || manifest.ndCore.sha256.length !== 64) {
+    throw new Error('Packaged ND Core provenance is missing or invalid')
+  }
 }
 
 console.log(configOnly ? 'Release packaging configuration verified.' : 'Release runtime inputs verified.')

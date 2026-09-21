@@ -100,7 +100,9 @@ export class OrganizationStore {
           title: clean(input.title), description: clean(input.description),
           acceptanceCriteria: input.acceptanceCriteria?.map(clean).filter(Boolean) ?? ['Requested outcome is implemented and verified.'],
           priority: input.priority ?? 'medium', status: 'backlog', dependsOn: input.dependsOn ?? [],
-          ...(agent ? { assignedAgentId: agent.id } : {}), createdAt: Date.now(), updatedAt: Date.now(),
+          ...(agent ? { assignedAgentId: agent.id } : {}),
+          ...taskExecutionHints(input),
+          createdAt: Date.now(), updatedAt: Date.now(),
         })
       }
     }
@@ -288,13 +290,29 @@ export class OrganizationStore {
     await this.save()
   }
 
-  async markReviewStarted(taskId: string, sessionId: string): Promise<void> {
+  async markReviewStarted(taskId: string, sessionId: string, reviewerAgentId?: string): Promise<void> {
     await this.load()
     const task = this.task(taskId)
-    task.reviewSessionId = sessionId; task.updatedAt = Date.now()
-    const reviewer = this.pickAgent(task.companyId, 'review')
+    const reviewer = reviewerAgentId
+      ? this.value.agents.find((item) => item.id === reviewerAgentId && item.companyId === task.companyId)
+      : this.pickReviewer(task)
+    if (reviewerAgentId && !reviewer) throw new Error('Reviewer crosses company boundary')
+    task.reviewSessionId = sessionId
+    if (reviewer) task.reviewerAgentId = reviewer.id
+    task.updatedAt = Date.now()
     this.setAgent(reviewer?.id, 'reviewing', task.id, sessionId)
     await this.save()
+  }
+
+  async reviewerForTask(taskId: string): Promise<{ agent?: OrganizationAgent; role?: OrganizationRole }> {
+    await this.load()
+    const task = this.task(taskId)
+    const agent = this.pickReviewer(task)
+    const role = agent ? this.value.roles.find((item) => item.id === agent.roleId) : undefined
+    return {
+      ...(agent ? { agent: clone(agent) } : {}),
+      ...(role ? { role: clone(role) } : {}),
+    }
   }
 
   /** A failed review run releases its session so the Review action can retry. */
@@ -523,10 +541,26 @@ export class OrganizationStore {
     const agent = input.assignedAgentId ? this.value.agents.find((item) => item.id === input.assignedAgentId) : this.pickAgent(input.companyId)
     if (agent?.teamId && !project.teamIds.includes(agent.teamId)) project.teamIds.push(agent.teamId)
     const now = Date.now()
-    this.value.tasks.push({ id: randomUUID(), companyId: input.companyId, projectId: input.projectId, title: clean(input.title), description: clean(input.description), acceptanceCriteria: input.acceptanceCriteria?.map(clean).filter(Boolean) ?? ['Requested outcome is implemented and verified.'], priority: input.priority ?? 'medium', status: 'backlog', dependsOn: input.dependsOn ?? [], ...(input.goalId ? { goalId: input.goalId } : {}), ...(input.milestoneId ? { milestoneId: input.milestoneId } : {}), ...(agent ? { assignedAgentId: agent.id } : {}), createdAt: now, updatedAt: now })
+    this.value.tasks.push({ id: randomUUID(), companyId: input.companyId, projectId: input.projectId, title: clean(input.title), description: clean(input.description), acceptanceCriteria: input.acceptanceCriteria?.map(clean).filter(Boolean) ?? ['Requested outcome is implemented and verified.'], priority: input.priority ?? 'medium', status: 'backlog', dependsOn: input.dependsOn ?? [], ...(input.goalId ? { goalId: input.goalId } : {}), ...(input.milestoneId ? { milestoneId: input.milestoneId } : {}), ...(agent ? { assignedAgentId: agent.id } : {}), ...taskExecutionHints(input), createdAt: now, updatedAt: now })
     this.refreshProject(input.projectId)
   }
-  private updateTask(id: string, patch: Extract<OrganizationMutation, { type: 'task.update' }>['patch']): void { const task = this.task(id); if (patch.assignedAgentId && !this.value.agents.some((item) => item.id === patch.assignedAgentId && item.companyId === task.companyId)) throw new Error('Assigned agent crosses company boundary'); for (const dependency of patch.dependsOn ?? []) if (!this.value.tasks.some((item) => item.id === dependency && item.projectId === task.projectId)) throw new Error('Task dependency crosses project boundary'); Object.assign(task, patch); task.updatedAt = Date.now(); this.refreshProject(task.projectId) }
+  private updateTask(id: string, patch: Extract<OrganizationMutation, { type: 'task.update' }>['patch']): void {
+    const task = this.task(id)
+    if (patch.assignedAgentId && !this.value.agents.some((item) => item.id === patch.assignedAgentId && item.companyId === task.companyId)) throw new Error('Assigned agent crosses company boundary')
+    if (patch.assignedAgentId && patch.assignedAgentId !== task.assignedAgentId && (task.status === 'in_progress' || task.status === 'review')) {
+      throw new Error('Cannot reassign a task while it is in progress or review')
+    }
+    for (const dependency of patch.dependsOn ?? []) if (!this.value.tasks.some((item) => item.id === dependency && item.projectId === task.projectId)) throw new Error('Task dependency crosses project boundary')
+    const nextPatch = { ...patch }
+    if (patch.workScopes !== undefined) nextPatch.workScopes = normalizeWorkScopes(patch.workScopes)
+    if (patch.artifactPaths !== undefined) nextPatch.artifactPaths = normalizeArtifactPaths(patch.artifactPaths)
+    const effectiveEvidence = patch.evidenceKind ?? task.evidenceKind ?? ((nextPatch.artifactPaths ?? task.artifactPaths)?.length ? 'artifact' : 'code')
+    const effectiveArtifacts = nextPatch.artifactPaths ?? task.artifactPaths ?? []
+    if (effectiveEvidence === 'artifact' && effectiveArtifacts.length === 0) throw new Error('Artifact tasks require at least one artifact path')
+    Object.assign(task, nextPatch)
+    task.updatedAt = Date.now()
+    this.refreshProject(task.projectId)
+  }
   private addMemory(input: { companyId: string; projectId?: string; title: string; content: string; tags?: string[]; source: MemoryEntry['source']; type?: string }): void { this.company(input.companyId); const now = Date.now(); this.value.memory.push({ id: randomUUID(), companyId: input.companyId, ...(input.projectId ? { projectId: input.projectId } : {}), title: clean(input.title), content: clean(input.content), tags: input.tags?.map(clean).filter(Boolean) ?? [], source: input.source, createdAt: now, updatedAt: now }) }
   private setPolicy(input: Extract<OrganizationMutation, { type: 'policy.set' }>): void { this.company(input.companyId); const existing = this.value.policies.find((item) => item.companyId === input.companyId && item.action === input.action); if (existing) { existing.effect = input.effect; if (input.description) existing.description = clean(input.description) } else this.value.policies.push({ id: randomUUID(), companyId: input.companyId, action: clean(input.action), effect: input.effect, description: clean(input.description ?? input.action) }) }
 
@@ -575,7 +609,32 @@ export class OrganizationStore {
     const role = hintedRole ?? roles.find((item) => /engineer/i.test(item.name)) ?? roles[0]
     if (!role) return undefined
     const agents = this.value.agents.filter((agent) => agent.companyId === companyId && agent.roleId === role.id)
-    return agents.find((agent) => agent.status === 'idle') ?? agents[0]
+    return agents
+      .map((agent, index) => ({
+        agent,
+        index,
+        open: this.value.tasks.filter((task) => task.assignedAgentId === agent.id && task.status !== 'completed').length,
+      }))
+      .sort((a, b) => a.open - b.open || a.index - b.index)[0]?.agent
+  }
+
+  private pickReviewer(task: OrganizationTask): OrganizationAgent | undefined {
+    const roles = this.value.roles.filter((role) => role.companyId === task.companyId)
+    const reviewerRoleIds = new Set(roles.filter((role) => /review|quality|qa/i.test(role.name)).map((role) => role.id))
+    const candidates = this.value.agents.filter((agent) => agent.companyId === task.companyId && reviewerRoleIds.has(agent.roleId))
+    if (!candidates.length) return this.pickAgent(task.companyId, 'review')
+    const worker = task.assignedAgentId ? this.value.agents.find((item) => item.id === task.assignedAgentId) : undefined
+    const workerRole = worker ? roles.find((role) => role.id === worker.roleId) : undefined
+    const workerRoute = routeKey(worker, workerRole)
+    return candidates
+      .map((agent, index) => {
+        const role = roles.find((item) => item.id === agent.roleId)
+        const route = routeKey(agent, role)
+        const sameRoute = Boolean(workerRoute && route && workerRoute === route)
+        const reviews = this.value.tasks.filter((item) => item.reviewerAgentId === agent.id).length
+        return { agent, index, sameRoute, reviews, busy: agent.status === 'reviewing' ? 1 : 0 }
+      })
+      .sort((a, b) => a.busy - b.busy || Number(a.sameRoute) - Number(b.sameRoute) || a.reviews - b.reviews || a.index - b.index)[0]?.agent
   }
   private setAgent(agentId: string | undefined, status: AgentStatus, taskId?: string, sessionId?: string): void { if (!agentId) return; const agent = this.value.agents.find((item) => item.id === agentId); if (!agent) return; agent.status = status; if (taskId) agent.currentTaskId = taskId; else delete agent.currentTaskId; if (sessionId) agent.lastSessionId = sessionId }
   private assertRoleCompany(roleId: string, companyId: string): void { if (!this.value.roles.some((item) => item.id === roleId && item.companyId === companyId)) throw new Error('Role crosses company boundary') }
@@ -615,6 +674,36 @@ function must<T>(value: T | undefined, label: string): T { if (!value) throw new
 function clone<T>(value: T): T { return structuredClone(value) }
 function mergeBuiltins(skills: OrganizationSkill[]): OrganizationSkill[] { const custom = skills.filter((item) => item.scope !== 'builtin'); return [...clone(BUILTIN_SKILLS), ...custom] }
 function priority(value: OrganizationTask['priority']): number { return value === 'critical' ? 4 : value === 'high' ? 3 : value === 'medium' ? 2 : 1 }
+function taskExecutionHints(input: { workScopes?: string[]; evidenceKind?: OrganizationTask['evidenceKind']; artifactPaths?: string[] }): Partial<Pick<OrganizationTask, 'workScopes' | 'evidenceKind' | 'artifactPaths'>> {
+  const workScopes = normalizeWorkScopes(input.workScopes ?? [])
+  const artifactPaths = normalizeArtifactPaths(input.artifactPaths ?? [])
+  const evidenceKind = input.evidenceKind ?? (artifactPaths.length ? 'artifact' : 'code')
+  if (evidenceKind === 'artifact' && artifactPaths.length === 0) throw new Error('Artifact tasks require at least one artifact path')
+  return {
+    ...(workScopes.length ? { workScopes } : {}),
+    ...(evidenceKind === 'artifact' ? { evidenceKind } : {}),
+    ...(artifactPaths.length ? { artifactPaths } : {}),
+  }
+}
+function normalizeWorkScopes(values: string[]): string[] {
+  if (!Array.isArray(values) || values.length > 32) throw new Error('Task workScopes must contain at most 32 entries')
+  return [...new Set(values.map((value) => value.trim().replaceAll('\\', '/')).filter(Boolean).map((value) => {
+    if (value.length > 512 || /[\u0000-\u001f]/.test(value)) throw new Error('Task work scope is invalid')
+    return value.replace(/^\.\//, '')
+  }))]
+}
+function normalizeArtifactPaths(values: string[]): string[] {
+  if (!Array.isArray(values) || values.length > 32) throw new Error('Task artifactPaths must contain at most 32 entries')
+  return [...new Set(values.map((value) => value.trim().replaceAll('\\', '/')).filter(Boolean).map((value) => {
+    if (value.length > 512 || isAbsolute(value) || value.split('/').includes('..') || /[\u0000-\u001f]/.test(value)) throw new Error('Task artifact path must stay relative to the workspace')
+    return value.replace(/^\.\//, '')
+  }))]
+}
+function routeKey(agent?: OrganizationAgent, role?: OrganizationRole): string | undefined {
+  const provider = agent?.providerId ?? role?.providerId
+  const model = agent?.modelId ?? role?.modelId
+  return provider && model ? provider.trim() + '::' + model.trim() : undefined
+}
 function short(value: string): string { return value.length > 14 ? `${value.slice(0, 6)}…${value.slice(-5)}` : value }
 
 /**

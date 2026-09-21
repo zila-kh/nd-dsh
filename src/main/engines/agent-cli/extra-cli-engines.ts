@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process'
 import {
   GOOSE_CLI_ENGINE_ID,
   HERMES_CLI_ENGINE_ID,
@@ -255,13 +256,13 @@ export const hermesAdapter: StructuredCliAdapter = {
 
 export type ExtraCliEngine = StructuredCliEngine | MiniMaxCliEngine
 
-export function createExtraCliEngines(log?: (line: string) => void): Array<[string, ExtraCliEngine]> {
+export function createExtraCliEngines(log?: (line: string) => void, spawnProcess: typeof spawn = spawn): Array<[string, ExtraCliEngine]> {
   const structured = [opencodeAdapter, gooseAdapter, jcodeAdapter, hermesAdapter].map<[string, ExtraCliEngine]>((adapter) => [
     adapter.id,
-    new StructuredCliEngine(adapter, log ? { log } : {}),
+    new StructuredCliEngine(adapter, { ...(log ? { log } : {}), spawnProcess }),
   ])
   return [
     ...structured,
-    [MINIMAX_CLI_ENGINE_ID, new MiniMaxCliEngine(log)],
+    [MINIMAX_CLI_ENGINE_ID, new MiniMaxCliEngine(log, spawnProcess)],
   ]
 }

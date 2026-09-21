@@ -1,10 +1,10 @@
 # Parallel work distribution and specialist engineering roles
 
-Status: **draft — awaiting human review.** No tasks scaffolded, no implementation started.
+Status: **draft — folded into PRD 0002 for human review.** No tasks scaffolded, no implementation started.
 Updated: 2026-09-21
-Related: [`../prd-full.md`](../prd-full.md) · [`ai-company-os.md`](../ai-company-os.md) · [`phase-2-agent-company-scale.md`](phase-2-agent-company-scale.md) (P2.1, P2.2, P2.6) · [`../roadmap.md`](../roadmap.md)
+Related: [`../prd/0002-rust-sidecar-mvp-migration.md`](../prd/0002-rust-sidecar-mvp-migration.md) · [`../prd-full.md`](../prd-full.md) · [`ai-company-os.md`](../ai-company-os.md) · [`phase-2-agent-company-scale.md`](phase-2-agent-company-scale.md) (P2.1, P2.2, P2.6) · [`../roadmap.md`](../roadmap.md)
 
-This draft refines Phase 2 rather than replacing it. P2.1 already delivers part of the safety half of parallel work — per-task Git worktrees, branch integration with conflict refusal, review checkpoints, and task leases — but not its full target model (per-task dev-server/port/secret isolation is still unimplemented). What is missing is the **management half**: which agent receives a task, how many workers may run at once, and what shape the engineering workforce should have so that several workers of one discipline run at the same time.
+This draft is now incorporated into PRD 0002 as the parallel-agent/runtime slice of the Rust Shared Core MVP. The organization semantics remain TypeScript-owned while nd-core provides the shared execution-permit/process/resource enforcement layer. It still refines the broader Phase 2 roadmap rather than replacing it. P2.1 already delivers part of the safety half of parallel work — per-task Git worktrees, branch integration with conflict refusal, review checkpoints, and task leases — but not its full target model (per-task dev-server/port/secret isolation is still unimplemented). What is missing is the **management half**: which agent receives a task, how many workers may run at once, and what shape the engineering workforce should have so that several workers of one discipline run at the same time.
 
 ## 1. Evidence from the multi-model beta round (2026-09-21)
 

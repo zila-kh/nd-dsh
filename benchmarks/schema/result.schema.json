@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ND benchmark result",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "benchmark",
+    "timestamp",
+    "backend",
+    "commit",
+    "buildProfile",
+    "fixtureRevision",
+    "environment"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "benchmark": {
+      "type": "string",
+      "minLength": 1
+    },
+    "timestamp": {
+      "type": "string",
+      "minLength": 1
+    },
+    "backend": {
+      "type": "string",
+      "minLength": 1
+    },
+    "commit": {
+      "type": "string",
+      "minLength": 1
+    },
+    "buildProfile": {
+      "type": "string",
+      "minLength": 1
+    },
+    "fixtureRevision": {
+      "type": "string",
+      "minLength": 1
+    },
+    "environment": {
+      "type": "object",
+      "required": [
+        "os",
+        "osVersion",
+        "arch",
+        "cpuModel",
+        "logicalCpuCount",
+        "physicalMemoryBytes",
+        "nodeVersion"
+      ],
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

@@ -29,7 +29,14 @@ export interface TaskWorktree {
   taskId: string
 }
 
+export type WorktreeGitRunner = (cwd: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
+
+export class TaskIntegrationConflictError extends Error {
+  readonly code = 'task-integration-conflict'
+}
+
 export class TaskWorktreeManager {
+  constructor(private readonly runGit: WorktreeGitRunner = git) {}
   /**
    * Create or recover a deterministic worktree for a task. A new worktree is
    * created only from a clean base workspace so the branch cannot silently omit
@@ -43,34 +50,34 @@ export class TaskWorktreeManager {
    */
   async ensure(projectWorkspace: string | undefined, taskId: string): Promise<TaskWorktree | undefined> {
     if (!projectWorkspace) return undefined
-    const repoRoot = await repositoryRoot(projectWorkspace).catch(() => bootstrapEmptyRepository(projectWorkspace))
+    const repoRoot = await repositoryRoot(projectWorkspace, this.runGit).catch(() => bootstrapEmptyRepository(projectWorkspace, this.runGit))
     if (!repoRoot) return undefined
     const descriptor = describe(repoRoot, taskId)
-    if (await isAttachedWorktree(descriptor.root)) return descriptor
+    if (await isAttachedWorktree(descriptor.root, this.runGit)) return descriptor
 
     await fs.mkdir(dirname(descriptor.root), { recursive: true })
     if (await pathExists(descriptor.root)) {
       throw new Error(`ND task worktree path already exists but is not a Git worktree: ${descriptor.root}`)
     }
 
-    await git(repoRoot, ['worktree', 'prune'])
-    if (await branchExists(repoRoot, descriptor.branch)) {
-      await git(repoRoot, ['worktree', 'add', descriptor.root, descriptor.branch])
+    await this.runGit(repoRoot, ['worktree', 'prune'])
+    if (await branchExists(repoRoot, descriptor.branch, this.runGit)) {
+      await this.runGit(repoRoot, ['worktree', 'add', descriptor.root, descriptor.branch])
       return descriptor
     }
 
-    const status = await git(repoRoot, ['status', '--porcelain=v1', '--untracked-files=all'])
+    const status = await this.runGit(repoRoot, ['status', '--porcelain=v1', '--untracked-files=all'])
     if (status.stdout.trim()) return undefined
-    await git(repoRoot, ['worktree', 'add', '-b', descriptor.branch, descriptor.root, 'HEAD'])
+    await this.runGit(repoRoot, ['worktree', 'add', '-b', descriptor.branch, descriptor.root, 'HEAD'])
     return descriptor
   }
 
   async existing(projectWorkspace: string | undefined, taskId: string): Promise<TaskWorktree | undefined> {
     if (!projectWorkspace) return undefined
-    const repoRoot = await repositoryRoot(projectWorkspace).catch(() => undefined)
+    const repoRoot = await repositoryRoot(projectWorkspace, this.runGit).catch(() => undefined)
     if (!repoRoot) return undefined
     const descriptor = describe(repoRoot, taskId)
-    return await isAttachedWorktree(descriptor.root) ? descriptor : undefined
+    return await isAttachedWorktree(descriptor.root, this.runGit) ? descriptor : undefined
   }
 
   /**
@@ -79,20 +86,20 @@ export class TaskWorktreeManager {
    */
   async baseline(worktree: TaskWorktree): Promise<string> {
     await removeDisposableArtifacts(worktree.root)
-    const status = await git(worktree.root, ['status', '--porcelain=v1', '--untracked-files=all'])
+    const status = await this.runGit(worktree.root, ['status', '--porcelain=v1', '--untracked-files=all'])
     if (status.stdout.trim()) {
       throw new Error('Task worktree is dirty before execution attempt; refusing to create an unsafe retry boundary')
     }
-    return (await git(worktree.root, ['rev-parse', 'HEAD'])).stdout.trim()
+    return (await this.runGit(worktree.root, ['rev-parse', 'HEAD'])).stdout.trim()
   }
 
   /** Restore only the ND-owned task worktree to its pre-attempt boundary. */
   async rollback(worktree: TaskWorktree, expectedHead: string): Promise<void> {
-    await git(worktree.root, ['reset', '--hard', expectedHead])
-    await git(worktree.root, ['clean', '-fd', '--'])
+    await this.runGit(worktree.root, ['reset', '--hard', expectedHead])
+    await this.runGit(worktree.root, ['clean', '-fd', '--'])
     const [head, status] = await Promise.all([
-      git(worktree.root, ['rev-parse', 'HEAD']),
-      git(worktree.root, ['status', '--porcelain=v1', '--untracked-files=all']),
+      this.runGit(worktree.root, ['rev-parse', 'HEAD']),
+      this.runGit(worktree.root, ['status', '--porcelain=v1', '--untracked-files=all']),
     ])
     if (head.stdout.trim() !== expectedHead || status.stdout.trim()) {
       throw new Error('Task worktree could not be restored to its execution-attempt baseline')
@@ -101,16 +108,16 @@ export class TaskWorktreeManager {
 
   /** Freeze the worker result into the task branch before independent review. */
   async checkpoint(worktree: TaskWorktree, title: string): Promise<string> {
-    const status = await git(worktree.root, ['status', '--porcelain=v1', '--untracked-files=all'])
+    const status = await this.runGit(worktree.root, ['status', '--porcelain=v1', '--untracked-files=all'])
     if (status.stdout.trim()) {
       // A failed earlier add/commit may have left a partial index behind.
       // The task worktree is ND-owned, so restage the current files from the
       // working tree instead of carrying stale cache entries into a retry.
-      await git(worktree.root, ['reset', '--'])
-      await git(worktree.root, ['add', '-A', '--', '.', ...CHECKPOINT_EXCLUDED_PATHS])
-      const staged = await git(worktree.root, ['diff', '--cached', '--name-only'])
+      await this.runGit(worktree.root, ['reset', '--'])
+      await this.runGit(worktree.root, ['add', '-A', '--', '.', ...CHECKPOINT_EXCLUDED_PATHS])
+      const staged = await this.runGit(worktree.root, ['diff', '--cached', '--name-only'])
       if (staged.stdout.trim()) {
-        await git(worktree.root, [
+        await this.runGit(worktree.root, [
           '-c', 'user.name=ND-DSH',
           '-c', 'user.email=nd-dsh@local',
           'commit', '-m', `nd-dsh: ${title.slice(0, 120)}`,
@@ -118,14 +125,14 @@ export class TaskWorktreeManager {
       }
     }
     await removeDisposableArtifacts(worktree.root)
-    return (await git(worktree.root, ['rev-parse', 'HEAD'])).stdout.trim()
+    return (await this.runGit(worktree.root, ['rev-parse', 'HEAD'])).stdout.trim()
   }
 
   async assertUnchanged(worktree: TaskWorktree, expectedHead: string): Promise<void> {
     await removeDisposableArtifacts(worktree.root)
     const [status, head] = await Promise.all([
-      git(worktree.root, ['status', '--porcelain=v1', '--untracked-files=all']),
-      git(worktree.root, ['rev-parse', 'HEAD']),
+      this.runGit(worktree.root, ['status', '--porcelain=v1', '--untracked-files=all']),
+      this.runGit(worktree.root, ['rev-parse', 'HEAD']),
     ])
     if (status.stdout.trim()) throw new Error('Reviewer/tooling changed the task worktree after the review checkpoint')
     if (head.stdout.trim() !== expectedHead) throw new Error('Task worktree HEAD changed after independent review started')
@@ -137,35 +144,35 @@ export class TaskWorktreeManager {
    */
   async integrate(projectWorkspace: string | undefined, taskId: string): Promise<{ merged: boolean; head: string }> {
     if (!projectWorkspace) throw new Error('Task integration requires a project workspace')
-    const repoRoot = await repositoryRoot(projectWorkspace)
+    const repoRoot = await repositoryRoot(projectWorkspace, this.runGit)
     const descriptor = describe(repoRoot, taskId)
-    if (!(await branchExists(repoRoot, descriptor.branch))) {
+    if (!(await branchExists(repoRoot, descriptor.branch, this.runGit))) {
       throw new Error(`Task branch ${descriptor.branch} is missing; cannot integrate verified work`)
     }
-    const taskStatus = await git(descriptor.root, ['status', '--porcelain=v1', '--untracked-files=all']).catch(() => undefined)
+    const taskStatus = await this.runGit(descriptor.root, ['status', '--porcelain=v1', '--untracked-files=all']).catch(() => undefined)
     if (!taskStatus || taskStatus.stdout.trim()) throw new Error('Task worktree changed after its review checkpoint; re-run review before integration')
 
-    const baseStatus = await git(repoRoot, ['status', '--porcelain=v1', '--untracked-files=all'])
+    const baseStatus = await this.runGit(repoRoot, ['status', '--porcelain=v1', '--untracked-files=all'])
     if (baseStatus.stdout.trim()) throw new Error('Project workspace has uncommitted human/local changes; integration is paused instead of overwriting them')
 
-    const alreadyMerged = await isAncestor(repoRoot, descriptor.branch, 'HEAD')
-    if (alreadyMerged) return { merged: false, head: (await git(repoRoot, ['rev-parse', 'HEAD'])).stdout.trim() }
+    const alreadyMerged = await isAncestor(repoRoot, descriptor.branch, 'HEAD', this.runGit)
+    if (alreadyMerged) return { merged: false, head: (await this.runGit(repoRoot, ['rev-parse', 'HEAD'])).stdout.trim() }
 
     try {
-      await git(repoRoot, [
+      await this.runGit(repoRoot, [
         '-c', 'user.name=ND-DSH',
         '-c', 'user.email=nd-dsh@local',
         'merge', '--no-ff', '--no-edit', descriptor.branch,
       ])
     } catch (error) {
-      await git(repoRoot, ['merge', '--abort']).catch(() => undefined)
-      throw new Error(`Task integration conflict for ${taskId}; ND left the task branch intact for explicit rework. ${errorMessage(error)}`)
+      await this.runGit(repoRoot, ['merge', '--abort']).catch(() => undefined)
+      throw new TaskIntegrationConflictError(`Task integration conflict for ${taskId}; ND left the task branch intact. Rebase or re-plan this task against the current base before another execution attempt. ${errorMessage(error)}`)
     }
-    return { merged: true, head: (await git(repoRoot, ['rev-parse', 'HEAD'])).stdout.trim() }
+    return { merged: true, head: (await this.runGit(repoRoot, ['rev-parse', 'HEAD'])).stdout.trim() }
   }
 
   path(projectWorkspace: string, taskId: string): Promise<string | undefined> {
-    return repositoryRoot(projectWorkspace)
+    return repositoryRoot(projectWorkspace, this.runGit)
       .then((repoRoot) => describe(repoRoot, taskId).root)
       .catch(() => undefined)
   }
@@ -217,49 +224,49 @@ function safeTaskKey(taskId: string): string {
   return `${readable}-${digest}`
 }
 
-async function repositoryRoot(cwd: string): Promise<string> {
-  return resolve((await git(resolve(cwd), ['rev-parse', '--show-toplevel'])).stdout.trim())
+async function repositoryRoot(cwd: string, runGit: WorktreeGitRunner = git): Promise<string> {
+  return resolve((await runGit(resolve(cwd), ['rev-parse', '--show-toplevel'])).stdout.trim())
 }
 
-async function bootstrapEmptyRepository(cwd: string): Promise<string | undefined> {
+async function bootstrapEmptyRepository(cwd: string, runGit: WorktreeGitRunner = git): Promise<string | undefined> {
   const root = resolve(cwd)
   try {
     const entries = await fs.readdir(root)
     if (entries.length !== 0) return undefined
-    await git(root, ['init'])
-    await git(root, [
+    await runGit(root, ['init'])
+    await runGit(root, [
       '-c', 'user.name=ND-DSH',
       '-c', 'user.email=nd-dsh@local',
       'commit', '--allow-empty', '-m', 'nd-dsh: initialize project workspace',
     ])
-    return repositoryRoot(root)
+    return repositoryRoot(root, runGit)
   } catch {
     return undefined
   }
 }
 
-async function isAttachedWorktree(path: string): Promise<boolean> {
+async function isAttachedWorktree(path: string, runGit: WorktreeGitRunner = git): Promise<boolean> {
   if (!(await pathExists(path))) return false
   try {
-    const root = resolve((await git(path, ['rev-parse', '--show-toplevel'])).stdout.trim())
+    const root = resolve((await runGit(path, ['rev-parse', '--show-toplevel'])).stdout.trim())
     return root === resolve(path)
   } catch {
     return false
   }
 }
 
-async function branchExists(repoRoot: string, branch: string): Promise<boolean> {
+async function branchExists(repoRoot: string, branch: string, runGit: WorktreeGitRunner = git): Promise<boolean> {
   try {
-    await git(repoRoot, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`])
+    await runGit(repoRoot, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`])
     return true
   } catch {
     return false
   }
 }
 
-async function isAncestor(repoRoot: string, ancestor: string, descendant: string): Promise<boolean> {
+async function isAncestor(repoRoot: string, ancestor: string, descendant: string, runGit: WorktreeGitRunner = git): Promise<boolean> {
   try {
-    await git(repoRoot, ['merge-base', '--is-ancestor', ancestor, descendant])
+    await runGit(repoRoot, ['merge-base', '--is-ancestor', ancestor, descendant])
     return true
   } catch {
     return false

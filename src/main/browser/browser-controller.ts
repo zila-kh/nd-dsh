@@ -25,9 +25,11 @@ export class BrowserController {
   private readonly reservedOrigin: (() => string | undefined) | undefined
   private annotationImage: UiAnnotationImage | undefined
   private stateValue: BrowserState
-  private onStateChanged?: (state: BrowserState) => void
+  private onStateChanged: ((state: BrowserState) => void) | undefined
   private binding: Promise<void> | undefined
   private lastBoundTarget: string | undefined
+  private destroyPromise: Promise<void> | undefined
+  private destroying = false
 
   constructor(
     private readonly window: BrowserWindow,
@@ -282,9 +284,22 @@ export class BrowserController {
     }
   }
 
-  destroy(): void {
-    void this.inspector.stop()
-    void this.annotator.cancel()
+  destroy(): Promise<void> {
+    if (this.destroyPromise) return this.destroyPromise
+    this.destroyPromise = this.destroyInternal()
+    return this.destroyPromise
+  }
+
+  private async destroyInternal(): Promise<void> {
+    this.destroying = true
+    this.onStateChanged = undefined
+    const binding = this.binding
+    if (binding) await binding.catch(() => undefined)
+    await Promise.allSettled([
+      this.inspector.stop(),
+      this.annotator.cancel(),
+      this.agentBrowser.close(),
+    ])
     if (!this.window.isDestroyed()) {
       try {
         this.window.contentView.removeChildView(this.view)
@@ -387,6 +402,7 @@ export class BrowserController {
   }
 
   private async ensureAgentBinding(): Promise<void> {
+    if (this.destroying) return
     if (this.binding) return this.binding
     this.binding = (async () => {
       try {

@@ -5,6 +5,7 @@ export type ProjectStatus = 'planning' | 'active' | 'blocked' | 'completed' | 'a
 export type AgentStatus = 'idle' | 'working' | 'reviewing' | 'blocked' | 'offline'
 export type TaskStatus = 'backlog' | 'ready' | 'in_progress' | 'review' | 'blocked' | 'completed'
 export type TaskPriority = 'low' | 'medium' | 'high' | 'critical'
+export type TaskEvidenceKind = 'code' | 'artifact'
 export type OrganizationRunKind = 'pm-plan' | 'task-execution' | 'task-review'
 export type OrganizationRunStatus = 'running' | 'completed' | 'failed'
 export type OrganizationScope = 'builtin' | 'company' | 'project' | 'team' | 'role' | 'agent'
@@ -163,6 +164,10 @@ export interface OrganizationTask {
   status: TaskStatus
   dependsOn: string[]
   assignedAgentId?: string
+  reviewerAgentId?: string
+  workScopes?: string[]
+  evidenceKind?: TaskEvidenceKind
+  artifactPaths?: string[]
   executionSessionId?: string
   reviewSessionId?: string
   resultSummary?: string
@@ -247,6 +252,9 @@ export interface ProjectPlanInput {
       acceptanceCriteria?: string[]
       dependsOn?: string[]
       role?: string
+      workScopes?: string[]
+      evidenceKind?: TaskEvidenceKind
+      artifactPaths?: string[]
     }>
   }>
   memory?: Array<{ title: string; content: string; tags?: string[] }>
@@ -274,8 +282,8 @@ export type OrganizationMutation =
   | { type: 'skill.create'; scope: Exclude<OrganizationScope, 'builtin'>; name: string; description: string; instructions: string; companyId?: string; projectId?: string; teamId?: string; roleId?: string; agentId?: string }
   | { type: 'workflow.create'; companyId: string; projectId?: string; name: string; steps: WorkflowStep[] }
   | { type: 'goal.create'; companyId: string; projectId: string; title: string; description: string }
-  | { type: 'task.create'; companyId: string; projectId: string; goalId?: string; milestoneId?: string; title: string; description: string; acceptanceCriteria?: string[]; priority?: TaskPriority; dependsOn?: string[]; assignedAgentId?: string }
-  | { type: 'task.update'; id: string; patch: Partial<Pick<OrganizationTask, 'title' | 'description' | 'acceptanceCriteria' | 'priority' | 'status' | 'dependsOn' | 'assignedAgentId'>> }
+  | { type: 'task.create'; companyId: string; projectId: string; goalId?: string; milestoneId?: string; title: string; description: string; acceptanceCriteria?: string[]; priority?: TaskPriority; dependsOn?: string[]; assignedAgentId?: string; workScopes?: string[]; evidenceKind?: TaskEvidenceKind; artifactPaths?: string[] }
+  | { type: 'task.update'; id: string; patch: Partial<Pick<OrganizationTask, 'title' | 'description' | 'acceptanceCriteria' | 'priority' | 'status' | 'dependsOn' | 'assignedAgentId' | 'workScopes' | 'evidenceKind' | 'artifactPaths'>> }
   | { type: 'memory.add'; companyId: string; projectId?: string; title: string; content: string; tags?: string[] }
   | { type: 'policy.set'; companyId: string; action: string; effect: OrganizationPolicyEffect; description?: string }
 

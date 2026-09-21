@@ -7,8 +7,9 @@ import type { HarnessService } from '../harness/harness-service.js'
 import type { WorkspaceService } from '../workspace/workspace-service.js'
 import { isRetryableExecutionFailure, MAX_EXECUTION_ATTEMPTS, retryBackoffMs, stallTimeoutMs } from './execution-reliability.js'
 import type { OrganizationStore } from './store.js'
-import { TaskWorktreeManager, type TaskWorktree } from './task-worktree.js'
-import { formatVerificationEvidence, runVerification } from './verification-evidence.js'
+import { TaskIntegrationConflictError, TaskWorktreeManager, type TaskWorktree } from './task-worktree.js'
+import { formatVerificationEvidence, runArtifactVerification, runVerification } from './verification-evidence.js'
+import type { ExecutionCoordinator } from './execution-coordinator.js'
 
 interface ReviewVerdict {
   verdict: 'pass' | 'fail'
@@ -71,7 +72,7 @@ export class OrganizationOrchestrator {
   private parallelFillProjects = new Set<string>()
   private stallReconcileBusy = false
   private readonly structuredErrors = new Map<string, string>()
-  private readonly taskWorktrees = new TaskWorktreeManager()
+  private readonly taskWorktrees: TaskWorktreeManager
 
   constructor(
     private readonly store: OrganizationStore,
@@ -81,7 +82,11 @@ export class OrganizationOrchestrator {
     private readonly engineRuns?: Pick<EngineSessionRouter, 'createSession' | 'run' | 'stopSession'>,
     private readonly projectRuntime?: { check(projectId: string): Promise<unknown> },
     private readonly capabilities?: { assertUsableForAgent(agent?: { id?: string; roleId?: string; teamId?: string }): Promise<void> },
-  ) {}
+    private readonly executionCoordinator?: Pick<ExecutionCoordinator, 'releaseSession'>,
+    taskWorktrees?: TaskWorktreeManager,
+  ) {
+    this.taskWorktrees = taskWorktrees ?? new TaskWorktreeManager()
+  }
 
   async planProject(projectId: string, explicit = true): Promise<OrganizationRunReceipt> {
     const context = await this.store.projectContext(projectId)
@@ -175,15 +180,12 @@ export class OrganizationOrchestrator {
 
   async reviewTask(taskId: string, explicit = true): Promise<OrganizationRunReceipt> {
     const context = await this.store.taskContext(taskId)
-    const projectCtx = await this.store.projectContext(context.project.id)
     this.assertPolicy(await this.store.policy(context.company.id, 'task.review'), explicit, 'task review')
     if (!explicit && context.company.autonomyLevel < 3) throw new Error('Autonomy level 3+ is required for automatic review')
     if (context.task.status !== 'review') throw new Error('Task must be ready for review')
-    const reviewerAgent = projectCtx.agents.find((item) => {
-      const role = projectCtx.roles.find((r) => r.id === item.roleId)
-      return role?.name.toLowerCase().includes('reviewer')
-    })
-    const reviewerRole = reviewerAgent ? projectCtx.roles.find((r) => r.id === reviewerAgent.roleId) : projectCtx.roles.find((r) => r.name.toLowerCase().includes('reviewer'))
+    const reviewer = await this.store.reviewerForTask(taskId)
+    const reviewerAgent = reviewer.agent
+    const reviewerRole = reviewer.role
     const modelOpts = this.resolveAgentModel(reviewerAgent, reviewerRole)
     const taskWorktree = await this.taskWorktrees.existing(context.project.workspacePath, context.task.id)
     await this.assertTaskRunSlot(context.task.id, context.project.id, Boolean(taskWorktree))
@@ -201,7 +203,7 @@ export class OrganizationOrchestrator {
     )
     if (taskWorktree && reviewHead) this.reviewWorktrees.set(sessionId, { worktree: taskWorktree, head: reviewHead })
     this.lastProgressAt.set(sessionId, run.startedAt)
-    await this.store.markReviewStarted(taskId, sessionId)
+    await this.store.markReviewStarted(taskId, sessionId, reviewerAgent?.id)
     try {
       await this.harness.run(reviewPrompt(context.task, context, taskWorktree), { sessionId, ...modelOpts })
     } catch (cause) {
@@ -393,7 +395,9 @@ export class OrganizationOrchestrator {
         const context = await this.store.taskContext(run.taskId)
         const worktree = await this.taskWorktrees.existing(context.project.workspacePath, run.taskId)
         if (worktree) await this.taskWorktrees.checkpoint(worktree, context.task.title)
-        const verification = await runVerification(context.project.testCommand, worktree?.root ?? context.project.workspacePath)
+        const verification = context.task.evidenceKind === 'artifact'
+          ? await runArtifactVerification(context.task.artifactPaths, worktree?.root ?? context.project.workspacePath)
+          : await runVerification(context.project.testCommand, worktree?.root ?? context.project.workspacePath)
         const output = `${workerOutput}${formatVerificationEvidence(verification)}`
         if (verification.status === 'failed') {
           const message = `Machine verification failed: ${verification.reason ?? `exit ${verification.exitCode ?? 'unknown'}`}`
@@ -504,6 +508,7 @@ export class OrganizationOrchestrator {
       let summary = `${review.summary}${issueText}`
       const context = await this.store.taskContext(taskId)
       let passed = review.verdict === 'pass'
+      let integrationConflict = false
       if (passed) {
         const checkpoint = this.reviewWorktrees.get(sessionId)
         if (checkpoint) {
@@ -512,12 +517,14 @@ export class OrganizationOrchestrator {
             await this.taskWorktrees.integrate(context.project.workspacePath, taskId)
           } catch (cause) {
             passed = false
+            integrationConflict = cause instanceof TaskIntegrationConflictError
             summary = `${summary}\nIntegration/evidence gate: ${errorMessage(cause)}`
           }
         }
       }
       const executionAttempts = await this.store.executionAttemptCount(taskId)
       const automaticRework = !passed
+        && !integrationConflict
         && context.company.autonomyLevel >= 4
         && executionAttempts < MAX_EXECUTION_ATTEMPTS
 
@@ -764,6 +771,9 @@ export class OrganizationOrchestrator {
   }
 
   private cleanupSession(sessionId: string): void {
+    void this.executionCoordinator?.releaseSession(sessionId).catch((error) => {
+      console.warn('Runtime permit release failed:', error instanceof Error ? error.message : String(error))
+    })
     this.finalText.delete(sessionId)
     this.structuredHandled.delete(sessionId)
     this.structuredInFlight.delete(sessionId)
@@ -809,7 +819,7 @@ export class OrganizationOrchestrator {
 function pmPrompt(context: Awaited<ReturnType<OrganizationStore['projectContext']>>): string {
   const roles = context.roles.map((item) => `- ${item.name}: ${item.responsibility}`).join('\n') || '- Software Engineer'
   const teams = context.teams.map((item) => `- ${item.name}: ${item.purpose}`).join('\n') || '- Engineering'
-  return `You are the AI Product Manager for ${context.company.name}.\nMission: ${context.company.mission}\nProject: ${context.project.name}\nObjective: ${context.project.objective}\n\nCreate a practical delivery plan. Respect company/project isolation. Use the existing teams and roles when assigning work. Keep independent work parallel: use dependsOn only for real code/data ordering, never merely to serialize execution. Tests, docs, accessibility, i18n, fixtures and independent components should remain parallel when safe. Return concise reasoning, then exactly one JSON object between <nd-dsh-plan> and </nd-dsh-plan>.\n\nSchema:\n<nd-dsh-plan>{"goal":{"title":"...","description":"..."},"milestones":[{"title":"...","description":"...","tasks":[{"title":"...","description":"...","priority":"medium","acceptanceCriteria":["..."],"dependsOn":["earlier task title"],"role":"Software Engineer"}]}],"memory":[{"title":"...","content":"...","tags":["plan"]}]}</nd-dsh-plan>\n\nAvailable roles:\n${roles}\nAvailable teams:\n${teams}\nKnown memory:\n${context.memory.map((item) => `- ${item.title}: ${item.content}`).join('\n') || '- none'}\nPolicies:\n${context.policies.map((item) => `- ${item.action}: ${item.effect}`).join('\n')}`
+  return `You are the AI Product Manager for ${context.company.name}.\nMission: ${context.company.mission}\nProject: ${context.project.name}\nObjective: ${context.project.objective}\n\nCreate a practical delivery plan. Respect company/project isolation. Use the existing teams and roles when assigning work. Keep independent work parallel: use dependsOn only for real code/data ordering, never merely to serialize execution. Tests, docs, accessibility, i18n, fixtures and independent components should remain parallel when safe. For each task, declare advisory workScopes when the likely file area is known. Use evidenceKind "artifact" with relative artifactPaths for design, research, or document deliverables that should be verified by produced artifacts instead of a code test command. Return concise reasoning, then exactly one JSON object between <nd-dsh-plan> and </nd-dsh-plan>.\n\nSchema:\n<nd-dsh-plan>{"goal":{"title":"...","description":"..."},"milestones":[{"title":"...","description":"...","tasks":[{"title":"...","description":"...","priority":"medium","acceptanceCriteria":["..."],"dependsOn":["earlier task title"],"role":"Software Engineer","workScopes":["src/feature/**"],"evidenceKind":"code","artifactPaths":[]}]}],"memory":[{"title":"...","content":"...","tags":["plan"]}]}</nd-dsh-plan>\n\nAvailable roles:\n${roles}\nAvailable teams:\n${teams}\nKnown memory:\n${context.memory.map((item) => `- ${item.title}: ${item.content}`).join('\n') || '- none'}\nPolicies:\n${context.policies.map((item) => `- ${item.action}: ${item.effect}`).join('\n')}`
 }
 
 function workerPrompt(context: Awaited<ReturnType<OrganizationStore['taskContext']>>, engine: TaskEngine, attempt: number, worktree?: TaskWorktree): string {
@@ -955,6 +965,9 @@ function validatePlan(plan: ProjectPlanInput): void {
       if (!titleMap.has(dependency)) throw new Error(`Unknown planned task dependency: ${dependency}`)
       if (dependency === key) throw new Error(`Task cannot depend on itself: ${task.title}`)
     }
+    if (task.workScopes !== undefined && (!Array.isArray(task.workScopes) || task.workScopes.some((value) => typeof value !== 'string' || !value.trim()))) throw new Error(`Invalid workScopes for planned task: ${task.title}`)
+    if (task.evidenceKind !== undefined && task.evidenceKind !== 'code' && task.evidenceKind !== 'artifact') throw new Error(`Invalid evidenceKind for planned task: ${task.title}`)
+    if (task.evidenceKind === 'artifact' && (!Array.isArray(task.artifactPaths) || task.artifactPaths.length === 0)) throw new Error(`Artifact planned task requires artifactPaths: ${task.title}`)
     graph.set(key, dependencies)
   }
   const visiting = new Set<string>()

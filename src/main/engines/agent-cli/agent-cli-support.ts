@@ -119,7 +119,12 @@ export async function killProcessTree(child: ChildProcess | undefined): Promise<
   })
 }
 
-/** Environment for engine children: ND control-plane variables never leak. */
+/**
+ * Environment intentionally forwarded to user-installed coding CLIs.
+ * ND control-plane variables and safeStorage provider credentials are not
+ * injected here; vendor CLI auth already present in the user's OS environment
+ * remains available to the CLI exactly as it was before the Rust migration.
+ */
 export function engineEnvironment(): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = {}
   for (const [key, value] of Object.entries(process.env)) {

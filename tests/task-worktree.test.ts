@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
-import { TaskWorktreeManager, taskEvidenceWorkspace } from '../src/main/organization/task-worktree.js'
+import { TaskIntegrationConflictError, TaskWorktreeManager, taskEvidenceWorkspace } from '../src/main/organization/task-worktree.js'
 
 const exec = promisify(execFile)
 const temporary: string[] = []
@@ -114,7 +114,7 @@ describe('TaskWorktreeManager', () => {
     await exec('git', ['add', 'app.ts'], { cwd: repo })
     await exec('git', ['commit', '-m', 'main change'], { cwd: repo })
 
-    await expect(manager.integrate(repo, 'task-conflict')).rejects.toThrow(/integration conflict/i)
+    await expect(manager.integrate(repo, 'task-conflict')).rejects.toBeInstanceOf(TaskIntegrationConflictError)
     expect(await readFile(join(worktree.root, 'app.ts'), 'utf8')).toContain('"task"')
     expect((await exec('git', ['status', '--porcelain'], { cwd: repo })).stdout.trim()).toBe('')
   })

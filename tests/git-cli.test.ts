@@ -201,6 +201,60 @@ describe('GitCli execution', () => {
     } satisfies Partial<GitError>)
   })
 
+  it('routes status and history parsing through typed ND Core methods without Node spawn fallback', async () => {
+    const methods: string[] = []
+    const cli = new GitCli({
+      gitPath: '/fake/git',
+      spawnProcess: () => { throw new Error('Node git spawn fallback should not run') },
+      core: {
+        request: async <T>(method: string): Promise<T> => {
+          methods.push(method)
+          if (method === 'git.status') {
+            return {
+              exitCode: 0,
+              stderr: '',
+              durationMs: 1,
+              truncated: false,
+              entries: [
+                { x: 'M', y: ' ', path: 'src/app.ts' },
+                { x: 'R', y: ' ', path: 'src/old.ts', rename: 'src/new.ts' },
+              ],
+            } as T
+          }
+          if (method === 'git.log') {
+            return {
+              exitCode: 0,
+              stderr: '',
+              durationMs: 2,
+              truncated: false,
+              commits: [{
+                hash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                message: 'Typed history',
+                authorName: 'Jane Doe',
+                authorEmail: 'jane@example.test',
+                authorTimestamp: 1_700_000_000,
+              }],
+            } as T
+          }
+          throw new Error('Unexpected core method: ' + method)
+        },
+      },
+    })
+
+    expect(await cli.statusEntries('/repo')).toEqual([
+      { x: 'M', y: ' ', path: 'src/app.ts' },
+      { x: 'R', y: ' ', path: 'src/old.ts', rename: 'src/new.ts' },
+    ])
+    expect(await cli.logEntries('/repo', 50)).toEqual([{
+      hash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      message: 'Typed history',
+      authorName: 'Jane Doe',
+      authorEmail: 'jane@example.test',
+      authorTimestamp: 1_700_000_000,
+    }])
+    expect(methods).toEqual(['git.status', 'git.log'])
+  })
+
   it('suppresses credential prompts through the environment', async () => {
     let seenEnv: NodeJS.ProcessEnv | undefined
     const cli = new GitCli({
