@@ -74,7 +74,7 @@ export class TaskWorktreeManager {
 
   async existing(projectWorkspace: string | undefined, taskId: string): Promise<TaskWorktree | undefined> {
     if (!projectWorkspace) return undefined
-    const repoRoot = await repositoryRoot(projectWorkspace, this.runGit).catch(() => undefined)
+    const repoRoot = await repositoryRoot(projectWorkspace).catch(() => undefined)
     if (!repoRoot) return undefined
     const descriptor = describe(repoRoot, taskId)
     return await isAttachedWorktree(descriptor.root, this.runGit) ? descriptor : undefined
