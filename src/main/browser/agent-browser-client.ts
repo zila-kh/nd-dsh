@@ -19,6 +19,7 @@ const MAX_CAPTURE_CHARS = 2_000_000
 const BIND_COMMAND_TIMEOUT_MS = 10_000
 const BIND_RETRY_DELAY_MS = 2_500
 const SMOKE_TEST_TIMEOUT_MS = 15_000
+const SHUTDOWN_TIMEOUT_MS = 5_000
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -32,6 +33,8 @@ export class AgentBrowserClient {
   readonly entryPath: string
   private readonly electronNodeMode: boolean
   private statusValue: AgentBrowserStatus = { state: 'binding' }
+  private sessionTouched = false
+  private closing: Promise<void> | undefined
 
   constructor(cdpPort: number, projectRoot: string) {
     this.cdpPort = cdpPort
@@ -104,6 +107,7 @@ export class AgentBrowserClient {
       // pane; one transparent retry keeps that off the agent's tool path
       // instead of surfacing as an unavailable browser mid-session.
       try {
+        this.sessionTouched = true
         await this.bindPinnedTab(targetId)
       } catch {
         this.statusValue = { state: 'binding' }
@@ -153,6 +157,21 @@ export class AgentBrowserClient {
   async snapshot(): Promise<unknown> {
     const result = await this.run(['snapshot', '-i'])
     return result.json ?? result.stdout
+  }
+
+  async close(): Promise<void> {
+    if (!this.sessionTouched) return
+    if (!this.closing) {
+      this.closing = this.run(['close'], [], SHUTDOWN_TIMEOUT_MS)
+        .catch((error) => {
+          console.warn('[agent-browser] session cleanup failed:', error instanceof Error ? error.message : String(error))
+        })
+        .finally(() => {
+          this.sessionTouched = false
+          this.closing = undefined
+        })
+    }
+    return this.closing
   }
 
   environment(): NodeJS.ProcessEnv {

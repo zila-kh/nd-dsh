@@ -74,6 +74,7 @@ app.enableSandbox()
 
 let mainWindow: BrowserWindow | undefined
 let activeHarness: HarnessService | undefined
+let activeBrowser: BrowserController | undefined
 let activeCodexEngine: CodexCliEngine | undefined
 let activeAntigravityEngine: AntigravityEngine | undefined
 let activeZcodeEngine: ZcodeCliEngine | undefined
@@ -188,6 +189,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   }
 
   const browser = new BrowserController(window, cdpPort, projectRoot(), { reservedOrigin })
+  activeBrowser = browser
   const dshSurface = new DshSurfaceController(window)
   const externalElements = new ExternalElementStage()
   const recentPicks = new RecentPickStore()
@@ -530,7 +532,7 @@ async function createWindow(cdpPort: number): Promise<void> {
     if (activeNdPencil === ndPencil) activeNdPencil = undefined
     void ndPencil.destroy()
     if (activeEngineRouter === engineRouter) { activeEngineRouter = undefined; beginEngineRouterClose(engineRouter) }
-    browser.destroy()
+    if (activeBrowser === browser) { activeBrowser = undefined; beginBrowserClose(browser) }
     dshSurface.destroy()
     if (mainWindow === window) mainWindow = undefined
     if (activeHarness === harness) activeHarness = undefined
@@ -575,6 +577,11 @@ app.on('before-quit', (event) => {
     const harness = activeHarness
     activeHarness = undefined
     beginHarnessClose(harness)
+  }
+  if (activeBrowser) {
+    const browser = activeBrowser
+    activeBrowser = undefined
+    beginBrowserClose(browser)
   }
   if (activeCodexEngine) {
     const codexEngine = activeCodexEngine
@@ -658,6 +665,10 @@ app.on('before-quit', (event) => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
+
+function beginBrowserClose(browser: BrowserController): void {
+  trackClose(browser.destroy().catch((error) => console.error('Failed to close the browser integration cleanly:', error)))
+}
 
 function beginExecutionCoordinatorClose(coordinator: ExecutionCoordinator): void {
   trackClose(coordinator.close().catch((error) => console.error('Failed to close ND runtime permits cleanly:', error)))

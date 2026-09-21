@@ -28,6 +28,7 @@ export class BrowserController {
   private onStateChanged?: (state: BrowserState) => void
   private binding: Promise<void> | undefined
   private lastBoundTarget: string | undefined
+  private destroyPromise: Promise<void> | undefined
 
   constructor(
     private readonly window: BrowserWindow,
@@ -282,9 +283,19 @@ export class BrowserController {
     }
   }
 
-  destroy(): void {
-    void this.inspector.stop()
-    void this.annotator.cancel()
+  destroy(): Promise<void> {
+    if (this.destroyPromise) return this.destroyPromise
+    this.destroyPromise = this.destroyInternal()
+    return this.destroyPromise
+  }
+
+  private async destroyInternal(): Promise<void> {
+    this.onStateChanged = undefined
+    await Promise.allSettled([
+      this.inspector.stop(),
+      this.annotator.cancel(),
+      this.agentBrowser.close(),
+    ])
     if (!this.window.isDestroyed()) {
       try {
         this.window.contentView.removeChildView(this.view)
