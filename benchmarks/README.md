@@ -27,3 +27,13 @@ Raw samples remain the source of truth. The generated Markdown summary contains 
 Legacy and Rust relative claims are accepted only when commit, build profile, fixture revision, CPU/OS/architecture, logical CPU count, and physical memory match. The legacy switch is developer-only and exists only for migration/soak comparison; packaged production remains Rust-core only.
 
 The full recorder uses at least 10 measured runs for startup and short-latency evidence and reports p50/p95. Memory records keep OS metric names (for example Windows private bytes or Linux PSS) rather than treating them as interchangeable.
+
+
+## GitHub Actions checkpoint runs
+
+Draft PR commits intentionally skip the heavy CI jobs. Use **Actions → ci → Run workflow** for checkpoints:
+
+- leave `full_benchmark=false` for the normal Linux validation + Windows package/smoke gates;
+- set `full_benchmark=true` for the Windows legacy-vs-Rust performance evidence run only.
+
+The full benchmark job uploads `prd-0002-performance-evidence` containing the generated Markdown summary and raw JSON samples.

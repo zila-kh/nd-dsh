@@ -7,6 +7,12 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
+    inputs:
+      full_benchmark:
+        description: Run the full Windows legacy-vs-Rust performance evidence suite
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -17,7 +23,7 @@ concurrency:
 
 jobs:
   validate:
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    if: (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event_name != 'workflow_dispatch' || inputs.full_benchmark == false)
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -74,7 +80,7 @@ jobs:
         run: xvfb-run --auto-servernum corepack pnpm e2e
 
   windows-package:
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    if: (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event_name != 'workflow_dispatch' || inputs.full_benchmark == false)
     runs-on: windows-latest
     timeout-minutes: 55
     steps:
@@ -106,4 +112,46 @@ jobs:
         with:
           name: packaged-runtime-smoke
           path: benchmark-results/packaged-smoke
+          if-no-files-found: error
+
+  performance-evidence:
+    if: github.event_name == 'workflow_dispatch' && inputs.full_benchmark == true
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Rust 1.98.1
+        run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
+      - name: Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Enable Corepack
+        run: corepack enable
+      - name: Install desktop dependencies
+        run: corepack pnpm install --frozen-lockfile
+      - name: Record full Windows performance evidence
+        run: corepack pnpm bench:record
+        env:
+          CI: 'true'
+          ND_DSH_BENCH_RUNS: '10'
+      - name: Verify benchmark budgets
+        if: always()
+        shell: pwsh
+        run: |
+          $summary = Get-ChildItem benchmark-results -Filter summary.json -Recurse |
+            Where-Object { (Get-Content $_.FullName -Raw) -match '"kind"\s*:\s*"nd-performance-evidence"' } |
+            Sort-Object LastWriteTime |
+            Select-Object -Last 1
+          if (-not $summary) { throw "No combined benchmark summary.json was produced." }
+          corepack pnpm bench:check $summary.FullName
+      - name: Upload full performance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prd-0002-performance-evidence
+          path: benchmark-results/**
           if-no-files-found: error

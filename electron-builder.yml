@@ -12,6 +12,7 @@ files:
   - package.json
   - node_modules/**
   - '!node_modules/.cache/**'
+  - '!node_modules/node-pty/**'
 
 extraResources:
   - from: .release/release-manifest.json
