@@ -35,23 +35,23 @@ function unavailable(ready: boolean, message: string): string | undefined {
 export function buildExtraCodingEngineCatalog(availability: ExtraCodingEngineAvailability): CodingEngineDescriptor[] {
   const opencodeReason = unavailable(
     availability.opencodeCliReady,
-    'The OpenCode CLI is not installed. Install OpenCode or point ND_DSH_OPENCODE_BINARY at the binary.',
+    'The OpenCode CLI is not installed. Install OpenCode. (Developers can override the path with ND_DSH_OPENCODE_BINARY.)',
   )
   const gooseReason = unavailable(
     availability.gooseCliReady,
-    'The goose CLI is not installed. Install goose from the Agentic AI Foundation release or point ND_DSH_GOOSE_BINARY at the binary.',
+    'The goose CLI is not installed. Install goose from the Agentic AI Foundation release. (Developers can override the path with ND_DSH_GOOSE_BINARY.)',
   )
   const jcodeReason = unavailable(
     availability.jcodeCliReady,
-    'The JCode CLI is not installed. Install it from https://jcode.sh or point ND_DSH_JCODE_BINARY at the binary.',
+    'The JCode CLI is not installed. Install it from https://jcode.sh. (Developers can override the path with ND_DSH_JCODE_BINARY.)',
   )
   const hermesReason = unavailable(
     availability.hermesCliReady,
-    'The Hermes Agent CLI is not installed. Install Hermes Agent or point ND_DSH_HERMES_BINARY at the binary.',
+    'The Hermes Agent CLI is not installed. Install Hermes Agent. (Developers can override the path with ND_DSH_HERMES_BINARY.)',
   )
   const minimaxReason = unavailable(
     availability.minimaxCliReady,
-    'The MiniMax CLI (mmx) is not installed. Install mmx-cli or point ND_DSH_MINIMAX_BINARY at the binary.',
+    'The MiniMax CLI (mmx) is not installed. Install mmx-cli. (Developers can override the path with ND_DSH_MINIMAX_BINARY.)',
   )
 
   return [

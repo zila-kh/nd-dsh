@@ -59,30 +59,30 @@ export function workerAssignableCodingEngines(engines: readonly CodingEngineDesc
 export function buildCodingEngineCatalog(availability: CodingEngineAvailability): CodingEngineDescriptor[] {
   const harnessReason = availability.harnessReady
     ? undefined
-    : 'ND runtime is not bootstrapped. Run the product bootstrap before starting agents.'
+    : 'The ND runtime is not set up on this install. Set it up in Settings → Capabilities, or reinstall ND.'
   const codexReason = availability.harnessReady
     ? availability.codexReady
       ? undefined
-      : 'The pinned Codex adapter is not built. Run the product bootstrap to install its platform payload.'
-    : 'Codex delegation depends on the ND runtime bootstrap.'
+      : 'The bundled Codex adapter is missing from this install. Set the runtime up in Settings → Capabilities, or reinstall ND.'
+    : 'Codex delegation needs the ND runtime, which is not set up on this install. Set it up in Settings → Capabilities, or reinstall ND.'
   const codexCliReason = availability.codexCliReady
     ? undefined
-    : 'The pinned Codex CLI payload is not installed. Run the product bootstrap to install it.'
+    : 'The bundled Codex CLI payload is missing from this install. Set the runtime up in Settings → Capabilities, or reinstall ND.'
   const antigravityReason = availability.antigravityReady
     ? undefined
-    : 'The Antigravity CLI (agy) is not installed. Install it from https://antigravity.google or point ND_DSH_ANTIGRAVITY_BINARY at the binary.'
+    : 'The Antigravity CLI (agy) is not installed. Install it from https://antigravity.google. (Developers can override the path with ND_DSH_ANTIGRAVITY_BINARY.)'
   const zcodeCliReason = availability.zcodeCliReady
     ? undefined
-    : 'The ZCode CLI is not installed. Install the ZCode desktop app or point ND_DSH_ZCODE_BINARY at the ZCode CLI entry script.'
+    : 'The ZCode CLI is not installed. Install the ZCode desktop app. (Developers can override the path with ND_DSH_ZCODE_BINARY.)'
   const piReason = availability.piCodingReady
     ? undefined
-    : 'The Pi coding agent CLI (pi) is not installed. Install it with `npm install -g @mariozechner/pi-coding-agent` or point ND_DSH_PI_BINARY at the binary.'
+    : 'The Pi coding agent CLI (pi) is not installed. Install the @mariozechner/pi-coding-agent package. (Developers can override the path with ND_DSH_PI_BINARY.)'
   const cursorReason = availability.cursorCliReady
     ? undefined
-    : 'The Cursor CLI (cursor-agent) is not installed. Install it from https://cursor.com/docs/cli/installation or point ND_DSH_CURSOR_BINARY at the binary.'
+    : 'The Cursor CLI (cursor-agent) is not installed. Install it from https://cursor.com/docs/cli/installation. (Developers can override the path with ND_DSH_CURSOR_BINARY.)'
   const claudeReason = availability.claudeCodeCliReady
     ? undefined
-    : 'The Claude Code CLI is not installed. Install it from https://claude.com/product/claude-code or point ND_DSH_CLAUDE_BINARY at the binary.'
+    : 'The Claude Code CLI is not installed. Install it from https://claude.com/product/claude-code. (Developers can override the path with ND_DSH_CLAUDE_BINARY.)'
 
   return [
     {

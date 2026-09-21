@@ -18,6 +18,7 @@ import type {
 import { ANTIGRAVITY_ENGINE_ID, CHATGPT_WEB_ENGINE_ID, CODEX_CLI_ENGINE_ID, ND_HARNESS_ENGINE_ID, ZCODE_CLI_ENGINE_ID } from '../../../shared/coding-engines'
 import { DisplayGroup, groupEntries, parseFileChanges, toolPreview, type ContextBlock } from '../../../shared/chat-grouping'
 import { filterSessionsInProjectScope, isSessionInProjectScope } from '../../../shared/session-project-scope'
+import type { SettingsTab } from '../lib/settings-route'
 import { splitAssistantSegments, type ReviewVerdict } from '../../../shared/structured-output'
 import type { ProjectPlanInput } from '../../../shared/organization'
 import type { AskQuestion, ThreadEntry, TodoItem } from '../lib/types'
@@ -79,7 +80,7 @@ interface ChatPanelProps {
   /** Requests activation of a project; the coordinator rebinds the workspace root. */
   onSelectProject?(projectId: string): void
   onError(message: string): void
-  onOpenSettings?(tab?: 'models'): void
+  onOpenSettings?(tab?: SettingsTab): void
   onOpenFile?(path: string): void
   externalPrompt?: { id: string; text: string } | null
   onExternalPromptConsumed?(): void
@@ -1354,8 +1355,15 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
             authenticate natively and never route through ND providers. */}
         {onHarnessThread && !status?.sourceReady ? (
           <div className="mx-3 mt-2.5 flex flex-col gap-[3px] rounded-[7px] border border-info/25 bg-info/[0.07] p-2.5 text-[9px] text-info">
-            <strong>Harness not built</strong>
-            <span>Run <code className="font-mono">pnpm bootstrap</code> once.</span>
+            <div className="flex items-center justify-between gap-2">
+              <strong>Runtime not set up</strong>
+              {onOpenSettings ? (
+                <button className="shrink-0 rounded border border-info/35 px-1.5 py-0.5 font-medium hover:bg-info/10" onClick={() => onOpenSettings('capabilities')}>
+                  Open Capabilities
+                </button>
+              ) : null}
+            </div>
+            <span>Set it up in Settings → Capabilities, or reinstall ND.</span>
           </div>
         ) : null}
         {onHarnessThread && status?.sourceReady && status.apiKeyRequired && !status.apiKeyPresent ? (

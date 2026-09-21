@@ -159,13 +159,24 @@ export class ExtensionStore {
   }
 }
 
+/**
+ * Root holding the release `scripts/` MCP entries above. Packaged ND stages
+ * them as `extraResources` beside `app.asar`, so the resources directory is a
+ * payload root even though — unlike a source checkout — it carries no
+ * `package.json` to detect it by. `process.resourcesPath` exists only under
+ * Electron, which keeps this module importable from ordinary Node tests.
+ */
 function defaultRuntimeRoot(): string {
+  const resourcesRoot = (process as { resourcesPath?: string }).resourcesPath
   const candidates = [
     process.env.ND_DSH_PROJECT_ROOT?.trim(),
+    resourcesRoot,
     resolve(currentDirectory, '../../..'),
     process.cwd(),
   ].filter((value): value is string => Boolean(value))
-  return candidates.find((root) => existsSync(join(root, 'package.json'))) ?? process.cwd()
+  return candidates.find((root) => existsSync(join(root, 'scripts', 'nd-extension-mcp.mjs')))
+    ?? candidates.find((root) => existsSync(join(root, 'package.json')))
+    ?? process.cwd()
 }
 
 function mergeBuiltinDemos(loaded: AgentExtensionManifest[]): AgentExtensionManifest[] {

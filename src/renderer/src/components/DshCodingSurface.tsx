@@ -33,7 +33,7 @@ export function DshCodingSurface({ active, inspectOverlayVisible = false, state,
     ?? (runtimeStatus?.state === 'error'
       ? runtimeStatus.error || 'The DSH runtime failed to start.'
       : runtimeStatus && !runtimeStatus.sourceReady
-        ? 'The DSH runtime is not bootstrapped. Run pnpm bootstrap from a source checkout.'
+        ? 'The DSH runtime is not set up on this install. Set it up in Settings → Capabilities, or reinstall ND.'
         : undefined)
 
   useEffect(() => {
@@ -144,7 +144,7 @@ export function DshCodingSurface({ active, inspectOverlayVisible = false, state,
             <div role="alert" className="max-w-[640px] rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-left">
               <strong className="block text-sm text-destructive">DSH runtime unavailable</strong>
               <p className="mb-0 mt-2 break-words text-[11px]/[1.55] text-muted-foreground">{runtimeError}</p>
-              <p className="mb-0 mt-2 text-[10px]/[1.5] text-faint">Provision the managed runtime with <code className="font-mono text-soft">pnpm bootstrap</code> from a source checkout, then reload.</p>
+              <p className="mb-0 mt-2 text-[10px]/[1.5] text-faint">Set it up in Settings → Capabilities, then reload. Packaged installs ship the runtime, so reinstall ND if that action is unavailable.</p>
             </div>
           ) : (
             <div className="flex flex-col items-center gap-3">

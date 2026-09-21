@@ -24,6 +24,20 @@ export function projectRoot(): string {
   return app.getAppPath()
 }
 
+/**
+ * Root of ND's bundled runtime payloads: the vendored Harness, the shipped
+ * `configs/dsh` overlay and presets, and the release `scripts/` entries.
+ *
+ * electron-builder stages those as `extraResources` beside `app.asar`, while
+ * the application `package.json` that `projectRoot()` probes for stays inside
+ * the archive (`scripts/verify-release.mjs` pins that split). Resolving
+ * payloads through `projectRoot()` therefore misses every one of them in a
+ * packaged build and reports an install that needs a developer bootstrap.
+ */
+export function bundledResourceRoot(): string {
+  return app.isPackaged ? process.resourcesPath : projectRoot()
+}
+
 /** User-managed published DSH package installation owned by ND. */
 export function managedHarnessRoot(): string {
   return resolve(process.env.ND_DSH_MANAGED_RUNTIME_ROOT ?? join(app.getPath('userData'), 'runtimes/dsh'))
@@ -38,7 +52,7 @@ export function harnessRoot(): string {
   for (const managed of publishedRuntimeCandidates) {
     if (existsSync(join(managed, 'node_modules/@deepseek-ai/dsh/lib/bin.js'))) return managed
   }
-  return resolve(join(projectRoot(), 'vendor/deepseek-harness'))
+  return resolve(join(bundledResourceRoot(), 'vendor/deepseek-harness'))
 }
 
 /** The dsh CLI launcher bin: boots the `web` profile the desktop shells. */
@@ -53,12 +67,12 @@ export function harnessCliBinPath(): string {
 
 /** ND-DSH's patch overlay applied on top of the web profile. */
 export function dshPatchPath(): string {
-  return resolve(process.env.ND_DSH_PATCH ?? join(projectRoot(), 'configs/dsh/nd-dsh.patch.yml'))
+  return resolve(process.env.ND_DSH_PATCH ?? join(bundledResourceRoot(), 'configs/dsh/nd-dsh.patch.yml'))
 }
 
 /** Shipped ND-DSH agent presets (installed into the harness home at launch). */
 export function presetSourceDir(): string {
-  return resolve(process.env.ND_DSH_PRESET_DIR ?? join(projectRoot(), 'configs/dsh/agent-presets'))
+  return resolve(process.env.ND_DSH_PRESET_DIR ?? join(bundledResourceRoot(), 'configs/dsh/agent-presets'))
 }
 
 interface CodexPackageManifest {

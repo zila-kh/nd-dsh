@@ -170,7 +170,7 @@ describe('coding engine catalog', () => {
     expect(engines.find((engine) => engine.id === CLAUDE_CODE_CLI_ENGINE_ID)?.workerInstructions).toContain('allow-listed')
   })
 
-  it('reports bootstrap failures without pretending an engine is available', () => {
+  it('reports missing-runtime failures as a GUI remedy without pretending an engine is available', () => {
     const engines = buildCodingEngineCatalog(availability({
       harnessReady: false,
       codexReady: false,
@@ -182,13 +182,20 @@ describe('coding engine catalog', () => {
       claudeCodeCliReady: false,
     }))
     expect(engines.every((engine) => !engine.available)).toBe(true)
-    expect(engines.find((engine) => engine.id === CODEX_ENGINE_ID)?.unavailableReason).toMatch(/bootstrap/i)
-    expect(engines.find((engine) => engine.id === CODEX_CLI_ENGINE_ID)?.unavailableReason).toMatch(/bootstrap/i)
+    // The ND-owned runtime is fixed from Settings, so its reasons must route
+    // there rather than to a developer bootstrap.
+    expect(engines.find((engine) => engine.id === CODEX_ENGINE_ID)?.unavailableReason).toMatch(/Settings → Capabilities/i)
+    expect(engines.find((engine) => engine.id === CODEX_CLI_ENGINE_ID)?.unavailableReason).toMatch(/Settings → Capabilities/i)
     expect(engines.find((engine) => engine.id === ANTIGRAVITY_ENGINE_ID)?.unavailableReason).toMatch(/agy/i)
     expect(engines.find((engine) => engine.id === ZCODE_CLI_ENGINE_ID)?.unavailableReason).toMatch(/ZCode CLI/i)
     expect(engines.find((engine) => engine.id === PI_CODING_ENGINE_ID)?.unavailableReason).toMatch(/ND_DSH_PI_BINARY/i)
     expect(engines.find((engine) => engine.id === CURSOR_CLI_ENGINE_ID)?.unavailableReason).toMatch(/ND_DSH_CURSOR_BINARY/i)
     expect(engines.find((engine) => engine.id === CLAUDE_CODE_CLI_ENGINE_ID)?.unavailableReason).toMatch(/ND_DSH_CLAUDE_BINARY/i)
+    // ND's end users are not expected to run a terminal, so no engine reason may
+    // hand them a shell command.
+    for (const engine of engines) {
+      expect(engine.unavailableReason ?? '').not.toMatch(/pnpm |npm install|product bootstrap|Run pnpm/i)
+    }
   })
 
   it('keeps the direct Codex CLI available independently from the ND runtime bootstrap', () => {

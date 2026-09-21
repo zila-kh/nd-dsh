@@ -315,7 +315,7 @@ export class CodexCliEngine {
   private async start(): Promise<void> {
     this.generation += 1
     const bin = codexBinPath()
-    if (!bin) throw new Error('The pinned Codex CLI payload is not installed. Run the product bootstrap to install it.')
+    if (!bin) throw new Error('The bundled Codex CLI payload is missing from this install. Set the runtime up in Settings → Capabilities, or reinstall ND.')
 
     const argv = bin.toLowerCase().endsWith('.js') ? [process.execPath, bin, 'app-server', '--stdio'] : [bin, 'app-server', '--stdio']
     const environment: NodeJS.ProcessEnv = {}

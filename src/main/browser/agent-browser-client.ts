@@ -94,7 +94,7 @@ export class AgentBrowserClient {
     try {
       await this.prepareConfig()
       if (!existsSync(this.entryPath)) {
-        throw new Error(`agent-browser MCP entry is not installed at ${this.entryPath}. Run pnpm install.`)
+        throw new Error(`agent-browser MCP entry is missing from this ND install at ${this.entryPath}. Reinstall ND.`)
       }
       // A brand-new pinned session may create a fresh tab before a target is
       // selected. Bind once without strict pinning, then turn strict pinning on
@@ -179,7 +179,7 @@ export class AgentBrowserClient {
 
   private async run(command: string[], globalArguments: string[] = [], timeoutMs = COMMAND_TIMEOUT_MS): Promise<RunResult> {
     if (this.binary.includes(sep) && !existsSync(this.binary)) {
-      throw new Error(`agent-browser is not installed at ${this.binary}. Run pnpm install.`)
+      throw new Error(`agent-browser is missing from this ND install at ${this.binary}. Reinstall ND.`)
     }
 
     const args = [

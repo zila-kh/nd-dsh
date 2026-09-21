@@ -13,7 +13,7 @@ import type {
   UiTarget,
 } from '../../shared/contracts.js'
 import { appendWorkspaceContext, stripWorkspaceContext, workspaceContextForPersona } from '../../shared/workspace-context.js'
-import { dshPatchPath, harnessCliBinPath, harnessRoot, presetSourceDir, projectRoot } from '../app-paths.js'
+import { bundledResourceRoot, dshPatchPath, harnessCliBinPath, harnessRoot, presetSourceDir } from '../app-paths.js'
 import type { BrowserController } from '../browser/browser-controller.js'
 import { formatExternalElementContext, type ExternalElementStage } from '../capture/external-inspect.js'
 import { GatewayClient, pickFreePort } from '../dsh/gateway-client.js'
@@ -438,7 +438,7 @@ export class HarnessService {
     const presetsDir = presetSourceDir()
     const missing = [cliBin, patchPath, presetsDir].filter((value) => !existsSync(value))
     if (missing.length > 0) {
-      throw new Error(`ND runtime is not bootstrapped. Missing: ${missing.join(', ')}. Run pnpm bootstrap.`)
+      throw new Error(`ND runtime is not set up on this install. Missing: ${missing.join(', ')}. Set it up in Settings → Capabilities, or reinstall ND.`)
     }
 
     const workspaceRoot = this.workspace.state().root
@@ -462,7 +462,7 @@ export class HarnessService {
       ...(providerRuntime.defaultModel ? { ND_DSH_DEFAULT_MODEL: providerRuntime.defaultModel } : {}),
       ND_DSH_TOKEN_SAVER_ENABLED: tokenSaverEnabled ? '1' : '0',
       ...this.browser.agentBrowserEnvironment(),
-      ND_DSH_EXTERNAL_INSPECT_ENTRY: join(projectRoot(), 'scripts', 'external-inspect-mcp.mjs'),
+      ND_DSH_EXTERNAL_INSPECT_ENTRY: join(bundledResourceRoot(), 'scripts', 'external-inspect-mcp.mjs'),
       DSH_HOME: dshHome,
       DSH_CWD: workspaceRoot,
       ND_DSH_WORKSPACE_CONTEXT: workspaceContextForPersona(this.workspace.state()),
