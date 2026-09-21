@@ -325,7 +325,7 @@ function guardOrchestrator(
       const result = executionCoordinator && permit
         ? await executionCoordinator.runWithPermit(permit, () => reviewTask(taskId, explicit))
         : await reviewTask(taskId, explicit)
-      await bindRuntimePermit(executionCoordinator, permit, result.sessionId, store)
+      await bindRuntimePermit(executionCoordinator, permit, result.sessionId, result.runId, store)
       await control.noteDispatch(result)
       return result
     } catch (error) {
