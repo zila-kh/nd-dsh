@@ -583,6 +583,7 @@ export class OrganizationStore {
     this.value.milestones = this.value.milestones.filter((item) => item.projectId !== id)
     this.value.tasks = this.value.tasks.filter((item) => item.projectId !== id)
     this.value.runs = this.value.runs.filter((item) => item.projectId !== id)
+    this.value.coordination = this.value.coordination.filter((item) => item.projectId !== id)
     this.value.memory = this.value.memory.filter((item) => item.projectId !== id)
     this.value.skills = this.value.skills.filter((item) => item.projectId !== id)
     this.value.workflows = this.value.workflows.filter((item) => item.projectId !== id)
