@@ -450,7 +450,8 @@ async function createWindow(cdpPort: number): Promise<void> {
     console.warn('Initial browser navigation failed:', error)
   })
   markStartup('usable')
-  await flushStartupBenchmark({ core: core?.health ?? null })
+  const startupCoreMetrics = core ? await core.request('metrics.snapshot', {}, 5_000).catch(() => null) : null
+  await flushStartupBenchmark({ core: core?.health ?? null, coreMetrics: startupCoreMetrics })
   const runtimeBenchmarkOutput = process.env.ND_DSH_RUNTIME_BENCH_OUTPUT?.trim()
   const packagedSmokeOutput = process.env.ND_DSH_PACKAGED_SMOKE_OUTPUT?.trim()
   if (runtimeBenchmarkOutput) {
