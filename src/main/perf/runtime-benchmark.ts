@@ -24,8 +24,6 @@ interface RuntimeBenchmarkOptions {
 export async function runRuntimeBenchmark(options: RuntimeBenchmarkOptions): Promise<void> {
   const backend = options.core ? 'rust-core' : 'legacy'
   const histogram = monitorEventLoopDelay({ resolution: 5 })
-  const cpuStarted = process.cpuUsage()
-  const started = performance.now()
   const workers: import('node:child_process').ChildProcess[] = []
   const sessionPermits: RuntimePermit[] = []
   let terminalId: string | undefined
@@ -68,6 +66,8 @@ export async function runRuntimeBenchmark(options: RuntimeBenchmarkOptions): Pro
     }
     for (const permit of sessionPermits.splice(0)) await options.coordinator.release(permit)
 
+    const stressStarted = performance.now()
+    const cpuStarted = process.cpuUsage()
     histogram.enable()
     const workerFixture = join(projectRoot(), 'benchmarks', 'fixtures', 'synthetic-worker.mjs')
     const workerEnv = { ...engineEnvironment(), ELECTRON_RUN_AS_NODE: '1' }
@@ -147,7 +147,7 @@ export async function runRuntimeBenchmark(options: RuntimeBenchmarkOptions): Pro
       backend,
       platform: process.platform,
       arch: process.arch,
-      durationMs: performance.now() - started,
+      durationMs: performance.now() - stressStarted,
       mainCpuMs: (cpu.user + cpu.system) / 1_000,
       mainRssBytes: process.memoryUsage().rss,
       idleMainRssBytes,
