@@ -151,6 +151,9 @@ impl ProcessManager {
             if key.len() > 256 || value.len() > 64 * 1024 {
                 bail!("invalid process environment");
             }
+            if looks_secret(&key) {
+                continue;
+            }
             command.env(key, value);
         }
 
@@ -253,6 +256,18 @@ impl ProcessManager {
                         );
                     }
                     break;
+                }
+
+                let expired_permit = manager
+                    .processes
+                    .lock()
+                    .ok()
+                    .and_then(|processes| processes.get(&wait_id).and_then(|record| record.permit_id.clone()))
+                    .is_some_and(|permit_id| !manager.scheduler.has_permit(&permit_id));
+                if expired_permit {
+                    let _ = manager.cancel(CancelParams {
+                        process_id: wait_id.clone(),
+                    });
                 }
                 thread::sleep(Duration::from_millis(25));
             }
@@ -443,5 +458,20 @@ pub fn kill_process_tree(pid: u32) {
     #[cfg(unix)]
     unsafe {
         let _ = libc::kill(-(pid as i32), libc::SIGKILL);
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn secret_environment_names_are_filtered() {
+        assert!(looks_secret("OPENAI_API_KEY"));
+        assert!(looks_secret("AUTHORIZATION"));
+        assert!(looks_secret("my_private_key"));
+        assert!(!looks_secret("PATH"));
+        assert!(!looks_secret("TERM"));
     }
 }

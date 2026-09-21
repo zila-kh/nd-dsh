@@ -384,3 +384,22 @@ fn validate_id(value: &str) -> Result<()> {
     }
     Ok(())
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_oversized_input_before_terminal_lookup() {
+        let manager = TerminalManager::new(Arc::new(ProtocolWriter::new()));
+        let error = manager
+            .write(TerminalWriteParams {
+                terminal_id: "missing".into(),
+                data: "x".repeat(64 * 1024 + 1),
+            })
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("too large"));
+    }
+}

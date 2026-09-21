@@ -3,8 +3,9 @@ use crate::scheduler::now_ms;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::process::{Command, Stdio};
+use std::thread::{self, JoinHandle};
 
 const DEFAULT_MAX_OUTPUT: usize = 24 * 1024 * 1024;
 
@@ -273,23 +274,62 @@ pub fn exec(params: GitExecParams) -> Result<GitExecResult> {
         }
     }
 
-    let output = child.wait_with_output()?;
-    let (stdout, stdout_truncated) = bounded_text(&output.stdout, max_output);
-    let (stderr, stderr_truncated) = bounded_text(&output.stderr, max_output);
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("Git stdout pipe is unavailable"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("Git stderr pipe is unavailable"))?;
+    let stdout_reader = spawn_bounded_reader(stdout, max_output);
+    let stderr_reader = spawn_bounded_reader(stderr, max_output);
+    let status = child.wait()?;
+    let (stdout_bytes, stdout_truncated) = join_reader(stdout_reader, "stdout")?;
+    let (stderr_bytes, stderr_truncated) = join_reader(stderr_reader, "stderr")?;
 
     Ok(GitExecResult {
-        exit_code: output.status.code().unwrap_or(-1),
-        stdout,
-        stderr,
+        exit_code: status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&stdout_bytes).into_owned(),
+        stderr: String::from_utf8_lossy(&stderr_bytes).into_owned(),
         duration_ms: now_ms().saturating_sub(started_at),
         truncated: stdout_truncated || stderr_truncated,
     })
 }
 
-fn bounded_text(bytes: &[u8], max: usize) -> (String, bool) {
-    let truncated = bytes.len() > max;
-    let slice = if truncated { &bytes[..max] } else { bytes };
-    (String::from_utf8_lossy(slice).into_owned(), truncated)
+fn spawn_bounded_reader<R: Read + Send + 'static>(
+    mut reader: R,
+    max: usize,
+) -> JoinHandle<Result<(Vec<u8>, bool)>> {
+    thread::spawn(move || {
+        let mut kept = Vec::with_capacity(max.min(64 * 1024));
+        let mut buffer = [0u8; 16 * 1024];
+        let mut truncated = false;
+        loop {
+            let read = reader.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            let remaining = max.saturating_sub(kept.len());
+            if remaining > 0 {
+                let take = remaining.min(read);
+                kept.extend_from_slice(&buffer[..take]);
+            }
+            if read > remaining {
+                truncated = true;
+            }
+        }
+        Ok((kept, truncated))
+    })
+}
+
+fn join_reader(
+    handle: JoinHandle<Result<(Vec<u8>, bool)>>,
+    stream: &str,
+) -> Result<(Vec<u8>, bool)> {
+    handle
+        .join()
+        .map_err(|_| anyhow::anyhow!("Git {stream} reader thread panicked"))?
 }
 
 #[cfg(test)]
