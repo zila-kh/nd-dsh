@@ -303,6 +303,26 @@ impl ProcessManager {
         Ok(stdin.is_some())
     }
 
+    pub fn cancel_permit(&self, permit_id: &str) -> usize {
+        let ids = self
+            .processes
+            .lock()
+            .map(|processes| {
+                processes
+                    .iter()
+                    .filter(|(_, record)| record.permit_id.as_deref() == Some(permit_id))
+                    .map(|(id, _)| id.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for process_id in &ids {
+            let _ = self.cancel(CancelParams {
+                process_id: process_id.clone(),
+            });
+        }
+        ids.len()
+    }
+
     pub fn snapshot(&self) -> Result<Vec<ProcessSnapshot>> {
         let processes = self
             .processes

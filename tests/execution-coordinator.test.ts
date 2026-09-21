@@ -38,7 +38,7 @@ describe('ExecutionCoordinator', () => {
       pools: [{ key: 'project:project-1:team:engineering', limit: 1 }],
     })
 
-    coordinator.bindSession(first, 'session-1')
+    await coordinator.bindSession(first, 'session-1', 'run-1')
     expect(coordinator.snapshot()).toMatchObject({ activePermits: 2, sessions: 1, local: true })
     await coordinator.releaseSession('session-1')
     await coordinator.release(independent)

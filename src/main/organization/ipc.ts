@@ -299,7 +299,7 @@ function guardOrchestrator(
       const result = executionCoordinator && permit
         ? await executionCoordinator.runWithPermit(permit, () => runTask(taskId, explicit))
         : await runTask(taskId, explicit)
-      await bindRuntimePermit(executionCoordinator, permit, result.sessionId, store)
+      await bindRuntimePermit(executionCoordinator, permit, result.sessionId, result.runId, store)
       await control.noteDispatch(result)
       return result
     } catch (error) {
@@ -357,10 +357,11 @@ async function bindRuntimePermit(
   coordinator: ExecutionCoordinator | undefined,
   permit: RuntimePermit | undefined,
   sessionId: string,
+  runId: string,
   store: OrganizationStore,
 ): Promise<void> {
   if (!coordinator || !permit) return
-  coordinator.bindSession(permit, sessionId)
+  await coordinator.bindSession(permit, sessionId, runId)
   const active = await store.runBySession(sessionId)
   if (!active) await coordinator.release(permit)
 }

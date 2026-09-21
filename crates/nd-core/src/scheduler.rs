@@ -40,6 +40,14 @@ pub struct ReleaseParams {
     pub permit_id: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BindParams {
+    pub permit_id: String,
+    pub session_id: String,
+    pub run_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PermitRecord {
@@ -181,6 +189,26 @@ impl Scheduler {
             .ok_or_else(|| anyhow::anyhow!("runtime permit not found"))?;
         permit.heartbeat_at = now;
         permit.expires_at = now.saturating_add(ttl);
+        Ok(permit.clone())
+    }
+
+    pub fn bind(&self, params: BindParams) -> Result<PermitRecord> {
+        validate_id(&params.permit_id)?;
+        validate_id(&params.session_id)?;
+        validate_id_opt(params.run_id.as_deref())?;
+        let now = now_ms();
+        let mut permits = self
+            .permits
+            .lock()
+            .map_err(|_| anyhow::anyhow!("scheduler lock poisoned"))?;
+        expire_locked(&mut permits, now);
+        let permit = permits
+            .get_mut(&params.permit_id)
+            .ok_or_else(|| anyhow::anyhow!("runtime permit not found"))?;
+        permit.session_id = Some(params.session_id);
+        if params.run_id.is_some() {
+            permit.run_id = params.run_id;
+        }
         Ok(permit.clone())
     }
 

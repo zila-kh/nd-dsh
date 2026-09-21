@@ -86,11 +86,18 @@ export class ExecutionCoordinator {
     return this.permitContext.getStore()?.id
   }
 
-  bindSession(permit: RuntimePermit, sessionId: string): void {
+  async bindSession(permit: RuntimePermit, sessionId: string, runId?: string): Promise<void> {
     if (!this.permits.has(permit.id)) throw new Error('Runtime permit is no longer active.')
     if (!sessionId.trim()) throw new Error('Runtime session id is required.')
     const previous = this.sessionPermits.get(sessionId)
     if (previous && previous !== permit.id) throw new Error('Runtime session already owns another permit.')
+    if (this.core) {
+      await this.coreRequest('scheduler.bind', {
+        permitId: permit.id,
+        sessionId,
+        ...(runId ? { runId } : {}),
+      }, 5_000)
+    }
     permit.sessionId = sessionId
     this.sessionPermits.set(sessionId, permit.id)
   }
