@@ -1,7 +1,7 @@
 use crate::process::{filtered_environment, kill_process_tree};
 use crate::protocol::ProtocolWriter;
-use anyhow::{bail, Context, Result};
-use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
+use anyhow::{Context, Result, bail};
+use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -308,7 +308,10 @@ impl TerminalManager {
     }
 
     pub fn terminal_count(&self) -> usize {
-        self.terminals.lock().map(|map| map.len()).unwrap_or_default()
+        self.terminals
+            .lock()
+            .map(|map| map.len())
+            .unwrap_or_default()
     }
 
     fn runtime(&self, terminal_id: &str) -> Result<Arc<TerminalRuntime>> {
