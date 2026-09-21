@@ -262,7 +262,11 @@ impl ProcessManager {
                     .processes
                     .lock()
                     .ok()
-                    .and_then(|processes| processes.get(&wait_id).and_then(|record| record.permit_id.clone()))
+                    .and_then(|processes| {
+                        processes
+                            .get(&wait_id)
+                            .and_then(|record| record.permit_id.clone())
+                    })
                     .is_some_and(|permit_id| !manager.scheduler.has_permit(&permit_id));
                 if expired_permit {
                     let _ = manager.cancel(CancelParams {
@@ -460,7 +464,6 @@ pub fn kill_process_tree(pid: u32) {
         let _ = libc::kill(-(pid as i32), libc::SIGKILL);
     }
 }
-
 
 #[cfg(test)]
 mod tests {
