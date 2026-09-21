@@ -90,6 +90,7 @@ pub struct GitLogResult {
 }
 
 pub fn status(params: GitQueryParams) -> Result<GitStatusResult> {
+    let started_at = now_ms();
     let result = exec(GitExecParams {
         cwd: params.cwd,
         args: vec!["status".into(), "-z".into(), "-uall".into()],
@@ -106,13 +107,14 @@ pub fn status(params: GitQueryParams) -> Result<GitStatusResult> {
     Ok(GitStatusResult {
         exit_code: result.exit_code,
         stderr: result.stderr,
-        duration_ms: result.duration_ms,
+        duration_ms: now_ms().saturating_sub(started_at),
         truncated: result.truncated,
         entries,
     })
 }
 
 pub fn log(params: GitLogParams) -> Result<GitLogResult> {
+    let started_at = now_ms();
     let limit = params.limit.clamp(1, 1000);
     let result = exec(GitExecParams {
         cwd: params.cwd,
@@ -134,7 +136,7 @@ pub fn log(params: GitLogParams) -> Result<GitLogResult> {
     Ok(GitLogResult {
         exit_code: result.exit_code,
         stderr: result.stderr,
-        duration_ms: result.duration_ms,
+        duration_ms: now_ms().saturating_sub(started_at),
         truncated: result.truncated,
         commits,
     })
