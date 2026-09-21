@@ -138,7 +138,7 @@ async function benchmarkTerminal() {
         args: [fixture, String(bytesTarget)], cwd: benchmarkRoot, cols: 80, rows: 24, env: {},
       })
       const inputStarted = performance.now()
-      await client.request('terminal.write', { terminalId: id, data: '\n' })
+      await client.request('terminal.write', { terminalId: id, data: '' })
       inputLatenciesMs.push(performance.now() - inputStarted)
     }
     const resizeLatenciesMs = []
