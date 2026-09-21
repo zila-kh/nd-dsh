@@ -1,6 +1,6 @@
 use crate::protocol::ProtocolWriter;
-use crate::scheduler::{now_ms, Scheduler};
-use anyhow::{bail, Context, Result};
+use crate::scheduler::{Scheduler, now_ms};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -185,20 +185,10 @@ impl ProcessManager {
         }
 
         if let Some(stdout) = stdout {
-            spawn_reader(
-                Arc::clone(&self.writer),
-                id.clone(),
-                "stdout",
-                stdout,
-            );
+            spawn_reader(Arc::clone(&self.writer), id.clone(), "stdout", stdout);
         }
         if let Some(stderr) = stderr {
-            spawn_reader(
-                Arc::clone(&self.writer),
-                id.clone(),
-                "stderr",
-                stderr,
-            );
+            spawn_reader(Arc::clone(&self.writer), id.clone(), "stderr", stderr);
         }
 
         let manager = Arc::clone(self);
@@ -323,7 +313,10 @@ impl ProcessManager {
     }
 
     pub fn process_count(&self) -> usize {
-        self.processes.lock().map(|map| map.len()).unwrap_or_default()
+        self.processes
+            .lock()
+            .map(|map| map.len())
+            .unwrap_or_default()
     }
 }
 
@@ -345,13 +338,7 @@ fn spawn_reader<R: Read + Send + 'static>(
                         bytes: buffer[..read].to_vec(),
                     };
                     if writer
-                        .send_event(
-                            "process.output",
-                            Some(&process_id),
-                            None,
-                            "normal",
-                            &event,
-                        )
+                        .send_event("process.output", Some(&process_id), None, "normal", &event)
                         .is_err()
                     {
                         break;
