@@ -268,7 +268,6 @@ mod tests {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,7 +276,8 @@ mod tests {
 
     fn fixture() -> (PathBuf, PathBuf) {
         let root = std::env::temp_dir().join(format!("nd-core-workspace-root-{}", Uuid::new_v4()));
-        let outside = std::env::temp_dir().join(format!("nd-core-workspace-outside-{}", Uuid::new_v4()));
+        let outside =
+            std::env::temp_dir().join(format!("nd-core-workspace-outside-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         fs::create_dir_all(&outside).unwrap();
         fs::write(root.join("inside.txt"), "ok").unwrap();
@@ -289,20 +289,26 @@ mod tests {
     fn rejects_parent_escape_and_symlink_escape() {
         let (root, outside) = fixture();
         let root_text = root.to_string_lossy().into_owned();
-        assert!(realpath(PathParams {
-            root: root_text.clone(),
-            path: "../outside.txt".into(),
-        }).is_err());
+        assert!(
+            realpath(PathParams {
+                root: root_text.clone(),
+                path: "../outside.txt".into(),
+            })
+            .is_err()
+        );
 
         #[cfg(unix)]
         {
             use std::os::unix::fs::symlink;
             symlink(outside.join("outside.txt"), root.join("escape.txt")).unwrap();
-            assert!(read(ReadParams {
-                root: root_text,
-                path: "escape.txt".into(),
-                max_bytes: None,
-            }).is_err());
+            assert!(
+                read(ReadParams {
+                    root: root_text,
+                    path: "escape.txt".into(),
+                    max_bytes: None,
+                })
+                .is_err()
+            );
         }
 
         let _ = fs::remove_dir_all(root);
