@@ -13,12 +13,29 @@ const workspaceState: WorkspaceState = {
 }
 
 function fixture() {
-  const run = vi.fn(async () => ({ sessionId: 'session-1' }))
-  const direct = { run, stop: vi.fn(), listModels: async () => [{ id: 'native-model' }], ownsSession: (id: string) => id === 'session-1' }
+  const run = vi.fn(async (_prompt: string, options?: { sessionId?: string }) => ({ sessionId: options?.sessionId ?? 'session-1' }))
+  const sessions = new Map<string, { sessionId: string; engineId: string; cwd?: string; title: string; createdAt: number; updatedAt: number; running: boolean }>()
+  let counter = 0
+  const direct = {
+    run,
+    stop: vi.fn(),
+    listModels: async () => [{ id: 'native-model' }],
+    ownsSession: (id: string) => id === 'session-1' || sessions.has(id),
+    createSession: vi.fn(async (input: { cwd?: string } = {}) => {
+      counter += 1
+      const sessionId = `direct-${counter}`
+      sessions.set(sessionId, { sessionId, engineId: 'direct', ...(input.cwd ? { cwd: input.cwd } : {}), title: sessionId, createdAt: Date.now(), updatedAt: Date.now(), running: false })
+      return { sessionId }
+    }),
+    listSessions: () => [...sessions.values()],
+    transcript: (sessionId: string) => ({ sessionId, engineId: 'direct', events: [] }),
+    handlesApproval: () => false,
+    respond: vi.fn(),
+  }
   const harness = { run: vi.fn(), stop: vi.fn(), gatewayRpc: vi.fn(async () => ({ ok: true })), status: () => ({}) }
   const workspace = { state: () => workspaceState, assertUsable: vi.fn() }
   const router = new EngineSessionRouter(harness as never, direct as never, workspace as never, direct as never, undefined, direct as never, direct as never, direct as never, direct as never)
-  return { router, run, workspace, harness, direct }
+  return { router, run, workspace, harness, direct, sessions }
 }
 
 describe('session-scoped cancellation', () => {
@@ -57,6 +74,34 @@ describe('direct engine workspace context', () => {
     expect(prompt).toContain('"projectName": "Blog News"')
     expect(prompt).toContain('"projectObjective": "Publish local news and community stories."')
     expect(prompt).toContain('"workingDirectory": "C:/projects/parent/examples"')
+  })
+
+  it('keeps mixed direct-engine task sessions on their ND-bound worktree roots', async () => {
+    const { router, run } = fixture()
+    const codexRoot = 'C:/projects/parent/.nd-dsh-worktrees/repo/task-codex'
+    const zcodeRoot = 'C:/projects/parent/.nd-dsh-worktrees/repo/task-zcode'
+    router.setWorktreeGuard((cwd) => cwd === codexRoot || cwd === zcodeRoot)
+
+    const codex = await router.createSession('codex-cli', codexRoot)
+    const zcode = await router.createSession('zcode-cli', zcodeRoot)
+
+    await router.run('codex task', { sessionId: codex.sessionId })
+    await router.run('zcode task', { sessionId: zcode.sessionId })
+
+    expect(run).toHaveBeenNthCalledWith(1, expect.any(String), { sessionId: codex.sessionId, cwd: codexRoot })
+    expect(run).toHaveBeenNthCalledWith(2, expect.any(String), { sessionId: zcode.sessionId, cwd: zcodeRoot })
+  })
+
+  it('fails closed if a direct adapter reports a different cwd than the ND session binding', async () => {
+    const { router, sessions } = fixture()
+    const root = 'C:/projects/parent/.nd-dsh-worktrees/repo/task-a'
+    router.setWorktreeGuard((cwd) => cwd === root)
+    const session = await router.createSession('zcode-cli', root)
+    const row = sessions.get(session.sessionId)
+    if (!row) throw new Error('missing fake direct session')
+    row.cwd = 'C:/projects/other'
+
+    await expect(router.run('should fail', { sessionId: session.sessionId })).rejects.toThrow(/changed the ND-bound task workspace/i)
   })
 
   it('does not start a direct engine for an unavailable project workspace', async () => {
