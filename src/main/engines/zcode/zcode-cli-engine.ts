@@ -764,6 +764,67 @@ async function killProcessTree(child: ChildProcess | undefined): Promise<void> {
       const finish = (): void => {
         if (settled) return
         settled = true
+        clearTimeout(timer)
+        try { child.kill() } catch { /* Already gone. */ }
+        resolve()
+      }
+      child.once('exit', finish)
+      const timer = setTimeout(finish, 3_000)
+      try {
+        const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+        killer.once('close', finish)
+        killer.once('error', finish)
+      } catch {
+        // Already handled.
+      }
+      try {
+        child.kill()
+      } catch {
+        // Already gone.
+      }
+    })
+    return
+  }
+
+  let groupSignalled = false
+  try {
+    process.kill(-pid, 'SIGTERM')
+    groupSignalled = true
+  } catch {
+    try { child.kill('SIGTERM') } catch { return }
+  }
+
+  await new Promise<void>((resolve) => {
+    let settled = false
+    const finish = (): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve()
+    }
+    const timer = setTimeout(() => {
+      try {
+        if (groupSignalled) process.kill(-pid, 'SIGKILL')
+        else child.kill('SIGKILL')
+      } catch {
+        // Already gone.
+      }
+      finish()
+    }, 3_000)
+    child.once('exit', () => {
+      if (!groupSignalled) {
+        finish()
+        return
+      }
+      try {
+        process.kill(-pid, 0)
+      } catch {
+        finish()
+      }
+    })
+  })
+}
+
 
 function normalizeWorkspaceRoot(value: string): string {
   const normalized = resolve(value)
