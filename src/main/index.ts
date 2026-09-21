@@ -22,6 +22,7 @@ import { ExternalElementStage, RecentPickStore } from './capture/external-inspec
 import { CoreClient } from './core/core-client.js'
 import { createCoreSpawn } from './core/core-child-process.js'
 import { createCorePtySpawner } from './core/core-pty.js'
+import { createCoreWorktreeGit } from './core/core-worktree-git.js'
 import { DesignService } from './design/design-service.js'
 import { registerDesignIpc } from './design/ipc.js'
 import { NdPencilController } from './design/nd-pencil-controller.js'
@@ -43,6 +44,7 @@ import { ExecutionCoordinator } from './organization/execution-coordinator.js'
 import { registerOrganizationIpc } from './organization/ipc.js'
 import { OrganizationOrchestrator } from './organization/orchestrator.js'
 import { OrganizationStore } from './organization/store.js'
+import { TaskWorktreeManager } from './organization/task-worktree.js'
 import { ProviderStore } from './providers.js'
 import { flushStartupBenchmark, markStartup } from './perf/startup-metrics.js'
 import { QaService } from './qa/qa-service.js'
@@ -258,7 +260,8 @@ async function createWindow(cdpPort: number): Promise<void> {
   const design = new DesignService(workspace, browser)
   const ndPencil = new NdPencilController(window, workspace, projectRoot(), ndPencilPreload)
   await ndPencil.initialize()
-  const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter, projectRuntime, capabilities, executionCoordinator)
+  const taskWorktrees = new TaskWorktreeManager(core ? createCoreWorktreeGit(core) : undefined)
+  const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter, projectRuntime, capabilities, executionCoordinator, taskWorktrees)
   const approvalGate = new OrganizationApprovalGate(organizationStore, harness)
   const qa = new QaService()
   qa.setProjectRoot(workspace.state().root)

@@ -72,7 +72,7 @@ export class OrganizationOrchestrator {
   private parallelFillProjects = new Set<string>()
   private stallReconcileBusy = false
   private readonly structuredErrors = new Map<string, string>()
-  private readonly taskWorktrees = new TaskWorktreeManager()
+  private readonly taskWorktrees: TaskWorktreeManager
 
   constructor(
     private readonly store: OrganizationStore,
@@ -83,7 +83,10 @@ export class OrganizationOrchestrator {
     private readonly projectRuntime?: { check(projectId: string): Promise<unknown> },
     private readonly capabilities?: { assertUsableForAgent(agent?: { id?: string; roleId?: string; teamId?: string }): Promise<void> },
     private readonly executionCoordinator?: Pick<ExecutionCoordinator, 'releaseSession'>,
-  ) {}
+    taskWorktrees?: TaskWorktreeManager,
+  ) {
+    this.taskWorktrees = taskWorktrees ?? new TaskWorktreeManager()
+  }
 
   async planProject(projectId: string, explicit = true): Promise<OrganizationRunReceipt> {
     const context = await this.store.projectContext(projectId)
