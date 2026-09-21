@@ -30,7 +30,6 @@ pub struct GitExecResult {
     pub truncated: bool,
 }
 
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitQueryParams {
@@ -56,6 +55,7 @@ pub struct GitStatusEntry {
     pub x: String,
     pub y: String,
     pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub rename: Option<String>,
 }
 
@@ -182,12 +182,16 @@ fn parse_log(raw: &str) -> Result<Vec<GitLogEntry>> {
     let mut commits = Vec::new();
     let mut index = 0;
     while index + 4 < fields.len() {
-        let hash = fields[index].trim_matches(|ch| ch == '\r' || ch == '\n').to_owned();
+        let hash = fields[index]
+            .trim_matches(|ch| ch == '\r' || ch == '\n')
+            .to_owned();
         if hash.is_empty() {
             index += 1;
             continue;
         }
-        if !(hash.len() == 40 || hash.len() == 64) || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        if !(hash.len() == 40 || hash.len() == 64)
+            || !hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
             bail!("malformed Git log hash");
         }
         let author_name = fields[index + 1].to_owned();
@@ -292,14 +296,14 @@ fn bounded_text(bytes: &[u8], max: usize) -> (String, bool) {
     (String::from_utf8_lossy(slice).into_owned(), truncated)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn parses_porcelain_status_including_rename_order() {
-        let parsed = parse_status("M  src/app.ts\0R  src/new.ts\0src/old.ts\0?? new.txt\0").unwrap();
+        let parsed =
+            parse_status("M  src/app.ts\0R  src/new.ts\0src/old.ts\0?? new.txt\0").unwrap();
         assert_eq!(parsed.len(), 3);
         assert_eq!(parsed[0].path, "src/app.ts");
         assert_eq!(parsed[1].path, "src/old.ts");
