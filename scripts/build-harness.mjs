@@ -19,7 +19,7 @@ import { spawn } from 'node:child_process'
 import { existsSync, promises as fs } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const harnessRoot = join(root, 'vendor', 'deepseek-harness')
@@ -102,7 +102,8 @@ async function unbuiltClientEntries() {
  * the aggregate test program that is known to fail in this vendored layout.
  */
 async function emitClientProjectGraph() {
-  const typescript = await import(pathToFileUrl(join(harnessRoot, 'node_modules', 'typescript', 'lib', 'typescript.js')))
+  const typescriptModule = await import(pathToFileURL(join(harnessRoot, 'node_modules', 'typescript', 'lib', 'typescript.js')).href)
+  const typescript = typescriptModule.default ?? typescriptModule
   const configPath = join(harnessRoot, 'tsconfig.client.json')
   const read = typescript.readConfigFile(configPath, typescript.sys.readFile)
   if (read.error) throw new Error('Could not read Harness tsconfig.client.json: ' + flattenTsDiagnostic(typescript, read.error))
@@ -117,11 +118,6 @@ async function emitClientProjectGraph() {
 
 function flattenTsDiagnostic(typescript, diagnostic) {
   return typescript.flattenDiagnosticMessageText(diagnostic.messageText, '\n')
-}
-
-function pathToFileUrl(path) {
-  const normalized = resolve(path)
-  return new URL('file://' + (process.platform === 'win32' ? '/' : '') + normalized.replace(/\\/g, '/')).href
 }
 
 /** The bundler's own entry, resolved through the dependency's manifest. */
