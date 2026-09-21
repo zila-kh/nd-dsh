@@ -18,7 +18,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # Keep draft synchronization isolated from the expensive ready-for-review run.
+  # Otherwise a tiny draft push starts a skipped workflow that still cancels the
+  # in-flight convergence jobs before their job-level draft guards are evaluated.
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name == 'pull_request' && github.event.pull_request.draft == true && 'draft' || 'active' }}
   cancel-in-progress: true
 
 jobs:
