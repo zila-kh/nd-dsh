@@ -19,6 +19,8 @@ import { CapabilityRegistry } from './capabilities/capability-registry.js'
 import { CapabilityStatusStore } from './capabilities/capability-status-store.js'
 import { createHarnessSourceSetupAdapters } from './capabilities/harness-runtime-setup.js'
 import { ExternalElementStage, RecentPickStore } from './capture/external-inspect.js'
+import { CoreClient } from './core/core-client.js'
+import { createCorePtySpawner } from './core/core-pty.js'
 import { DesignService } from './design/design-service.js'
 import { registerDesignIpc } from './design/ipc.js'
 import { NdPencilController } from './design/nd-pencil-controller.js'
@@ -70,6 +72,7 @@ let activeClaudeEngine: ClaudeCodeCliEngine | undefined
 let activeEngineRouter: EngineSessionRouter | undefined
 let activeNdPencil: NdPencilController | undefined
 let activeTerminalManager: TerminalManager | undefined
+let activeCore: CoreClient | undefined
 let shutdownStarted = false
 const closingServices = new Set<Promise<void>>()
 
@@ -104,6 +107,21 @@ async function createWindow(cdpPort: number): Promise<void> {
   const workspace = new WorkspaceService(process.env.ND_DSH_WORKSPACE?.trim() || process.cwd())
   const providers = new ProviderStore()
   const userData = app.getPath('userData')
+  const legacyCoreBackend = process.env.ND_DSH_CORE_BACKEND?.trim().toLowerCase() === 'legacy'
+  const core = legacyCoreBackend
+    ? undefined
+    : new CoreClient({
+        log: (line) => console.log(line),
+        onUnexpectedExit: (code, signal) => {
+          console.error('ND Core exited unexpectedly:', { code, signal })
+        },
+      })
+  if (core) {
+    await core.start()
+    activeCore = core
+  } else {
+    console.warn('[nd-core] legacy backend enabled for benchmark/rollback mode.')
+  }
   const sessionArchive = new SessionArchiveStore(join(userData, 'session-archive.json'))
   const usageLedger = new UsageLedger(join(userData, 'usage-ledger.jsonl'))
   const isMac = process.platform === 'darwin'
@@ -132,6 +150,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   const terminalManager = new TerminalManager({
     storePath: join(userData, 'terminals.json'),
     workspace,
+    ...(core ? { spawn: createCorePtySpawner(core) } : {}),
     onOutput: (event) => { if (!window.isDestroyed()) window.webContents.send(TERMINAL_IPC.outputEvent, event) },
     onExit: (event) => { if (!window.isDestroyed()) window.webContents.send(TERMINAL_IPC.exitEvent, event) },
     onState: (event) => { if (!window.isDestroyed()) window.webContents.send(TERMINAL_IPC.stateEvent, event) },
@@ -159,7 +178,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   const dshSurface = new DshSurfaceController(window)
   const externalElements = new ExternalElementStage()
   const recentPicks = new RecentPickStore()
-  const git = new GitService(workspace)
+  const git = new GitService(workspace, core ? { core } : {})
   const harness = new HarnessService(workspace, browser, providers, externalElements, sessionArchive, usageLedger)
   const codexEngine = new CodexCliEngine({ log: (line) => console.log(line) })
   activeCodexEngine = codexEngine
@@ -450,6 +469,7 @@ async function createWindow(cdpPort: number): Promise<void> {
     if (activeCursorEngine === cursorEngine) activeCursorEngine = undefined
     if (activeClaudeEngine === claudeEngine) activeClaudeEngine = undefined
     if (activeTerminalManager === terminalManager) { activeTerminalManager = undefined; beginTerminalClose(terminalManager) }
+    if (core && activeCore === core) { activeCore = undefined; beginCoreClose(core) }
     beginCodexClose(codexEngine)
     beginAntigravityClose(antigravityEngine)
     beginZcodeClose(zcodeEngine)
@@ -522,6 +542,11 @@ app.on('before-quit', (event) => {
     activeTerminalManager = undefined
     beginTerminalClose(terminalManager)
   }
+  if (activeCore) {
+    const core = activeCore
+    activeCore = undefined
+    beginCoreClose(core)
+  }
   if (activeNdPencil) {
     const ndPencil = activeNdPencil
     activeNdPencil = undefined
@@ -554,6 +579,10 @@ app.on('before-quit', (event) => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
+
+function beginCoreClose(core: CoreClient): void {
+  trackClose(core.close().catch((error) => console.error('Failed to close ND Core cleanly:', error)))
+}
 
 function beginHarnessClose(harness: HarnessService): void {
   trackClose(harness.close().catch((error) => console.error('Failed to close ND runtime cleanly:', error)))
