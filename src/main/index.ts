@@ -207,17 +207,17 @@ async function createWindow(cdpPort: number): Promise<void> {
   const engineSpawn = core ? createCoreSpawn(core, executionCoordinator) : spawn
   const git = new GitService(workspace, core ? { core } : {})
   const harness = new HarnessService(workspace, browser, providers, externalElements, sessionArchive, usageLedger)
-  const codexEngine = new CodexCliEngine({ log: (line) => console.log(line) })
+  const codexEngine = new CodexCliEngine({ log: (line) => console.log(line), spawnProcess: engineSpawn })
   activeCodexEngine = codexEngine
-  const antigravityEngine = new AntigravityEngine({ log: (line) => console.log(line) })
+  const antigravityEngine = new AntigravityEngine({ log: (line) => console.log(line), spawnProcess: engineSpawn })
   activeAntigravityEngine = antigravityEngine
-  const zcodeEngine = new ZcodeCliEngine({ log: (line) => console.log(line) })
+  const zcodeEngine = new ZcodeCliEngine({ log: (line) => console.log(line), spawnProcess: engineSpawn })
   activeZcodeEngine = zcodeEngine
-  const piEngine = new PiCodingEngine({ log: (line) => console.log(line) })
+  const piEngine = new PiCodingEngine({ log: (line) => console.log(line), spawnProcess: engineSpawn })
   activePiEngine = piEngine
   const cursorEngine = new CursorCliEngine({ log: (line) => console.log(line), spawnProcess: engineSpawn })
   activeCursorEngine = cursorEngine
-  const claudeEngine = new ClaudeCodeCliEngine({ log: (line) => console.log(line) })
+  const claudeEngine = new ClaudeCodeCliEngine({ log: (line) => console.log(line), spawnProcess: engineSpawn })
   activeClaudeEngine = claudeEngine
   const engineRouter = new EngineSessionRouter(harness, codexEngine, workspace, antigravityEngine, {
     browser,
