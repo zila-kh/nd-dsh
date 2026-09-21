@@ -108,10 +108,10 @@ impl ProcessManager {
         if params.args.len() > 512 || params.args.iter().any(|arg| arg.len() > 64 * 1024) {
             bail!("invalid process arguments");
         }
-        if let Some(permit_id) = params.permit_id.as_deref() {
-            if !self.scheduler.has_permit(permit_id) {
-                bail!("runtime permit is missing or expired");
-            }
+        if let Some(permit_id) = params.permit_id.as_deref()
+            && !self.scheduler.has_permit(permit_id)
+        {
+            bail!("runtime permit is missing or expired");
         }
 
         let id = params.id.unwrap_or_else(|| Uuid::new_v4().to_string());

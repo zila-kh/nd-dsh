@@ -8,7 +8,7 @@ mod workspace;
 use anyhow::{Context, Result};
 use process::{CancelParams, CloseStdinParams, ProcessManager, SpawnParams, WriteParams};
 use protocol::{PROTOCOL_VERSION, ProtocolWriter, read_request};
-use scheduler::{AcquireParams, HeartbeatParams, ReleaseParams, Scheduler};
+use scheduler::{ReleaseParams, Scheduler};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};

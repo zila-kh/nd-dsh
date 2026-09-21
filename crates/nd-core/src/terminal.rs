@@ -59,7 +59,6 @@ pub struct TerminalCreateResult {
 #[serde(rename_all = "camelCase")]
 struct TerminalOutput {
     terminal_id: String,
-    session_id: String,
     #[serde(with = "serde_bytes")]
     bytes: Vec<u8>,
 }
@@ -79,6 +78,7 @@ struct TerminalRuntime {
     writer: Mutex<Box<dyn Write + Send>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     pid: Option<u32>,
+    #[cfg(unix)]
     process_group: Option<i32>,
     seq: AtomicU64,
 }
@@ -162,11 +162,11 @@ impl TerminalManager {
         };
 
         let runtime = Arc::new(TerminalRuntime {
-            session_id: params.session_id.clone(),
             master: Mutex::new(pair.master),
             writer: Mutex::new(terminal_writer),
             killer: Mutex::new(killer),
             pid,
+            #[cfg(unix)]
             process_group,
             seq: AtomicU64::new(0),
         });
