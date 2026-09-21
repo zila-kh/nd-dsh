@@ -13,12 +13,9 @@ import {
   GitCli,
   GitError,
   GitErrorCodes,
-  GitStatusParser,
   MAX_CLI_LENGTH,
-  parseGitCommits,
   sanitizeRelativePath,
   splitInChunks,
-  type Commit,
   type GitSpawnFunction,
 } from './git-cli.js'
 
@@ -551,16 +548,14 @@ export class GitService {
   }
 
   private async statusEntries(root: string): Promise<{ staged: GitFileChange[]; unstaged: GitFileChange[]; untracked: GitFileChange[]; conflicts: GitFileChange[] }> {
-    const result = await this.cli.status(root)
-    const parser = new GitStatusParser()
-    parser.update(result.stdout)
+    const entries = await this.cli.statusEntries(root)
 
     const staged: GitFileChange[] = []
     const unstaged: GitFileChange[] = []
     const untracked: GitFileChange[] = []
     const conflicts: GitFileChange[] = []
 
-    for (const entry of parser.status) {
+    for (const entry of entries) {
       // Upstream parser convention: for `R NEW\0OLD\0` entries, `rename` holds the
       // new path and `path` the original. ND contracts want path = current path.
       const change: GitFileChange = {
@@ -602,8 +597,14 @@ export class GitService {
 
   private async headCommits(root: string): Promise<GitCommitInfo[]> {
     try {
-      const result = await this.cli.log(root, HEAD_LOG_LIMIT)
-      return parseGitCommits(result.stdout).map(toCommitInfo)
+      const commits = await this.cli.logEntries(root, HEAD_LOG_LIMIT)
+      return commits.map((commit) => ({
+        hash: commit.hash,
+        message: commit.message,
+        authorName: commit.authorName,
+        authorEmail: commit.authorEmail,
+        date: new Date(commit.authorTimestamp * 1000).toISOString(),
+      }))
     } catch (error) {
       // An unborn repository has no commits yet.
       if (error instanceof GitError && /does not have any commits yet|bad revision/.test(error.stderr ?? '')) return []
@@ -673,12 +674,3 @@ function sameWorkspaceContext(left: WorkspaceState, right: WorkspaceState): bool
     && left.projectWorkspacePath === right.projectWorkspacePath
 }
 
-function toCommitInfo(commit: Commit): GitCommitInfo {
-  return {
-    hash: commit.hash,
-    message: commit.message,
-    authorName: commit.authorName ?? '',
-    authorEmail: commit.authorEmail ?? '',
-    date: (commit.authorDate ?? commit.commitDate ?? new Date(0)).toISOString(),
-  }
-}
