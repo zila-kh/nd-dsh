@@ -459,6 +459,7 @@ async function createWindow(cdpPort: number): Promise<void> {
         ...(core ? { core } : {}),
         terminal: terminalManager,
         git,
+        coordinator: executionCoordinator,
         spawnProcess: engineSpawn,
       })
       console.log('Runtime benchmark completed.')
