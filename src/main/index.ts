@@ -38,6 +38,7 @@ import { GitService } from './git/git-service.js'
 import { HarnessService } from './harness/harness-service.js'
 import { registerIpc } from './ipc.js'
 import { OrganizationApprovalGate } from './organization/approval-gate.js'
+import { ExecutionCoordinator } from './organization/execution-coordinator.js'
 import { registerOrganizationIpc } from './organization/ipc.js'
 import { OrganizationOrchestrator } from './organization/orchestrator.js'
 import { OrganizationStore } from './organization/store.js'
@@ -73,6 +74,7 @@ let activeEngineRouter: EngineSessionRouter | undefined
 let activeNdPencil: NdPencilController | undefined
 let activeTerminalManager: TerminalManager | undefined
 let activeCore: CoreClient | undefined
+let activeExecutionCoordinator: ExecutionCoordinator | undefined
 let shutdownStarted = false
 const closingServices = new Set<Promise<void>>()
 
@@ -200,6 +202,8 @@ async function createWindow(cdpPort: number): Promise<void> {
   }, zcodeEngine, piEngine, cursorEngine, claudeEngine)
   activeEngineRouter = engineRouter
   const organizationStore = new OrganizationStore(join(userData, 'organization.json'))
+  const executionCoordinator = new ExecutionCoordinator(core)
+  activeExecutionCoordinator = executionCoordinator
   const interruptedRuns = await organizationStore.reconcileInterruptedRuns()
   if (interruptedRuns > 0) console.warn(`Recovered ${interruptedRuns} interrupted organization run(s) from the previous app session.`)
   const projectWorkspace = new ProjectWorkspaceCoordinator(
@@ -248,14 +252,14 @@ async function createWindow(cdpPort: number): Promise<void> {
   const design = new DesignService(workspace, browser)
   const ndPencil = new NdPencilController(window, workspace, projectRoot(), ndPencilPreload)
   await ndPencil.initialize()
-  const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter, projectRuntime, capabilities)
+  const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter, projectRuntime, capabilities, executionCoordinator)
   const approvalGate = new OrganizationApprovalGate(organizationStore, harness)
   const qa = new QaService()
   qa.setProjectRoot(workspace.state().root)
   const disposeIpc = registerIpc({ window, preloadPath: preload, browser, dshSurface, engines, engineRouter, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, qa, sessionArchive, usageLedger, capabilities, organizationStore })
   const disposeTerminalIpc = registerTerminalIpc(window, terminalManager)
   const disposeDesignIpc = registerDesignIpc(window, design, ndPencil)
-  const disposeOrganizationIpc = registerOrganizationIpc(window, organizationStore, organization, projectWorkspace, projectRuntime)
+  const disposeOrganizationIpc = registerOrganizationIpc(window, organizationStore, organization, projectWorkspace, projectRuntime, executionCoordinator)
   mainWindow = window
   activeHarness = harness
   activeNdPencil = ndPencil
@@ -469,6 +473,7 @@ async function createWindow(cdpPort: number): Promise<void> {
     if (activeCursorEngine === cursorEngine) activeCursorEngine = undefined
     if (activeClaudeEngine === claudeEngine) activeClaudeEngine = undefined
     if (activeTerminalManager === terminalManager) { activeTerminalManager = undefined; beginTerminalClose(terminalManager) }
+    if (activeExecutionCoordinator === executionCoordinator) { activeExecutionCoordinator = undefined; beginExecutionCoordinatorClose(executionCoordinator) }
     if (core && activeCore === core) { activeCore = undefined; beginCoreClose(core) }
     beginCodexClose(codexEngine)
     beginAntigravityClose(antigravityEngine)
@@ -542,6 +547,11 @@ app.on('before-quit', (event) => {
     activeTerminalManager = undefined
     beginTerminalClose(terminalManager)
   }
+  if (activeExecutionCoordinator) {
+    const executionCoordinator = activeExecutionCoordinator
+    activeExecutionCoordinator = undefined
+    beginExecutionCoordinatorClose(executionCoordinator)
+  }
   if (activeCore) {
     const core = activeCore
     activeCore = undefined
@@ -579,6 +589,10 @@ app.on('before-quit', (event) => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
+
+function beginExecutionCoordinatorClose(coordinator: ExecutionCoordinator): void {
+  trackClose(coordinator.close().catch((error) => console.error('Failed to close ND runtime permits cleanly:', error)))
+}
 
 function beginCoreClose(core: CoreClient): void {
   trackClose(core.close().catch((error) => console.error('Failed to close ND Core cleanly:', error)))
