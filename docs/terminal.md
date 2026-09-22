@@ -4,7 +4,7 @@ ND's built-in terminal is a resource owned by a chat session, not a global IDE s
 
 ## Architecture
 
-`TerminalDock` runs xterm.js in the sandboxed renderer. A narrow preload bridge forwards validated calls to `TerminalManager` in Electron main. `TerminalManager` owns `node-pty` processes and starts each shell in the chat/worktree cwd when available, otherwise the active workspace root.
+`TerminalDock` runs xterm.js in the sandboxed renderer. A narrow preload bridge forwards validated calls to `TerminalManager` in Electron main. `TerminalManager` delegates PTY ownership to the bundled `nd-core` sidecar and starts each shell in the chat/worktree cwd when available, otherwise the active workspace root.
 
 Each chat can own multiple terminal tabs and a split-pane layout. Switching chats changes the terminal resource set without killing terminals belonging to other chats. Split directions and user-resized split ratios are persisted per chat, and the layout subtree remounts on session changes so one chat cannot inherit another chat's in-memory panel sizes. Renderer reloads reattach to the same live PTY and replay output by sequence number.
 
@@ -14,7 +14,7 @@ Terminal title, cwd, shell, dimensions, bounded scrollback, active terminal, act
 
 ## Platform support
 
-Unix uses the requested shell, `$SHELL`, then zsh/bash/sh fallbacks. Windows uses the requested shell, `COMSPEC`, PowerShell/pwsh, then cmd. `node-pty` is rebuilt for the Electron ABI during install and ND repairs the Unix `spawn-helper` executable bit before first spawn when package extraction removed it.
+Unix uses the requested shell, `$SHELL`, then zsh/bash/sh fallbacks. Windows uses the requested shell, `COMSPEC`, PowerShell/pwsh, then cmd. Production desktop startup requires the bundled `nd-core`; there is no node-pty or legacy terminal fallback.
 
 ## Security boundary
 
