@@ -42,8 +42,16 @@ This is a platform-independent source defect, not a Windows problem: the Windows
 
 - [x] `pnpm core:test` exits 0 on a clean checkout, with no test weakened, skipped, or newly allowed. — `corepack pnpm core:test` exits 0: `cargo fmt --check` clean, clippy clean under `-D warnings`, and `cargo test -p nd-core` passes 38 + 17 tests with 0 failures. No test, budget, or assertion was changed.
 - [x] `snapshot.rs` is restored to normally formatted source rather than left minified. — Expanded from 13 minified lines to 140 normally formatted lines; `git diff` touches only `snapshot.rs` and `protocol_contract.rs`, and both diffs are line-wrapping only. The `clippy::possible_missing_else` error was a symptom of the minification, not a separate defect: rustfmt's output puts the second `if` on its own line, which is the remedy the lint itself names.
-- [ ] Both CI jobs get past `Verify ND Core` on a non-draft pull request, so the Windows steps in blocked-0004 execute for the first time since the regression.
+- [x] The fmt/clippy repair is proven on a non-draft pull request. — Run [35773266896](https://github.com/zila-kh/nd-dsh/actions/runs/35773266896): `validate` completes green in 5m19s including `Verify ND Core`, and `windows-package` passes `cargo fmt --check` and clippy and proceeds into `cargo test` for the first time since the regression. The residual failure there is a timing flake in [wip-0013](wip-0013-windows-deadline-test-flake.md), which is a separate defect that this gate had been masking.
+- [ ] Both CI jobs complete green on a non-draft pull request, so the Windows steps in blocked-0004 execute. — Gated on [wip-0013](wip-0013-windows-deadline-test-flake.md).
 - [x] No `continue-on-error` is added anywhere, and no lint is `allow`-ed to satisfy the gate. — No workflow, lint, or crate configuration changed; the only edits are the two source files and the task board.
+
+## CI trigger notes (2026-09-23)
+
+Two trigger problems cost time on this task and are worth knowing beyond it. Both are now documented in [CONTRIBUTING.md](../../CONTRIBUTING.md).
+
+1. **The pull request produced no runs at all.** The head commit message described the `[skip ci]` convention in its body, and GitHub matches the skip directive anywhere in the message — prose and backticks included — so the `opened` and `reopened` events were suppressed. Rewording the commit to describe the directive without the literal token made the next push start a run immediately. The tree was byte-identical throughout (`6620ea32`), which is what proves the message text, not the content, was the cause. This is also how the regression this task fixes reached `main`.
+2. **A second dispatch canceled the first run.** `concurrency` is keyed on the ref and `cancel-in-progress` is on, so dispatching `full_benchmark=true` while the first dispatch was still building canceled that job mid-flight. The canceled job was not a failure: its annotation reads `Canceling since a higher priority waiting request for ci-ci-refs/heads/fix/nd-core-format-lint-gate-active exists`, and it had already passed `Verify ND Core`, `Benchmark smoke on Windows`, and `Prove the terminal handshake fails loudly`.
 
 ## Verification run locally (2026-09-23, Windows)
 

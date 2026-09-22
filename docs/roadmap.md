@@ -41,7 +41,7 @@ This approved MVP is the active implementation vehicle for the runtime-distribut
 
 **Status:** implementation backlog complete on `feat/complete-active-work`. The production desktop is single-runtime (`nd-core`), the agent fast path and matched measurement are implemented, and stale TODO/WIP records are archived. Fresh Windows release validation remains explicitly blocked in task 0004, and it is now gated behind a `main` CI defect claimed as task 0012.
 
-**CI reality check (2026-09-23):** run `35762360604`, the first run on `main` after PR #29 merged, failed `Verify ND Core` in **both** jobs — `validate` in 59 s and `windows-package` in 1m43s — so every Windows step and the performance-evidence bundle were skipped. The cause is platform-independent: `crates/nd-core` was merged with unformatted, lint-failing source that aborts `pnpm core:test` on Linux too, having arrived via `[skip ci]` commits that no gate ever evaluated. The last green `validate` was run `35719173634` on 2026-09-22, before those commits. Task 0012 repairs the gate; blocked task 0004 stays blocked until a run gets past it.
+**CI reality check (2026-09-23):** run `35762360604`, the first run on `main` after PR #29 merged, failed `Verify ND Core` in **both** jobs — `validate` in 59 s and `windows-package` in 1m43s — so every Windows step and the performance-evidence bundle were skipped. The cause is platform-independent: `crates/nd-core` was merged with unformatted, lint-failing source that aborts `pnpm core:test` on Linux too, having arrived via commits carrying a skip-ci directive that no gate ever evaluated. The last green `validate` was run `35719173634` on 2026-09-22, before those commits. Task 0012 repairs the gate, and the Windows job now reaches `cargo test`, where a second defect — a PowerShell cold-start timing flake in the deadline test — is filed as task 0013. blocked task 0004 stays blocked until both are cleared; see it for the per-run evidence.
 
 #### Current direction — four deliverables
 
@@ -56,8 +56,9 @@ Target: **fast native runtime + minimal round trips + structured agent actions +
 
 | Task | Pri | State |
 | --- | --- | --- |
-| [wip-0012](tasks/wip-0012-nd-core-format-lint-gate.md) | P0 | **in progress** — restore `Verify ND Core`; local gate green, awaiting a non-draft CI run |
-| [blocked-0004](tasks/blocked-0004-windows-release-validation.md) | P0 | **blocked on fresh Windows release validation** — gated behind task 0012; latest main run failed at `Verify ND Core` on both platforms |
+| [wip-0012](tasks/wip-0012-nd-core-format-lint-gate.md) | P0 | **in progress** — fmt/clippy repair proven; `validate` green, Windows reaches `cargo test` |
+| [wip-0013](tasks/wip-0013-windows-deadline-test-flake.md) | P0 | **in progress** — deadline raised for cold PowerShell start; awaiting a green `windows-package` |
+| [blocked-0004](tasks/blocked-0004-windows-release-validation.md) | P0 | **blocked on fresh Windows release validation** — gated behind tasks 0012 and 0013 |
 | [done-0005](tasks/done/done-0005-agent-task-measurement.md) | P1 | **done** — task-cost measurement + normal-loop baseline |
 | [done-0006](tasks/done/done-0006-nd-core-runtime-contract.md) | P1 | **done** — workspace/deadline/revision/cache/search/runtime contract |
 | [done-0007](tasks/done/done-0007-retire-legacy-paths-and-dispatch.md) | P1 | **done** — single production runtime, node-pty/legacy path retired, typed dispatch availability |

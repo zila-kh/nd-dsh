@@ -304,7 +304,13 @@ fn deadline_expiry_stops_git_work_reports_its_code_and_leaves_no_orphan() {
 
     // The child needs time to start and prove it is alive before the deadline lands,
     // so the assertion below is about killing a running process, not a late start.
-    let deadline_ms = 4_000;
+    // That child is PowerShell, and its cold start on a Windows CI runner (image load,
+    // AMSI/Defender scan, JIT, plus parallel test load) does not fit in 4 s: a warm
+    // start measures ~0.5 s here, and run 35773266896 killed the child before its first
+    // heartbeat and failed the precondition below, on the same tree that passed in run
+    // 35768282861. The orphan check is what this test is about, and it does not weaken
+    // as the deadline grows.
+    let deadline_ms = 15_000;
     let id = core.send_with_deadline(
         "git.exec",
         json!({
@@ -315,7 +321,7 @@ fn deadline_expiry_stops_git_work_reports_its_code_and_leaves_no_orphan() {
         deadline_ms,
     );
     let started = Instant::now();
-    let result = core.await_response::<Value>(&id, Duration::from_secs(20));
+    let result = core.await_response::<Value>(&id, Duration::from_secs(45));
     let elapsed = started.elapsed();
 
     let error = result.expect_err("an expired deadline must not report success");
