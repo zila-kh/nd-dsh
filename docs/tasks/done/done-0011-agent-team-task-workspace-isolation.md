@@ -1,5 +1,8 @@
 # Task 0011 — Engine-neutral teams and task workspace isolation
 
+> **Done 2026-09-22.** All seven implementation workstreams and their regression/scale evidence are complete. The latest main Linux `validate` job (`35719173634`) passed migration tests, unit tests, desktop build and desktop smoke; the unrelated Windows ND Core release gate remains isolated in blocked task 0004.
+
+
 > PRD: [PRD-0003](../prd/0003-engine-neutral-agent-teams-and-task-workspace-isolation.md)  
 > Priority: P1  
 > Status: implementation-complete — awaiting repository CI before archival  

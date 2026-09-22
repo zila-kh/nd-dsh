@@ -127,26 +127,18 @@ async function createWindow(cdpPort: number): Promise<void> {
   // switch it on, and the benchmark reads these samples back.
   setTaskMetricsRecorder(new TaskMetricsRecorder())
   const userData = app.getPath('userData')
-  const legacyCoreBackend = process.env.ND_DSH_CORE_BACKEND?.trim().toLowerCase() === 'legacy'
-  const core = legacyCoreBackend
-    ? undefined
-    : new CoreClient({
-        log: (line) => console.log(line),
-        onUnexpectedExit: (code, signal) => {
-          console.error('ND Core exited unexpectedly:', { code, signal })
-        },
-      })
-  if (core) {
-    await core.start()
-    markStartup('core-ready')
-    activeCore = core
-    // Workspace file browsing is the product consumer of the nd-core workspace
-    // primitives: bounded reads, bounded listings, and containment checks all run
-    // in the sidecar. The in-process path stays only for the legacy rollback mode.
-    workspace.attachFileSystem(createCoreWorkspaceFileSystem(core))
-  } else {
-    console.warn('[nd-core] legacy backend enabled for benchmark/rollback mode.')
-  }
+  const core = new CoreClient({
+    log: (line) => console.log(line),
+    onUnexpectedExit: (code, signal) => {
+      console.error('ND Core exited unexpectedly:', { code, signal })
+    },
+  })
+  // nd-core is the production desktop runtime boundary. Startup fails closed
+  // when the bundled sidecar is unavailable instead of changing semantics.
+  await core.start()
+  markStartup('core-ready')
+  activeCore = core
+  workspace.attachFileSystem(createCoreWorkspaceFileSystem(core))
   const sessionArchive = new SessionArchiveStore(join(userData, 'session-archive.json'))
   const usageLedger = new UsageLedger(join(userData, 'usage-ledger.jsonl'))
   const isMac = process.platform === 'darwin'
@@ -175,7 +167,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   const terminalManager = new TerminalManager({
     storePath: join(userData, 'terminals.json'),
     workspace,
-    ...(core ? { spawn: createCorePtySpawner(core) } : {}),
+    spawn: createCorePtySpawner(core),
     onOutput: (event) => { if (!window.isDestroyed()) window.webContents.send(TERMINAL_IPC.outputEvent, event) },
     onExit: (event) => { if (!window.isDestroyed()) window.webContents.send(TERMINAL_IPC.exitEvent, event) },
     onState: (event) => { if (!window.isDestroyed()) window.webContents.send(TERMINAL_IPC.stateEvent, event) },
@@ -216,7 +208,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   })
   const interruptedRuns = await organizationStore.reconcileInterruptedRuns()
   if (interruptedRuns > 0) console.warn(`Recovered ${interruptedRuns} interrupted organization run(s) from the previous app session.`)
-  const disposeCoreReady = core?.onEvent('core.ready', () => {
+  const disposeCoreReady = core.onEvent('core.ready', () => {
     // A terminal whose shell belongs to a previous sidecar generation is gone, so
     // the session stops claiming it is running instead of showing a live terminal
     // that cannot accept input.
@@ -235,8 +227,8 @@ async function createWindow(cdpPort: number): Promise<void> {
         console.error('ND Core restarted, but organization reconciliation failed; dispatch remains blocked:', error)
       })
   })
-  const engineSpawn = core ? createCoreSpawn(core, executionCoordinator) : spawn
-  const git = new GitService(workspace, core ? { core } : {})
+  const engineSpawn = createCoreSpawn(core, executionCoordinator)
+  const git = new GitService(workspace, { core })
   const harness = new HarnessService(workspace, browser, providers, externalElements, sessionArchive, usageLedger)
   const codexEngine = new CodexCliEngine({ log: (line) => console.log(line), spawnProcess: engineSpawn })
   activeCodexEngine = codexEngine
@@ -303,12 +295,12 @@ async function createWindow(cdpPort: number): Promise<void> {
   const design = new DesignService(workspace, browser)
   const ndPencil = new NdPencilController(window, workspace, projectRoot(), ndPencilPreload)
   await ndPencil.initialize()
-  const taskWorktrees = new TaskWorktreeManager(core ? createCoreWorktreeGit(core) : undefined)
+  const taskWorktrees = new TaskWorktreeManager(createCoreWorktreeGit(core))
   // Task worktrees are ND's own isolated checkouts for this project, so the
   // engine router admits them by the exact roots ND created — never by a path
   // shape a caller could construct.
   engineRouter.setWorktreeGuard((cwd) => taskWorktrees.ownsRoot(cwd))
-  const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter, projectRuntime, capabilities, executionCoordinator, taskWorktrees)
+  const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter, projectRuntime, capabilities, executionCoordinator, taskWorktrees, core)
   const approvalGate = new OrganizationApprovalGate(organizationStore, harness)
   const qa = new QaService()
   qa.setProjectRoot(workspace.state().root)

@@ -1,3 +1,35 @@
+# Blocked Task 0004 — Windows release validation
+
+> PRD: [PRD-0002](prd/0002-rust-sidecar-mvp-migration.md)
+> Priority: P0
+> Status: **blocked on fresh Windows release validation**
+> Owner: release validation
+> Updated: 2026-09-22
+
+## Why this is blocked instead of WIP
+
+All known implementation work owned by the former task 0004 has landed or been superseded: the ConPTY handshake proof, release staging closure checks, evidence identity checks, desktop teardown fix, and Linux validation path are implemented. Main workflow run `35719173634` completed **validate** successfully, including ND Core verification, benchmark smoke, agent-task baseline validation, evidence-identity proof, repository verification, typecheck, unit tests, desktop build, renderer isolation, and desktop smoke.
+
+The same run failed **windows-package → Verify ND Core** before Windows benchmark smoke, packaging, forced-sidecar cleanup, and packaged smoke could execute. `performance-evidence` was skipped. The current convergence branch is intentionally written with `[skip ci]` at the operator's request, so a passing Windows run cannot be manufactured or inferred here.
+
+## Exit criteria
+
+- [ ] A Windows run completes `Verify ND Core`.
+- [ ] Windows benchmark smoke + terminal handshake proof complete.
+- [ ] Windows portable build and forced-sidecar cleanup proof complete.
+- [ ] Packaged Rust core / terminal / Git smoke completes.
+- [ ] The optional full performance-evidence workflow is recorded when release evidence is requested.
+
+## Current implementation state
+
+No source TODO/WIP is assigned to this record. If a fresh Windows run exposes a deterministic source defect, create/claim a new implementation task for that defect and link it here. Until then this record is a release-validation blocker, not an invitation to change code speculatively.
+
+## Historical detail
+
+The former WIP record is retained below for audit context.
+
+---
+
 # Task 0004 — Restore green CI on Windows and make performance evidence trustworthy
 
 > PRD: [PRD-0002](../prd/0002-rust-sidecar-mvp-migration.md)  

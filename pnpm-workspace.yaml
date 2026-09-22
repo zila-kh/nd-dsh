@@ -4,7 +4,6 @@ allowBuilds:
   agent-browser: true
   esbuild: true
   electron: true
-  node-pty: true
   # Squirrel is a transitive optional target; ND's Windows beta uses the
   # portable target, so its install-time download/build step stays disabled.
   electron-winstaller: false

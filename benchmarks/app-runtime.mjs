@@ -12,10 +12,10 @@ import { benchmarkRoot } from './lib/core-rpc.mjs'
 const execFileAsync = promisify(execFile)
 const require = createRequire(import.meta.url)
 const electronExecutable = require('electron')
-const backendArg = (process.argv[2] || '').trim().toLowerCase()
-const backend = backendArg === 'legacy' ? 'legacy' : backendArg === 'rust' || backendArg === 'rust-core' ? 'rust-core' : undefined
+const backendArg = (process.argv[2] || 'rust-core').trim().toLowerCase()
+const backend = backendArg === 'rust' || backendArg === 'rust-core' ? 'rust-core' : undefined
 if (!backend) {
-  console.error('Usage: node benchmarks/app-runtime.mjs <legacy|rust-core>')
+  console.error('Usage: node benchmarks/app-runtime.mjs [rust-core] (legacy runtime retired)')
   process.exit(2)
 }
 const runs = Math.max(2, Number(process.env.ND_DSH_BENCH_RUNS || 5))
@@ -34,7 +34,6 @@ try {
     try {
       const env = safeEnvironment()
       Object.assign(env, {
-        ND_DSH_CORE_BACKEND: backend === 'legacy' ? 'legacy' : 'rust',
         ND_DSH_CORE_PROFILE: 'release',
         ND_DSH_WORKSPACE: workspace,
         ND_DSH_USER_DATA_DIR: userData,

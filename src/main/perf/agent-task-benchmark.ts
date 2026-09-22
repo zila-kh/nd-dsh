@@ -35,6 +35,7 @@ export interface AgentTaskBenchmarkExpectation {
   outcome?: 'completed' | 'failed' | 'canceled' | 'interrupted'
   completedTask?: boolean
   bytesToModelPositive?: boolean
+  bytesToModelZero?: boolean
 }
 
 export interface AgentTaskBenchmarkScenario {
@@ -56,6 +57,8 @@ export interface AgentTaskBenchmarkScenario {
    * a task that finished before the cancellation instead of guessing.
    */
   cancelAfterRoundTrips?: number
+  /** Use the production deterministic fast path instead of starting a coding engine. */
+  fastPath?: boolean
 }
 
 export interface AgentTaskBenchmarkOptions {
@@ -110,9 +113,11 @@ function errorMessage(error: unknown): string {
 export async function runAgentTaskBenchmark(options: AgentTaskBenchmarkOptions): Promise<void> {
   const log = options.log ?? ((line: string) => console.log(line))
   const scenario = options.scenario
-  // Fails before any task runs when the deterministic engine is not configured:
-  // a missing fixture must never be reported as a slow or cheap task.
-  const engine = options.engines.assertAvailable(OPENCODE_CLI_ENGINE_ID)
+  // Normal passes use the deterministic CLI fixture. The fast-path pass must
+  // prove that no coding/model engine needs to start at all.
+  const engine = scenario.fastPath
+    ? { id: 'nd-fast-path', name: 'ND Fast Path' }
+    : options.engines.assertAvailable(OPENCODE_CLI_ENGINE_ID)
 
   const company = await options.store.mutate({
     type: 'company.create',
@@ -140,14 +145,12 @@ export async function runAgentTaskBenchmark(options: AgentTaskBenchmarkOptions):
     steps: [{ id: 'execute', name: 'Assigned worker executes', kind: 'execute', requiredRole: 'Software Engineer' }],
   })
 
-  await options.engines.assign(workerAgentId(withProject), engine.id)
-  // The same two steps a user performs in Settings → Capabilities before a
-  // direct engine can run work: verify it, then enable it. A capability that is
-  // installed but unverified stays unusable, and the benchmark does not get an
-  // exemption from that rule.
-  await options.capabilities.verify(engine.id)
-  const status = await options.capabilities.setEnabled(engine.id, true)
-  if (!status.enabled) throw new Error(`Agent-task benchmark could not enable ${engine.name}.`)
+  if (!scenario.fastPath) {
+    await options.engines.assign(workerAgentId(withProject), engine.id)
+    await options.capabilities.verify(engine.id)
+    const status = await options.capabilities.setEnabled(engine.id, true)
+    if (!status.enabled) throw new Error(`Agent-task benchmark could not enable ${engine.name}.`)
+  }
   log(`[agent-task] pass ${scenario.name}: engine ${engine.id} in ${options.workspaceRoot}`)
 
   const tasks: AgentTaskBenchmarkTask[] = []

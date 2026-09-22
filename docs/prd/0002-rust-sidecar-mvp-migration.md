@@ -8,6 +8,9 @@ mvp-merge: "PR #20 (feat/rust-shared-core-mvp), merge commit 588f3ed"
 
 # Product Requirement Document (PRD): Rust Shared Core + Parallel Agent Runtime MVP
 
+> **Convergence update — 2026-09-22:** implementation is complete on the active backlog branch. The production desktop now requires one bundled `nd-core`; the node-pty/legacy backend rollback path is retired. The agent fast path uses an explicit typed action block, company policy + durable action receipts, a bounded revision-aware `workspace.snapshot` composite operation, the existing verification/integration lifecycle, and deterministic escalation to the normal engine for non-mechanical actions. Release recording is Rust-only; historical legacy comparisons remain readable via `bench:compare`. The latest main Linux `validate` job is green, while Windows release validation is tracked separately because its latest `Verify ND Core` step failed and no new CI run is being triggered for this skip-CI convergence branch.
+
+
 ## 1. Goals & User Problem
 
 ND-DSH currently runs substantial system-facing work inside the Electron main process: PTY lifecycle, Git subprocesses/parsing, workspace filesystem operations, engine/process supervision, durable state writes, and orchestration glue. The same process also owns Electron windows, browser lifecycle, permissions, IPC, and other latency-sensitive duties.

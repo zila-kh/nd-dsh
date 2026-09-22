@@ -9,12 +9,9 @@
  * from its stdout. No model provider is contacted, so the task loop, the
  * machine verification and the cost counters are reproducible offline.
  *
- * Scenario knobs arrive through the environment because that is the only
- * channel a `.cmd`/shell shim can carry faithfully on Windows: `cmd.exe` treats
- * a newline inside an argument as a command separator, so a shimmed CLI
- * receives only the first line of a multi-line prompt. Real npm-installed CLIs
- * share that transport, so the benchmark records it instead of working around
- * it.
+ * Scenario knobs arrive through the environment so the deterministic workload
+ * is independent of prompt wording. Windows npm-style shims are resolved to
+ * their Node entrypoint by ND, so real multi-line prompts remain intact.
  *
  *   ND_TASK_FIXTURE_STEPS      model calls the CLI reports (default 3)
  *   ND_TASK_FIXTURE_TOOLS      tool calls the CLI reports (default 4)
@@ -36,6 +33,7 @@ const TOOLS = integer(process.env.ND_TASK_FIXTURE_TOOLS, 4)
 const STEP_MS = integer(process.env.ND_TASK_FIXTURE_STEP_MS, 0)
 const VERIFY = process.env.ND_TASK_FIXTURE_VERIFY === 'fail' ? 'fail' : 'pass'
 const FAIL_RUN = process.env.ND_TASK_FIXTURE_FAIL === '1'
+const READ_ONLY = process.env.ND_TASK_FIXTURE_READ_ONLY === '1'
 const INPUT_TOKENS_PER_STEP = 1000
 const OUTPUT_TOKENS_PER_STEP = 50
 const cwd = process.cwd()
@@ -61,8 +59,8 @@ for (let step = 1; step <= STEPS; step += 1) {
 if (FAIL_RUN) {
   emit({ type: 'error', error: 'fixture engine reported a deterministic task failure' })
   process.exitCode = 1
-} else {
-  // The work a real worker would leave behind: a source change plus the
+} else if (!READ_ONLY) {
+  // The work a mutating worker would leave behind: a source change plus the
   // evidence file the project's machine verification reads.
   await mkdir(join(cwd, 'src'), { recursive: true })
   await mkdir(join(cwd, 'evidence'), { recursive: true })

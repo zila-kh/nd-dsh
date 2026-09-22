@@ -12,7 +12,7 @@ if (!executable) {
   process.exit(2)
 }
 const runs = Math.max(2, Number(process.env.ND_DSH_BENCH_RUNS || 10))
-const backend = process.env.ND_DSH_BENCH_BACKEND || 'rust'
+const backend = 'rust-core'
 const samples = []
 const records = []
 
@@ -26,7 +26,6 @@ for (let index = 0; index < runs; index += 1) {
       stdio: 'ignore',
       env: {
         ...safeEnvironment(),
-        ND_DSH_CORE_BACKEND: backend === 'legacy' ? 'legacy' : 'rust',
         ND_DSH_BENCHMARK_OUTPUT: output,
         ND_DSH_BENCHMARK_EXIT: '1',
         ND_DSH_WORKSPACE: workspace,
@@ -45,7 +44,7 @@ for (let index = 0; index < runs; index += 1) {
     if (status !== 0) throw new Error('packaged ND exited with code ' + status)
     const record = JSON.parse(await readFile(output, 'utf8'))
     if (!Number.isFinite(record.marks?.usable)) throw new Error('packaged startup benchmark did not record usable mark')
-    if (backend !== 'legacy' && record.core?.protocolVersion !== 1) throw new Error('packaged startup did not report bundled ND Core readiness')
+    if (record.core?.protocolVersion !== 1) throw new Error('packaged startup did not report bundled ND Core readiness')
     samples.push(record.marks.usable)
     records.push(record)
   } finally {
@@ -54,7 +53,7 @@ for (let index = 0; index < runs; index += 1) {
   }
 }
 
-process.env.ND_DSH_BENCH_BACKEND = backend === 'legacy' ? 'legacy' : 'rust-core'
+process.env.ND_DSH_BENCH_BACKEND = backend
 const outputDir = resolve(process.env.ND_DSH_BENCH_OUTPUT || defaultOutputDir())
 const result = await writeResult(outputDir, 'app-startup', {
   measuredRuns: runs,

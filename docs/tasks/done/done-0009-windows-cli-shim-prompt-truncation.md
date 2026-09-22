@@ -1,5 +1,8 @@
 # Task 0009 — Windows `.cmd` shims truncate multi-line prompts
 
+> **Done 2026-09-22.** Recognized npm-style Windows shims are resolved to their Node entrypoint so multi-line prompts remain argv data. Unresolved shims now fail closed for multi-line or shell-sensitive arguments instead of passing them through `cmd.exe`; regression coverage and the agent-task benchmark shim exercise the corrected path.
+
+
 > PRD: [PRD-0002](../prd/0002-rust-sidecar-mvp-migration.md)  
 > Priority: P1  
 > Owner: ZCode/desktop  

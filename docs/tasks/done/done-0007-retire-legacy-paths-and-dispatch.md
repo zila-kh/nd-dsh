@@ -1,5 +1,8 @@
 # Task 0007 — Retire legacy runtime paths and unify dispatch
 
+> **Done 2026-09-22.** Autopilot dispatch already uses typed coordinator availability/release refill on main. This convergence branch removes the production legacy backend switch and node-pty path, makes nd-core mandatory for desktop system services, removes node-pty package/build metadata, and converts release recording to Rust-only absolute/correctness evidence. Historical comparison remains available through `bench:compare`.
+
+
 > PRD: [PRD-0002](../prd/0002-rust-sidecar-mvp-migration.md)  
 > Priority: P1  
 > Owner: ZCode  

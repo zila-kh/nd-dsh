@@ -51,6 +51,10 @@ export function registerOrganizationIpc(
     if (!window.isDestroyed()) window.webContents.send(ORGANIZATION_STRATEGY_IPC.changed, state)
   })
 
+  orchestrator.setFastPathAuditRecorder(async (record) => {
+    await strategy.mutate({ type: 'action.record', ...record })
+  })
+
   // Guard the orchestrator itself instead of only guarding renderer IPC. The
   // orchestrator calls its public methods for autonomy-3/4 continuation, so
   // wrapping them here makes later automatic turns obey the same gates,
@@ -190,6 +194,7 @@ export function registerOrganizationIpc(
     clearInterval(reconcileTimer)
     clearInterval(scheduleTimer)
     restoreOrchestrator()
+    orchestrator.setFastPathAuditRecorder(undefined)
     control.setOnChanged(undefined)
     strategy.setOnChanged(undefined)
     for (const channel of channels) ipcMain.removeHandler(channel)

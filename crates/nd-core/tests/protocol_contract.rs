@@ -1042,6 +1042,56 @@ fn a_search_deadline_stops_the_scan_without_failing_the_request() {
 }
 
 #[test]
+fn workspace_snapshot_composes_reads_search_and_git_and_detects_stale_revisions() {
+    if !git_available() {
+        eprintln!("skipping: git is not available in this environment");
+        return;
+    }
+    let fixture = temp_dir("workspace-snapshot");
+    fs::create_dir_all(fixture.join("src")).expect("create src");
+    fs::write(fixture.join("src").join("app.ts"), "export const needle = 1\n").expect("write app");
+    git(&fixture, &["init"]);
+    git(&fixture, &["config", "user.email", "snapshot@nd.local"]);
+    git(&fixture, &["config", "user.name", "ND Snapshot"]);
+    git(&fixture, &["add", "."]);
+    git(&fixture, &["commit", "-m", "baseline"]);
+
+    let mut core = Core::launch();
+    let root = fixture.to_string_lossy().to_string();
+    let first: Value = core.call("workspace.snapshot", json!({
+        "root": root,
+        "reads": [{ "path": "src/app.ts", "maxBytes": 4096 }],
+        "searches": [{ "query": "needle", "path": "src", "maxResults": 20 }],
+        "includeGitStatus": true,
+    })).expect("workspace.snapshot");
+    assert_eq!(first["stale"], json!(false));
+    assert_eq!(first["truncated"], json!(false));
+    assert!(first["reads"][0]["data"].as_str().unwrap_or_default().contains("needle"));
+    assert_eq!(first["searches"][0]["matches"][0]["path"], json!("src/app.ts"));
+    assert!(first["gitStatus"]["entries"].as_array().is_some());
+    let revision = first["revision"]["value"].as_str().expect("revision").to_owned();
+
+    fs::write(fixture.join("src").join("app.ts"), "export const needle = 12345\nexport const changed = true\n").expect("mutate app");
+    let stale: Value = core.call("workspace.snapshot", json!({
+        "root": root,
+        "expectedRevision": revision,
+        "reads": [{ "path": "src/app.ts" }],
+        "searches": [{ "query": "needle" }],
+        "includeGitStatus": true,
+    })).expect("stale workspace.snapshot");
+    assert_eq!(stale["stale"], json!(true));
+    assert!(stale["reads"].as_array().expect("reads").is_empty());
+    assert!(stale["searches"].as_array().expect("searches").is_empty());
+    assert_eq!(stale["gitStatus"], Value::Null);
+
+    let too_many = (0..13).map(|_| json!({ "path": "src/app.ts" })).collect::<Vec<_>>();
+    let oversized = core.call::<Value>("workspace.snapshot", json!({ "root": root, "reads": too_many }))
+        .expect_err("oversized snapshot request must fail predictably");
+    assert_eq!(oversized.code, "invalid_params");
+    let _ = fs::remove_dir_all(&fixture);
+}
+
+#[test]
 fn every_declared_capability_is_reachable_and_unknown_methods_are_refused() {
     let mut core = Core::launch();
     let health = core.health();

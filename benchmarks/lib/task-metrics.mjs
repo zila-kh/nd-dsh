@@ -116,6 +116,12 @@ export function evaluateTaskExpectations(tasks, samples) {
         deviations.push({ taskId: task.taskId, field: 'bytesToModel', expected: '> 0', observed: observed.bytesToModel ?? 0 })
       }
     }
+    if (expected.bytesToModelZero) {
+      checked += 1
+      if (Number(observed.bytesToModel) !== 0) {
+        deviations.push({ taskId: task.taskId, field: 'bytesToModel', expected: 0, observed: observed.bytesToModel ?? 0 })
+      }
+    }
   }
   return { checked, deviations }
 }

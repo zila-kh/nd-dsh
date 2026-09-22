@@ -1,5 +1,8 @@
 # Task 0002 — Rust Shared Core + Parallel Agent Runtime MVP
 
+> **Closed 2026-09-22.** The implementation backlog is complete: shared Rust runtime, runtime contract, task metrics, single-runtime cleanup, deterministic fast path, Windows shim hardening, and engine-neutral task isolation are implemented. Release-platform validation that cannot be truthfully inferred without a new Windows run is isolated in [blocked-0004](../blocked-0004-windows-release-validation.md), so it does not keep implementation work falsely marked WIP. This branch intentionally uses `[skip ci]` per operator request.
+
+
 > PRD: [PRD-0002](../prd/0002-rust-sidecar-mvp-migration.md)  
 > Priority: P0  
 > Owner: ChatGPT  

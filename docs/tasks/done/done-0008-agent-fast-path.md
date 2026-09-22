@@ -1,5 +1,8 @@
 # Task 0008 — Agent fast path: typed actions, cheap routing, escalation
 
+> **Done 2026-09-22.** Added the explicit typed action vocabulary and write-scope contract, normalized company-policy/audit envelopes, fail-closed routing/escalation, revision-aware bounded `workspace.snapshot`, production-path execution through the existing verification/integration lifecycle, and matched `normal-read` / `fast-read` task measurement. Offline fixture wall time is not claimed as model-latency evidence; the benchmark instead gates the counters it can prove deterministically.
+
+
 > PRD: [PRD-0002](../prd/0002-rust-sidecar-mvp-migration.md) — scope origin: [agent-fast-path.md](../plan/agent-fast-path.md)  
 > Priority: P2  
 > Owner: unassigned  

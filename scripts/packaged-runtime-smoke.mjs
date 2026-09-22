@@ -30,7 +30,6 @@ for (const [key, value] of Object.entries(process.env)) {
   safeEnv[key] = value
 }
 Object.assign(safeEnv, {
-  ND_DSH_CORE_BACKEND: 'rust',
   ND_DSH_WORKSPACE: workspace,
   ND_DSH_USER_DATA_DIR: userData,
   ND_DSH_PACKAGED_SMOKE_OUTPUT: receipt,

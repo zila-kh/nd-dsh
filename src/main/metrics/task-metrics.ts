@@ -173,6 +173,13 @@ export class TaskMetricsRecorder {
     }
   }
 
+  /** Explicit router escalation that does not originate from an engine frame. */
+  noteEscalation(sessionId: string, count = 1): void {
+    const sample = this.sample(sessionId)
+    if (!sample || !Number.isFinite(count) || count <= 0) return
+    sample.escalations += Math.floor(count)
+  }
+
   /** Tool calls and escalations, counted from the shared engine frame fan-out. */
   noteFrame(frame: DshEventFrame): void {
     if (!frame.sessionId) return

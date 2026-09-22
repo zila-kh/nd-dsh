@@ -2,10 +2,10 @@ import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, promises as fs } from 'node:fs'
 import { createRequire } from 'node:module'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
 import { benchmarkRoot, defaultCoreBinary } from './lib/core-rpc.mjs'
-import { AGENT_TASK_TEST_COMMAND, createAgentTaskWorkspace } from './lib/fixture-workspace.mjs'
+import { AGENT_TASK_READ_ONLY_TEST_COMMAND, AGENT_TASK_TEST_COMMAND, createAgentTaskWorkspace } from './lib/fixture-workspace.mjs'
 import { environmentMetadata } from './lib/metrics.mjs'
 import { defaultOutputDir, resultProvenance } from './lib/results.mjs'
 import {
@@ -26,6 +26,21 @@ import {
  * starting the app.
  */
 const PASSES = [
+  {
+    name: 'normal-read',
+    tasks: 2,
+    readOnly: true,
+    fixture: { steps: 2, toolCalls: 3, stepMs: 0, verify: 'pass', failRun: false },
+    expected: { modelRoundTrips: 2, toolCalls: 3, escalations: 0, verification: 'passed', outcome: 'completed', completedTask: true, bytesToModelPositive: true },
+  },
+  {
+    name: 'fast-read',
+    tasks: 2,
+    fastPath: true,
+    readOnly: true,
+    fixture: { steps: 0, toolCalls: 0, stepMs: 0, verify: 'pass', failRun: false },
+    expected: { modelRoundTrips: 0, toolCalls: 0, escalations: 0, verification: 'passed', outcome: 'completed', completedTask: true, bytesToModelZero: true },
+  },
   {
     name: 'verified',
     tasks: 2,
@@ -127,7 +142,6 @@ async function record() {
     await writeShim(shimPath, runtimePath)
     const env = safeEnvironment()
     Object.assign(env, {
-      ND_DSH_CORE_BACKEND: 'rust',
       ND_DSH_CORE_PROFILE: profile,
       ND_DSH_BENCH_PROFILE: profile,
       ND_DSH_WORKSPACE: workspaceRoot,
@@ -141,6 +155,7 @@ async function record() {
       ND_TASK_FIXTURE_STEP_MS: String(pass.fixture.stepMs),
       ND_TASK_FIXTURE_VERIFY: pass.fixture.verify,
       ND_TASK_FIXTURE_FAIL: pass.fixture.failRun ? '1' : '0',
+      ND_TASK_FIXTURE_READ_ONLY: pass.readOnly ? '1' : '0',
     })
     process.stdout.write(`[agent-task] pass "${pass.name}": ${pass.tasks} task(s)\n`)
     const { stdout, stderr, code } = await runApp(env)
@@ -168,7 +183,7 @@ async function record() {
     runMode: 'offline-fixture',
     notes: [
       'Tasks run through the production task path: organization records, runtime permits, isolated task worktrees, the real engine router and machine verification.',
-      `Windows resolves an npm-style CLI through a .cmd shim, so the fixture CLI receives only the first line of a multi-line prompt (shim: ${shimKind}). ND still submits the full prompt, which is what bytesToModel counts.`,
+      `Windows npm-style shims are resolved to their Node entrypoint before spawn, so multi-line prompts arrive intact (shim: ${shimKind}).`,
       'A task counts as completed only when its machine verification passed. Failed, canceled and interrupted runs are reported, never dropped.',
     ],
     fixture: {
@@ -189,6 +204,7 @@ async function record() {
     samples,
     summary: summarizeTaskSamples(samples, { wallTimeScope: 'excludes-model-latency' }),
     expectations: evaluateTaskExpectations(tasks, samples),
+    fastPathComparison: compareFastPath(recorded, samples),
   }
   assertTaskMetricsResult(document)
 
@@ -235,6 +251,7 @@ function judge(document) {
   const failures = []
   if (summary.unfinishedTasks > 0) failures.push(`${summary.unfinishedTasks} task(s) never reached a terminal state`)
   if (expectations.deviations.length) failures.push(...expectations.deviations.map((item) => `${item.field}: expected ${JSON.stringify(item.expected)}, observed ${JSON.stringify(item.observed)}`))
+  if (document.fastPathComparison?.status === 'fail') failures.push(...document.fastPathComparison.failures)
   return {
     status: failures.length ? 'fail' : 'pass',
     tasks: summary.tasks,
@@ -256,21 +273,35 @@ function scenarioFor(pass) {
     project: `Agent task fixture (${pass.name})`,
     objective: 'Run deterministic tasks through the production task path.',
     taskTitle: `Fixture task (${pass.name})`,
-    taskDescription: `Deterministic fixture task for pass "${pass.name}". The fixture CLI reports ${pass.fixture.steps} model step(s) and ${pass.fixture.toolCalls} tool call(s), and leaves ${pass.fixture.verify === 'pass' ? 'passing' : 'failing'} machine evidence.`,
-    acceptanceCriteria: [
-      'The fixture writes evidence/task-result.json in the task worktree.',
-      'The project test command decides the outcome.',
-    ],
-    testCommand: AGENT_TASK_TEST_COMMAND,
+    taskDescription: pass.fastPath
+      ? [
+          'Inspect the fixture source using the deterministic typed fast path.',
+          '<nd-dsh-fast-actions>',
+          JSON.stringify({ version: 1, actions: [
+            { verb: 'READ_FILE', params: { path: 'src/app.txt', maxBytes: 4096 }, writeScope: [] },
+            { verb: 'SEARCH_CODE', params: { query: 'fixture application source', path: 'src', maxResults: 20 }, writeScope: [] },
+            { verb: 'CHECK_GIT', params: { operation: 'status' }, writeScope: [] },
+            { verb: 'DONE', params: { summary: 'Fixture source inspected and Git state checked.' }, writeScope: [] },
+          ] }),
+          '</nd-dsh-fast-actions>',
+        ].join('\n')
+      : `Deterministic fixture task for pass "${pass.name}". The fixture CLI reports ${pass.fixture.steps} model step(s) and ${pass.fixture.toolCalls} tool call(s).`,
+    acceptanceCriteria: pass.readOnly
+      ? ['The fixture source is inspected without mutation.', 'The project read-only test command decides the outcome.']
+      : ['The fixture writes evidence/task-result.json in the task worktree.', 'The project test command decides the outcome.'],
+    testCommand: pass.readOnly ? AGENT_TASK_READ_ONLY_TEST_COMMAND : AGENT_TASK_TEST_COMMAND,
     expected: pass.expected,
+    ...(pass.fastPath ? { fastPath: true } : {}),
     ...(pass.cancelAfterRoundTrips === undefined ? {} : { cancelAfterRoundTrips: pass.cancelAfterRoundTrips }),
   }
 }
 
 async function writeShim(path, runtime) {
+  const localFixture = join(dirname(path), 'agent-task-cli.mjs')
+  await fs.copyFile(fixtureCliPath, localFixture)
   const content = process.platform === 'win32'
-    ? `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${runtime}" "${fixtureCliPath}" %*\r\n`
-    : `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "${runtime}" "${fixtureCliPath}" "$@"\n`
+    ? `@echo off\r\nnode "%~dp0agent-task-cli.mjs" %*\r\n`
+    : `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "${runtime}" "${localFixture}" "$@"\n`
   await fs.writeFile(path, content, 'utf8')
   if (process.platform !== 'win32') await fs.chmod(path, 0o755)
 }
@@ -318,6 +349,34 @@ function sha256(buffer) {
 
 function relativeToRepo(path) {
   return resolve(path).slice(benchmarkRoot.length + 1).replaceAll('\\', '/')
+}
+
+function compareFastPath(recorded, samples) {
+  const rows = (name) => {
+    const pass = recorded.find((entry) => entry.pass.name === name)
+    if (!pass) return []
+    const ids = new Set(pass.raw.tasks.map((task) => task.runId))
+    return samples.filter((sample) => ids.has(sample.runId))
+  }
+  const normal = rows('normal-read')
+  const fast = rows('fast-read')
+  const mean = (values) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0
+  const metrics = (items) => ({
+    modelRoundTrips: mean(items.map((x) => x.modelRoundTrips)),
+    toolCalls: mean(items.map((x) => x.toolCalls)),
+    ipcCrossings: mean(items.map((x) => x.ipcCrossings)),
+    escalations: mean(items.map((x) => x.escalations)),
+    completionRate: items.length ? items.filter((x) => x.completedTask).length / items.length : 0,
+  })
+  const normalMetrics = metrics(normal)
+  const fastMetrics = metrics(fast)
+  const failures = []
+  if (!(fastMetrics.modelRoundTrips < normalMetrics.modelRoundTrips)) failures.push('fast path did not reduce model round trips')
+  if (!(fastMetrics.toolCalls < normalMetrics.toolCalls)) failures.push('fast path did not reduce model-visible tool calls')
+  if (!(fastMetrics.ipcCrossings < normalMetrics.ipcCrossings)) failures.push('fast path did not reduce nd-core IPC crossings')
+  if (fastMetrics.completionRate < normalMetrics.completionRate) failures.push('fast path completion rate regressed')
+  if (fastMetrics.escalations > 0.1) failures.push('fast path escalation rate exceeded the deterministic fixture budget')
+  return { status: failures.length ? 'fail' : 'pass', normal: normalMetrics, fast: fastMetrics, failures }
 }
 
 async function rm(path) {

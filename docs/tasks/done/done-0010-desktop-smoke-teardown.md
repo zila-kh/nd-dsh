@@ -1,5 +1,8 @@
 # Task 0010 — Name the desktop-smoke teardown leak
 
+> **Done 2026-09-22.** PR #28 merged the app-owned browser-daemon shutdown sweep and diagnostics. Main workflow run `35719173634` subsequently completed the entire Linux `validate` job successfully, including **Desktop smoke tests**. The remaining Windows package failure is unrelated and is tracked in blocked task 0004.
+
+
 > PRD: [PRD-0002](../prd/0002-rust-sidecar-mvp-migration.md)  
 > Priority: P1  
 > Owner: unassigned  
