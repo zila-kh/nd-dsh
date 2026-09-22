@@ -148,6 +148,10 @@ export async function closeApp(launched: LaunchedApp | undefined): Promise<void>
     if (survivors.length > 0) {
       console.error('[e2e-close] descendant process survived app exit:', formatRows(survivors))
       for (const line of survivorDiagnostics(survivors, userDataDir)) console.error(line)
+      // The app's own shutdown narration is otherwise invisible here: it is
+      // captured, and only printed when the force-kill path runs.
+      if (diagnostics?.stdout) console.error(`[e2e-close] app stdout tail:\n${diagnostics.stdout}`)
+      if (diagnostics?.stderr) console.error(`[e2e-close] app stderr tail:\n${diagnostics.stderr}`)
       for (const row of [...survivors].reverse()) {
         try { process.kill(row.pid, 'SIGKILL') } catch { /* already gone */ }
       }
@@ -267,6 +271,26 @@ function formatRows(rows: ProcessRow[]): string {
 }
 
 /**
+ * How long a process has been alive, from `/proc/<pid>/stat` starttime against
+ * the kernel's uptime. A survivor born while the app was already shutting down
+ * is a different defect from one that predates the quit, so the run has to say
+ * which it saw. Best effort; returns 'unknown' where `/proc` cannot answer.
+ */
+function processAgeSeconds(pid: number): string {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
+    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ')
+    const startTicks = Number(fields[19])
+    const uptimeSeconds = Number(readFileSync('/proc/uptime', 'utf8').split(' ')[0])
+    const ticksPerSecond = 100
+    const age = uptimeSeconds - startTicks / ticksPerSecond
+    return Number.isFinite(age) ? age.toFixed(1) : 'unknown'
+  } catch {
+    return 'unknown'
+  }
+}
+
+/**
  * Name the daemon that outlived the app: its command line, the daemon-relevant
  * environment it was started with, and the sidecar files that exist where a
  * daemon of this app should have left them.
@@ -285,7 +309,7 @@ function survivorDiagnostics(rows: ProcessRow[], userDataDir: string): string[] 
       const environment = readFileSync(`/proc/${row.pid}/environ`, 'utf8')
         .split('\0')
         .filter((entry) => /^(AGENT_BROWSER_|ND_DSH_AGENT_BROWSER_|HOME=|XDG_STATE_HOME=|XDG_RUNTIME_DIR=|TMPDIR=)/.test(entry))
-      lines.push(`[e2e-close] survivor pid=${row.pid} cmdline: ${cmdline}`)
+      lines.push(`[e2e-close] survivor pid=${row.pid} ageSeconds=${processAgeSeconds(row.pid)} cmdline: ${cmdline}`)
       lines.push(`[e2e-close] survivor pid=${row.pid} env: ${environment.join(' ') || '(none of the daemon variables)'}`)
     } catch (error) {
       lines.push(`[e2e-close] survivor pid=${row.pid} inspect failed: ${error instanceof Error ? error.message : String(error)}`)

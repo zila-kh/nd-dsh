@@ -700,13 +700,18 @@ app.on('before-quit', (event) => {
     console.log('[nd] exit sweep (no tracked services)')
     event.preventDefault()
     shutdownStarted = true
-    void stopAppOwnedBrowserDaemons()
-      .then((stopped) => console.log(`[nd] exit sweep stopped ${stopped} app-owned browser daemon(s)`))
-      .catch((error) => console.error('Failed to stop app-owned browser daemons:', error))
-      .finally(() => {
-        void log.flush()
-        app.exit(0)
-      })
+    void (async () => {
+      await stopAppOwnedBrowserDaemons()
+        .then((stopped) => console.log(`[nd] exit sweep pass 1 stopped ${stopped} app-owned browser daemon(s)`))
+        .catch((error) => console.error('Failed to stop app-owned browser daemons:', error))
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 750))
+      await stopAppOwnedBrowserDaemons()
+        .then((stopped) => console.log(`[nd] exit sweep pass 2 stopped ${stopped} app-owned browser daemon(s)`))
+        .catch((error) => console.error('Failed to stop app-owned browser daemons:', error))
+    })().finally(() => {
+      void log.flush()
+      app.exit(0)
+    })
     return
   }
   event.preventDefault()
@@ -727,9 +732,15 @@ app.on('before-quit', (event) => {
     }
     // An engine or the Harness runtime can still start a browser daemon while it
     // stops. A daemon that outlives this process keeps inherited pipes open, so
-    // take one last pass once every service close has settled.
+    // take a last pass once every service close has settled — twice, with a beat
+    // between, because a child that is still tearing down can spawn its daemon
+    // just after the first pass has already looked.
     await stopAppOwnedBrowserDaemons()
-      .then((stopped) => console.log(`[nd] exit sweep stopped ${stopped} app-owned browser daemon(s)`))
+      .then((stopped) => console.log(`[nd] exit sweep pass 1 stopped ${stopped} app-owned browser daemon(s)`))
+      .catch((error) => console.error('Failed to stop app-owned browser daemons:', error))
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 750))
+    await stopAppOwnedBrowserDaemons()
+      .then((stopped) => console.log(`[nd] exit sweep pass 2 stopped ${stopped} app-owned browser daemon(s)`))
       .catch((error) => console.error('Failed to stop app-owned browser daemons:', error))
     app.exit(0)
   })
