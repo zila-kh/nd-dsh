@@ -39,9 +39,9 @@ These are blockers for a downloadable public beta, not optional polish.
 
 This approved MVP is the active implementation vehicle for the runtime-distribution, PTY/process, Git/worktree, parallel-worker capacity, packaged Windows smoke, and reproducible performance-proof portions of the roadmap. Organization/business truth remains TypeScript-owned; nd-core owns shared runtime permits, native process/resource lifecycle, and system-heavy services.
 
-**Status:** implementation backlog complete on `feat/complete-active-work`. The production desktop is single-runtime (`nd-core`), the agent fast path and matched measurement are implemented, and stale TODO/WIP records are archived. Fresh Windows release validation remains explicitly blocked in task 0004 because this branch intentionally skips CI.
+**Status:** implementation backlog complete on `feat/complete-active-work`. The production desktop is single-runtime (`nd-core`), the agent fast path and matched measurement are implemented, and stale TODO/WIP records are archived. Fresh Windows release validation remains explicitly blocked in task 0004, and it is now gated behind a `main` CI defect claimed as task 0012.
 
-**CI reality check (2026-09-22):** main workflow run `35719173634` passed the complete Linux `validate` job, including desktop smoke. `windows-package` failed at `Verify ND Core`, so Windows package/smoke and performance evidence remain unproven without a fresh run; see blocked task 0004.
+**CI reality check (2026-09-23):** run `35762360604`, the first run on `main` after PR #29 merged, failed `Verify ND Core` in **both** jobs — `validate` in 59 s and `windows-package` in 1m43s — so every Windows step and the performance-evidence bundle were skipped. The cause is platform-independent: `crates/nd-core` was merged with unformatted, lint-failing source that aborts `pnpm core:test` on Linux too, having arrived via `[skip ci]` commits that no gate ever evaluated. The last green `validate` was run `35719173634` on 2026-09-22, before those commits. Task 0012 repairs the gate; blocked task 0004 stays blocked until a run gets past it.
 
 #### Current direction — four deliverables
 
@@ -56,7 +56,8 @@ Target: **fast native runtime + minimal round trips + structured agent actions +
 
 | Task | Pri | State |
 | --- | --- | --- |
-| [blocked-0004](tasks/blocked-0004-windows-release-validation.md) | P0 | **blocked on fresh Windows release validation** — latest main Windows job failed at `Verify ND Core`; no speculative source work assigned |
+| [wip-0012](tasks/wip-0012-nd-core-format-lint-gate.md) | P0 | **in progress** — restore `Verify ND Core`; local gate green, awaiting a non-draft CI run |
+| [blocked-0004](tasks/blocked-0004-windows-release-validation.md) | P0 | **blocked on fresh Windows release validation** — gated behind task 0012; latest main run failed at `Verify ND Core` on both platforms |
 | [done-0005](tasks/done/done-0005-agent-task-measurement.md) | P1 | **done** — task-cost measurement + normal-loop baseline |
 | [done-0006](tasks/done/done-0006-nd-core-runtime-contract.md) | P1 | **done** — workspace/deadline/revision/cache/search/runtime contract |
 | [done-0007](tasks/done/done-0007-retire-legacy-paths-and-dispatch.md) | P1 | **done** — single production runtime, node-pty/legacy path retired, typed dispatch availability |

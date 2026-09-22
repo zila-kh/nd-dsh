@@ -1,16 +1,17 @@
 # Blocked Task 0004 — Windows release validation
 
-> PRD: [PRD-0002](prd/0002-rust-sidecar-mvp-migration.md)
-> Priority: P0
-> Status: **blocked on fresh Windows release validation**
-> Owner: release validation
-> Updated: 2026-09-22
+> PRD: [PRD-0002](../prd/0002-rust-sidecar-mvp-migration.md)  
+> Priority: P0  
+> Owner: release validation  
+> Updated: 2026-09-23  
 
 ## Why this is blocked instead of WIP
 
 All known implementation work owned by the former task 0004 has landed or been superseded: the ConPTY handshake proof, release staging closure checks, evidence identity checks, desktop teardown fix, and Linux validation path are implemented. Main workflow run `35719173634` completed **validate** successfully, including ND Core verification, benchmark smoke, agent-task baseline validation, evidence-identity proof, repository verification, typecheck, unit tests, desktop build, renderer isolation, and desktop smoke.
 
 The same run failed **windows-package → Verify ND Core** before Windows benchmark smoke, packaging, forced-sidecar cleanup, and packaged smoke could execute. `performance-evidence` was skipped. The current convergence branch is intentionally written with `[skip ci]` at the operator's request, so a passing Windows run cannot be manufactured or inferred here.
+
+**Update (2026-09-23):** a fresh run exists and it moved the blocker rather than clearing it. Run `35762360604` — the first run on `main` after PR #29 merged — fails `Verify ND Core` in **both** jobs (`validate` in 59 s, `windows-package` in 1m43s), so every Windows step below was skipped and no Windows evidence was produced. The cause is not Windows-specific: `crates/nd-core` was merged with unformatted, lint-failing source, which aborts `pnpm core:test` on any platform. That is a deterministic source defect, so it is claimed as [wip-0012](wip-0012-nd-core-format-lint-gate.md), exactly as the "Current implementation state" section below directs. This record stays blocked until a run gets past that gate.
 
 ## Exit criteria
 
@@ -22,7 +23,7 @@ The same run failed **windows-package → Verify ND Core** before Windows benchm
 
 ## Current implementation state
 
-No source TODO/WIP is assigned to this record. If a fresh Windows run exposes a deterministic source defect, create/claim a new implementation task for that defect and link it here. Until then this record is a release-validation blocker, not an invitation to change code speculatively.
+The gate defect is claimed as [wip-0012](wip-0012-nd-core-format-lint-gate.md) (P0, `fix/nd-core-format-lint-gate`). It is a formatting/lint repair only — `cargo test -p nd-core` already passes 55 tests — so nothing about this record's release-validation semantics changes, and no other source work is assigned to it. Once that gate is green on a non-draft run, this record is unblocked and its exit criteria become testable again; a further Windows-only failure at that point would be a new defect and should be filed as its own task.
 
 ## Historical detail
 
