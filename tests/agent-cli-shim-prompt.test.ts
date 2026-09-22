@@ -80,8 +80,15 @@ describe.skipIf(process.platform !== 'win32')('Windows CLI shim argument transpo
     expect(seen.hasPipe).toBe(true)
   })
 
-  it('still spawns a .cmd that is not a node shim', async () => {
+  it('still spawns a .cmd that is not a node shim when its arguments are simple', async () => {
     const bin = writeShim('plain-tool.cmd', ['@ECHO off', 'echo FALLBACK-OK'])
     expect(await run(bin, ['ignored'])).toContain('FALLBACK-OK')
+  })
+
+  it('fails closed instead of truncating or interpreting unsafe arguments for an unresolved shim', () => {
+    const bin = writeShim('unsafe-tool.cmd', ['@ECHO off', 'echo SHOULD-NOT-RUN'])
+    expect(() => spawnCliCommand(spawn, bin, [PROMPT], {
+      cwd: root, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true,
+    })).toThrow(/Cannot safely pass multi-line or shell-sensitive arguments/)
   })
 })
