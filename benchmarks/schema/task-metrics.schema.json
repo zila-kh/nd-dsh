@@ -54,7 +54,7 @@
         "cliSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
         "shim": {
           "enum": ["cmd-exe", "posix-shell"],
-          "description": "Windows resolves an npm-style CLI through a .cmd shim, which cmd.exe parses; the shim therefore sees only the first line of a multi-line prompt."
+          "description": "Windows npm-style shims are resolved to their Node entrypoint before spawn, preserving multi-line prompts."
         },
         "runtimePath": { "type": "string" },
         "passes": {
