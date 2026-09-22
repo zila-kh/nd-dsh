@@ -4,8 +4,8 @@ These benchmarks are release evidence for PRD 0002. They use deterministic local
 
 - `pnpm bench:smoke` — short CI correctness/protocol/PTY/Git/scheduler/process-tree smoke.
 - `node benchmarks/terminal-handshake-proof.mjs` — proves the benchmark client's Windows terminal handshake both ways: a client that stops answering fails loudly inside the grace window, and the same terminal finishes once it answers.
-- `node benchmarks/verify-evidence-identity.mjs` — proves the evidence identity gates on synthetic bundles: a swapped legacy/rust pair, and a pair that ran two different nd-core executables, are refused by `bench:check` as `[identity]` failures instead of passing as budget deltas.
-- `pnpm bench:record` — one-shot Windows reference run. It builds the current portable app, records release-core results, records the same built Electron app in legacy and Rust modes, records packaged startup, evaluates budgets, and writes `summary.json` plus generated `summary.md`.
+- `node benchmarks/verify-evidence-identity.mjs` — proves the production evidence identity gates on synthetic bundles: a mislabelled runtime or mismatched nd-core executable is refused by `bench:check` as an `[identity]` failure.
+- `pnpm bench:record` — one-shot Windows reference run. It builds the current portable app, records release-core results, records the Rust Electron runtime and packaged startup, evaluates absolute/correctness budgets, and writes `summary.json` plus generated `summary.md`.
 - `pnpm bench:compare <legacy.json> <rust.json>` — compare two same-machine `electron-responsiveness.json` files. Provenance mismatch exits non-zero.
 - `pnpm bench:check <bundle/summary.json>` — reload raw JSON and recompute all PRD budgets; missing or failed evidence exits non-zero.
 - `pnpm bench:app` — packaged Electron startup only; requires `ND_DSH_BENCH_PACKAGED_APP`.
@@ -30,6 +30,8 @@ Tasks run through the production path: organization records, the guarded `organi
 
 | Pass | Fixture workload | Expected record |
 | --- | --- | --- |
+| `normal-read` (2 tasks) | Read-only deterministic CLI task, 2 model steps / 3 tool calls | matched normal-loop side of the fast-path comparison |
+| `fast-read` (2 tasks) | The same read/search/status task through the typed deterministic router | zero model round trips/tool calls/bytes-to-model; same verification gate |
 | `verified` (2 tasks) | 3 model steps, 4 tool calls, passing evidence | `completed`, verification `passed`, `completedTask: true` |
 | `verification-failed` | 2 steps, failing evidence | `failed`, verification `failed`, `completedTask: false` |
 | `engine-failed` | the engine reports an error | `failed`, verification `not-run` |
@@ -41,7 +43,7 @@ Rules this measurement keeps:
 - Counters do not depend on model latency, so an offline fixture may produce them — this is the default and the committed baseline — and a live-model fixture may too. Wall time may not: `wallTimeScope: excludes-model-latency` marks an offline record, whose wall times are product overhead rather than user-visible latency.
 - `modelRoundTrips` counts what each engine can actually report: harness `assistant/message` events (one per model call) or a CLI's own wire step boundaries. `roundTripSource` records which, so a zero is never read as "free".
 - The fixture declares its own workload and every recorded task is checked against it. A deviation fails the run: the measurement is wrong, not the task fast.
-- On Windows an npm-style CLI resolves through a `.cmd` shim, and `cmd.exe` treats a newline inside an argument as a command separator, so a shimmed CLI receives only the first line of ND's multi-line prompt. `bytesToModel` counts the full prompt ND submitted; `fixture.shim` records which transport was used.
+- On Windows ND resolves npm-style `.cmd` shims to their Node entrypoint and spawns that script directly, preserving multi-line prompts. An unresolved shim is allowed only for simple arguments; multi-line or shell-sensitive arguments fail closed rather than being truncated or interpreted by `cmd.exe`.
 
 ### Baseline policy
 
@@ -81,26 +83,22 @@ The fixture (`benchmarks/fixtures/terminal-flood.mjs`) emits payload as self-ide
 
 ## Comparison discipline
 
-Legacy and Rust relative claims are accepted only when commit, build profile, fixture revision, CPU/OS/architecture, logical CPU count, and physical memory match. The legacy switch is developer-only and exists only for migration/soak comparison; packaged production remains Rust-core only.
+Release evidence now measures the single production runtime: `rust-core`. The legacy backend switch and node-pty fallback were retired after migration convergence, so `bench:record` no longer boots a second runtime merely to preserve a migration-era relative comparison.
 
-Identity is checked before the numbers are trusted, because a swapped legacy/rust pair — or a pair whose runs used two different nd-core executables — satisfies every relative budget in both directions:
+Production evidence still fails closed on identity:
+- `backend-identity` requires core/runtime/packaged documents to identify `rust-core`.
+- `core-binary-identity` requires one nd-core SHA-256 across core, Electron runtime and packaged evidence.
+- `full-provenance` requires one commit, profile, fixture revision and machine fingerprint.
 
-- `backend-identity` requires each document's recorded `backend` to match the run that produced it (core/rust/packaged = `rust-core`, legacy = `legacy`).
-- `core-binary-identity` requires one `ndCore.sha256` across the core suite, the Rust runtime and the packaged evidence, and requires those three to record one at all. Commit and build profile identify the repository, not the executable that ran; the recorder takes the packaged hash from the staged release manifest, so packaging a different core than the suite measured is refused rather than absorbed.
-- `full-provenance` extends the same rule to commit, profile, fixture revision and the machine fingerprint.
+Historical same-machine legacy-vs-Rust `electron-responsiveness.json` files remain comparable with `pnpm bench:compare`. They are historical migration evidence, not a prerequisite for current release recording.
 
-Every check carries `kind: 'identity' | 'budget'`, and a failure line starts with `[identity]` or `[budget]`, so a mislabelled or mixed-executable bundle is never read as a numeric regression. `node benchmarks/verify-evidence-identity.mjs` demonstrates this on synthetic bundles, including a deliberately swapped pair.
-
-Runtime baselines follow [the baseline policy](../docs/plan/performance-baseline-policy.md): one committed, reviewed summary per reference machine under `benchmarks/baselines/`, refreshed by a documented PR, with raw bundles attached to the run that produced them.
-
-The full recorder uses at least 10 measured runs for startup and short-latency evidence and reports p50/p95. Memory records keep OS metric names (for example Windows private bytes or Linux PSS) rather than treating them as interchangeable.
-
+Runtime baselines follow [the baseline policy](../docs/plan/performance-baseline-policy.md). The full recorder uses at least 10 measured runs for startup and short-latency evidence and reports p50/p95.
 
 ## GitHub Actions checkpoint runs
 
 Draft PR commits intentionally skip the heavy CI jobs. Use **Actions → ci → Run workflow** for checkpoints:
 
 - leave `full_benchmark=false` for the normal Linux validation + Windows package/smoke gates;
-- set `full_benchmark=true` for the Windows legacy-vs-Rust performance evidence run only.
+- set `full_benchmark=true` for the Windows production performance evidence run only.
 
 The full benchmark job uploads `prd-0002-performance-evidence` containing the generated Markdown summary and raw JSON samples.
