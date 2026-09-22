@@ -1,8 +1,25 @@
+## Closure record (2026-09-22)
+
+Closed by `ZCode`. The implementation merged to `main` in PR #23 (`9e894dd7`); this record is the archival move from `docs/tasks/todo-` to `docs/tasks/done/`.
+
+Local gates on this branch (`docs/archive-task-0011`, based on `9e894dd`):
+
+| Gate | Command | Result |
+| --- | --- | --- |
+| Repo invariants | `pnpm verify` | passed (225 source files, 100 test files) |
+| Types | `pnpm typecheck` | passed |
+| Unit tests | `pnpm test` | 761 passed, 8 skipped (97 files passed, 4 skipped) |
+| Task regression set | `npx vitest run tests/task-worktree.test.ts tests/zcode-cli-engine.test.ts tests/engine-session-router.test.ts tests/organization-workspace-provenance.test.ts` | 36 passed (4 files) |
+
+Repository CI on the merged implementation tree: `main` run [#800 / 35685765665](https://github.com/zila-kh/nd-dsh/actions/runs/35685765665) is green, covering the Linux `validate` gate (typecheck, unit tests, desktop build, renderer isolation, Desktop smoke tests) and the Windows packaging gate. That satisfies this ticket's own gate — a green repository CI run before the record moves under `docs/tasks/done/`.
+
+**Merge gate for this archive:** this pull request is docs-only; it merges once its own `validate` and `windows-package` jobs are green. If either is red or cancelled, the move stays unmerged and the ticket is not closed.
+
 # Task 0011 — Engine-neutral teams and task workspace isolation
 
 > PRD: [PRD-0003](../prd/0003-engine-neutral-agent-teams-and-task-workspace-isolation.md)  
 > Priority: P1  
-> Status: implementation-complete — awaiting repository CI before archival  
+> Status: done — archived 2026-09-22; merge-gated by this archival PR's CI  
 > Owner: ChatGPT  
 > Updated: 2026-09-22
 
@@ -85,7 +102,7 @@ Do not build another parallel worktree manager beside these.
 - `tests/organization-workspace-provenance.test.ts` — persisted provenance, coordination handoff and integration-conflict lifecycle.
 - `benchmarks/run-suite.mjs` / `benchmarks/lib/budgets.mjs` — deterministic 1/2/4/8/10 scheduler/worktree scale evidence contract.
 
-A green repository CI run is required before this record moves under `docs/tasks/done/`.
+The required green repository CI run exists on the merged implementation tree (`main` run #800), so this record moved under `docs/tasks/done/` on 2026-09-22. The move itself is merge-gated by the archival pull request's own CI.
 
 ## Acceptance
 
