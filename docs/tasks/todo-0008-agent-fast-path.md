@@ -5,7 +5,7 @@
 > Owner: unassigned  
 > Branch: unassigned  
 > Updated: 2026-09-22  
-> Depends-on: todo-0005, todo-0006  
+> Depends-on: done-0005, done-0006 (satisfied)  
 
 ## Objective
 
@@ -13,7 +13,7 @@ A cheap decision tier over a typed action space: resolve mechanical steps withou
 
 The premise is falsifiable and must be treated as such: this work is worth keeping only if measured model round trips, tool calls, and IPC crossings per completed task improve on the same fixtures while completion rate holds. If the baseline shows round trips are not the dominant cost, the correct outcome is to **stop and record that**, not to ship a router.
 
-**Ordering inside this task is not optional.** Section 1 is unblocked and is contract work. Sections 2 and 3 are gated on task 0005 (measurement) and, for section 3, on task 0006's workspace and cache decisions.
+**Ordering inside this task is not optional.** Tasks 0005 and 0006 are now complete, so all three sections are implementation-unblocked. Section 1 still lands first because the router must conform to the action envelope before any optional decision adapter is wired.
 
 ## 1. Action space conforms to the existing envelope (start here — unblocked)
 
@@ -27,8 +27,12 @@ The failure this prevents: a second, parallel action vocabulary. If the fast pat
 - [ ] A conformance test asserts every verb resolves to an envelope kind; adding a verb without a mapping fails the build.
 - [ ] The mapping table is recorded as the contract of record.
 
-## 2. Router with explicit escalation (gated on task 0005)
+## 2. Router with explicit escalation (unblocked; baseline exists)
 
+- [ ] The router depends on a provider-neutral `DecisionEngine` contract; organization/orchestration code never branches on Jev or any other decision-model vendor.
+- [ ] Deterministic routing is the required baseline/fallback and handles provable mechanical cases with zero model calls.
+- [ ] Jev is an optional adapter only: no Jev package, credential, account, or network access is required for ND startup, normal execution, or CI.
+- [ ] If Jev or another optional adapter is unavailable/invalid/timed out, ND records the reason and falls back to deterministic handling where provable, otherwise `ESCALATE`.
 - [ ] The router emits only actions from the section 1 contract; the conformance test covers routed actions.
 - [ ] The most mechanical verbs resolve with no model call at all; a deterministic-first strategy, not a prompt.
 - [ ] No routed action executes without envelope evaluation; a denied action fails closed exactly as on the normal path.
@@ -41,7 +45,7 @@ The failure this prevents: a second, parallel action vocabulary. If the fast pat
 - [ ] Results carry provenance per the baseline policy from task 0004.
 - [ ] No benchmark-only branch exists in the shipped path.
 
-## 3. Composite core operations (gated on task 0005 and task 0006)
+## 3. Composite core operations (unblocked by dependencies; still gated by measured IPC benefit)
 
 A typical agent step costs several boundary crossings answering adjacent questions about the same workspace state — `stat`, `read`, `search`, `git status`, parse. The target is one crossing returning entries, reads, Git status, and matches together, with a revision marker so a caller can tell whether the result is current.
 
@@ -57,12 +61,13 @@ This is an optimization to be justified by measurement, not an architecture to a
 
 ## Out of scope
 
-- Replacing or wrapping the Harness or Codex engine loops. The fast path operates ND-side, above the engine contract.
+- Replacing or wrapping Harness, Codex, ZCode, or other coding-engine loops. The fast path operates ND-side, above the engine contract.
+- Requiring Jev. Jev is a benchmark candidate/optional decision adapter, not part of ND correctness or startup.
 - A new action vocabulary; section 1 owns the contract.
 - Browser and Git surface routing beyond what the first iteration genuinely needs — scope creep here is the main delivery risk.
 - A general RPC batching framework or query language.
 
 ## Notes
 
-- Open questions to settle with data, not in advance: where the router lives (main-process TypeScript versus nd-core — decide with the IPC-crossing metric), what the cheap tier is (a deterministic rules engine needs no model call at all and is the largest possible win), and whether the fast path is per-agent opt-in or company policy. Listed in [agent-fast-path.md](../plan/agent-fast-path.md) §9.
+- Open questions to settle with data, not in advance: whether any optional decision adapter (starting with Jev) beats the deterministic baseline enough to justify its latency/cost, and whether the fast path is per-agent opt-in or company policy. The first router/interface lives in the TypeScript control plane; move it only if measurement proves the boundary is a bottleneck. Listed in [agent-fast-path.md](../plan/agent-fast-path.md) §9.
 - Section 1 can be claimed and completed now, independent of everything it enables.
