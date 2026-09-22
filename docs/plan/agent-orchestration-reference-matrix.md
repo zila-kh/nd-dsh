@@ -16,6 +16,7 @@ This file preserves the open-source systems explicitly studied while designing N
 | Gajae Code | https://github.com/Yeachan-Heo/gajae-code | a84f851d8dd557f21772f27364f007a0ccd7cda7 | Plan-before-mutation, durable goal ledger, bounded subagent contracts, leader-owned checkpoint state |
 | LazyCodex | https://github.com/code-yeongyu/lazycodex | e64afc5e32170c363d1d89007f79e3d20fa093bc | Team-vs-subagent distinction, durable team state, adaptive worktree isolation |
 | jcode | https://github.com/1jehuang/jcode | 2a4edaa02057ac994a601311c4f03ed450e1b3c9 | Repository-owned performance/startup/memory benchmark inspiration |
+| Jev Ultrafast | https://github.com/browser-use/jev-ultrafast | 1231850a0bf1a0c0341fe408ef1668dbbfdfac46 | Constrained decision loop, compatible-target selection, verification, and round-trip reduction reference; optional research input only |
 
 The revisions above are observation pins, not dependencies. ND does not vendor or require these projects.
 
@@ -184,7 +185,37 @@ Future benchmark/reference questions:
 - repository/search operations;
 - end-to-end coding task latency when a comparable deterministic fixture can be defined.
 
-## 8. ND synthesis
+## 8. Jev Ultrafast
+
+Observed design themes:
+
+- a constrained decision model selects from an enumerated operation/target space rather than generating arbitrary executable text;
+- operation and compatible target selection are collapsed into one decision request;
+- generative text is delegated to a separate model only when an action actually needs text;
+- execution targets are resolved from fresh observed state rather than trusting stale model-authored identifiers;
+- completion is verified independently rather than accepting a model's `DONE` token as proof;
+- the repository emphasizes reducing browser/protocol round trips as well as model latency.
+
+ND ideas to revisit:
+
+- a provider-neutral `DecisionEngine` above the normalized ND action envelope;
+- deterministic routing as the required baseline and fallback;
+- Jev as an explicit opt-in adapter only, never a startup/runtime dependency;
+- bounded observations + compatible target lists for cheap routing;
+- durable decision provenance including engine/version/fallback/escalation reason;
+- independent machine verification after any routed action.
+
+Benchmark/reference questions:
+
+- deterministic rules vs optional Jev on the same ND agent-task fixtures;
+- model round trips, tool calls, IPC crossings, bytes/tokens to model and escalation rate per verified completion;
+- provider-decision latency as a separate metric from ND runtime overhead;
+- correctness under stale observations and invalid/unsupported decisions;
+- whether any optional decision adapter improves verified task cost enough to justify another provider/network dependency.
+
+Caution: the Jev Ultrafast published demo is browser-specific and small-sample. Its results are hypothesis-generating for ND; they are not ND benchmark evidence and must not be reused as an ND performance claim.
+
+## 9. ND synthesis
 
 ND should not copy one reference architecture.
 
@@ -212,7 +243,7 @@ Current design choice:
 - engine session = replaceable runtime context;
 - ND = checkpoint/verification/integration authority.
 
-## 9. Comparative benchmark backlog
+## 10. Comparative benchmark backlog
 
 Comparisons must be reproducible and honest. Do not publish a "faster than X" claim unless workload, machine class, cold/warm policy, verification requirement, and completion definition are comparable.
 
@@ -241,7 +272,7 @@ Benchmark rules:
 5. avoid network/model-latency claims unless both sides use equivalent providers/models and a documented setup;
 6. retain failed/inconclusive experiments rather than cherry-picking only favorable runs.
 
-## 10. ZCode/PR #21 reference incident
+## 11. ZCode/PR #21 reference incident
 
 PR #21 in ND is retained as a local regression story, not as a claim about ZCode architecture.
 
