@@ -21,6 +21,44 @@ afterEach(async () => {
 })
 
 describe('AgentBrowserClient shutdown ownership', () => {
+  it('cleans an app-owned daemon even when another client started it before this wrapper touched the session', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nd-agent-browser-external-daemon-'))
+    temporary.push(root)
+    electronState.userData = root
+
+    const client = new AgentBrowserClient(9_222, root)
+    await mkdir(client.socketDir, { recursive: true })
+    const pidPath = join(client.socketDir, `${client.sessionName}.pid`)
+    const daemon = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+    if (!daemon.pid) throw new Error('test daemon did not start')
+    const daemonPid = daemon.pid
+    await writeFile(pidPath, String(daemonPid), 'utf8')
+
+    const internal = client as unknown as {
+      sessionTouched: boolean
+      run: (command: string[], globalArguments?: string[], timeoutMs?: number) => Promise<{ stdout: string; stderr: string }>
+    }
+    expect(internal.sessionTouched).toBe(false)
+    internal.run = vi.fn(async () => {
+      await rm(pidPath, { force: true })
+      return { stdout: '', stderr: '' }
+    })
+
+    try {
+      await client.close()
+      await waitForExit(daemon, 2_000)
+      expect(isAlive(daemonPid)).toBe(false)
+      expect(internal.run).toHaveBeenCalledWith(['close'], [], expect.any(Number))
+    } finally {
+      if (isAlive(daemonPid)) {
+        try { process.kill(daemonPid, 'SIGKILL') } catch { /* already exited */ }
+      }
+    }
+  }, 8_000)
+
   it('kills the daemon captured before close even when the CLI removes its pid file', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nd-agent-browser-shutdown-'))
     temporary.push(root)
