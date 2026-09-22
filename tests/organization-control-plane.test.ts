@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { OrganizationSnapshot } from '../src/shared/organization.js'
-import { OrganizationControlPlane } from '../src/main/organization/control-plane.js'
+import { OrganizationControlPlane, taskDispatchAvailability } from '../src/main/organization/control-plane.js'
+import { ExecutionCoordinator } from '../src/main/organization/execution-coordinator.js'
 
 const temporary: string[] = []
 afterEach(async () => {
@@ -220,6 +221,70 @@ describe('organization control plane', () => {
     await expect(control.runtimeClaims('project-1', 'task.review', 'task-capacity')).resolves.toEqual([
       { key: 'project:project-1:review', limit: 2 },
     ])
+  })
+
+  it('answers automatic dispatch from the control plane gates and the coordinator pools together', async () => {
+    const { control, value } = await fixture()
+    const now = Date.now()
+    value.tasks.push({
+      id: 'task-dispatch',
+      companyId: 'company-1',
+      projectId: 'project-1',
+      title: 'Dispatch task',
+      description: 'Automatic dispatch probe',
+      acceptanceCriteria: [],
+      priority: 'medium',
+      status: 'ready',
+      dependsOn: [],
+      createdAt: now,
+      updatedAt: now,
+    })
+    await control.mutate({
+      type: 'budget.set',
+      companyId: 'company-1',
+      projectId: 'project-1',
+      maxParallelWorkers: 1,
+      maxReviewWorkers: 1,
+    })
+    const coordinator = new ExecutionCoordinator()
+    const execute = () => taskDispatchAvailability(control, coordinator, 'project-1', 'task-dispatch', 'task.execute')
+
+    await expect(execute()).resolves.toEqual({ granted: true })
+
+    const execution = await coordinator.acquire({
+      companyId: 'company-1',
+      projectId: 'project-1',
+      kind: 'execution',
+      pools: [{ key: 'project:project-1:execution', limit: 1 }],
+    })
+    await expect(execute()).resolves.toMatchObject({ granted: false, blockedPool: 'project:project-1:execution' })
+
+    // Review capacity is independent: a full execution pool does not refuse review.
+    await expect(taskDispatchAvailability(control, coordinator, 'project-1', 'task-dispatch', 'task.review')).resolves.toEqual({ granted: true })
+    const review = await coordinator.acquire({
+      companyId: 'company-1',
+      projectId: 'project-1',
+      kind: 'review',
+      pools: [{ key: 'project:project-1:review', limit: 1 }],
+    })
+    await expect(taskDispatchAvailability(control, coordinator, 'project-1', 'task-dispatch', 'task.review'))
+      .resolves.toMatchObject({ granted: false, blockedPool: 'project:project-1:review' })
+
+    // Freeing a permit re-grants: the answer is live, not a cached verdict.
+    await coordinator.release(execution)
+    await expect(execute()).resolves.toEqual({ granted: true })
+
+    // A human gate refuses before capacity is consulted, and names no pool.
+    await control.mutate({
+      type: 'human-action.add', companyId: 'company-1', projectId: 'project-1', kind: 'gate',
+      title: 'Production choice', question: 'Choose the production data strategy.', scopes: ['task.execute'],
+    })
+    const gated = await execute()
+    expect(gated.granted).toBe(false)
+    expect(gated.blockedPool).toBeUndefined()
+
+    await coordinator.release(review)
+    await coordinator.close()
   })
 
 })

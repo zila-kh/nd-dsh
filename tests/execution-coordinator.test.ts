@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ExecutionCoordinator } from '../src/main/organization/execution-coordinator.js'
+import { ExecutionCoordinator, RuntimeCapacityError, type CapacityReleaseEvent } from '../src/main/organization/execution-coordinator.js'
 
 describe('ExecutionCoordinator', () => {
   it('acquires all required pools atomically and exposes the active permit to engine spawns', async () => {
@@ -88,5 +88,63 @@ describe('ExecutionCoordinator', () => {
     await coordinator.release(execution)
     await coordinator.release(review)
     await coordinator.close()
+  })
+
+  it('answers availability per pool without reserving, and names the pool that refuses', async () => {
+    const coordinator = new ExecutionCoordinator()
+    const pools = [
+      { key: 'project:p:execution', limit: 2 },
+      { key: 'project:p:role:engineer', limit: 1 },
+    ]
+
+    await expect(coordinator.availability(pools)).resolves.toEqual({ granted: true })
+
+    const permit = await coordinator.acquire({ kind: 'execution', projectId: 'p', pools })
+    await expect(coordinator.availability(pools)).resolves.toEqual({
+      granted: false,
+      reason: 'Runtime pool project:p:role:engineer is full (1/1).',
+      blockedPool: 'project:p:role:engineer',
+    })
+    // The probe is not a reservation: it never consumed the project's second slot.
+    await expect(coordinator.availability([{ key: 'project:p:execution', limit: 2 }])).resolves.toEqual({ granted: true })
+    // A different role's pool is independent of the saturated one.
+    await expect(coordinator.availability([{ key: 'project:p:role:reviewer', limit: 1 }])).resolves.toEqual({ granted: true })
+
+    await coordinator.release(permit)
+    await expect(coordinator.availability(pools)).resolves.toEqual({ granted: true })
+    await coordinator.close()
+  })
+
+  it('refuses an over-capacity acquire with a typed error rather than a message to match', async () => {
+    const coordinator = new ExecutionCoordinator()
+    const pools = [{ key: 'project:p:execution', limit: 1 }]
+    await coordinator.acquire({ kind: 'execution', projectId: 'p', pools })
+
+    await expect(coordinator.acquire({ kind: 'execution', projectId: 'p', pools }))
+      .rejects.toBeInstanceOf(RuntimeCapacityError)
+    await coordinator.close()
+  })
+
+  it('announces capacity releases for resume, and stays silent while closing', async () => {
+    const coordinator = new ExecutionCoordinator()
+    const events: CapacityReleaseEvent[] = []
+    const stop = coordinator.onCapacityReleased((event) => events.push(event))
+
+    const execution = await coordinator.acquire({ kind: 'execution', projectId: 'p', pools: [{ key: 'project:p:execution', limit: 1 }] })
+    await coordinator.release(execution)
+    expect(events).toEqual([{ kind: 'execution', projectId: 'p' }])
+
+    stop()
+    const review = await coordinator.acquire({ kind: 'review', projectId: 'p', pools: [{ key: 'project:p:review', limit: 1 }] })
+    await coordinator.release(review)
+    expect(events).toHaveLength(1)
+
+    // Closing the app releases its permits too; none of those may start work.
+    const duringClose: CapacityReleaseEvent[] = []
+    coordinator.onCapacityReleased((event) => duringClose.push(event))
+    const last = await coordinator.acquire({ kind: 'execution', projectId: 'p', pools: [{ key: 'project:p:execution', limit: 1 }] })
+    await coordinator.close()
+    expect(duringClose).toEqual([])
+    expect(last.id).toBeTruthy()
   })
 })

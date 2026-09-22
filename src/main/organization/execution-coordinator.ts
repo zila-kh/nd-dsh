@@ -22,6 +22,33 @@ export interface RuntimePermit {
   input: RuntimePermitInput
 }
 
+/**
+ * A structured answer to "would an acquire with these pools succeed right now?".
+ * Callers that dispatch work one task at a time (the Autopilot fill) need to
+ * decide before starting a run; without this they can only attempt the run and
+ * guess from the failure text, which turns real errors into fake capacity.
+ */
+export interface RuntimeAvailability {
+  granted: boolean
+  reason?: string
+  /** The pool that refused, so a caller can tell a per-task limit from a project-wide one. */
+  blockedPool?: string
+}
+
+/**
+ * A permit acquire that was refused because a pool is full. A caller that
+ * dispatched speculatively treats this as "not now" — the run never started, so
+ * there is no failure to report — rather than matching on the message.
+ */
+export class RuntimeCapacityError extends Error {
+  readonly code = 'runtime-capacity'
+}
+
+export interface CapacityReleaseEvent {
+  kind: RuntimePermitInput['kind']
+  projectId?: string
+}
+
 interface CoreAcquireResult {
   granted: boolean
   reason?: string
@@ -40,8 +67,10 @@ export class ExecutionCoordinator {
   private readonly permitContext = new AsyncLocalStorage<RuntimePermit>()
   private readonly heartbeatTimer: ReturnType<typeof setInterval> | undefined
   private readonly disposeCoreExit: (() => void) | undefined
+  private readonly releaseListeners = new Set<(event: CapacityReleaseEvent) => void>()
   private coreChain: Promise<unknown> = Promise.resolve()
   private blockedReason: string | undefined
+  private closing = false
 
   constructor(private readonly core?: Pick<CoreClient, 'request' | 'onEvent'>) {
     if (core) {
@@ -73,7 +102,7 @@ export class ExecutionCoordinator {
         ttlMs: 120_000,
       }, 5_000)
       if (!result.granted || !result.permit) {
-        throw new Error(result.reason ?? 'ND Core runtime capacity is unavailable.')
+        throw new RuntimeCapacityError(result.reason ?? 'ND Core runtime capacity is unavailable.')
       }
     } else {
       this.acquireLocal(id, input.pools)
@@ -81,6 +110,41 @@ export class ExecutionCoordinator {
     const permit: RuntimePermit = { id, input }
     this.permits.set(id, permit)
     return permit
+  }
+
+  /**
+   * Read-only capacity probe for callers that dispatch one unit of work at a
+   * time. It is not a reservation: the acquire that follows is still the only
+   * authority, and a grant here can be lost to a competing dispatch.
+   */
+  async availability(claims: RuntimePoolClaim[]): Promise<RuntimeAvailability> {
+    validatePools(claims)
+    if (this.blockedReason) return { granted: false, reason: this.blockedReason }
+    if (this.core) {
+      let pools: Record<string, number>
+      try {
+        const snapshot = await this.coreRequest<{ pools?: Record<string, number> }>('scheduler.snapshot', {}, 5_000)
+        pools = snapshot?.pools ?? {}
+      } catch (error) {
+        // Failing closed is the point: an unreachable scheduler cannot prove
+        // there is room, and dispatching anyway would exceed the caps.
+        return { granted: false, reason: `ND Core runtime capacity is unavailable: ${error instanceof Error ? error.message : String(error)}` }
+      }
+      return availabilityFrom(claims, (key) => pools[key] ?? 0)
+    }
+    return availabilityFrom(claims, (key) => [...this.localPermits.values()]
+      .filter((permit) => permit.pools.some((pool) => pool.key === key))
+      .length)
+  }
+
+  /**
+   * Notifies after a permit is released so a dispatch round that ended on a full
+   * pool can resume without waiting for an unrelated lifecycle event. Releases
+   * during shutdown are not announced: closing the app must not start work.
+   */
+  onCapacityReleased(listener: (event: CapacityReleaseEvent) => void): () => void {
+    this.releaseListeners.add(listener)
+    return () => this.releaseListeners.delete(listener)
   }
 
   runWithPermit<T>(permit: RuntimePermit, operation: () => Promise<T>): Promise<T> {
@@ -144,6 +208,7 @@ export class ExecutionCoordinator {
   }
 
   async close(): Promise<void> {
+    this.closing = true
     this.disposeCoreExit?.()
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
     const permits = [...this.permits.values()]
@@ -173,19 +238,32 @@ export class ExecutionCoordinator {
         .filter((permit) => permit.pools.some((pool) => pool.key === claim.key))
         .length
       if (used >= claim.limit) {
-        throw new Error('Runtime capacity reached for ' + claim.key + ' (' + used + '/' + claim.limit + ').')
+        throw new RuntimeCapacityError('Runtime capacity reached for ' + claim.key + ' (' + used + '/' + claim.limit + ').')
       }
     }
     this.localPermits.set(id, { id, pools })
   }
 
   private async releaseById(permitId: string): Promise<void> {
+    const permit = this.permits.get(permitId)
     if (!this.permits.delete(permitId)) return
     this.localPermits.delete(permitId)
+    if (permit) this.announceRelease(permit)
     if (!this.core) return
     await this.coreRequest('scheduler.release', { permitId }, 5_000).catch((error) => {
       console.warn('ND Core permit release failed:', error instanceof Error ? error.message : String(error))
     })
+  }
+
+  private announceRelease(permit: RuntimePermit): void {
+    if (this.closing) return
+    for (const listener of [...this.releaseListeners]) {
+      try {
+        listener({ kind: permit.input.kind, ...(permit.input.projectId ? { projectId: permit.input.projectId } : {}) })
+      } catch (error) {
+        console.warn('Runtime capacity release listener failed:', error instanceof Error ? error.message : String(error))
+      }
+    }
   }
 
   private async heartbeat(): Promise<void> {
@@ -201,6 +279,16 @@ export class ExecutionCoordinator {
       }
     }))
   }
+}
+
+function availabilityFrom(claims: RuntimePoolClaim[], used: (key: string) => number): RuntimeAvailability {
+  for (const claim of claims) {
+    const count = used(claim.key)
+    if (count >= claim.limit) {
+      return { granted: false, reason: `Runtime pool ${claim.key} is full (${count}/${claim.limit}).`, blockedPool: claim.key }
+    }
+  }
+  return { granted: true }
 }
 
 function validatePools(pools: RuntimePoolClaim[]): void {

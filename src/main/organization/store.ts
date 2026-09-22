@@ -450,10 +450,21 @@ export class OrganizationStore {
     await this.save()
   }
 
-  async nextReadyTask(projectId: string): Promise<OrganizationTask | undefined> {
+  /**
+   * Every dispatchable task in priority order. Parallel dispatch needs the whole
+   * list, not just its head: a per-role or per-team cap can refuse the highest
+   * priority task while a lower one still has room.
+   */
+  async readyTasks(projectId: string): Promise<OrganizationTask[]> {
     await this.load(); this.refreshProject(projectId)
-    const task = this.value.tasks.filter((item) => item.projectId === projectId && item.status === 'ready').sort((a, b) => priority(b.priority) - priority(a.priority) || a.createdAt - b.createdAt)[0]
-    return task ? clone(task) : undefined
+    return this.value.tasks
+      .filter((item) => item.projectId === projectId && item.status === 'ready')
+      .sort((a, b) => priority(b.priority) - priority(a.priority) || a.createdAt - b.createdAt)
+      .map(clone)
+  }
+
+  async nextReadyTask(projectId: string): Promise<OrganizationTask | undefined> {
+    return (await this.readyTasks(projectId))[0]
   }
 
   private async load(): Promise<void> {

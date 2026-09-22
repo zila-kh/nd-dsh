@@ -10,7 +10,7 @@ import { isRetryableExecutionFailure, MAX_EXECUTION_ATTEMPTS, retryBackoffMs, st
 import type { OrganizationStore } from './store.js'
 import { TaskIntegrationConflictError, TaskWorktreeManager, type TaskWorktree } from './task-worktree.js'
 import { formatVerificationEvidence, runArtifactVerification, runVerification } from './verification-evidence.js'
-import type { ExecutionCoordinator } from './execution-coordinator.js'
+import { RuntimeCapacityError, type ExecutionCoordinator, type RuntimeAvailability } from './execution-coordinator.js'
 
 interface ReviewVerdict {
   verdict: 'pass' | 'fail'
@@ -56,6 +56,17 @@ const STRUCTURED_RESULT_GRACE_MS = 2_500
 type WorkflowKind = 'plan' | 'execute' | 'review'
 type TaskEngine = Pick<CodingEngineDescriptor, 'id' | 'name' | 'workerInstructions'>
 
+/**
+ * Asked before every automatic dispatch. Only the control plane can compute a
+ * task's pool claims, so the guarded IPC layer installs this; an orchestrator
+ * without it dispatches as before and lets the acquire refuse.
+ */
+export type DispatchAvailabilityProvider = (
+  projectId: string,
+  taskId: string,
+  action: 'task.execute' | 'task.review',
+) => Promise<RuntimeAvailability>
+
 const DEFAULT_WORKER_INSTRUCTIONS = '\nExecution engine: ND Harness. Work directly in the project workspace using the available ND tools.\n'
 
 export class OrganizationOrchestrator {
@@ -72,6 +83,8 @@ export class OrganizationOrchestrator {
   private lastProgressAt = new Map<string, number>()
   private parallelFillProjects = new Set<string>()
   private stallReconcileBusy = false
+  private dispatchAvailability: DispatchAvailabilityProvider | undefined
+  private readonly capacityWaiting = new Set<string>()
   private readonly structuredErrors = new Map<string, string>()
   private readonly taskWorktrees: TaskWorktreeManager
 
@@ -87,6 +100,26 @@ export class OrganizationOrchestrator {
     taskWorktrees?: TaskWorktreeManager,
   ) {
     this.taskWorktrees = taskWorktrees ?? new TaskWorktreeManager()
+  }
+
+  /**
+   * Installed by the guarded IPC layer, which owns the control plane the claims
+   * come from. Without a provider the orchestrator cannot know whether a pool
+   * has room, so it dispatches and lets the permit acquire refuse.
+   */
+  setDispatchAvailability(provider: DispatchAvailabilityProvider | undefined): void {
+    this.dispatchAvailability = provider
+  }
+
+  /**
+   * Re-enters the parallel fill for one project after a runtime permit was
+   * released. A round that ended on a full pool is the only thing resume means:
+   * every other stop needs a different trigger (a gate, a fix, a new plan), and
+   * re-dispatching into a failing task would spin.
+   */
+  async resumeAutopilotDispatch(projectId: string): Promise<void> {
+    if (!this.capacityWaiting.has(projectId)) return
+    await this.fillParallelReadyTasks(projectId)
   }
 
   async planProject(projectId: string, explicit = true): Promise<OrganizationRunReceipt> {
@@ -704,25 +737,57 @@ export class OrganizationOrchestrator {
     if (this.parallelFillProjects.has(projectId)) return
     this.parallelFillProjects.add(projectId)
     try {
-      for (let index = 0; index < MAX_AUTOPILOT_PARALLEL_FILL; index += 1) {
+      // The bound is an iteration guard, not a capacity decision: it caps how
+      // many candidates one round inspects and how many runs it starts. Every
+      // dispatch still acquires its own permit, and the availability probe is
+      // what ends a round when a pool is full.
+      for (let attempt = 0; attempt < MAX_AUTOPILOT_PARALLEL_FILL; attempt += 1) {
         const state = await this.store.state()
         const project = state.projects.find((item) => item.id === projectId)
         const company = project ? state.companies.find((item) => item.id === project.companyId) : undefined
         if (!project || company?.autonomyLevel !== 4) return
-        const ready = await this.store.nextReadyTask(projectId)
-        if (!ready) return
+        const { task, capacityBound } = await this.nextDispatchableTask(projectId)
+        if (!task) {
+          if (capacityBound) this.capacityWaiting.add(projectId)
+          else this.capacityWaiting.delete(projectId)
+          return
+        }
+        this.capacityWaiting.delete(projectId)
         try {
-          await this.runTask(ready.id, false)
+          await this.runTask(task.id, false)
         } catch (error) {
-          const message = errorMessage(error)
-          if (/capacity|active|isolated|worktree|leased/i.test(message)) return
-          console.warn('Parallel autopilot fill paused:', message)
+          // A pool filled between the probe and the acquire. The run never
+          // started, so no task record and no run receipt claim a failure; the
+          // round just waits for the next release.
+          if (error instanceof RuntimeCapacityError) {
+            this.capacityWaiting.add(projectId)
+            return
+          }
+          console.warn('Parallel autopilot fill paused:', errorMessage(error))
           return
         }
       }
     } finally {
       this.parallelFillProjects.delete(projectId)
     }
+  }
+
+  /**
+   * The ready task this round should dispatch next, plus whether the round is
+   * ending because every candidate hit a full pool. A full project pool refuses
+   * all of them; a full role or team pool refuses only the tasks that carry it,
+   * so a lower-priority task can still proceed.
+   */
+  private async nextDispatchableTask(projectId: string): Promise<{ task: OrganizationTask | undefined; capacityBound: boolean }> {
+    const candidates = (await this.store.readyTasks(projectId)).slice(0, MAX_AUTOPILOT_PARALLEL_FILL)
+    if (!this.dispatchAvailability) return { task: candidates[0], capacityBound: false }
+    let capacityBound = false
+    for (const candidate of candidates) {
+      const availability = await this.dispatchAvailability(projectId, candidate.id, 'task.execute')
+      if (availability.granted) return { task: candidate, capacityBound }
+      if (availability.blockedPool) capacityBound = true
+    }
+    return { task: undefined, capacityBound }
   }
 
   private resolveAgentModel(agent?: OrganizationAgent, role?: OrganizationRole): { provider?: string; model?: string } {

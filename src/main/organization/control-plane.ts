@@ -20,7 +20,7 @@ import type { OrganizationRun, OrganizationRunKind, OrganizationRunReceipt, Orga
 import type { OrganizationStore } from './store.js'
 import { taskEvidenceWorkspace } from './task-worktree.js'
 import { captureWorkspaceEvidence } from './worktree-evidence.js'
-import type { RuntimePoolClaim } from './execution-coordinator.js'
+import type { ExecutionCoordinator, RuntimeAvailability, RuntimePoolClaim } from './execution-coordinator.js'
 
 const DAY_MS = 24 * 60 * 60 * 1_000
 const DEFAULT_LEASE_MS = 30 * 60 * 1_000
@@ -558,6 +558,27 @@ function gateBlocks(item: OrganizationHumanAction, action: OrganizationControlAc
 function assertCompanyProject(state: OrganizationSnapshot, companyId: string, projectId?: string): void {
   if (!state.companies.some((item) => item.id === companyId)) throw new Error('Company not found')
   if (projectId && !state.projects.some((item) => item.id === projectId && item.companyId === companyId)) throw new Error('Project does not belong to company')
+}
+
+/**
+ * The single authority for "may Autopilot dispatch this task right now?".
+ *
+ * The fill used to attempt a run and read the failure text as "no capacity".
+ * That bypassed the control plane's gates and turned any real error containing
+ * a word like "active" into a silent stop. Both authorities answer in structured
+ * form here, so a refusal is a decision rather than a message to match.
+ */
+export async function taskDispatchAvailability(
+  control: Pick<OrganizationControlPlane, 'shouldRun' | 'runtimeClaims'>,
+  coordinator: Pick<ExecutionCoordinator, 'availability'> | undefined,
+  projectId: string,
+  taskId: string,
+  action: 'task.execute' | 'task.review',
+): Promise<RuntimeAvailability> {
+  const decision = await control.shouldRun(projectId, action, taskId)
+  if (decision.route !== 'ready') return { granted: false, reason: decision.reason }
+  if (!coordinator) return { granted: true }
+  return coordinator.availability(await control.runtimeClaims(projectId, action, taskId))
 }
 
 function attentionFeedback(label: OrganizationReviewFeedback['label']): boolean {

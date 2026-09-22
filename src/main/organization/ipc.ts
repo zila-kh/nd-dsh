@@ -13,7 +13,7 @@ import {
 } from '../../shared/organization-strategy.js'
 import type { ProjectRuntimeService } from '../workspace/project-runtime.js'
 import type { ProjectWorkspaceCoordinator } from '../workspace/project-workspace-coordinator.js'
-import { OrganizationControlPlane } from './control-plane.js'
+import { OrganizationControlPlane, taskDispatchAvailability } from './control-plane.js'
 import type { ExecutionCoordinator, RuntimePermit } from './execution-coordinator.js'
 import type { OrganizationOrchestrator } from './orchestrator.js'
 import { materializeOrganizationSignal } from './signal-materializer.js'
@@ -276,6 +276,20 @@ function guardOrchestrator(
   const reviewTask = orchestrator.reviewTask.bind(orchestrator)
   const runNext = orchestrator.runNext.bind(orchestrator)
 
+  // Dispatch decisions consult the same two authorities the guarded runs obey:
+  // the control plane's gates and the coordinator's pools. Without this the
+  // automatic fill could only attempt a run and read its failure text as "no
+  // capacity", which bypassed the gates and hid genuine errors at once.
+  orchestrator.setDispatchAvailability((projectId, taskId, action) => taskDispatchAvailability(control, executionCoordinator, projectId, taskId, action))
+  // A fill round that ended on a full pool restarts when that pool frees up,
+  // instead of waiting for an unrelated lifecycle event to try again.
+  const stopCapacityReleases = executionCoordinator?.onCapacityReleased((event) => {
+    if (!event.projectId) return
+    void orchestrator.resumeAutopilotDispatch(event.projectId).catch((error) => {
+      console.warn('Autopilot capacity resume failed:', error instanceof Error ? error.message : String(error))
+    })
+  })
+
   orchestrator.planProject = async (projectId: string, explicit = true) => {
     await control.assertRunnable(projectId, 'internal.plan')
     const result = await planProject(projectId, explicit)
@@ -345,6 +359,8 @@ function guardOrchestrator(
   }
 
   return () => {
+    stopCapacityReleases?.()
+    orchestrator.setDispatchAvailability(undefined)
     orchestrator.planProject = planProject
     orchestrator.runTask = runTask
     orchestrator.reviewTask = reviewTask
