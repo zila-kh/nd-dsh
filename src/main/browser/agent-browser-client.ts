@@ -175,15 +175,20 @@ export class AgentBrowserClient {
   }
 
   async close(): Promise<void> {
-    if (!this.sessionTouched) return
     if (!this.closing) {
       this.closing = (async () => {
+        // The socket directory is private to this ND app/userData. A daemon can
+        // be started by another app-owned client (for example the browser MCP)
+        // before this wrapper itself marks the session as touched, so ownership
+        // is determined by the pid file as well as sessionTouched.
+        //
         // Capture the daemon pid *before* asking agent-browser to close the
         // session. agent-browser may remove its pid file as part of close even
         // when the daemon process is still alive; reading the file afterwards
         // loses the only stable ownership handle and leaks the daemon beyond
-        // the Electron process (observed on Linux CI with agent-browser 0.34).
+        // the Electron process.
         const daemonPid = await this.daemonPid()
+        if (!this.sessionTouched && daemonPid === undefined) return
         try {
           await this.run(['close'], [], SHUTDOWN_TIMEOUT_MS)
         } catch (error) {
