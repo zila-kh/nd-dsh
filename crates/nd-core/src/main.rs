@@ -9,6 +9,7 @@ mod protocol;
 mod revision;
 mod scheduler;
 mod search;
+mod snapshot;
 mod terminal;
 #[cfg(windows)]
 mod windows_job;
@@ -331,6 +332,11 @@ fn dispatch(
             let params = from_params::<search::SearchParams>(params)?;
             state.metrics.observe_workspace(&params.root);
             to_value(search::search(params, interrupt)?)
+        }
+        "workspace.snapshot" => {
+            let params = from_params::<snapshot::SnapshotParams>(params)?;
+            state.metrics.observe_workspace(&params.root);
+            to_value(snapshot::snapshot(params, interrupt)?)
         }
         other => {
             let _ = request_id;
