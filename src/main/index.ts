@@ -13,6 +13,7 @@ import { ORGANIZATION_IPC } from '../shared/organization.js'
 import { TERMINAL_IPC } from '../shared/terminal.js'
 import { projectRoot } from './app-paths.js'
 import { BrowserController } from './browser/browser-controller.js'
+import { stopAppOwnedBrowserDaemons } from './browser/agent-browser-client.js'
 import { DEFAULT_BROWSER_URL } from './browser/browser-url.js'
 import { CapabilityAssignmentStore } from './capabilities/capability-assignment-store.js'
 import { CapabilityRegistry } from './capabilities/capability-registry.js'
@@ -704,7 +705,7 @@ app.on('before-quit', (event) => {
     console.warn('ND shutdown timed out waiting for background services; exiting forcefully.')
     app.exit(0)
   }, 5_000)
-  void Promise.allSettled(pending).then((results) => {
+  void Promise.allSettled(pending).then(async (results) => {
     clearTimeout(shutdownTimeout)
     void log.flush()
     if (results.some((result) => result.status === 'rejected')) {
@@ -713,6 +714,10 @@ app.on('before-quit', (event) => {
       console.error('ND quit was canceled because the Freeform document could not be saved safely.')
       return
     }
+    // An engine or the Harness runtime can still start a browser daemon while it
+    // stops. A daemon that outlives this process keeps inherited pipes open, so
+    // take one last pass once every service close has settled.
+    await stopAppOwnedBrowserDaemons().catch((error) => console.error('Failed to stop app-owned browser daemons:', error))
     app.exit(0)
   })
 })

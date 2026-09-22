@@ -58,7 +58,7 @@ export class AgentBrowserClient {
   constructor(cdpPort: number, projectRoot: string) {
     this.cdpPort = cdpPort
     this.configPath = join(app.getPath('userData'), 'agent-browser.visible.json')
-    this.socketDir = join(app.getPath('userData'), 'agent-browser-runtime')
+    this.socketDir = appBrowserSocketDir()
     this.binary = this.resolveBinary(projectRoot)
     this.entryPath = resolve(
       process.env.ND_DSH_AGENT_BROWSER_ENTRY
@@ -237,50 +237,9 @@ export class AgentBrowserClient {
     }
   }
 
-  /**
-   * Daemon directories this app can own, most specific first.
-   *
-   * The namespace composes with the socket directory, so a consumer that inherits
-   * AGENT_BROWSER_SOCKET_DIR and one that only reads the config resolve the same
-   * namespace under different roots. The pre-namespace root stays in the list so a
-   * daemon started by an earlier build is still reapable.
-   */
-  private daemonRoots(): string[] {
-    return [
-      join(this.socketDir, 'namespaces', AGENT_BROWSER_DAEMON_NAMESPACE, 'run'),
-      join(app.getPath('home'), '.agent-browser', 'namespaces', AGENT_BROWSER_DAEMON_NAMESPACE, 'run'),
-      this.socketDir,
-    ]
-  }
-
   /** Every daemon pid sidecar in the directories this app can own. */
   private async daemonPids(): Promise<number[]> {
-    const pids = new Set<number>()
-    for (const root of this.daemonRoots()) {
-      let entries: string[]
-      try {
-        entries = await fs.readdir(root)
-      } catch {
-        continue
-      }
-      for (const entry of entries) {
-        if (!entry.endsWith('.pid')) continue
-        const pid = await this.readPidFile(join(root, entry))
-        if (pid !== undefined) pids.add(pid)
-      }
-    }
-    return [...pids]
-  }
-
-  private async readPidFile(pidPath: string): Promise<number | undefined> {
-    try {
-      const raw = await fs.readFile(pidPath, 'utf8')
-      const pid = Number.parseInt(raw.trim(), 10)
-      if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid) return undefined
-      return pid
-    } catch {
-      return undefined
-    }
+    return daemonPidsFor(this.socketDir)
   }
 
   private async ensureDaemonsStopped(capturedPids: number[]): Promise<void> {
@@ -289,34 +248,7 @@ export class AgentBrowserClient {
     // versions that leave the files in place.
     const pids = new Set<number>(capturedPids)
     for (const pid of await this.daemonPids()) pids.add(pid)
-    for (const pid of pids) await this.forceStopDaemon(pid)
-  }
-
-  private async forceStopDaemon(pid: number): Promise<void> {
-    const deadline = Date.now() + DAEMON_EXIT_GRACE_MS
-    while (Date.now() < deadline) {
-      if (!isProcessAlive(pid)) return
-      await sleep(50)
-    }
-
-    console.warn(`[agent-browser] daemon ${pid} did not exit after close; forcing cleanup`)
-    if (process.platform === 'win32') {
-      await new Promise<void>((resolvePromise) => {
-        const killer = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], {
-          stdio: 'ignore',
-          windowsHide: true,
-        })
-        const done = (): void => resolvePromise()
-        killer.once('error', done)
-        killer.once('close', done)
-      })
-    } else {
-      try { process.kill(pid, 'SIGTERM') } catch { return }
-      await sleep(250)
-      if (isProcessAlive(pid)) {
-        try { process.kill(pid, 'SIGKILL') } catch { /* already exited */ }
-      }
-    }
+    for (const pid of pids) await forceStopDaemon(pid, DAEMON_EXIT_GRACE_MS)
   }
 
   private resolveBinary(projectRoot: string): string {
@@ -397,4 +329,99 @@ export class AgentBrowserClient {
       })
     })
   }
+}
+
+/** The app's private daemon socket directory. */
+export function appBrowserSocketDir(): string {
+  return join(app.getPath('userData'), 'agent-browser-runtime')
+}
+
+/**
+ * Daemon directories this app can own, most specific first.
+ *
+ * The namespace composes with the socket directory, so a consumer that inherits
+ * AGENT_BROWSER_SOCKET_DIR and one that only reads the config file resolve the
+ * same namespace under different roots. The pre-namespace root stays in the list
+ * so a daemon started by an earlier build is still reapable.
+ */
+function daemonRootsFor(socketDir: string): string[] {
+  return [
+    join(socketDir, 'namespaces', AGENT_BROWSER_DAEMON_NAMESPACE, 'run'),
+    join(app.getPath('home'), '.agent-browser', 'namespaces', AGENT_BROWSER_DAEMON_NAMESPACE, 'run'),
+    socketDir,
+  ]
+}
+
+async function daemonPidsFor(socketDir: string): Promise<number[]> {
+  const pids = new Set<number>()
+  for (const root of daemonRootsFor(socketDir)) {
+    let entries: string[]
+    try {
+      entries = await fs.readdir(root)
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (!entry.endsWith('.pid')) continue
+      const pid = await readPidFile(join(root, entry))
+      if (pid !== undefined) pids.add(pid)
+    }
+  }
+  return [...pids]
+}
+
+async function readPidFile(pidPath: string): Promise<number | undefined> {
+  try {
+    const raw = await fs.readFile(pidPath, 'utf8')
+    const pid = Number.parseInt(raw.trim(), 10)
+    if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid) return undefined
+    return pid
+  } catch {
+    return undefined
+  }
+}
+
+async function forceStopDaemon(pid: number, graceMs: number): Promise<void> {
+  const deadline = Date.now() + graceMs
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) return
+    await sleep(50)
+  }
+
+  console.warn(`[agent-browser] daemon ${pid} did not exit after close; forcing cleanup`)
+  if (process.platform === 'win32') {
+    await new Promise<void>((resolvePromise) => {
+      const killer = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      })
+      const done = (): void => resolvePromise()
+      killer.once('error', done)
+      killer.once('close', done)
+    })
+  } else {
+    try { process.kill(pid, 'SIGTERM') } catch { return }
+    await sleep(250)
+    if (isProcessAlive(pid)) {
+      try { process.kill(pid, 'SIGKILL') } catch { /* already exited */ }
+    }
+  }
+}
+
+/**
+ * Force-stop every browser daemon this app can own, with no graceful close.
+ *
+ * Called after the app's services have finished shutting down: an engine or the
+ * Harness runtime can still start a daemon while it stops, and a daemon that
+ * outlives the Electron process holds inherited pipes open until its own idle
+ * timeout. Returns how many daemons it had to stop.
+ */
+export async function stopAppOwnedBrowserDaemons(): Promise<number> {
+  let stopped = 0
+  for (const pid of await daemonPidsFor(appBrowserSocketDir())) {
+    if (!isProcessAlive(pid)) continue
+    await forceStopDaemon(pid, 0)
+    stopped += 1
+  }
+  return stopped
 }

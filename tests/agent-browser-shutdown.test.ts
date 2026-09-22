@@ -12,7 +12,12 @@ vi.mock('electron', () => ({
   },
 }))
 
-import { AGENT_BROWSER_DAEMON_NAMESPACE, AgentBrowserClient } from '../src/main/browser/agent-browser-client.js'
+import {
+  AGENT_BROWSER_DAEMON_NAMESPACE,
+  AgentBrowserClient,
+  appBrowserSocketDir,
+  stopAppOwnedBrowserDaemons,
+} from '../src/main/browser/agent-browser-client.js'
 
 const temporary: string[] = []
 
@@ -175,6 +180,34 @@ describe('AgentBrowserClient shutdown ownership', () => {
       await waitForExit(daemon, 2_000)
       expect(isAlive(daemonPid)).toBe(false)
       expect(internal.run).toHaveBeenCalledWith(['close', '--all'], [], expect.any(Number), { withoutSocketDir: true })
+    } finally {
+      if (isAlive(daemonPid)) {
+        try { process.kill(daemonPid, 'SIGKILL') } catch { /* already exited */ }
+      }
+    }
+  }, 8_000)
+
+  it('stops owned daemons on the app-wide sweep, which runs after every service closes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nd-agent-browser-app-sweep-'))
+    temporary.push(root)
+    electronState.userData = root
+
+    // A daemon can be started while the app is already shutting down; the final
+    // sweep has no session state to consult and must still stop it.
+    const runDir = join(appBrowserSocketDir(), 'namespaces', AGENT_BROWSER_DAEMON_NAMESPACE, 'run')
+    await mkdir(runDir, { recursive: true })
+    const daemon = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+    if (!daemon.pid) throw new Error('test daemon did not start')
+    const daemonPid = daemon.pid
+    await writeFile(join(runDir, 'leftover.pid'), String(daemonPid), 'utf8')
+
+    try {
+      expect(await stopAppOwnedBrowserDaemons()).toBe(1)
+      await waitForExit(daemon, 2_000)
+      expect(isAlive(daemonPid)).toBe(false)
     } finally {
       if (isAlive(daemonPid)) {
         try { process.kill(daemonPid, 'SIGKILL') } catch { /* already exited */ }
