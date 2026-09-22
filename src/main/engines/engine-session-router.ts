@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { resolve } from 'node:path'
 import type {
   DshEventFrame,
   EngineModelOption,
@@ -86,6 +87,8 @@ export class EngineSessionRouter {
   }
   /** Logical engine ids for harness-backed sessions such as delegated Codex. */
   private readonly logicalEngineBySession = new Map<string, string>()
+  /** ND-owned immutable workspace binding for direct task/interactive sessions. */
+  private readonly workspaceRootBySession = new Map<string, string>()
   private readonly chatGptWeb: ChatGptWebEngine | undefined
   private readonly chatGptWebBrowser: BrowserController | undefined
   private readonly chatGptWebLog: ((line: string) => void) | undefined
@@ -163,9 +166,14 @@ export class EngineSessionRouter {
     const directTarget = this.directEngines.get(requested)
     const requestedSessionId = options?.sessionId
     const workspaceDirect = Boolean(directTarget) && this.isWorkspaceDirectEngine(requested)
-    const sessionCwd = workspaceDirect && requestedSessionId
+    const engineSessionCwd = workspaceDirect && requestedSessionId
       ? directTarget?.listSessions().find((item) => item.sessionId === requestedSessionId)?.cwd
       : undefined
+    const boundSessionCwd = requestedSessionId ? this.workspaceRootBySession.get(requestedSessionId) : undefined
+    if (boundSessionCwd && engineSessionCwd && !sameWorkspaceRoot(boundSessionCwd, engineSessionCwd)) {
+      throw new Error('Direct engine changed the ND-bound task workspace; create a new session instead of re-rooting this one')
+    }
+    const sessionCwd = boundSessionCwd ?? engineSessionCwd
     if (workspaceDirect && requestedSessionId) {
       if (!sessionCwd || !this.sessionRootAllowed(sessionCwd)) throw new Error('Session belongs to a different project workspace')
     }
@@ -274,12 +282,13 @@ export class EngineSessionRouter {
   async createSession(engineId: string, cwd?: string): Promise<{ sessionId: string; engineId: string }> {
     const direct = this.directEngines.get(engineId)
     if (direct) {
+      const workspaceDirect = this.isWorkspaceDirectEngine(engineId)
+      const targetCwd = workspaceDirect ? (cwd ?? this.workspace.state().root) : undefined
       const sessionId = (await direct.createSession(
-        this.isWorkspaceDirectEngine(engineId)
-          ? { cwd: cwd ?? this.workspace.state().root }
-          : {},
+        workspaceDirect && targetCwd ? { cwd: targetCwd } : {},
       )).sessionId
       this.logicalEngineBySession.set(sessionId, engineId)
+      if (workspaceDirect && targetCwd) this.workspaceRootBySession.set(sessionId, targetCwd)
       return { engineId, sessionId }
     }
     const targetCwd = cwd ?? this.workspace.state().root
@@ -346,7 +355,7 @@ export class EngineSessionRouter {
       ...[...this.directEngines.entries()]
         .filter(([engineId]) => this.isWorkspaceDirectEngine(engineId))
         .flatMap(([, direct]) => direct.listSessions()),
-    ].filter((session) => sessionInWorkspace(workspaceRoot, session.cwd))
+    ].filter((session) => session.cwd === undefined || sessionInWorkspace(workspaceRoot, session.cwd) || this.worktreeGuard?.(session.cwd) === true)
     const interactiveSessions = [...this.directEngines.entries()]
       .filter(([engineId]) => !this.isWorkspaceDirectEngine(engineId))
       .flatMap(([, direct]) => direct.listSessions())
@@ -426,4 +435,12 @@ function isChatGptUrl(value: string): boolean {
 
 export function isRestorableBrowserUrl(value: string): boolean {
   return value.trim().toLowerCase() !== 'about:blank' && !isChatGptUrl(value)
+}
+
+function sameWorkspaceRoot(left: string, right: string): boolean {
+  const normalize = (value: string): string => {
+    const root = resolve(value)
+    return process.platform === 'win32' ? root.toLowerCase() : root
+  }
+  return normalize(left) === normalize(right)
 }

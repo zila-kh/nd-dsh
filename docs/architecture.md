@@ -12,6 +12,8 @@ ND-DSH is the product and control plane. Model vendors and coding runtimes are r
 | company policy | ND-DSH | orchestrator + main-process approval gate |
 | model-provider routes | ND-DSH | provider compiler → Harness LLM adapters |
 | coding-engine routes | ND-DSH | engine registry + per-employee assignments |
+| task workspace / checkpoint provenance | ND-DSH | TaskWorktreeManager + organization run ledger |
+| runtime permits / parallel capacity | ND-DSH | ExecutionCoordinator + nd-core scheduler |
 | primary coding runtime | ND-DSH adapter | DeepSeek Harness (tracks upstream latest) |
 | delegated Codex execution | ND-DSH adapter | pinned Harness Codex provider → official Codex app-server |
 | visible browser | ND-DSH / Electron | one `WebContentsView` + exact CDP target |
@@ -31,22 +33,20 @@ context-isolated preload / narrow IPC
         |
         v
 Electron main process
-  |-- organization state + PM/worker/reviewer orchestrator
+  |-- organization state + PM/task/review/integration orchestrator
+  |-- per-task lease/worktree/checkpoint provenance
+  |-- ExecutionCoordinator + nd-core shared runtime permits
   |-- provider control plane + encrypted credentials
   |-- coding-engine registry + employee assignments
+  |-- engine-session router with immutable task workspace binding
   |-- company approval policy gate
-  |-- workspace service
-  |-- visible browser controller
+  |-- workspace service + visible browser controller
   |
-  `-- ND Harness adapter
-        |
-        `-- pinned Harness child: dsh --profile web --patch ...
-              |-- provider-neutral LLM runtime
-              |-- workspace filesystem / shell / jobs
-              |-- ND skills / workflow tools
-              |-- browser MCP -> exact visible Electron target
-              `-- optional Codex provider
-                    `-- package-local official codex app-server --stdio
+  +-- ND Harness adapter
+  +-- Codex app-server adapter
+  +-- ZCode app-server adapter
+  +-- direct CLI adapters (Claude Code / Cursor / Antigravity / Pi / OpenCode / Goose / JCode / Hermes)
+  `-- browser-only / model-only interactive adapters when they do not expose an ND workspace
 ```
 
 The hidden Harness web surface remains compatibility/debug infrastructure. ND-DSH forces the normal product surface to the ND workbench and does not present the upstream UI as product identity.
@@ -55,7 +55,7 @@ The hidden Harness web surface remains compatibility/debug infrastructure. ND-DS
 
 ND keeps durable product state outside runtime-vendor configuration:
 
-- `organization.json` — companies, projects, workforce, workflows, tasks, policies, memory, activity, run receipts.
+- `organization.json` — companies, projects, workforce, workflows, tasks, policies, memory, activity, run receipts, coordination events, task workspace/checkpoint provenance, integration state.
 - `organization.json.bak` — last-known-good organization recovery copy.
 - `providers.json` — provider metadata only; no API keys.
 - `provider-secrets.json` — OS-backed encrypted provider credentials where secure storage is available.
@@ -80,7 +80,7 @@ AI employee
 
 `src/main/provider-runtime.ts` compiles enabled ND provider settings into provider+model routes. DeepSeek remains a seeded compatibility route; the company/task domain does not depend on it.
 
-`src/main/engines/` owns the coding-engine registry and employee assignments. The current Codex route is deliberately marked **delegated** because an ND Harness parent session invokes the pinned one-shot Codex provider and then validates the resulting workspace. A future direct persistent Codex adapter can implement the same ND engine contract without changing organization semantics.
+`src/main/engines/` owns the coding-engine registry and employee assignments. ND currently supports the primary Harness plus direct workspace-capable adapters including Codex, ZCode, Claude Code, Cursor, Antigravity and Pi, with additional installed CLI adapters such as OpenCode, Goose, JCode and Hermes. Delegated Codex remains a fallback. Vendor authentication/model/tool policy stays native; the organization domain never requires vendor-specific task fields.
 
 ## AI company execution
 
@@ -88,16 +88,18 @@ AI employee
 objective
   -> AI PM plan
   -> goal / milestones / dependency-aware tasks
-  -> assigned employee
-  -> resolve employee coding engine
-  -> real workspace execution
+  -> safe ready tasks dispatched in parallel
+  -> task lease + dedicated worktree + engine session
+  -> checkpoint exact output
+  -> ND machine/artifact verification
   -> independent reviewer
-  -> pass: memory + unlock dependency
-     fail: block or bounded autonomy-4 rework
-  -> next ready task
+  -> integration queue
+     pass: integrate + memory + unlock dependency
+     conflict/fail: preserve task branch + explicit rework/block
+  -> next safe work
 ```
 
-One organization run owns the shared runtime/workspace at a time. Cancellation never counts as completion. A desktop restart converts stale running receipts to explicit interrupted failures so projects cannot remain permanently locked.
+Global planning runs remain serialized where they mutate shared planning truth, but isolated task execution/review runs may run concurrently across projects/companies when leases, dependency/scope checks, policies and runtime pools allow it. Each independent writable task has its own transaction/worktree boundary. Cancellation never counts as completion, and a desktop restart converts stale running receipts to explicit interrupted failures so work can recover from a known task boundary.
 
 ## Approval and policy boundary
 
@@ -146,13 +148,13 @@ ND advertises only capabilities it actually wires.
 - provider-neutral model routing
 - human approvals/questions
 
-### Codex CLI (current delegated adapter)
+### Workspace-capable direct engines
 
-- same workspace
-- filesystem and shell through Codex
-- one-shot final result
+Codex CLI, ZCode CLI, Claude Code CLI, Cursor CLI, Antigravity CLI and Pi CLI use the common direct-engine session contract when installed. OpenCode, Goose, JCode and Hermes are additional registered CLI adapters. ND binds organization sessions to the task workspace selected by the control plane; a direct adapter cannot silently re-root that session to another checkout.
 
-ND does not yet advertise the delegated Codex route as having ND browser, ND MCP/skill compilation, human approval streaming, or persistent Codex threads. Native Codex account/auth/model/project configuration remains authoritative.
+### Delegated Codex fallback
+
+Delegated Codex remains a one-shot Harness-backed route. ND does not claim browser/MCP/skill or persistent-thread capabilities that the delegated route does not provide. Native engine authentication, provider/model and project configuration remain authoritative.
 
 ## Failure behavior
 

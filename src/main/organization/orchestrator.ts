@@ -83,7 +83,7 @@ export class OrganizationOrchestrator {
     private readonly engineRuns?: Pick<EngineSessionRouter, 'createSession' | 'run' | 'stopSession'>,
     private readonly projectRuntime?: { check(projectId: string): Promise<unknown> },
     private readonly capabilities?: { assertUsableForAgent(agent?: { id?: string; roleId?: string; teamId?: string }): Promise<void> },
-    private readonly executionCoordinator?: Pick<ExecutionCoordinator, 'releaseSession'>,
+    private readonly executionCoordinator?: Pick<ExecutionCoordinator, 'releaseSession' | 'currentPermit'>,
     taskWorktrees?: TaskWorktreeManager,
   ) {
     this.taskWorktrees = taskWorktrees ?? new TaskWorktreeManager()
@@ -154,7 +154,17 @@ export class OrganizationOrchestrator {
       target.sessionId,
       context.task.id,
       context.task.goalId,
-      taskWorktree ? { parallelTask: true } : {},
+      {
+        ...(taskWorktree ? { parallelTask: true } : {}),
+        engineId: engine.id,
+        workspaceKind: taskWorktree ? 'git-worktree' : 'project-workspace',
+        ...((taskWorktree?.root ?? context.project.workspacePath)
+          ? { workspaceRoot: (taskWorktree?.root ?? context.project.workspacePath)! }
+          : {}),
+        ...(taskWorktree ? { workspaceBranch: taskWorktree.branch } : {}),
+        ...(attemptHead ? { baselineCommit: attemptHead } : {}),
+        ...(this.executionCoordinator?.currentPermit()?.id ? { runtimePermitId: this.executionCoordinator.currentPermit()!.id } : {}),
+      },
     )
     if (taskWorktree && attemptHead) this.executionBaselines.set(target.sessionId, { worktree: taskWorktree, head: attemptHead })
     const effectiveRoute = this.effectiveExecutionRoute(engine.id, attempt, modelOpts)
@@ -200,8 +210,18 @@ export class OrganizationOrchestrator {
       sessionId,
       context.task.id,
       context.task.goalId,
-      taskWorktree ? { parallelTask: true } : {},
+      {
+        ...(taskWorktree ? { parallelTask: true } : {}),
+        engineId: ND_HARNESS_ENGINE_ID,
+        workspaceKind: taskWorktree ? 'git-worktree' : 'project-workspace',
+        ...((taskWorktree?.root ?? context.project.workspacePath)
+          ? { workspaceRoot: (taskWorktree?.root ?? context.project.workspacePath)! }
+          : {}),
+        ...(taskWorktree ? { workspaceBranch: taskWorktree.branch } : {}),
+        ...(this.executionCoordinator?.currentPermit()?.id ? { runtimePermitId: this.executionCoordinator.currentPermit()!.id } : {}),
+      },
     )
+    if (reviewHead) await this.store.updateRunProvenance(run.id, { checkpointCommit: reviewHead })
     if (taskWorktree && reviewHead) this.reviewWorktrees.set(sessionId, { worktree: taskWorktree, head: reviewHead })
     this.lastProgressAt.set(sessionId, run.startedAt)
     await this.store.markReviewStarted(taskId, sessionId, reviewerAgent?.id)
@@ -395,7 +415,8 @@ export class OrganizationOrchestrator {
       try {
         const context = await this.store.taskContext(run.taskId)
         const worktree = await this.taskWorktrees.existing(context.project.workspacePath, run.taskId)
-        if (worktree) await this.taskWorktrees.checkpoint(worktree, context.task.title)
+        const checkpointHead = worktree ? await this.taskWorktrees.checkpoint(worktree, context.task.title) : undefined
+        if (checkpointHead) await this.store.updateRunProvenance(run.id, { checkpointCommit: checkpointHead })
         const verification = context.task.evidenceKind === 'artifact'
           ? await runArtifactVerification(context.task.artifactPaths, worktree?.root ?? context.project.workspacePath)
           : await runVerification(context.project.testCommand, worktree?.root ?? context.project.workspacePath)
@@ -412,7 +433,10 @@ export class OrganizationOrchestrator {
           return
         }
         const workflow = await this.workflowKinds(run.projectId)
-        if (!workflow.has('review') && worktree) await this.taskWorktrees.integrate(context.project.workspacePath, run.taskId)
+        if (!workflow.has('review') && worktree) {
+          const integrated = await this.taskWorktrees.integrate(context.project.workspacePath, run.taskId)
+          await this.store.markIntegrated(run.taskId, integrated.head)
+        }
         await this.store.completeRun(run.id, output)
         if (workflow.has('review')) await this.store.markForReview(run.taskId, output)
         else await this.store.completeWithoutReview(run.taskId, output)
@@ -420,7 +444,11 @@ export class OrganizationOrchestrator {
       } catch (cause) {
         const message = errorMessage(cause)
         await this.store.completeRun(run.id, workerOutput, message).catch(() => undefined)
-        await this.failTask(run.taskId, message)
+        if (cause instanceof TaskIntegrationConflictError) {
+          await this.store.markIntegrationConflict(run.taskId, message).catch(() => undefined)
+        } else {
+          await this.failTask(run.taskId, message)
+        }
       }
       this.cleanupSession(sessionId)
       await this.continueProject(run.projectId)
@@ -516,11 +544,13 @@ export class OrganizationOrchestrator {
         if (checkpoint) {
           try {
             await this.taskWorktrees.assertUnchanged(checkpoint.worktree, checkpoint.head)
-            await this.taskWorktrees.integrate(context.project.workspacePath, taskId)
+            const integrated = await this.taskWorktrees.integrate(context.project.workspacePath, taskId)
+            await this.store.markIntegrated(taskId, integrated.head)
           } catch (cause) {
             passed = false
             integrationConflict = cause instanceof TaskIntegrationConflictError
             summary = `${summary}\nIntegration/evidence gate: ${errorMessage(cause)}`
+            if (integrationConflict) await this.store.markIntegrationConflict(taskId, summary)
           }
         }
       }
@@ -850,6 +880,13 @@ function receipt(run: OrganizationRun): OrganizationRunReceipt {
     projectId: run.projectId,
     ...(run.taskId ? { taskId: run.taskId } : {}),
     kind: run.kind,
+    ...(run.engineId ? { engineId: run.engineId } : {}),
+    ...(run.workspaceKind ? { workspaceKind: run.workspaceKind } : {}),
+    ...(run.workspaceRoot ? { workspaceRoot: run.workspaceRoot } : {}),
+    ...(run.workspaceBranch ? { workspaceBranch: run.workspaceBranch } : {}),
+    ...(run.baselineCommit ? { baselineCommit: run.baselineCommit } : {}),
+    ...(run.checkpointCommit ? { checkpointCommit: run.checkpointCommit } : {}),
+    ...(run.runtimePermitId ? { runtimePermitId: run.runtimePermitId } : {}),
   }
 }
 

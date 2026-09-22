@@ -1,7 +1,7 @@
 # Phase 2 — Agent Company Scale and Differentiation
 
 Status: execution plan  
-Updated: 2026-08-25  
+Updated: 2026-09-22  
 Goal: move ND-DSH from a reliable autonomous developer into a true multi-worker AI software company that is better than using any individual harness alone.
 
 ## Product thesis
@@ -14,7 +14,9 @@ The user should manage outcomes, priorities, budget, and judgment. ND should man
 
 ## P2.1 — Parallel AI teams with per-task leases
 
-Replace the one-active-run ceiling with safe parallel project execution.
+Detailed follow-on contract: [PRD 0003 — Engine-Neutral Agent Teams and Task Workspace Isolation](../prd/0003-engine-neutral-agent-teams-and-task-workspace-isolation.md), approved 2026-09-22 and implemented on the feature branch pending repository CI. Maintained external references and future comparative benchmark questions: [agent-orchestration-reference-matrix.md](agent-orchestration-reference-matrix.md).
+
+Run safe parallel project/company execution through task leases and isolated writable task transactions. Global planning mutations remain serialized; independent task execution/review is capacity-controlled instead of globally single-run.
 
 Target model:
 
@@ -61,6 +63,8 @@ idempotency key
 Rules:
 
 - The contention unit is a task, not the entire project.
+- For durable writable company work, the task is also the default transaction boundary: independent tasks keep independent writable workspace/checkpoint lineage even when their declared file scopes are disjoint.
+- Team/subagent coordination does not imply shared mutable filesystem state; read-only helpers may share context, while additional writers require serialization or explicit child isolation.
 - Different tasks may run in parallel when dependencies, write scopes, and policies allow it.
 - A stale lease/version cannot write terminal task state.
 - Overlapping write scopes should warn or block before execution rather than after corrupted parallel work.

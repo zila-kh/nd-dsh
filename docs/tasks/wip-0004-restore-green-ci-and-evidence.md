@@ -4,13 +4,24 @@
 > Priority: P0  
 > Owner: ZCode  
 > Branch: — (working tree on `main`; a concurrent session is editing `crates/nd-core` and `src/main/**`)  
-> Updated: 2026-09-21  
+> Updated: 2026-09-22  
 
 ## Objective
 
 CI has never been green on the merged MVP, and the benchmark gate that produces performance claims cannot be trusted or cannot run. Four problems, one outcome: **the gates must actually execute and their output must be real.**
 
 Run `35592399694` failed all three jobs. `windows-package` and `performance-evidence` died during release staging, so the packaged Windows smoke and the performance-evidence bundle have never run at all. `validate` passed every step including Benchmark smoke, then failed on the last one. Separately, `pnpm bench:smoke` fails on Windows with a root cause that CI cannot see because it runs that step on Linux only.
+
+## Post-merge CI update (2026-09-22)
+
+PR #21 merged to `main` as `101a855ba332cd1861c1467c36ccd2d35c294115`. The first push CI run on that merge was [35640378484](https://github.com/zila-kh/nd-dsh/actions/runs/35640378484) and is **not green**:
+
+- `validate` reached `Verify ND Core` and failed in `crates/nd-core/tests/protocol_contract.rs`: `workspace_primitives_are_bounded_reject_escapes_and_are_the_only_ones_exposed` returned `CoreError { code: "method_failed", message: "workspace path is unavailable: No such file or directory (os error 2)" }`. The unit portion had 38/38 passing and the protocol contract had 15/16 passing before this failure.
+- Because `Verify ND Core` failed, the later Linux migration/unit/benchmark/identity/desktop gates did not execute in that run. This is a new CI-environment/path failure relative to the local `pnpm core:test` evidence recorded in PR #21 and must be reproduced/fixed rather than treated as green.
+- `windows-package` was canceled during dependency installation, before `Verify ND Core`, Windows `bench:smoke`, handshake proof, packaging, cleanup, or packaged smoke ran.
+- `performance-evidence` was skipped, so the 120-minute evidence bundle remains open.
+
+This supersedes any wording below that says only the old desktop teardown blocks `validate`: task 0004 now also owns this post-merge Linux workspace-path contract failure until it is explained and a non-draft CI run passes.
 
 ## Status (2026-09-21)
 

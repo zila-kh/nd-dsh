@@ -65,6 +65,36 @@ describe('TaskWorktreeManager', () => {
     expect(await readFile(join(workspace, 'app.ts'), 'utf8')).toContain('ready = true')
   })
 
+  it('keeps five independent writable tasks rollbackable without touching peers or the base checkout', async () => {
+    const repo = await repoFixture()
+    const manager = new TaskWorktreeManager()
+    const worktrees = []
+
+    for (let index = 1; index <= 5; index += 1) {
+      const worktree = await manager.ensure(repo, `parallel-task-${index}`)
+      expect(worktree).toBeTruthy()
+      if (!worktree) return
+      worktrees.push(worktree)
+    }
+
+    expect(new Set(worktrees.map((item) => item.root)).size).toBe(5)
+    expect(new Set(worktrees.map((item) => item.branch)).size).toBe(5)
+
+    const baselines = await Promise.all(worktrees.map((item) => manager.baseline(item)))
+    for (let index = 0; index < worktrees.length; index += 1) {
+      await writeFile(join(worktrees[index]!.root, `task-${index + 1}.txt`), `task ${index + 1}\n`)
+    }
+
+    await manager.rollback(worktrees[2]!, baselines[2]!)
+
+    await expect(readFile(join(worktrees[2]!.root, 'task-3.txt'), 'utf8')).rejects.toThrow()
+    expect(await readFile(join(worktrees[0]!.root, 'task-1.txt'), 'utf8')).toBe('task 1\n')
+    expect(await readFile(join(worktrees[4]!.root, 'task-5.txt'), 'utf8')).toBe('task 5\n')
+    await expect(readFile(join(repo, 'task-1.txt'), 'utf8')).rejects.toThrow()
+    await expect(readFile(join(repo, 'task-5.txt'), 'utf8')).rejects.toThrow()
+    expect((await exec('git', ['status', '--porcelain'], { cwd: repo })).stdout.trim()).toBe('')
+  })
+
   it('does not checkpoint dependency, build, or package-manager caches', async () => {
     const repo = await repoFixture()
     const manager = new TaskWorktreeManager()

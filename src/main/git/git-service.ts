@@ -7,6 +7,8 @@
  *  the state model, grouping, and orchestration are ND implementation.
  *--------------------------------------------------------------------------------------------*/
 
+import { realpathSync } from 'node:fs'
+import { resolve } from 'node:path'
 import type { GitBranch, GitCommitInfo, GitFileChange, GitStatusSnapshot, WorkspaceState } from '../../shared/contracts.js'
 import type { CoreClient } from '../core/core-client.js'
 import {
@@ -479,7 +481,9 @@ export class GitService {
       const current = branches.find((candidate) => candidate.name === branch)
       return {
         root,
-        repoRoot,
+        // Preserve the project path spelling when Git reports the same physical
+        // directory through another alias (for example RUNNER~1 on Windows).
+        repoRoot: root,
         branch,
         ahead: current?.ahead ?? 0,
         behind: current?.behind ?? 0,
@@ -663,7 +667,20 @@ export class GitService {
 }
 
 function sameWorkspacePath(left: string, right: string): boolean {
-  const normalize = (value: string): string => value.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase()
+  const normalize = (value: string): string => {
+    const trimmed = value.replace(/[\\/]+$/, '')
+    let canonical = trimmed
+    try {
+      // Windows CI commonly exposes %TEMP% through an 8.3 alias (RUNNER~1)
+      // while Git returns the long path. Realpath collapses those aliases, and
+      // on POSIX it also makes symlinked project roots compare to Git's physical
+      // repository root without weakening the exact-project boundary.
+      canonical = realpathSync.native(trimmed)
+    } catch {
+      canonical = resolve(trimmed)
+    }
+    return canonical.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase()
+  }
   return normalize(left) === normalize(right)
 }
 

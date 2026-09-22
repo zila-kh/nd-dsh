@@ -15,6 +15,7 @@ import type {
   OrganizationSkill,
   OrganizationSnapshot,
   OrganizationTask,
+  OrganizationTeamEventKind,
   OrganizationWorkflow,
   Project,
   ProjectPlanInput,
@@ -27,7 +28,7 @@ import { BUILTIN_SKILLS, defaultPolicies, defaultWorkflow } from './defaults.js'
 const EMPTY: OrganizationSnapshot = {
   version: 1,
   companies: [], projects: [], roles: [], teams: [], agents: [], skills: BUILTIN_SKILLS,
-  workflows: [], goals: [], milestones: [], tasks: [], memory: [], policies: [], activity: [], runs: [],
+  workflows: [], goals: [], milestones: [], tasks: [], memory: [], policies: [], activity: [], runs: [], coordination: [],
 }
 
 const SNAPSHOT_ARRAY_KEYS = [
@@ -184,7 +185,15 @@ export class OrganizationStore {
     sessionId: string,
     taskId?: string,
     goalId?: string,
-    options: { parallelTask?: boolean } = {},
+    options: {
+      parallelTask?: boolean
+      engineId?: string
+      workspaceKind?: OrganizationRun['workspaceKind']
+      workspaceRoot?: string
+      workspaceBranch?: string
+      baselineCommit?: string
+      runtimePermitId?: string
+    } = {},
   ): Promise<OrganizationRun> {
     await this.load()
     this.company(companyId); this.project(projectId)
@@ -209,7 +218,17 @@ export class OrganizationStore {
       if (sameTask) throw new Error(`Task already has an active ${sameTask.kind} run in session ${sameTask.sessionId}`)
     }
 
-    const run: OrganizationRun = { id: randomUUID(), companyId, projectId, kind, status: 'running', sessionId, ...(taskId ? { taskId } : {}), ...(goalId ? { goalId } : {}), startedAt: Date.now() }
+    const run: OrganizationRun = {
+      id: randomUUID(), companyId, projectId, kind, status: 'running', sessionId,
+      ...(taskId ? { taskId } : {}), ...(goalId ? { goalId } : {}),
+      ...(options.engineId ? { engineId: options.engineId } : {}),
+      ...(options.workspaceKind ? { workspaceKind: options.workspaceKind } : {}),
+      ...(options.workspaceRoot ? { workspaceRoot: options.workspaceRoot } : {}),
+      ...(options.workspaceBranch ? { workspaceBranch: options.workspaceBranch } : {}),
+      ...(options.baselineCommit ? { baselineCommit: options.baselineCommit } : {}),
+      ...(options.runtimePermitId ? { runtimePermitId: options.runtimePermitId } : {}),
+      startedAt: Date.now(),
+    }
     this.value.runs.unshift(run)
     // Cost measurement starts where the run does, so a run that never reaches a
     // terminal state is still visible as unfinished instead of absent.
@@ -217,6 +236,17 @@ export class OrganizationStore {
     this.activity(companyId, projectId, `run.${kind}`, `${kind} started in session ${short(sessionId)}.`)
     await this.save()
     return clone(run)
+  }
+
+  async updateRunProvenance(
+    runId: string,
+    patch: Partial<Pick<OrganizationRun, 'runtimePermitId' | 'checkpointCommit'>>,
+  ): Promise<void> {
+    await this.load()
+    const run = must(this.value.runs.find((item) => item.id === runId), 'Organization run')
+    if (patch.runtimePermitId !== undefined) run.runtimePermitId = clean(patch.runtimePermitId)
+    if (patch.checkpointCommit !== undefined) run.checkpointCommit = clean(patch.checkpointCommit)
+    await this.save()
   }
 
   async completeRun(runId: string, output?: string, error?: string): Promise<void> {
@@ -280,9 +310,12 @@ export class OrganizationStore {
   async markExecution(taskId: string, sessionId: string): Promise<void> {
     await this.load()
     const task = this.task(taskId)
-    task.status = 'in_progress'; task.executionSessionId = sessionId; delete task.reviewSessionId; task.updatedAt = Date.now()
+    task.status = 'in_progress'; task.executionSessionId = sessionId; delete task.reviewSessionId
+    task.integrationState = 'pending'; delete task.integrationSummary; delete task.integratedHead
+    task.updatedAt = Date.now()
     this.setAgent(task.assignedAgentId, 'working', task.id, sessionId)
     this.activity(task.companyId, task.projectId, 'task.execute', `Started “${task.title}”.`)
+    this.teamEvent(task, 'progress', `Execution started for “${task.title}”.`)
     await this.save()
   }
 
@@ -292,6 +325,7 @@ export class OrganizationStore {
     task.status = 'review'; task.resultSummary = summary.slice(0, 20_000); task.updatedAt = Date.now()
     this.setAgent(task.assignedAgentId, 'idle')
     this.activity(task.companyId, task.projectId, 'task.review-ready', `“${task.title}” is ready for independent review.`)
+    this.teamEvent(task, 'review-request', `“${task.title}” is checkpointed and ready for independent review.`)
     this.refreshProject(task.projectId)
     await this.save()
   }
@@ -358,9 +392,40 @@ export class OrganizationStore {
     const task = this.task(taskId)
     if (task.status !== 'blocked') throw new Error('Only a blocked task can be queued for rework')
     task.status = 'ready'
+    task.integrationState = 'pending'
+    delete task.integrationSummary
+    delete task.integratedHead
     task.updatedAt = Date.now()
     this.activity(task.companyId, task.projectId, 'task.rework', `Queued rework for “${task.title}”: ${reason.slice(0, 500)}`)
+    this.teamEvent(task, 'blocker', `Rework queued for “${task.title}”: ${reason.slice(0, 500)}`)
     this.refreshProject(task.projectId)
+    await this.save()
+  }
+
+  async markIntegrationConflict(taskId: string, summary: string): Promise<void> {
+    await this.load()
+    const task = this.task(taskId)
+    task.status = 'blocked'
+    task.integrationState = 'conflict'
+    task.integrationSummary = clean(summary).slice(0, 20_000)
+    delete task.integratedHead
+    task.updatedAt = Date.now()
+    this.setAgent(task.assignedAgentId, 'idle')
+    this.activity(task.companyId, task.projectId, 'task.integration-conflict', `Integration conflict for “${task.title}”.`)
+    this.teamEvent(task, 'blocker', `Integration conflict for “${task.title}”: ${task.integrationSummary.slice(0, 500)}`)
+    this.refreshProject(task.projectId)
+    await this.save()
+  }
+
+  async markIntegrated(taskId: string, head: string): Promise<void> {
+    await this.load()
+    const task = this.task(taskId)
+    task.integrationState = 'integrated'
+    task.integratedHead = clean(head)
+    delete task.integrationSummary
+    task.updatedAt = Date.now()
+    this.activity(task.companyId, task.projectId, 'task.integrated', `Integrated “${task.title}” at ${short(task.integratedHead)}.`)
+    this.teamEvent(task, 'progress', `“${task.title}” integrated at ${short(task.integratedHead)}.`)
     await this.save()
   }
 
@@ -518,6 +583,7 @@ export class OrganizationStore {
     this.value.milestones = this.value.milestones.filter((item) => item.projectId !== id)
     this.value.tasks = this.value.tasks.filter((item) => item.projectId !== id)
     this.value.runs = this.value.runs.filter((item) => item.projectId !== id)
+    this.value.coordination = this.value.coordination.filter((item) => item.projectId !== id)
     this.value.memory = this.value.memory.filter((item) => item.projectId !== id)
     this.value.skills = this.value.skills.filter((item) => item.projectId !== id)
     this.value.workflows = this.value.workflows.filter((item) => item.projectId !== id)
@@ -648,6 +714,21 @@ export class OrganizationStore {
   private company(id: string): Company { return must(this.value.companies.find((item) => item.id === id), 'Company') }
   private project(id: string): Project { return must(this.value.projects.find((item) => item.id === id), 'Project') }
   private task(id: string): OrganizationTask { return must(this.value.tasks.find((item) => item.id === id), 'Task') }
+  private teamEvent(task: OrganizationTask, kind: OrganizationTeamEventKind, summary: string): void {
+    const agent = task.assignedAgentId ? this.value.agents.find((item) => item.id === task.assignedAgentId) : undefined
+    this.value.coordination.unshift({
+      id: randomUUID(),
+      companyId: task.companyId,
+      projectId: task.projectId,
+      ...(agent?.teamId ? { teamId: agent.teamId } : {}),
+      taskId: task.id,
+      ...(agent ? { agentId: agent.id } : {}),
+      kind,
+      summary: summary.slice(0, 4_000),
+      createdAt: Date.now(),
+    })
+    this.value.coordination = this.value.coordination.slice(0, 500)
+  }
   private activity(companyId: string, projectId: string | undefined, type: string, message: string): void { const row: OrganizationActivity = { id: randomUUID(), companyId, type, message, createdAt: Date.now(), ...(projectId ? { projectId } : {}) }; this.value.activity.unshift(row); this.value.activity = this.value.activity.slice(0, 500) }
 }
 
@@ -657,6 +738,9 @@ function normalizeSnapshot(value: unknown): OrganizationSnapshot {
   if (record.version !== 1) throw new Error(`Unsupported organization snapshot version: ${String(record.version)}`)
   for (const key of SNAPSHOT_ARRAY_KEYS) {
     if (!Array.isArray(record[key])) throw new Error(`Organization snapshot field ${key} must be an array`)
+  }
+  if (record.coordination !== undefined && !Array.isArray(record.coordination)) {
+    throw new Error('Organization snapshot field coordination must be an array when present')
   }
   const parsed = record as unknown as OrganizationSnapshot
   return { ...clone(EMPTY), ...parsed, skills: mergeBuiltins(parsed.skills) }

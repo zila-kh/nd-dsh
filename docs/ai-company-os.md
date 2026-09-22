@@ -1,6 +1,6 @@
 # AI Company OS
 
-ND-DSH is evolving from a coding workbench into a desktop operating system for AI-run companies. The user operates at the level of companies, projects, goals, policies, and approvals; DeepSeek Harness remains the execution engine for sessions, tools, subagents, browser automation, filesystem/shell work, and approvals.
+ND-DSH is evolving from a coding workbench into a desktop operating system for AI-run companies. The user operates at the level of companies, projects, goals, policies, budgets and approvals; ND routes execution to replaceable coding engines while keeping company/task truth, leases, workspace provenance, verification, review and integration in its own control plane.
 
 ## Product hierarchy
 
@@ -12,13 +12,15 @@ User
 │  ├─ Project A1
 │  │  ├─ objective, workspace/repos
 │  │  ├─ goals → milestones → dependency-aware tasks
-│  │  └─ runs, review results, project memory
+│  │  ├─ task A → lease → engine session → isolated task workspace
+│  │  ├─ task B → lease → engine session → isolated task workspace
+│  │  └─ board, runs, review/integration evidence, project memory
 │  └─ Project A2
 ├─ Company B
 └─ Company C
 ```
 
-A company is the primary isolation boundary. Company-scoped roles, teams, agents, memory, policies, and project resources must never be silently reused across another company. Projects bind business outcomes to one or more technical workspaces/resources; a project is not the same thing as a filesystem workspace.
+A company is the primary **business** isolation boundary. Company-scoped roles, teams, agents, memory, policies, budgets, and project resources must never be silently reused across another company. A project is the normal delivery/context boundary: board, goals, repository/workspace, project memory and organization-session view. A durable writable task is the transaction boundary: independent tasks keep independent ND-owned workspace/checkpoint lineage even when their declared file scopes are disjoint.
 
 ## Default company
 
@@ -44,23 +46,25 @@ AI PM session
       ↓
 structured goal + milestones + tasks
       ↓
-next dependency-ready task
+dependency-ready task graph
       ↓
-fresh worker session
+parallel safe tasks
       ↓
-workspace changes + validation
+lease + isolated task worktree + engine session
+      ↓
+checkpoint exact task output
+      ↓
+machine verification
       ↓
 fresh independent review session
       ↓
-pass ────────────────┐
- │                    │
- └→ complete + memory ├→ next ready task
-fail → blocked ───────┘
+pass → integration queue → complete + memory → unlock dependencies
+fail/conflict → preserve task lineage → bounded rework / human decision
 ```
 
 PM and reviewer outputs use tagged JSON envelopes (`<nd-dsh-plan>` and `<nd-dsh-review>`) so orchestration state is derived from explicit machine-readable results while normal reasoning stays visible in the underlying Harness session.
 
-Each worker/reviewer gets a fresh Harness session. The session prompt contains only the selected company/project scope, relevant role/agent instructions, inherited skills, allowed company/project memory, task requirements, and policies. This keeps the Harness general while ND-DSH owns organization composition.
+Each worker gets an engine session rooted at the ND-selected task workspace; reviewers inspect the exact checkpoint. The session prompt contains only the selected company/project scope, relevant role/agent instructions, inherited skills, allowed company/project memory, task requirements, and policies. Engine-specific execution stays in adapters while ND-DSH owns organization composition and task transaction boundaries.
 
 ## Autonomy levels
 
@@ -82,7 +86,7 @@ Organization state is persisted at:
 <electron userData>/organization.json
 ```
 
-Writes use a temp file + rename so the on-disk snapshot is replaced atomically. The snapshot contains companies, projects, roles, teams, agents, skills, workflows, goals, milestones, tasks, memory, policies, activity, and run receipts. Harness sessions remain in the existing durable Harness session store.
+Writes use a temp file + rename so the on-disk snapshot is replaced atomically. The snapshot contains companies, projects, roles, teams, agents, skills, workflows, goals, milestones, tasks, memory, policies, activity, run receipts, workspace/checkpoint provenance, integration state, and structured coordination events. Vendor session transcripts remain runtime-owned; ND keeps the durable organization/task mapping.
 
 The organization run ledger links PM/worker/reviewer runs to Harness session IDs. The Company dashboard can therefore show business-level progress while the DeepSeek workbench remains the place to inspect the full agent trajectory and approvals.
 
@@ -92,20 +96,20 @@ The organization run ledger links PM/worker/reviewer runs to Harness session IDs
 ND-DSH / Electron
 ├─ Company dashboard and organization IPC
 ├─ OrganizationStore (scoped durable state)
-├─ OrganizationOrchestrator (PM → worker → reviewer loop)
+├─ OrganizationOrchestrator (plan → parallel task → checkpoint → verify → review → integrate)
+├─ task leases + TaskWorktreeManager + integration queue
+├─ engine-session router + immutable task workspace binding
 ├─ Workspace switching / project binding
-└─ existing gateway + browser + workbench surfaces
+└─ gateway + browser + workbench surfaces
         ↓
-DeepSeek Harness
-├─ models and agent loop
-├─ sessions and events
-├─ tools / skills / MCP
-├─ filesystem + shell sandbox
-├─ jobs / subagents
-└─ approvals
+Replaceable execution engines
+├─ ND Harness
+├─ Codex / ZCode / Claude Code / Cursor / Antigravity / Pi
+├─ OpenCode / Goose / JCode / Hermes
+└─ future local / remote workers
 ```
 
-ND-DSH does not fork or patch the Harness agent loop. Organization features compose existing Harness capabilities through the same gateway/runtime boundary used by the workbench.
+ND-DSH does not make any engine's private loop authoritative company state. Organization features use a common engine/session boundary; engines perform work, while ND owns task ownership, evidence, recovery and integration.
 
 ## Current UI
 

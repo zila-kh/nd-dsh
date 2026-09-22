@@ -203,6 +203,27 @@ fn validate_relative(path: &str) -> Result<PathBuf> {
     if path.len() > MAX_PATH_LENGTH {
         bail!("workspace path is too long");
     }
+
+    // The RPC path contract is platform-neutral. A Windows absolute path must
+    // still be rejected when nd-core happens to run on Linux/macOS (and vice
+    // versa), otherwise a value such as C:/Windows is treated as a relative
+    // filename and fails later with the misleading "path is unavailable".
+    let bytes = path.as_bytes();
+    let windows_drive_absolute = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\');
+    let windows_unc_absolute = path.starts_with("\\\\") || path.starts_with("//");
+    if windows_drive_absolute || windows_unc_absolute {
+        bail!("workspace path must be relative");
+    }
+
+    // Interpret either path separator when looking for a parent traversal so
+    // the safety boundary is identical on every host OS.
+    if path.split(['/', '\\']).any(|segment| segment == "..") {
+        bail!("workspace path escapes the root");
+    }
+
     let value = Path::new(path);
     if value.is_absolute() {
         bail!("workspace path must be relative");
@@ -260,7 +281,13 @@ mod tests {
     #[test]
     fn rejects_absolute_and_prefix_paths() {
         let root = temp_root("workspace-absolute");
-        for candidate in ["/etc/passwd", "C:/Windows/win.ini", "..\\secrets.txt"] {
+        for candidate in [
+            "/etc/passwd",
+            "C:/Windows/win.ini",
+            "C:\\Windows\\win.ini",
+            "\\\\server\\share",
+            "..\\secrets.txt",
+        ] {
             let result = list(ListParams {
                 root: root_of(&root),
                 path: candidate.into(),

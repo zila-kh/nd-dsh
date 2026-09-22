@@ -362,6 +362,7 @@ async function bindRuntimePermit(
 ): Promise<void> {
   if (!coordinator || !permit) return
   await coordinator.bindSession(permit, sessionId, runId)
+  await store.updateRunProvenance(runId, { runtimePermitId: permit.id })
   const active = await store.runBySession(sessionId)
   if (!active) await coordinator.release(permit)
 }

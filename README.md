@@ -7,7 +7,7 @@ ND-DSH is a desktop **AI Company Operating System for software delivery**. Inste
 > **⚠️ Status: Developer Preview / Private Beta.**
 > The core loop runs on real desktop/runtime state, but there is no signed public installer or broad stability promise yet. Use it with supervised beta workflows and expect breaking changes. See [What we ship and what's planned](#what-we-ship-and-whats-planned) and the [Roadmap](#roadmap).
 
-The current product is coding-first: an AI PM plans work, assigned workers operate the real workspace and browser, an independent reviewer verifies the result, failed reviews can return to rework, durable memory is recorded, dependencies unlock, and the next task can continue automatically according to company autonomy and policy.
+The current product is coding-first: an AI PM plans work, assigned workers can execute independent tasks in parallel in ND-owned task workspaces, ND checkpoints and machine-verifies the result, an independent reviewer verifies the exact checkpoint, failed reviews can return to bounded rework, durable memory is recorded, dependencies unlock, and the next safe task can continue according to company autonomy and policy.
 
 ## Product boundary
 
@@ -27,13 +27,47 @@ ND company / project / role / agent / task control plane
         |      +--> provider-native/catalog routes
         |
         +--> ND coding-engine registry
-               +--> ND Harness (primary)
-               +--> Codex CLI (direct, ND-managed app-server)
-               +--> Codex CLI (delegated one-shot engine)
-               +--> future engine adapters
+               +--> ND Harness
+               +--> Codex CLI (direct + delegated)
+               +--> ZCode / Antigravity / Pi / Cursor / Claude Code
+               +--> OpenCode / Goose / JCode / Hermes
+               +--> interactive-only engines such as ChatGPT Web / MiniMax
+               +--> future local or remote engine adapters
 ```
 
 ND owns identity, configuration, authorization, orchestration, and durable state. Coding engines own execution details such as the agent loop, shell/process mechanics, filesystem operations, model transport, and product-specific protocol handling.
+
+## Multi-company workflow
+
+One ND desktop can own **multiple companies**. Each company can own **multiple projects**, and each project can run **multiple workers/tasks** concurrently when dependencies, policy, capacity, and write-scope checks allow it.
+
+![Multi-company AI company workflow](docs/assets/multi-company-ai-workflow.svg)
+
+The operating hierarchy is:
+
+```text
+ND control plane
+├── Company A — business boundary
+│   ├── company teams / employees / memory / policy / budget
+│   ├── Project A1 — board + repo/workspace + project context
+│   │   ├── Task 1 -> lease -> engine session -> isolated task worktree
+│   │   ├── Task 2 -> lease -> engine session -> isolated task worktree
+│   │   └── Task 3 -> lease -> engine session -> isolated task worktree
+│   └── Project A2
+└── Company B
+    ├── Project B1
+    └── Project B2
+```
+
+The boundaries are deliberate:
+
+- **Company = business boundary.** Roles, teams, employees, policy, budget and company memory never silently cross companies.
+- **Project = delivery/context boundary.** A project owns its board, goals, repository/workspace, project memory, runtime and organization-session view.
+- **Task = writable transaction boundary.** Independent writable tasks get independent ND-managed workspace/checkpoint lineage even when their files appear disjoint.
+- **Team = coordination boundary, not a dirty-tree boundary.** Workers can share decisions, blockers and handoffs while their independent task output stays rollbackable.
+- **Engine session = replaceable execution context.** ZCode, Codex, Claude Code, Cursor and other engines perform work; ND remains authoritative for leases, checkpoint, verification, review and integration.
+
+Switching the human UI from Taxi Co to Ecommerce Co does not redefine ownership of already-running task sessions. Background organization work remains attributed to its company/project/task, while the active UI filters to the selected company/project. Organization-run chats are project-attributed today; plain manual chats without organization attribution remain global until explicit Global/Company/Project/Task manual-chat scoping is added.
 
 ## Current coding engines
 
@@ -53,7 +87,11 @@ Native Codex authentication, `HOME` / `CODEX_HOME`, model selection, project tru
 
 The vendored Harness also contains `@deepseek-ai/dsh-subagent-codex`, which starts its package-local `codex app-server --stdio` process as a one-shot delegate inside an ND Harness run (engine id `codex`). It remains available as a fallback when the direct engine is not usable.
 
-AI employees can be assigned an available coding engine from Workforce. The assignment is durable ND state. Engine-specific worker guidance ships with each engine descriptor, so organization workflow code never branches on engine ids: delegated workers hand implementation to Codex and then validate the workspace themselves, while direct workers implement natively in Codex before the normal independent review step.
+### Other direct CLI engines
+
+The same engine/session contract also supports installed **ZCode CLI, Antigravity CLI, Pi CLI, Cursor CLI, Claude Code CLI, OpenCode, Goose, JCode, and Hermes** when their native CLIs are available. Authentication, provider/model selection, project rules, and vendor permission policy remain native to each engine. Browser-only/model-only adapters stay interactive and are not advertised as organization workers unless they expose a real ND workspace boundary.
+
+AI employees can be assigned an available workspace-capable coding engine from Workforce. The assignment is durable ND state. Engine-specific worker guidance stays in engine descriptors, while organization workflow code reasons about the common ND contract rather than vendor ids.
 
 ## AI company workflow
 
@@ -63,26 +101,41 @@ A normal autonomous delivery cycle is:
 Company objective
       |
       v
-AI PM plan
+AI PM plan -> task/dependency graph
       |
       v
-Goal -> milestones -> dependency-aware tasks
+Ready independent tasks
       |
-      v
-Assigned worker + coding-engine route
-      |
-      +--> workspace files
-      +--> shell / tests
-      +--> visible browser when supported
-      +--> skills / MCP when supported
-      +--> optional Codex delegation
-      |
-      v
-Independent reviewer
-      |
-      +--> pass -> durable memory -> unlock next task
-      |
-      +--> fail -> blocked or bounded automatic rework
+      +-------------------+-------------------+
+      v                   v                   v
+ Task A                Task B              Task C
+ lease/worktree        lease/worktree      lease/worktree
+ engine session        engine session      engine session
+      |                   |                   |
+      +--------- execute safely in parallel --+
+                          |
+                          v
+                 checkpoint exact output
+                          |
+                          v
+                   machine verification
+                          |
+                          v
+                  independent review
+                          |
+               +----------+-----------+
+               |                      |
+             PASS                 REWORK/BLOCK
+               |                      |
+               v                      +--> preserved task lineage
+          integration queue
+               |
+        merge or explicit
+       integration-conflict
+               |
+               v
+       durable result/memory
+       + dependency unlock
 ```
 
 Company autonomy levels control how much of that workflow may continue without another explicit human start. Approval-bearing organization runs pass through the ND main-process policy gate before a human approval card can be shown or resolved.
@@ -122,6 +175,7 @@ Before publishing a change:
 corepack pnpm verify
 corepack pnpm typecheck
 corepack pnpm test
+corepack pnpm core:test
 corepack pnpm build
 ```
 
@@ -162,14 +216,15 @@ A **Public Beta** still requires packaged runtime distribution, signed/notarized
 | Desktop shell | 🚢 Shipped | Secure Electron/React app with one canonical visible browser pane; renderer fails closed without trusted bridges |
 | Model routing | 🚢 Shipped | Provider-neutral routes: DeepSeek, OpenAI-compatible, Responses-compatible, Anthropic-compatible |
 | Provider credentials | 🚢 Shipped | OS-backed encrypted storage when available; write-only from the UI (replace/clear, never read back) |
-| Organization state | 🚢 Shipped | Companies, projects, teams, roles, AI employees, goals, milestones, tasks, memory, policies, run receipts |
-| Delivery loop | 🚢 Shipped | AI PM → assigned worker → independent reviewer; dependency-aware progression and bounded rework |
-| Coding engines | 🚢 Shipped | ND Harness (primary) + Codex CLI as a delegated one-shot engine, assigned per employee |
+| Organization state | 🚢 Shipped | Multiple companies/projects with scoped teams, roles, AI employees, goals, milestones, tasks, memory, policies, run receipts and coordination events |
+| Parallel task isolation | 🚢 Shipped | Independent writable tasks use ND-owned Git worktrees, baseline/checkpoint provenance, targeted rollback, verification and fail-closed integration |
+| Delivery loop | 🚢 Shipped | AI PM → dependency graph → parallel workers → checkpoint → machine verify → independent review → integration/rework |
+| Coding engines | 🚢 Shipped | ND Harness; direct Codex, ZCode, Antigravity, Pi, Cursor, Claude Code; installed OpenCode/Goose/JCode/Hermes adapters; delegated Codex fallback |
 | Source Control | 🚢 Shipped | Built-in Git panel (status groups, stage/commit, diffs, branches, fetch/pull/push) derived from microsoft/vscode extensions/git (MIT) — see [`docs/source-control.md`](docs/source-control.md) |
 | Policy gate | 🚢 Shipped | Main-process DENY/ALLOW/ASK enforcement for approval-bearing organization runs |
 | Packaging & installers | 🛠 Planned | Bundled runtime, signed/notarized installers, offline install without dev tooling |
 | Codex onboarding | 🛠 Planned | Native authentication and health checks in first-run onboarding |
-| More CLI engines | 🛠 Planned | Additional adapters beyond Harness and Codex — any CLI engine can plug in |
+| More execution providers | 🛠 Planned | Additional local/offline and remote/cloud workers behind the same ND task/workspace/evidence contract |
 | Broader company templates | 🛠 Planned | Non-coding business roles once the software-company loop is reliable |
 
 ## Roadmap
@@ -190,6 +245,8 @@ The full, ordered roadmap lives in [`docs/roadmap.md`](docs/roadmap.md), and the
 - Provider credentials: separated from provider metadata, encrypted at rest when OS secure storage is available, and never returned to React after storage.
 - Codex delegated mode: fail-closed `never` approval policy by default; dangerous bypass is not selected by ND.
 - Organization state: atomic writes, last-known-good backup, validation, and interrupted-run reconciliation.
+- Task isolation: independent writable organization tasks use ND-owned task worktrees; rollback/clean targets only the known task workspace, never a dirty human checkout.
+- Engine workspace binding: a writable direct-engine session cannot silently move from its ND-bound task workspace to another checkout.
 - Organization approvals: explicit company DENY/ALLOW/ASK decisions are enforced in the main process for approval-bearing Harness runs; uncertain classifications fail back to human ASK.
 
 ## Repository layout

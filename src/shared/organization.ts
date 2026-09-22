@@ -6,6 +6,16 @@ export type AgentStatus = 'idle' | 'working' | 'reviewing' | 'blocked' | 'offlin
 export type TaskStatus = 'backlog' | 'ready' | 'in_progress' | 'review' | 'blocked' | 'completed'
 export type TaskPriority = 'low' | 'medium' | 'high' | 'critical'
 export type TaskEvidenceKind = 'code' | 'artifact'
+export type OrganizationWorkspaceKind = 'git-worktree' | 'project-workspace' | 'shared-readonly' | 'sandbox' | 'remote'
+export type OrganizationIntegrationState = 'pending' | 'integrated' | 'conflict'
+export type OrganizationTeamEventKind =
+  | 'progress'
+  | 'blocker'
+  | 'interface-change'
+  | 'artifact-ready'
+  | 'handoff'
+  | 'review-request'
+  | 'dependency-unblocked'
 export type OrganizationRunKind = 'pm-plan' | 'task-execution' | 'task-review'
 export type OrganizationRunStatus = 'running' | 'completed' | 'failed'
 export type OrganizationScope = 'builtin' | 'company' | 'project' | 'team' | 'role' | 'agent'
@@ -172,6 +182,10 @@ export interface OrganizationTask {
   reviewSessionId?: string
   resultSummary?: string
   reviewSummary?: string
+  /** Integration is independent from task status so a successful review can remain inspectable when merge-back conflicts. */
+  integrationState?: OrganizationIntegrationState
+  integrationSummary?: string
+  integratedHead?: string
   createdAt: number
   updatedAt: number
 }
@@ -205,6 +219,19 @@ export interface OrganizationActivity {
   createdAt: number
 }
 
+export interface OrganizationTeamEvent {
+  id: string
+  companyId: string
+  projectId: string
+  teamId?: string
+  taskId?: string
+  runId?: string
+  agentId?: string
+  kind: OrganizationTeamEventKind
+  summary: string
+  createdAt: number
+}
+
 export interface OrganizationRun {
   id: string
   companyId: string
@@ -214,6 +241,14 @@ export interface OrganizationRun {
   kind: OrganizationRunKind
   status: OrganizationRunStatus
   sessionId: string
+  /** Engine/workspace provenance belongs to ND, not to the vendor session store. */
+  engineId?: string
+  workspaceKind?: OrganizationWorkspaceKind
+  workspaceRoot?: string
+  workspaceBranch?: string
+  baselineCommit?: string
+  checkpointCommit?: string
+  runtimePermitId?: string
   output?: string
   error?: string
   startedAt: number
@@ -238,6 +273,8 @@ export interface OrganizationSnapshot {
   policies: OrganizationPolicy[]
   activity: OrganizationActivity[]
   runs: OrganizationRun[]
+  /** Structured team/task handoffs. Missing in older v1 snapshots and normalized to []. */
+  coordination: OrganizationTeamEvent[]
 }
 
 export interface ProjectPlanInput {
@@ -293,6 +330,13 @@ export interface OrganizationRunReceipt {
   projectId: string
   taskId?: string
   kind: OrganizationRunKind
+  engineId?: string
+  workspaceKind?: OrganizationWorkspaceKind
+  workspaceRoot?: string
+  workspaceBranch?: string
+  baselineCommit?: string
+  checkpointCommit?: string
+  runtimePermitId?: string
 }
 
 export interface OrganizationDesktopApi {

@@ -69,17 +69,21 @@ export async function runPackagedRuntimeSmoke(options: PackagedRuntimeSmokeOptio
     }
 
     const git = await options.git.refresh()
-    if (!git.repoRoot || !git.branch || git.heads.length === 0) {
-      throw new Error('Packaged Rust Git backend did not detect the prepared repository and commit.')
-    }
+    // Record the snapshot before asserting it. A packaged-only failure must say
+    // whether Git was absent, reported an alias/parent root, or simply returned
+    // no branch/history instead of collapsing all of those into one message.
     receipt.git = {
       root: git.root,
       repoRoot: git.repoRoot,
       branch: git.branch,
       head: git.heads[0]?.hash,
+      heads: git.heads.length,
       staged: git.staged.length,
       unstaged: git.unstaged.length,
       untracked: git.untracked.length,
+    }
+    if (!git.repoRoot || !git.branch || git.heads.length === 0) {
+      throw new Error('Packaged Rust Git backend did not detect the prepared repository and commit.')
     }
 
     receipt.status = 'pass'

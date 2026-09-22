@@ -1,4 +1,7 @@
 import { EventEmitter } from 'node:events'
+import { mkdtemp, mkdir, rm, symlink } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { ChildProcess } from 'node:child_process'
@@ -209,6 +212,28 @@ describe('GitService snapshot', () => {
     expect(state.heads).toHaveLength(1)
     expect(state.heads[0]).toMatchObject({ hash: '1111111111111111111111111111111111111111', message: 'Latest commit' })
     expect(state.branches[0]).toMatchObject({ name: 'main', ahead: 2, upstream: 'origin/main' })
+  })
+
+  it('treats filesystem aliases as the same exact project repository root', async () => {
+    const temporary = await mkdtemp(join(tmpdir(), 'nd-git-alias-'))
+    const realRoot = join(temporary, 'real-project')
+    const aliasRoot = join(temporary, 'project-alias')
+    await mkdir(realRoot)
+    await symlink(realRoot, aliasRoot, process.platform === 'win32' ? 'junction' : 'dir')
+    try {
+      fake.script = [
+        { match: ['rev-parse', '--show-toplevel'], stdout: `${realRoot}\n` },
+        ...repositoryScript().slice(1),
+      ]
+      const state = await createService(fake, aliasRoot).refresh()
+
+      expect(state.root).toBe(aliasRoot)
+      expect(state.repoRoot).toBe(aliasRoot)
+      expect(state.branch).toBe('main')
+      expect(state.heads).toHaveLength(1)
+    } finally {
+      await rm(temporary, { recursive: true, force: true })
+    }
   })
 
   it('does not expose a parent repository as project Git', async () => {

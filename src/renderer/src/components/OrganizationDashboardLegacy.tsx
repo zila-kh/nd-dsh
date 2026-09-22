@@ -618,7 +618,7 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
                 <Row
                   left={<>
                     <strong className="truncate text-sm">{runKindLabel(run.kind)}</strong>
-                    <small className="truncate text-xs text-faint">{run.status} · {short(run.sessionId)} · {clock(run.startedAt)}</small>
+                    <small className="truncate text-xs text-faint">{run.status} · {run.engineId ?? 'engine'}{run.workspaceKind ? ` · ${run.workspaceKind}` : ''} · {short(run.sessionId)} · {clock(run.startedAt)}</small>
                   </>}
                   right={run.status === 'failed'
                     ? <button className={cn(orgButton, 'h-[22px] shrink-0 px-1.5 text-[11px]')} disabled={busy !== null} onClick={() => void action(`retry-${run.id}`, () => retryRun(run))}>Retry</button>
@@ -626,6 +626,13 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
                       ? <span className="shrink-0 text-xs font-semibold text-primary">running…</span>
                       : undefined}
                 />
+                {run.workspaceBranch || run.checkpointCommit || run.baselineCommit ? (
+                  <div className="mt-1.5 flex flex-wrap gap-1 text-[10px] text-faint">
+                    {run.workspaceBranch ? <code className="rounded border border-border-soft bg-secondary px-1.5 py-0.5" title={run.workspaceBranch}>{run.workspaceBranch}</code> : null}
+                    {run.baselineCommit ? <code className="rounded border border-border-soft bg-secondary px-1.5 py-0.5">base {short(run.baselineCommit)}</code> : null}
+                    {run.checkpointCommit ? <code className="rounded border border-primary/20 bg-primary/[0.06] px-1.5 py-0.5 text-primary">checkpoint {short(run.checkpointCommit)}</code> : null}
+                  </div>
+                ) : null}
                 {run.error ? (
                   <p className="m-0 mt-1.5 max-h-[88px] overflow-auto whitespace-pre-wrap break-words rounded-[7px] border border-destructive/25 bg-destructive/[0.06] p-[7px] text-xs/[1.45] text-destructive" title={run.error}>
                     {run.error.length > 500 ? `${run.error.slice(0, 500)}…` : run.error}
@@ -943,10 +950,23 @@ function TaskCard({ task, state, busy, run }: { task: OrganizationTask; state: O
       <small className="text-[11px] uppercase text-faint">{task.priority}</small>
       <strong className="text-sm">{task.title}</strong>
       <p className="m-0 text-xs/[1.45] text-muted-foreground">{task.description}</p>
+      {task.integrationState === 'conflict' ? (
+        <p className="m-0 rounded-md border border-warning/30 bg-warning/10 px-2 py-1 text-[11px]/[1.4] text-warning" title={task.integrationSummary}>
+          Integration conflict · task checkpoint preserved
+        </p>
+      ) : null}
       {task.status === 'review' && reviewFailure ? (
         <p className="m-0 rounded-md border border-warning/25 bg-warning/10 px-2 py-1 text-[11px]/[1.4] text-warning">
           Review needs retry{reviewFailure.error ? `: ${reviewFailure.error.slice(0, 220)}` : '.'}
         </p>
+      ) : null}
+      {latestExecution ? (
+        <div className="flex flex-wrap gap-1 text-[10px] text-faint">
+          {latestExecution.engineId ? <span className="rounded border border-border-soft bg-secondary px-1.5 py-0.5">{latestExecution.engineId}</span> : null}
+          {latestExecution.workspaceKind ? <span className="rounded border border-border-soft bg-secondary px-1.5 py-0.5">{latestExecution.workspaceKind}</span> : null}
+          {latestExecution.workspaceBranch ? <code className="max-w-full truncate rounded border border-border-soft bg-secondary px-1.5 py-0.5" title={latestExecution.workspaceBranch}>{latestExecution.workspaceBranch}</code> : null}
+          {latestExecution.checkpointCommit ? <code className="rounded border border-primary/20 bg-primary/[0.06] px-1.5 py-0.5 text-primary">cp {short(latestExecution.checkpointCommit)}</code> : null}
+        </div>
       ) : null}
       <footer className="flex items-center justify-between gap-1.5 text-[11px] text-faint">
         <span className="truncate">{agent?.name ?? 'AI worker'}</span>

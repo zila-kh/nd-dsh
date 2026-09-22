@@ -6,7 +6,7 @@
 | --- | --- |
 | Document | Full PRD / feature inventory for new developers |
 | Status | **Developer Preview / Private Beta — source builds only.** Public Beta remains blocked on the P0 release gates in §8. |
-| Updated | 2026-08-26 |
+| Updated | 2026-09-22 |
 | Audience | New developers joining ND-DSH who need the complete feature picture without reading every file |
 | Related docs | [`../README.md`](../README.md) · [`architecture.md`](architecture.md) · [`ai-company-os.md`](ai-company-os.md) · [`coding-engine-architecture.md`](coding-engine-architecture.md) · [`provider-architecture.md`](provider-architecture.md) · [`roadmap.md`](roadmap.md) · [`plan/token-saver.md`](plan/token-saver.md) · [`qa/token-saver-manual.md`](qa/token-saver-manual.md) |
 | License | MIT |
@@ -66,9 +66,9 @@ Read this once; the rest of the document uses these terms exactly.
 | **Memory** | Durable tagged context entries with source `human/pm/worker/reviewer`; capped at the last 30 entries per company/project during context assembly. |
 | **Policy** | `action + effect` map with effects `allow / ask / deny`. Default-deny-to-ask: unspecified actions resolve to `ask`. |
 | **Activity** | Append-only audit log, capped at 500 rows. |
-| **Run receipt** | Durable record of a `pm-plan / task-execution / task-review` run: status, harness session id, output (capped 40k chars), error (capped 8k). |
+| **Run receipt** | Durable record of a `pm-plan / task-execution / task-review` run: status, engine/session, task workspace kind/root/branch, baseline/checkpoint/runtime-permit provenance, output (capped 40k chars), error (capped 8k). |
 | **Provider** | Supplies a model endpoint (DeepSeek, OpenAI-compatible, Responses-compatible, Anthropic-compatible, provider-native/catalog). Providers are **not** coding engines. |
-| **Coding engine** | Supplies an agent/execution environment: **ND Harness** (primary) and **Codex CLI** (delegated one-shot) today. Employees are assigned an engine; the assignment is durable ND state. |
+| **Coding engine** | Supplies an agent/execution environment. Shipped routes include ND Harness; direct Codex, ZCode, Claude Code, Cursor, Antigravity and Pi; registered OpenCode/Goose/JCode/Hermes adapters; and delegated Codex fallback. Employees are assigned workspace-capable engines through durable ND routing. |
 | **Token Saver** | ND-owned context-efficiency layer. Built-in saving combines conservative prompt optimization with Harness history compaction/tool-result pruning; external-app optimization is a separate explicit opt-in. `Off` means the ND prompt optimizer and Harness compaction/pruner are disabled for the next refreshed Harness runtime. |
 | **Provider account** | Authentication surface used by an integration, distinct from a model-provider API key. Codex stays on native ChatGPT/Codex auth; Antigravity uses an ND-managed Google OAuth flow. |
 | **Surfaces** | Three product views: **Company** (`#/company`), **Agent** workbench (`#/agent`, default), **Settings** (`#/settings`). The hidden Harness web surface is compatibility/debug infrastructure only. |
@@ -136,18 +136,19 @@ The delivery cycle (all shipped):
 ```text
 Company objective
   → AI PM session → structured goal + milestones + dependency-aware tasks (<nd-dsh-plan> JSON)
-  → next dependency-ready task
-  → fresh worker session (assigned employee + resolved coding engine)
-      → workspace files, shell/tests, visible browser when supported, skills/MCP, optional Codex delegation
+  → safe ready tasks acquire leases/capacity and execute concurrently when allowed
+  → each writable task gets its own ND task worktree + engine session
+  → ND checkpoint + machine/artifact verification
   → fresh independent reviewer session → <nd-dsh-review> JSON {verdict, summary, issues[], memory[]}
-  → pass: complete + durable memory + unlock dependents → next ready task
+  → pass: integrate exact checkpoint + durable memory + unlock dependents
+  → merge conflict: preserve checkpoint/branch + explicit integration-conflict state
   → fail: blocked, or bounded autonomy-4 rework
 ```
 
 - ✅ PM and reviewer outputs use tagged JSON envelopes (`<nd-dsh-plan>`, `<nd-dsh-review>`) so orchestration state is machine-readable while reasoning stays visible in the underlying session. A plan/review run with a missing/invalid structured result fails and blocks the task — ND never invents completion.
 - ✅ Each worker/reviewer gets a **fresh session** containing only: selected company/project scope, role/agent instructions, resolved skills (agent+role+team+builtin union), allowed memory (≤30 entries), task requirements + acceptance criteria, previous review feedback on rework, and policies.
 - ✅ **Dependency unlocking**: backlog → ready when all `dependsOn` are completed; PM-plan tasks may reference dependencies by title (remapped to ids after insert). Cross-company/project references are rejected.
-- ✅ **One-active-run ownership**: only one organization run (across all projects) may be `running`; autopilot `runNext` silently no-ops if another project holds the runtime.
+- ✅ **Parallel task ownership**: global planning/shared mutations remain serialized, while isolated task execution/review may run concurrently across projects/companies under task leases, dependency/work-scope checks, and project/role/team/review runtime pools. The same task/session cannot be double-owned.
 - ✅ **Agent selection** for a task: role matched by name hint → `/engineer/i` fallback → first role; prefers an idle agent of that role.
 - ✅ **Cancellation** never counts as completion: stop marks the run failed and the task blocked with an explicit canceled message.
 - ✅ **Restart/interruption recovery**: at startup, persisted `running` runs are converted to explicit interrupted failures, interrupted review runs return to `review`, execution runs to `blocked`, working/reviewing agents reset to idle, `run.interrupted` activity logged. No silent auto-resume of partial workspace changes.
@@ -163,8 +164,11 @@ Company objective
 ### 4.6 Coding engines
 
 - ✅ **Product-owned engine catalog** with availability checks and capability advertisement:
-  - **ND Harness** (`nd-harness`, integration `primary`): available when the vendored CLI bin + patch + presets exist. Capabilities: workspace, filesystem, shell, visible browser, ND skills, MCP, provider-neutral model routing, human approvals/questions, streaming, persistent sessions.
-  - **Codex CLI** (`codex`, integration `delegated`): available only when Harness is ready **and** the pinned `@deepseek-ai/dsh-subagent-codex` adapter exists. One-shot: delegates implementation as a single self-contained `subagent_codex` tool call; the ND parent then validates the actual workspace itself. Native Codex auth, `HOME`/`CODEX_HOME`, model selection, project trust, and account settings remain authoritative — ND never copies provider keys into Codex credentials. Browser/skills/MCP/provider-routing/approvals/persistent sessions are **not** advertised for this route.
+  - **ND Harness** (`nd-harness`): workspace, filesystem, shell, visible browser, ND skills/MCP, provider-neutral model routing, approvals, streaming and durable runtime sessions.
+  - **Direct workspace engines**: Codex CLI, ZCode CLI, Claude Code CLI, Cursor CLI, Antigravity CLI and Pi CLI use the common ND session/workspace contract when installed.
+  - **Additional registered installed adapters**: OpenCode, Goose, JCode and Hermes expose workspace-capable CLI execution; MiniMax and ChatGPT Web remain interactive-only when they cannot provide the ND writable-workspace contract.
+  - **Delegated Codex** (`codex`) remains a one-shot Harness-backed fallback with only the capabilities the delegated route actually provides.
+  - Native vendor authentication, model/provider configuration and permission rules remain authoritative; organization Task/Company/Project objects stay engine-neutral.
 - ✅ ND only advertises capabilities it actually wires (no aspirational capability flags).
 - ✅ **Per-employee engine assignment** is durable ND state (`engine-assignments.json`; absence/unreadable → defaults to `nd-harness`), edited from the Workforce UI; unknown or unavailable engines are rejected before a run starts.
 - ✅ **ND Harness adapter** (`src/main/harness/`): spawns the pinned `dsh --profile web --patch <nd-dsh.patch.yml> --no-open --port <free-port>` child (env overrides `ND_DSH_HARNESS_ROOT / ND_DSH_PATCH / ND_DSH_PRESET_DIR`); readiness race (stdout URL regex vs HTTP poll, 120 s deadline); status machine `stopped/starting/ready/running/error`; gateway RPC retry on replaced gateway; graceful SIGTERM shutdown with 4 s kill fallback; durable sessions survive restarts; runtime restarts on provider revision change (next prompt), permission-mode change (launch), and Token Saver built-in policy change (next Harness run/session); pinned-port fallback to a free loopback port.
@@ -348,7 +352,7 @@ Everything in §4 — the coding-first vertical slice running on real desktop/ru
 ### P2 — enterprise company operations + richer engines
 
 - Durable policy/audit ledger (actor, engine, model, action, approval, evidence, result); budgets/quotas/SLOs; scheduled + conditional workflows with bounded retries; cross-project objectives and portfolio planning; team/user accounts and admin controls; enterprise identity, managed config, export/retention, backup/restore; remote supervision of a desktop execution host.
-- **Richer coding engines**: direct persistent Codex app-server adapter (thread/resume/progress) if one-shot delegation becomes limiting; Claude Code and other adapters behind the same ND contract; local/offline engine adapter; remote/cloud workers with the same company/task/policy receipts. No engine may require vendor-specific fields in domain objects.
+- **Richer coding engines**: continue hardening the shipped direct adapters, add local/offline and remote/cloud workers with the same task/workspace/evidence contract, and improve restart persistence where native runtimes support it. No engine may require vendor-specific fields in domain objects.
 - **Broader Token Saver/external routing**: add provider-appropriate external connectors and account flows only when they preserve native auth boundaries and have deterministic install/disable/restore semantics; do not generalize by credential extraction or machine-wide MITM.
 
 ### Release labels
@@ -388,6 +392,7 @@ Configure model providers in **Settings → Models**. Token Saver is configured 
 corepack pnpm verify
 corepack pnpm typecheck
 corepack pnpm test
+corepack pnpm core:test
 corepack pnpm build
 ```
 

@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { resolve } from 'node:path'
 import { stripWorkspaceContext } from '../../../shared/workspace-context.js'
 import type {
   DshEventFrame,
@@ -195,7 +196,12 @@ export class ZcodeCliEngine {
     if (!session) throw new Error(`${ZCODE_CLI_ENGINE_ID} session could not be created`)
     const activeSession = session
     if (activeSession.running) throw new Error('This ZCode chat already has an active turn')
-    if (options.cwd !== undefined) activeSession.cwd = options.cwd
+    if (options.cwd !== undefined) {
+      if (activeSession.cwd !== undefined && normalizeWorkspaceRoot(activeSession.cwd) !== normalizeWorkspaceRoot(options.cwd)) {
+        throw new Error('ZCode session workspace is immutable; create a new session for a different task workspace')
+      }
+      if (activeSession.cwd === undefined) activeSession.cwd = options.cwd
+    }
 
     const settled = deferred<TurnOutcome>()
     activeSession.turnSettled = settled
@@ -817,4 +823,10 @@ async function killProcessTree(child: ChildProcess | undefined): Promise<void> {
       }
     })
   })
+}
+
+
+function normalizeWorkspaceRoot(value: string): string {
+  const normalized = resolve(value)
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized
 }

@@ -19,7 +19,7 @@ function organization(): OrganizationSnapshot {
     activeProjectId: 'project-1',
     companies: [{ id: 'company-1', name: 'Acme', mission: 'Ship verified software', autonomyLevel: 4, status: 'active', createdAt: now, updatedAt: now }],
     projects: [{ id: 'project-1', companyId: 'company-1', name: 'App', objective: 'Build it', status: 'active', repoUrls: [], teamIds: [], progress: 50, createdAt: now, updatedAt: now }],
-    roles: [], teams: [], agents: [], skills: [], workflows: [], goals: [], milestones: [], memory: [], policies: [], activity: [], runs: [],
+    roles: [], teams: [], agents: [], skills: [], workflows: [], goals: [], milestones: [], memory: [], policies: [], activity: [], runs: [], coordination: [],
     tasks: [
       { id: 'task-1', companyId: 'company-1', projectId: 'project-1', title: 'One', description: 'One', acceptanceCriteria: [], priority: 'high', status: 'completed', dependsOn: [], createdAt: now, updatedAt: now },
       { id: 'task-2', companyId: 'company-1', projectId: 'project-1', title: 'Two', description: 'Two', acceptanceCriteria: [], priority: 'high', status: 'ready', dependsOn: [], createdAt: now, updatedAt: now },
