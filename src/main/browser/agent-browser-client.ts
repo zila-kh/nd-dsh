@@ -21,6 +21,14 @@ const BIND_RETRY_DELAY_MS = 2_500
 const SMOKE_TEST_TIMEOUT_MS = 15_000
 const SHUTDOWN_TIMEOUT_MS = 5_000
 const DAEMON_EXIT_GRACE_MS = 1_000
+/**
+ * Namespace that isolates this product's daemon sockets and restore state from
+ * any other agent-browser use on the machine. Pinned in the config file because
+ * a consumer that reads only that file — the Harness browser MCP — otherwise
+ * starts its daemon in the CLI's unnamespaced global state directory, where
+ * shutdown cannot find it.
+ */
+export const AGENT_BROWSER_DAEMON_NAMESPACE = 'nd-dsh'
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -98,6 +106,7 @@ export class AgentBrowserClient {
       $schema: 'https://agent-browser.dev/schema.json',
       cdp: String(this.cdpPort),
       session: this.sessionName,
+      namespace: AGENT_BROWSER_DAEMON_NAMESPACE,
       pinTab: true,
       json: true,
       contentBoundaries: true,
@@ -192,13 +201,11 @@ export class AgentBrowserClient {
         // idle timeout.
         const daemonPids = await this.daemonPids()
         if (!this.sessionTouched && daemonPids.length === 0) return
-        try {
-          // `close` ends this wrapper's session only; shutdown owns every
-          // session in the app's socket directory.
-          await this.run(['close', '--all'], [], SHUTDOWN_TIMEOUT_MS)
-        } catch (error) {
-          console.warn('[agent-browser] graceful session cleanup failed:', error instanceof Error ? error.message : String(error))
-        }
+        // Close the space this wrapper's environment points at, then the space a
+        // config-only consumer resolves to. The namespace is pinned in the config
+        // file, so the second call reaches a daemon the first cannot see.
+        await this.closeSessions()
+        await this.closeSessions({ withoutSocketDir: true })
         await this.ensureDaemonsStopped(daemonPids)
       })().finally(() => {
         this.sessionTouched = false
@@ -220,19 +227,47 @@ export class AgentBrowserClient {
     }
   }
 
-  /** Every agent-browser daemon sidecar in this app's private socket directory. */
-  private async daemonPids(): Promise<number[]> {
-    let entries: string[]
+  private async closeSessions(options: { withoutSocketDir?: boolean } = {}): Promise<void> {
     try {
-      entries = await fs.readdir(this.socketDir)
-    } catch {
-      return []
+      // `close` ends one session; `--all` ends every session in the daemon space,
+      // which is what shutdown owns.
+      await this.run(['close', '--all'], [], SHUTDOWN_TIMEOUT_MS, options)
+    } catch (error) {
+      console.warn('[agent-browser] graceful session cleanup failed:', error instanceof Error ? error.message : String(error))
     }
+  }
+
+  /**
+   * Daemon directories this app can own, most specific first.
+   *
+   * The namespace composes with the socket directory, so a consumer that inherits
+   * AGENT_BROWSER_SOCKET_DIR and one that only reads the config resolve the same
+   * namespace under different roots. The pre-namespace root stays in the list so a
+   * daemon started by an earlier build is still reapable.
+   */
+  private daemonRoots(): string[] {
+    return [
+      join(this.socketDir, 'namespaces', AGENT_BROWSER_DAEMON_NAMESPACE, 'run'),
+      join(app.getPath('home'), '.agent-browser', 'namespaces', AGENT_BROWSER_DAEMON_NAMESPACE, 'run'),
+      this.socketDir,
+    ]
+  }
+
+  /** Every daemon pid sidecar in the directories this app can own. */
+  private async daemonPids(): Promise<number[]> {
     const pids = new Set<number>()
-    for (const entry of entries) {
-      if (!entry.endsWith('.pid')) continue
-      const pid = await this.readPidFile(join(this.socketDir, entry))
-      if (pid !== undefined) pids.add(pid)
+    for (const root of this.daemonRoots()) {
+      let entries: string[]
+      try {
+        entries = await fs.readdir(root)
+      } catch {
+        continue
+      }
+      for (const entry of entries) {
+        if (!entry.endsWith('.pid')) continue
+        const pid = await this.readPidFile(join(root, entry))
+        if (pid !== undefined) pids.add(pid)
+      }
     }
     return [...pids]
   }
@@ -295,7 +330,12 @@ export class AgentBrowserClient {
     return join(projectRoot, 'node_modules', '.bin', executable)
   }
 
-  private async run(command: string[], globalArguments: string[] = [], timeoutMs = COMMAND_TIMEOUT_MS): Promise<RunResult> {
+  private async run(
+    command: string[],
+    globalArguments: string[] = [],
+    timeoutMs = COMMAND_TIMEOUT_MS,
+    options: { withoutSocketDir?: boolean } = {},
+  ): Promise<RunResult> {
     if (this.binary.includes(sep) && !existsSync(this.binary)) {
       throw new Error(`agent-browser is missing from this ND install at ${this.binary}. Reinstall ND.`)
     }
@@ -314,7 +354,7 @@ export class AgentBrowserClient {
           PATH: process.env.PATH?.split(delimiter).filter(Boolean).join(delimiter),
           AGENT_BROWSER_CONFIG: this.configPath,
           AGENT_BROWSER_SESSION: this.sessionName,
-          AGENT_BROWSER_SOCKET_DIR: this.socketDir,
+          ...(options.withoutSocketDir ? {} : { AGENT_BROWSER_SOCKET_DIR: this.socketDir }),
           ...(this.electronNodeMode ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
         },
       })
