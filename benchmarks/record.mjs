@@ -16,7 +16,6 @@ const outputDir = defaultOutputDir()
 const root = benchmarkRoot
 const runs = Math.max(10, Number(process.env.ND_DSH_BENCH_RUNS || 10))
 const coreDir = join(outputDir, 'core')
-const legacyDir = join(outputDir, 'legacy')
 const rustDir = join(outputDir, 'rust')
 const packagedDir = join(outputDir, 'packaged')
 
@@ -42,9 +41,6 @@ if (staged) {
 console.log('\nRecording release-profile nd-core suite...')
 await runNode(['benchmarks/run-suite.mjs'], { ...shared, ND_DSH_BENCH_BACKEND: 'rust-core', ND_DSH_BENCH_OUTPUT: coreDir })
 
-console.log('\nRecording same-build legacy Electron runtime...')
-await runNode(['benchmarks/app-runtime.mjs', 'legacy'], { ...shared, ND_DSH_BENCH_BACKEND: 'legacy', ND_DSH_BENCH_OUTPUT: legacyDir })
-
 console.log('\nRecording same-build Rust Electron runtime...')
 await runNode(['benchmarks/app-runtime.mjs', 'rust-core'], { ...shared, ND_DSH_BENCH_BACKEND: 'rust-core', ND_DSH_BENCH_OUTPUT: rustDir })
 
@@ -59,15 +55,13 @@ await runNode(['benchmarks/app-startup.mjs'], {
 
 const paths = {
   core: relative(outputDir, join(coreDir, 'summary.json')).replaceAll('\\', '/'),
-  legacy: relative(outputDir, join(legacyDir, 'electron-responsiveness.json')).replaceAll('\\', '/'),
   rust: relative(outputDir, join(rustDir, 'electron-responsiveness.json')).replaceAll('\\', '/'),
   packaged: relative(outputDir, join(packagedDir, 'app-startup.json')).replaceAll('\\', '/'),
 }
 const coreSummary = await readJson(join(outputDir, paths.core))
-const legacyRuntime = await readJson(join(outputDir, paths.legacy))
 const rustRuntime = await readJson(join(outputDir, paths.rust))
 const packagedStartup = await readJson(join(outputDir, paths.packaged))
-const budget = evaluateEvidence({ coreSummary, legacyRuntime, rustRuntime, packagedStartup })
+const budget = evaluateEvidence({ coreSummary, rustRuntime, packagedStartup })
 const provenance = await resultProvenance()
 
 const summary = {
@@ -83,7 +77,6 @@ const summary = {
     appStartupP95Ms: packagedStartup.summaryMs?.p95 ?? null,
   },
   paths,
-  comparison: budget.comparison,
   budget: {
     status: budget.status,
     checks: budget.checks,
@@ -176,20 +169,6 @@ function safeEnvironment() {
 
 function renderMarkdown(summary, packagedStartup) {
   const env = summary.environment ?? {}
-  const checkById = new Map(summary.budget.checks.map((check) => [check.id, check]))
-  const budgetByMetric = {
-    'main-cpu-p50': 'relative-main-cpu',
-    'idle-backend-memory-p50': 'relative-idle-memory',
-    'session-growth-p50': 'relative-session-scaling',
-    'terminal-stress-p50': 'relative-terminal',
-    'git-refresh-p50': 'relative-git',
-    'cancel-p95': 'relative-cancel',
-  }
-  const rows = summary.comparison.rows.map((row) => {
-    const check = checkById.get(budgetByMetric[row.id])
-    return '| ' + row.label + ' | ' + formatValue(row.baseline, row.unit) + ' | ' + formatValue(row.candidate, row.unit)
-      + ' | ' + formatDelta(row.deltaPct) + ' | ' + (check?.budget ?? 'report') + ' | ' + (check ? (check.passed ? 'PASS' : 'FAIL') : 'INFO') + ' |'
-  })
   const checks = summary.budget.checks.map((check) =>
     '| ' + check.label + ' | ' + (check.passed ? 'PASS' : 'FAIL') + ' | ' + escapeCell(formatActual(check.actual)) + ' | ' + escapeCell(check.budget) + ' |')
   const observations = summary.budget.observations.map((item) =>
@@ -200,17 +179,11 @@ function renderMarkdown(summary, packagedStartup) {
     '**Result: ' + summary.status.toUpperCase() + '**',
     '',
     '- Commit: `' + summary.commit + '`',
-    '- Backend comparison: legacy vs rust-core, same built Electron app',
+    '- Backend: rust-core (single production runtime)',
     '- Build profile: ' + summary.buildProfile,
     '- Fixture revision: ' + summary.fixtureRevision,
     '- Reference: ' + [env.os, env.osVersion, env.arch, env.cpuModel, formatBytes(env.physicalMemoryBytes)].filter(Boolean).join(' / '),
     '- Packaged Windows startup: p50 ' + formatValue(packagedStartup.summaryMs?.p50, 'ms') + ', p95 ' + formatValue(packagedStartup.summaryMs?.p95, 'ms'),
-    '',
-    '## Same-machine comparison',
-    '',
-    '| Metric | Legacy | Rust core | Delta | Budget | Result |',
-    '| --- | ---: | ---: | ---: | --- | --- |',
-    ...rows,
     '',
     '## Absolute and correctness gates',
     '',
@@ -225,12 +198,11 @@ function renderMarkdown(summary, packagedStartup) {
     '## Raw machine-readable evidence',
     '',
     '- [Core suite](' + summary.paths.core + ')',
-    '- [Legacy Electron runtime](' + summary.paths.legacy + ')',
     '- [Rust Electron runtime](' + summary.paths.rust + ')',
     '- [Packaged startup](' + summary.paths.packaged + ')',
     '- [Combined budget summary](summary.json)',
     '',
-    'All percentages and PASS/FAIL values above are generated from the linked JSON artifacts.',
+    'Historical legacy-vs-Rust bundles remain comparable with bench:compare, but release evidence no longer requires the retired runtime.',
   ].join('\n')
 }
 
