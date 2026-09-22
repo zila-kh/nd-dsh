@@ -27,7 +27,7 @@ The breakdown is deliberately coarse — one ticket per deliverable, not per tec
 
 | Task | Pri | What it covers |
 | --- | --- | --- |
-| [wip-0004](wip-0004-restore-green-ci-and-evidence.md) | P0 | Green CI on Windows and trustworthy evidence: benchmark terminal handshake, release staging, desktop smoke, baselines/backend identity/binary hash |
+| [done-0004](done/done-0004-restore-green-ci-and-evidence.md) | P0 | **done pending final archive merge gate** — green CI on Windows and trustworthy evidence: terminal handshake, release staging, desktop smoke, baselines/backend identity/binary hash |
 | [todo-0005](todo-0005-agent-task-measurement.md) | P1 | Agent-task metrics — makes the cost of a task measurable |
 | [wip-0006](wip-0006-nd-core-runtime-contract.md) | P1 | Finish the nd-core contract: workspace-RPC decision, core-side deadlines, protocol completeness, cache/revision, search — **implemented**, decisions in PRD 0002 §5.0.3 |
 | [todo-0007](todo-0007-retire-legacy-paths-and-dispatch.md) | P1 | Retire legacy runtime paths (node-pty, legacy backend switch) and unify autopilot dispatch |
