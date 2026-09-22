@@ -21,11 +21,9 @@ type WorkspaceContext = Omit<WorkspaceState, 'root' | 'name'>
 
 export interface WorkspaceServiceOptions {
   /**
-   * The nd-core workspace filesystem layer. When it is attached, workspace file
-   * browsing runs through it, which is where the bounded read, the listing bound,
-   * and the escape/symlink checks live. The in-process implementation below is the
-   * legacy backend used only while `ND_DSH_CORE_BACKEND=legacy` remains available
-   * for rollback and benchmarks.
+   * The nd-core workspace filesystem layer used by desktop production. The
+   * in-process implementation remains only as a unit-test seam for this service;
+   * desktop bootstrap always attaches nd-core and fails closed otherwise.
    */
   files?: WorkspaceFileSystem
 }
@@ -42,10 +40,7 @@ export class WorkspaceService {
     this.files = options.files
   }
 
-  /**
-   * Attach the nd-core workspace filesystem once the sidecar is ready. Before it is
-   * attached, browsing uses the in-process legacy path.
-   */
+  /** Attach the nd-core workspace filesystem once the sidecar is ready. */
   attachFileSystem(files: WorkspaceFileSystem | undefined): void {
     this.files = files
   }
