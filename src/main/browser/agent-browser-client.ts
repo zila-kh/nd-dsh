@@ -1,6 +1,6 @@
 import { app } from 'electron'
 import { spawn } from 'node:child_process'
-import { existsSync, promises as fs } from 'node:fs'
+import { existsSync, readFileSync, promises as fs } from 'node:fs'
 import { delimiter, isAbsolute, join, resolve, sep } from 'node:path'
 
 interface RunResult {
@@ -57,7 +57,7 @@ export class AgentBrowserClient {
 
   constructor(cdpPort: number, projectRoot: string) {
     this.cdpPort = cdpPort
-    this.configPath = join(app.getPath('userData'), 'agent-browser.visible.json')
+    this.configPath = appBrowserConfigPath()
     this.socketDir = appBrowserSocketDir()
     this.binary = this.resolveBinary(projectRoot)
     this.entryPath = resolve(
@@ -200,13 +200,18 @@ export class AgentBrowserClient {
         // the Electron process, where it holds inherited pipes open until its
         // idle timeout.
         const daemonPids = await this.daemonPids()
-        if (!this.sessionTouched && daemonPids.length === 0) return
-        // Close the space this wrapper's environment points at, then the space a
-        // config-only consumer resolves to. The namespace is pinned in the config
-        // file, so the second call reaches a daemon the first cannot see.
-        await this.closeSessions()
-        await this.closeSessions({ withoutSocketDir: true })
-        await this.ensureDaemonsStopped(daemonPids)
+        if (this.sessionTouched || daemonPids.length > 0) {
+          // Close the space this wrapper's environment points at, then the space a
+          // config-only consumer resolves to. The namespace is pinned in the config
+          // file, so the second call reaches a daemon the first cannot see.
+          await this.closeSessions()
+          await this.closeSessions({ withoutSocketDir: true })
+          await this.ensureDaemonsStopped(daemonPids)
+        }
+        // Runs unconditionally: a pid sidecar can name a client that has already
+        // exited while its daemon lives on, and that daemon is exactly the one
+        // that would hold inherited pipes open past this process.
+        await stopAgentBrowserDaemonProcesses(this.socketDir, this.configPath)
       })().finally(() => {
         this.sessionTouched = false
         this.closing = undefined
@@ -336,6 +341,149 @@ export function appBrowserSocketDir(): string {
   return join(app.getPath('userData'), 'agent-browser-runtime')
 }
 
+/** The config file every app-owned agent-browser client reads. */
+export function appBrowserConfigPath(): string {
+  return join(app.getPath('userData'), 'agent-browser.visible.json')
+}
+
+/**
+ * Path fragment that identifies an agent-browser daemon on any install.
+ *
+ * Both shapes end in it: the CLI binary a development checkout runs
+ * (`node_modules/.pnpm/agent-browser@x/node_modules/agent-browser/bin/agent-browser-linux-x64`)
+ * and the packaged entry script the app runs under `ELECTRON_RUN_AS_NODE`
+ * (`app.asar/node_modules/agent-browser/bin/agent-browser.js`). Matching the
+ * containing Electron binary instead would match this app itself, and matching
+ * the bare name would match an unrelated agent-browser install on the machine.
+ */
+const DAEMON_COMMAND_MARKER = 'agent-browser/bin/agent-browser'
+
+export function isAgentBrowserDaemonCommand(command: string): boolean {
+  return command.replace(/\\/g, '/').includes(DAEMON_COMMAND_MARKER)
+}
+
+interface ProcessRow {
+  pid: number
+  ppid: number
+  command: string
+}
+
+/**
+ * Enumerate processes with their parent and command line.
+ *
+ * Linux is read from `/proc` rather than by spawning `ps`: this runs inside the
+ * app's own shutdown, where a `ps` that is missing, blocked, or shadowed would
+ * silently no-op the sweep that has to stop the daemon. Other platforms fall
+ * back to `ps`.
+ */
+async function listProcesses(): Promise<ProcessRow[]> {
+  const fromProc = await listProcProcesses()
+  return fromProc.length > 0 ? fromProc : listPsProcesses()
+}
+
+async function listProcProcesses(): Promise<ProcessRow[]> {
+  if (process.platform !== 'linux') return []
+  let entries: string[]
+  try {
+    entries = await fs.readdir('/proc')
+  } catch {
+    return []
+  }
+  const rows: ProcessRow[] = []
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) continue
+    try {
+      // `stat` is `pid (comm) state ppid ...`, and comm can hold spaces and
+      // parentheses, so only the fields after the last ')' can be trusted.
+      const stat = await fs.readFile(`/proc/${entry}/stat`, 'utf8')
+      const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ')
+      const command = (await fs.readFile(`/proc/${entry}/cmdline`, 'utf8')).split(' ').filter(Boolean).join(' ')
+      if (!command) continue
+      rows.push({ pid: Number(entry), ppid: Number(fields[1]), command })
+    } catch {
+      continue
+    }
+  }
+  return rows
+}
+
+async function listPsProcesses(): Promise<ProcessRow[]> {
+  if (process.platform === 'win32') return []
+  const listing = await new Promise<string>((resolvePromise) => {
+    const child = spawn('ps', ['-eo', 'pid=,ppid=,args='], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true })
+    let stdout = ''
+    child.stdout.setEncoding('utf8')
+    child.stdout.on('data', (chunk: string) => { stdout += chunk })
+    child.once('error', () => resolvePromise(''))
+    child.once('close', () => resolvePromise(stdout))
+  })
+  const rows: ProcessRow[] = []
+  for (const line of listing.split(/\r?\n/)) {
+    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/)
+    if (match) rows.push({ pid: Number(match[1]), ppid: Number(match[2]), command: match[3] ?? '' })
+  }
+  return rows
+}
+
+function descendantPids(rows: ProcessRow[], rootPid: number): Set<number> {
+  const children = new Map<number, number[]>()
+  for (const row of rows) {
+    const list = children.get(row.ppid)
+    if (list) list.push(row.pid)
+    else children.set(row.ppid, [row.pid])
+  }
+  const descendants = new Set<number>()
+  const queue = [rootPid]
+  while (queue.length > 0) {
+    for (const child of children.get(queue.shift()!) ?? []) {
+      if (descendants.has(child)) continue
+      descendants.add(child)
+      queue.push(child)
+    }
+  }
+  return descendants
+}
+
+/**
+ * Whether a matching process is this app's daemon rather than someone else's
+ * agent-browser use on the same machine.
+ *
+ * A daemon inherits the socket directory and config path of whoever started it,
+ * so on Linux its own environment is the answer. Where that is unreadable
+ * (macOS), being a descendant of this process is the next best evidence.
+ */
+function isAppOwnedDaemon(row: ProcessRow, descendants: Set<number>, socketDir: string, configPath: string): boolean {
+  try {
+    const environment = readFileSync(`/proc/${row.pid}/environ`, 'utf8')
+    return environment.includes(socketDir) || environment.includes(configPath)
+  } catch {
+    return descendants.has(row.pid)
+  }
+}
+
+/**
+ * Stop agent-browser daemons that belong to this app even when no pid sidecar
+ * names them.
+ *
+ * A sidecar records the pid of the client that asked for the daemon; when that
+ * client re-execs or the daemon detaches, the recorded pid is already gone while
+ * the daemon lives on. Ownership is therefore checked against the daemon's own
+ * process instead of against a pid file. Returns how many daemons it stopped.
+ */
+export async function stopAgentBrowserDaemonProcesses(socketDir: string, configPath: string): Promise<number> {
+  const rows = await listProcesses()
+  if (rows.length === 0) return 0
+  const descendants = descendantPids(rows, process.pid)
+  let stopped = 0
+  for (const row of rows) {
+    if (row.pid === process.pid || !isAgentBrowserDaemonCommand(row.command)) continue
+    if (!isAppOwnedDaemon(row, descendants, socketDir, configPath)) continue
+    await forceStopDaemon(row.pid, 0)
+    stopped += 1
+  }
+  return stopped
+}
+
 /**
  * Daemon directories this app can own, most specific first.
  *
@@ -417,11 +565,13 @@ async function forceStopDaemon(pid: number, graceMs: number): Promise<void> {
  * timeout. Returns how many daemons it had to stop.
  */
 export async function stopAppOwnedBrowserDaemons(): Promise<number> {
+  const socketDir = appBrowserSocketDir()
   let stopped = 0
-  for (const pid of await daemonPidsFor(appBrowserSocketDir())) {
+  for (const pid of await daemonPidsFor(socketDir)) {
     if (!isProcessAlive(pid)) continue
     await forceStopDaemon(pid, 0)
     stopped += 1
   }
+  stopped += await stopAgentBrowserDaemonProcesses(socketDir, appBrowserConfigPath())
   return stopped
 }

@@ -16,6 +16,7 @@ import {
   AGENT_BROWSER_DAEMON_NAMESPACE,
   AgentBrowserClient,
   appBrowserSocketDir,
+  isAgentBrowserDaemonCommand,
   stopAppOwnedBrowserDaemons,
 } from '../src/main/browser/agent-browser-client.js'
 
@@ -214,6 +215,27 @@ describe('AgentBrowserClient shutdown ownership', () => {
       }
     }
   }, 8_000)
+})
+
+describe('agent-browser daemon process matching', () => {
+  it('matches the development CLI binary and the packaged entry script', () => {
+    expect(isAgentBrowserDaemonCommand(
+      '/repo/node_modules/.pnpm/agent-browser@0.34.0/node_modules/agent-browser/bin/agent-browser-linux-x64',
+    )).toBe(true)
+    expect(isAgentBrowserDaemonCommand(
+      'C:\\Program Files\\ND\\resources\\app.asar\\node_modules\\agent-browser\\bin\\agent-browser.js',
+    )).toBe(true)
+  })
+
+  it('does not match this app, a package shim, or another agent-browser install', () => {
+    // The app itself runs the Electron binary; the packaged daemon adds the
+    // entry script, which is matched above. The binary alone must not match.
+    expect(isAgentBrowserDaemonCommand('/repo/node_modules/electron/dist/electron --type=renderer')).toBe(false)
+    // A shim only relays to the real binary, which is matched on its own.
+    expect(isAgentBrowserDaemonCommand('/repo/node_modules/.bin/agent-browser --config x get url')).toBe(false)
+    // Someone else's installation is not this app's daemon.
+    expect(isAgentBrowserDaemonCommand('/usr/local/bin/agent-browser open https://example.com')).toBe(false)
+  })
 })
 
 function isAlive(pid: number): boolean {
