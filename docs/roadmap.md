@@ -29,19 +29,19 @@ The `ai-company-workflow` branch already contains the product vertical slice:
 These are blockers for a downloadable public beta, not optional polish.
 
 
-### Active implementation — PRD 0002 Rust Shared Core + Parallel Agent Runtime MVP
+### PRD 0002 convergence — implementation complete; Windows release validation blocked
 
 - PRD: [0002-rust-sidecar-mvp-migration.md](prd/0002-rust-sidecar-mvp-migration.md) — **MVP merged; reconverging on open deltas** (see §5.0).
-- Task: [wip-0002-rust-sidecar-mvp-migration.md](tasks/wip-0002-rust-sidecar-mvp-migration.md) — P0, merged as PR #20 (`588f3ed`).
+- Task: [done-0002-rust-sidecar-mvp-migration.md](tasks/done/done-0002-rust-sidecar-mvp-migration.md) — P0, merged as PR #20 (`588f3ed`).
 - Benchmark contract: [performance-benchmark-suite.md](plan/performance-benchmark-suite.md) — implemented at runtime level; §12 records what is still unmeasurable.
 - Parallel-agent scope: [parallel-work-distribution.md](plan/parallel-work-distribution.md) — D1-D3 implemented; see the open-delta list.
 - Agent fast path: [agent-fast-path.md](plan/agent-fast-path.md) — proposed; **gated on measurement, not started**.
 
 This approved MVP is the active implementation vehicle for the runtime-distribution, PTY/process, Git/worktree, parallel-worker capacity, packaged Windows smoke, and reproducible performance-proof portions of the roadmap. Organization/business truth remains TypeScript-owned; nd-core owns shared runtime permits, native process/resource lifecycle, and system-heavy services.
 
-**Status:** the shared core, permits, PTY/Git/process migration, parallel distribution, and the benchmark suite all merged and run. The remaining work is convergence, not construction, and it is listed with file-level evidence in [PRD 0002 §5.0.2](prd/0002-rust-sidecar-mvp-migration.md#502-genuinely-open-deltas--the-remaining-mvp-work). Task 0006 closed the runtime-contract deltas — the `workspace.*` layer has a product consumer, core-side deadlines and per-request cancellation exist, `terminal.restart`/`terminal.state` exist, a revision-keyed cache backs `git.status`/`git.log`, and bounded search exists — with the decisions recorded in [PRD 0002 §5.0.3](prd/0002-rust-sidecar-mvp-migration.md#503-decision-record--nd-core-runtime-contract-task-0006-2026-09-21). Still open there: node-pty removal (0007), the legacy backend switch (0007), the autopilot dispatch heuristic (0007), and benchmark evidence gaps (0004/0005).
+**Status:** implementation backlog complete on `feat/complete-active-work`. The production desktop is single-runtime (`nd-core`), the agent fast path and matched measurement are implemented, and stale TODO/WIP records are archived. Fresh Windows release validation remains explicitly blocked in task 0004 because this branch intentionally skips CI.
 
-**CI reality check (post-PR #21):** PR #21 merged to `main` as `101a855b`. The ConPTY benchmark/client fix, evidence-identity gates, agent-task baseline, and runtime-contract work are now on main. The first post-merge CI run (`35640378484`) still did **not** go green: Ubuntu `validate` failed inside `pnpm core:test` because `workspace_primitives_are_bounded_reject_escapes_and_are_the_only_ones_exposed` hit `workspace path is unavailable: No such file or directory (os error 2)`; the remaining validate steps were skipped. The Windows job was canceled during dependency installation, so its new benchmark/package gates did not execute, and `performance-evidence` was skipped. Treat the local Windows/package evidence as useful but keep CI/release proof open until a non-draft run completes all gates. See task 0004 and [performance-benchmark-suite.md §12](plan/performance-benchmark-suite.md#12-remaining-gaps--agent-task-metrics-baselines-and-fast-path-proof).
+**CI reality check (2026-09-22):** main workflow run `35719173634` passed the complete Linux `validate` job, including desktop smoke. `windows-package` failed at `Verify ND Core`, so Windows package/smoke and performance evidence remain unproven without a fresh run; see blocked task 0004.
 
 #### Current direction — four deliverables
 
@@ -54,18 +54,18 @@ Target: **fast native runtime + minimal round trips + structured agent actions +
 
 #### Task board — PRD 0002 breakdown
 
-| Task | Pri | Owner | What it unblocks |
-| --- | --- | --- | --- |
-| [wip-0004](tasks/wip-0004-restore-green-ci-and-evidence.md) | P0 | ZCode | CI actually runs its gates on Windows; performance claims become verifiable and swap-proof |
-| [wip-0007](tasks/wip-0007-retire-legacy-paths-and-dispatch.md) | P1 | ZCode | one terminal runtime path; legacy backend switch scheduled out; autopilot capacity decided by query |
-| [wip-0009](tasks/wip-0009-windows-cli-shim-prompt-truncation.md) | P1 | ZCode | implementation landed in PR #21; keep open until CI evidence is reconciled |
-| [todo-0010](tasks/todo-0010-desktop-smoke-teardown.md) | P1 | unassigned | names the desktop-smoke teardown leak so `validate` can go green |
-| [todo-0008](tasks/todo-0008-agent-fast-path.md) | P2 | unassigned | one action vocabulary (unblocked), then the router and composite ops once measurement exists |
-| [done-0005](tasks/done/done-0005-agent-task-measurement.md) | P1 | ZCode | **done, verified** — task cost measurable: result kind, offline fixture and normal-loop baseline |
-| [done-0006](tasks/done/done-0006-nd-core-runtime-contract.md) | P1 | ZCode | **done, verified locally** — sidecar declared scope delivered; post-merge Linux CI exposed a workspace-path contract failure that task 0004 must reconcile |
-| [todo-0011](tasks/todo-0011-agent-team-task-workspace-isolation.md) | P1 | ChatGPT | **implementation complete; CI gate pending** — engine-neutral task workspace/session isolation, coordination provenance and conflict-aware integration; PRD 0003 |
+| Task | Pri | State |
+| --- | --- | --- |
+| [blocked-0004](tasks/blocked-0004-windows-release-validation.md) | P0 | **blocked on fresh Windows release validation** — latest main Windows job failed at `Verify ND Core`; no speculative source work assigned |
+| [done-0005](tasks/done/done-0005-agent-task-measurement.md) | P1 | **done** — task-cost measurement + normal-loop baseline |
+| [done-0006](tasks/done/done-0006-nd-core-runtime-contract.md) | P1 | **done** — workspace/deadline/revision/cache/search/runtime contract |
+| [done-0007](tasks/done/done-0007-retire-legacy-paths-and-dispatch.md) | P1 | **done** — single production runtime, node-pty/legacy path retired, typed dispatch availability |
+| [done-0008](tasks/done/done-0008-agent-fast-path.md) | P2 | **done** — typed governed fast path + composite snapshot + matched benchmark |
+| [done-0009](tasks/done/done-0009-windows-cli-shim-prompt-truncation.md) | P1 | **done** — direct npm shim resolution + fail-closed unresolved shim path |
+| [done-0010](tasks/done/done-0010-desktop-smoke-teardown.md) | P1 | **done** — app-owned browser daemon shutdown; latest main desktop smoke passed |
+| [done-0011](tasks/done/done-0011-agent-team-task-workspace-isolation.md) | P1 | **done** — engine-neutral teams/workspace isolation and conflict-aware integration |
 
-Claim a task by setting `Owner` and taking the prefix to `wip-`; the full per-task detail, acceptance criteria, and evidence references live under [docs/tasks/](tasks/).
+New implementation defects should be created as new `todo-` records; blocked release-only validation stays explicit instead of being misrepresented as implementation WIP.
 
 
 ### 1. Runtime distribution
@@ -126,7 +126,7 @@ Success criterion: users can tell why an engine is not ready before starting wor
 ## P1 — engine-neutral agent teams and task workspace isolation
 
 - PRD: [0003-engine-neutral-agent-teams-and-task-workspace-isolation.md](prd/0003-engine-neutral-agent-teams-and-task-workspace-isolation.md) — **approved 2026-09-22; implementation complete on feature branch, CI gate pending**.
-- Task: [todo-0011-agent-team-task-workspace-isolation.md](tasks/todo-0011-agent-team-task-workspace-isolation.md) — P1, implementation complete; archive after green CI.
+- Task: [done-0011-agent-team-task-workspace-isolation.md](tasks/done/done-0011-agent-team-task-workspace-isolation.md) — P1, implementation complete and archived; unrelated Windows release validation is tracked by blocked task 0004.
 - Reference/benchmark matrix: [agent-orchestration-reference-matrix.md](plan/agent-orchestration-reference-matrix.md).
 
 This work formalizes the existing per-task worktree/checkpoint/review/integration foundation as an engine-neutral company contract. The direct ZCode-assisted PR #21 shared-checkout episode is retained as a regression story, **not** as an ND organization-run failure or a claim about ZCode architecture. Target invariant: teams share knowledge and structured handoffs; independent durable writable tasks keep independent transaction/workspace lineage.
