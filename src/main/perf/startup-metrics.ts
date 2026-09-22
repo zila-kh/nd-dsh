@@ -24,7 +24,7 @@ export async function flushStartupBenchmark(extra: Record<string, unknown> = {})
     schemaVersion: 1,
     benchmark: 'app-startup',
     pid: process.pid,
-    backend: process.env.ND_DSH_CORE_BACKEND?.trim().toLowerCase() === 'legacy' ? 'legacy' : 'rust-core',
+    backend: 'rust-core',
     platform: process.platform,
     arch: process.arch,
     node: process.version,
