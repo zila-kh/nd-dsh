@@ -72,9 +72,14 @@ export interface OrganizationActionAuditReceipt {
   externality: NormalizedActionExternality
   destructiveLevel: NormalizedActionDestructiveLevel
   costUsd?: number
+  credentialScope?: string[]
   engine?: string
   model?: string
   agentId?: string
+  provider?: string
+  capability?: string
+  provenance?: string[]
+  requestedAt?: number
   decision: NormalizedActionDecision
   reason: string
   result?: string
@@ -126,7 +131,7 @@ export type OrganizationStrategyMutation =
   | { type: 'knowledge.update'; id: string; patch: Partial<Pick<OrganizationCompanyKnowledge, 'title' | 'content' | 'tags' | 'confidence' | 'status'>> }
   | { type: 'schedule.add'; companyId: string; projectId: string; title: string; intervalMinutes: number; nextRunAt?: number; maxRuns?: number }
   | { type: 'schedule.update'; id: string; patch: Partial<Pick<OrganizationCompanySchedule, 'title' | 'intervalMinutes' | 'status' | 'nextRunAt' | 'maxRuns'>> }
-  | { type: 'action.record'; companyId: string; projectId?: string; taskId?: string; action: string; target: string; scope: string; risk: NormalizedActionRisk; externality: NormalizedActionExternality; destructiveLevel: NormalizedActionDestructiveLevel; costUsd?: number; engine?: string; model?: string; agentId?: string; decision: NormalizedActionDecision; reason: string; result?: string }
+  | { type: 'action.record'; companyId: string; projectId?: string; taskId?: string; action: string; target: string; scope: string; risk: NormalizedActionRisk; externality: NormalizedActionExternality; destructiveLevel: NormalizedActionDestructiveLevel; costUsd?: number; credentialScope?: string[]; engine?: string; model?: string; agentId?: string; provider?: string; capability?: string; provenance?: string[]; requestedAt?: number; decision: NormalizedActionDecision; reason: string; result?: string }
 
 export interface OrganizationStrategyDesktopApi {
   state(): Promise<OrganizationStrategySnapshot>
