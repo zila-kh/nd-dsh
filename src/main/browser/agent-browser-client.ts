@@ -19,7 +19,11 @@ const MAX_CAPTURE_CHARS = 2_000_000
 const BIND_COMMAND_TIMEOUT_MS = 10_000
 const BIND_RETRY_DELAY_MS = 2_500
 const SMOKE_TEST_TIMEOUT_MS = 15_000
-const SHUTDOWN_TIMEOUT_MS = 5_000
+// Shutdown must fit inside the app's own 5 s quit budget, and the CLI close is
+// only best effort: the identity sweep below is what actually guarantees the
+// daemon is gone. A long close here made the app exceed that budget and force
+// exit with the daemon still running.
+const SHUTDOWN_TIMEOUT_MS = 1_200
 const DAEMON_EXIT_GRACE_MS = 1_000
 /**
  * Namespace that isolates this product's daemon sockets and restore state from

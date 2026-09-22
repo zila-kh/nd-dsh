@@ -719,7 +719,14 @@ app.on('before-quit', (event) => {
   const pending = [...closingServices]
   const shutdownTimeout = setTimeout(() => {
     console.warn('ND shutdown timed out waiting for background services; exiting forcefully.')
-    app.exit(0)
+    // Cleanup that has not settled never runs, so reap browser daemons here: a
+    // daemon that outlives this process keeps inherited pipes open after it, and
+    // the failed quit path is exactly when that happens.
+    const swept = stopAppOwnedBrowserDaemons()
+      .then((stopped) => console.log(`[nd] forced-exit sweep stopped ${stopped} app-owned browser daemon(s)`))
+      .catch(() => undefined)
+    void Promise.race([swept, new Promise((resolvePromise) => setTimeout(resolvePromise, 1_500))])
+      .finally(() => app.exit(0))
   }, 5_000)
   void Promise.allSettled(pending).then(async (results) => {
     clearTimeout(shutdownTimeout)
