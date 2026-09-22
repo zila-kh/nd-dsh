@@ -1,5 +1,4 @@
 import { promises as fs } from 'node:fs'
-import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import process from 'node:process'
@@ -7,7 +6,6 @@ import type { TerminalCreateInput, TerminalExitEvent, TerminalOutputEvent, Termi
 import type { WorkspaceService } from '../workspace/workspace-service.js'
 import { quarantineFile } from '../logging/log-file.js'
 
-const nodeRequire = createRequire(import.meta.url)
 const MAX_BUFFER = 512 * 1024
 const MAX_INPUT = 64 * 1024
 const RESTORE_MARKER = '\r\n\x1b[2m[ND] Restored terminal after desktop restart; the previous shell process ended with the app.\x1b[0m\r\n'
@@ -50,7 +48,7 @@ interface Runtime {
 export interface TerminalManagerOptions {
   storePath: string
   workspace: Pick<WorkspaceService, 'state'>
-  spawn?: PtySpawner
+  spawn: PtySpawner
   onOutput?: (event: TerminalOutputEvent) => void
   onExit?: (event: TerminalExitEvent) => void
   onState?: (event: TerminalStateEvent) => void
@@ -66,7 +64,7 @@ export class TerminalManager {
   private persistChain: Promise<void> = Promise.resolve()
 
   constructor(private readonly options: TerminalManagerOptions) {
-    this.spawnPty = options.spawn ?? defaultSpawn
+    this.spawnPty = options.spawn
   }
 
   async initialize(): Promise<void> {
@@ -366,20 +364,6 @@ export class TerminalManager {
   private async ensureReady(): Promise<void> { if (!this.initialized) await this.initialize() }
 }
 
-// Developer-only legacy backend retained temporarily for same-machine migration benchmarks.
-// Production/default desktop startup injects the Rust PTY spawner and never reaches this path.
-function defaultSpawn(file: string, args: string[], options: PtySpawnOptions): PtyProcessLike {
-  ensureSpawnHelper(); const pty = nodeRequire('node-pty') as typeof import('node-pty'); return pty.spawn(file, args, options)
-}
-function ensureSpawnHelper(): void {
-  if (process.platform === 'win32') return
-  try {
-    const resolved = nodeRequire.resolve('node-pty/lib/unixTerminal.js').replace(/[/\\]lib[/\\]unixTerminal\.js$/, '')
-    for (const path of [join(resolved, 'build/Release/spawn-helper'), join(resolved, 'build/Debug/spawn-helper')]) {
-      try { const stat = nodeRequire('node:fs').statSync(path); if ((stat.mode & 0o111) === 0) nodeRequire('node:fs').chmodSync(path, stat.mode | 0o755); return } catch { /* try next */ }
-    }
-  } catch { /* node-pty will surface the real spawn failure */ }
-}
 function shellAttempts(requested?: string): Array<{ file: string; args: string[] }> {
   if (process.platform === 'win32') {
     const root = process.env.SystemRoot ?? process.env.WINDIR ?? 'C:\\Windows'
