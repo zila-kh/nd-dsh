@@ -14,13 +14,12 @@ if (summary.schemaVersion !== 1 || summary.kind !== 'nd-performance-evidence' ||
   throw new Error('bench:check requires the top-level summary.json produced by pnpm bench:record.')
 }
 const root = dirname(summaryPath)
-const [coreSummary, legacyRuntime, rustRuntime, packagedStartup] = await Promise.all([
+const [coreSummary, rustRuntime, packagedStartup] = await Promise.all([
   readRelative(root, summary.paths.core),
-  readRelative(root, summary.paths.legacy),
   readRelative(root, summary.paths.rust),
   readRelative(root, summary.paths.packaged),
 ])
-const evaluated = evaluateEvidence({ coreSummary, legacyRuntime, rustRuntime, packagedStartup })
+const evaluated = evaluateEvidence({ coreSummary, rustRuntime, packagedStartup })
 const result = {
   status: evaluated.status,
   checks: evaluated.checks,
