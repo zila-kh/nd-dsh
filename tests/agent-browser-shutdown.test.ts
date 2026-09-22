@@ -51,7 +51,7 @@ describe('AgentBrowserClient shutdown ownership', () => {
       await client.close()
       await waitForExit(daemon, 2_000)
       expect(isAlive(daemonPid)).toBe(false)
-      expect(internal.run).toHaveBeenCalledWith(['close'], [], expect.any(Number))
+      expect(internal.run).toHaveBeenCalledWith(['close', '--all'], [], expect.any(Number))
     } finally {
       if (isAlive(daemonPid)) {
         try { process.kill(daemonPid, 'SIGKILL') } catch { /* already exited */ }
@@ -91,7 +91,48 @@ describe('AgentBrowserClient shutdown ownership', () => {
       await client.close()
       await waitForExit(daemon, 2_000)
       expect(isAlive(daemonPid)).toBe(false)
-      expect(internal.run).toHaveBeenCalledWith(['close'], [], expect.any(Number))
+      expect(internal.run).toHaveBeenCalledWith(['close', '--all'], [], expect.any(Number))
+    } finally {
+      if (isAlive(daemonPid)) {
+        try { process.kill(daemonPid, 'SIGKILL') } catch { /* already exited */ }
+      }
+    }
+  }, 8_000)
+
+  it('stops a daemon another app-owned session left in this app socket directory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nd-agent-browser-other-session-'))
+    temporary.push(root)
+    electronState.userData = root
+
+    const client = new AgentBrowserClient(9_222, root)
+    await mkdir(client.socketDir, { recursive: true })
+    // The Harness browser MCP names its own session, so its daemon lives behind
+    // a sidecar this wrapper's session name never matches. The app still owns
+    // it, and a daemon that outlives the app is what stalls e2e teardown.
+    const otherPidPath = join(client.socketDir, 'harness-browser-mcp.pid')
+    const daemon = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+    if (!daemon.pid) throw new Error('test daemon did not start')
+    const daemonPid = daemon.pid
+    await writeFile(otherPidPath, String(daemonPid), 'utf8')
+
+    const internal = client as unknown as {
+      sessionTouched: boolean
+      run: (command: string[], globalArguments?: string[], timeoutMs?: number) => Promise<{ stdout: string; stderr: string }>
+    }
+    expect(internal.sessionTouched).toBe(false)
+    internal.run = vi.fn(async () => {
+      await rm(otherPidPath, { force: true })
+      return { stdout: '', stderr: '' }
+    })
+
+    try {
+      await client.close()
+      await waitForExit(daemon, 2_000)
+      expect(isAlive(daemonPid)).toBe(false)
+      expect(internal.run).toHaveBeenCalledWith(['close', '--all'], [], expect.any(Number))
     } finally {
       if (isAlive(daemonPid)) {
         try { process.kill(daemonPid, 'SIGKILL') } catch { /* already exited */ }

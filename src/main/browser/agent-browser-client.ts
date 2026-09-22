@@ -177,24 +177,29 @@ export class AgentBrowserClient {
   async close(): Promise<void> {
     if (!this.closing) {
       this.closing = (async () => {
-        // The socket directory is private to this ND app/userData. A daemon can
-        // be started by another app-owned client (for example the browser MCP)
-        // before this wrapper itself marks the session as touched, so ownership
-        // is determined by the pid file as well as sessionTouched.
+        // The socket directory is private to this ND app/userData, and every
+        // session in it belongs to this app. Another app-owned client (for
+        // example the Harness browser MCP) can start a daemon under its own
+        // session name before this wrapper marks its own session as touched, so
+        // ownership follows every pid sidecar in the directory as well as
+        // sessionTouched — not this wrapper's session name alone.
         //
-        // Capture the daemon pid *before* asking agent-browser to close the
-        // session. agent-browser may remove its pid file as part of close even
-        // when the daemon process is still alive; reading the file afterwards
+        // Capture the daemon pids *before* asking agent-browser to close the
+        // sessions. agent-browser may remove a pid file as part of close even
+        // when the daemon process is still alive; reading the files afterwards
         // loses the only stable ownership handle and leaks the daemon beyond
-        // the Electron process.
-        const daemonPid = await this.daemonPid()
-        if (!this.sessionTouched && daemonPid === undefined) return
+        // the Electron process, where it holds inherited pipes open until its
+        // idle timeout.
+        const daemonPids = await this.daemonPids()
+        if (!this.sessionTouched && daemonPids.length === 0) return
         try {
-          await this.run(['close'], [], SHUTDOWN_TIMEOUT_MS)
+          // `close` ends this wrapper's session only; shutdown owns every
+          // session in the app's socket directory.
+          await this.run(['close', '--all'], [], SHUTDOWN_TIMEOUT_MS)
         } catch (error) {
           console.warn('[agent-browser] graceful session cleanup failed:', error instanceof Error ? error.message : String(error))
         }
-        await this.ensureDaemonStopped(daemonPid)
+        await this.ensureDaemonsStopped(daemonPids)
       })().finally(() => {
         this.sessionTouched = false
         this.closing = undefined
@@ -215,8 +220,24 @@ export class AgentBrowserClient {
     }
   }
 
-  private async daemonPid(): Promise<number | undefined> {
-    const pidPath = join(this.socketDir, `${this.sessionName}.pid`)
+  /** Every agent-browser daemon sidecar in this app's private socket directory. */
+  private async daemonPids(): Promise<number[]> {
+    let entries: string[]
+    try {
+      entries = await fs.readdir(this.socketDir)
+    } catch {
+      return []
+    }
+    const pids = new Set<number>()
+    for (const entry of entries) {
+      if (!entry.endsWith('.pid')) continue
+      const pid = await this.readPidFile(join(this.socketDir, entry))
+      if (pid !== undefined) pids.add(pid)
+    }
+    return [...pids]
+  }
+
+  private async readPidFile(pidPath: string): Promise<number | undefined> {
     try {
       const raw = await fs.readFile(pidPath, 'utf8')
       const pid = Number.parseInt(raw.trim(), 10)
@@ -227,13 +248,16 @@ export class AgentBrowserClient {
     }
   }
 
-  private async ensureDaemonStopped(capturedPid?: number): Promise<void> {
-    // Prefer the pre-close pid because the CLI can unlink the pid file before
+  private async ensureDaemonsStopped(capturedPids: number[]): Promise<void> {
+    // Prefer the pre-close pids because the CLI can unlink a pid file before
     // the daemon has actually exited. Fall back to a post-close read for
-    // versions that leave the file in place.
-    const pid = capturedPid ?? await this.daemonPid()
-    if (pid === undefined) return
+    // versions that leave the files in place.
+    const pids = new Set<number>(capturedPids)
+    for (const pid of await this.daemonPids()) pids.add(pid)
+    for (const pid of pids) await this.forceStopDaemon(pid)
+  }
 
+  private async forceStopDaemon(pid: number): Promise<void> {
     const deadline = Date.now() + DAEMON_EXIT_GRACE_MS
     while (Date.now() < deadline) {
       if (!isProcessAlive(pid)) return
