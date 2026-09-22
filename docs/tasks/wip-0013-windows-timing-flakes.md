@@ -51,7 +51,7 @@ So a client that has just received a response can still see its own request coun
 
 - [x] No assertion is removed, skipped, or weakened, and nothing is `allow`-ed. — The subjects of both tests — `deadline_exceeded` is reported, the child really ran, no orphan survives, and no slot or dispatcher worker is retained — are asserted exactly as before.
 - [x] Both tests pass repeatedly on Windows. — Deadline 4/4 and cancel 8/8 consecutive runs locally, and the full suite (`pnpm core:test`, 38 + 17) exits 0.
-- [ ] `windows-package` completes green on a non-draft pull request, including the portable build, the forced-cleanup proof, and the packaged smoke.
+- [ ] `windows-package` completes green on a non-draft pull request, including the portable build, the forced-cleanup proof, and the packaged smoke. — **Deferred, not dropped:** CI usage was suspended on 2026-09-23 at the operator's direction to conserve compute. Both fixes are verified locally; this criterion needs a runner. Partial CI evidence exists: on run [35776684225](https://github.com/zila-kh/nd-dsh/actions/runs/35776684225) `windows-package` passed `Verify ND Core`, `Benchmark smoke on Windows`, and `Prove the terminal handshake fails loudly` before the job was canceled by the suspension, so the timing fixes are confirmed on a Windows runner up to the portable build.
 
 ## Notes
 

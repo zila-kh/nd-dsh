@@ -19,6 +19,11 @@ Cordis changes in the commit and preserve the same-browser invariant.
 
 ## CI triggers and the skip directive
 
+> **CI is suspended as of 2026-09-23** at the operator's direction, to conserve compute until
+> the product is stable enough to justify the spend. The workflows below are unchanged and
+> stay in the repo for when it resumes. Until then the local commands in "Before submitting
+> changes" are the gate, and anything needing a runner is deferred rather than waived.
+
 The `ci` workflow runs on pushes to `main` and on non-draft pull requests.
 
 A commit message containing the skip directive — `[skip ci]`, `[ci skip]`,

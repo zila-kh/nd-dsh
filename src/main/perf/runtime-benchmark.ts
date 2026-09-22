@@ -237,14 +237,24 @@ async function waitForTerminalMarker(
   throw new Error('Runtime benchmark terminal did not finish within the timeout.')
 }
 
+/**
+ * Run the flood fixture without an `exit` on the same input line.
+ *
+ * A shell that exits on the same input line closes the console host before it has
+ * flushed the output still in flight, so the marker this benchmark waits for is never
+ * readable. That was measured on Windows for the packaged smoke and is recorded in
+ * perf/packaged-runtime-smoke.ts, which drops the same `exit` for the same reason; this
+ * harness kept it and timed out on run 35771982331. The benchmark closes the terminal
+ * itself once it has read the marker, so the shell does not have to end on its own.
+ */
 function terminalCommand(shell: string, fixture: string, bytes: number): string {
   if (process.platform !== 'win32') {
-    return `ELECTRON_RUN_AS_NODE=1 ${shQuote(process.execPath)} ${shQuote(fixture)} ${bytes}; exit\n`
+    return `ELECTRON_RUN_AS_NODE=1 ${shQuote(process.execPath)} ${shQuote(fixture)} ${bytes}\n`
   }
   if (/powershell|pwsh/i.test(shell)) {
-    return `$env:ELECTRON_RUN_AS_NODE='1'; & ${psQuote(process.execPath)} ${psQuote(fixture)} ${bytes}; exit\r\n`
+    return `$env:ELECTRON_RUN_AS_NODE='1'; & ${psQuote(process.execPath)} ${psQuote(fixture)} ${bytes}\r\n`
   }
-  return `set "ELECTRON_RUN_AS_NODE=1" && "${process.execPath}" "${fixture}" ${bytes} && exit\r\n`
+  return `set "ELECTRON_RUN_AS_NODE=1" && "${process.execPath}" "${fixture}" ${bytes}\r\n`
 }
 
 function shQuote(value: string): string {

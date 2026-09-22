@@ -15,6 +15,20 @@ The same run failed **windows-package → Verify ND Core** before Windows benchm
 
 **Update 2 (2026-09-23):** the gate is repaired and the Windows job now reaches the steps this record has been waiting on. On run [35773266896](https://github.com/zila-kh/nd-dsh/actions/runs/35773266896) `validate` is fully green (5m19s) and `windows-package` passes `Verify ND Core`'s fmt and clippy stages before failing on a timing flake in `protocol_contract.rs`, filed as [wip-0013](wip-0013-windows-timing-flakes.md). Note that the Windows steps below did execute once, on run [35768282861](https://github.com/zila-kh/nd-dsh/actions/runs/35768282861): `Verify ND Core`, `Benchmark smoke on Windows`, and `Prove the terminal handshake fails loudly` all passed, and the job was then **canceled** by a concurrency collision — a second dispatch on the same ref — not by a failure. The portable build, forced-cleanup proof, and packaged smoke therefore still have no completed run.
 
+**Update 3 (2026-09-23):** the optional `performance-evidence` criterion has now been attempted for the first time, on run [35771982331](https://github.com/zila-kh/nd-dsh/actions/runs/35771982331). It failed at 37m24s inside `pnpm bench:record`, because the app-runtime benchmark waits for a terminal marker that its own `exit` makes unreadable. That is filed and fixed as [wip-0014](wip-0014-app-runtime-terminal-marker.md), with a local before/after reproduction. No budget could be checked because no combined `summary.json` was produced, so the committed runtime baseline described in [performance-baseline-policy.md](../plan/performance-baseline-policy.md) is still unrecorded.
+
+**Update 4 (2026-09-23): CI suspended at the operator's direction.** GitHub Actions usage is paused to conserve compute until the product is stable enough to justify it, so this record's exit criteria are deferred rather than pursued. Nothing is waived and the workflows are unchanged. Where the implementation stands, all of it verified locally:
+
+| Criterion | State |
+| --- | --- |
+| Windows run completes `Verify ND Core` | **Passed on a runner** — run [35776684225](https://github.com/zila-kh/nd-dsh/actions/runs/35776684225) `windows-package`, after [wip-0012](wip-0012-nd-core-format-lint-gate.md) and [wip-0013](wip-0013-windows-timing-flakes.md) |
+| Windows benchmark smoke + terminal handshake proof | **Passed on a runner** — same job |
+| Portable build + forced-sidecar cleanup proof | Not completed — the job was canceled by the suspension mid-build; `pnpm dist:win:portable` and the cleanup receipt were verified locally on 2026-09-21 |
+| Packaged core / terminal / Git smoke | Not completed — needs the same job to reach it |
+| Optional performance-evidence bundle | Attempted once (run `35771982331`) and failed on [wip-0014](wip-0014-app-runtime-terminal-marker.md), now fixed and reproduced before/after locally |
+
+The last three need a Windows runner and cannot be satisfied on a dev machine, so they are the checklist for the first run after CI resumes.
+
 ## Exit criteria
 
 - [ ] A Windows run completes `Verify ND Core`.

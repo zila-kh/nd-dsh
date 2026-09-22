@@ -43,6 +43,8 @@ This approved MVP is the active implementation vehicle for the runtime-distribut
 
 **CI reality check (2026-09-23):** run `35762360604`, the first run on `main` after PR #29 merged, failed `Verify ND Core` in **both** jobs — `validate` in 59 s and `windows-package` in 1m43s — so every Windows step and the performance-evidence bundle were skipped. The cause is platform-independent: `crates/nd-core` was merged with unformatted, lint-failing source that aborts `pnpm core:test` on Linux too, having arrived via commits carrying a skip-ci directive that no gate ever evaluated. The last green `validate` was run `35719173634` on 2026-09-22, before those commits. Task 0012 repairs the gate, and the Windows job now reaches `cargo test`, where a second defect — a PowerShell cold-start timing flake in the deadline test — is filed as task 0013. blocked task 0004 stays blocked until both are cleared; see it for the per-run evidence.
 
+**CI suspended (2026-09-23, operator direction):** GitHub Actions usage is paused to conserve compute until the product is stable enough to justify the spend. The workflows are unchanged and remain in the repo for that point — nothing is disabled, and no acceptance criterion is waived. Work continues against local verification (`pnpm core:test`, `pnpm verify`, `pnpm typecheck`, `pnpm test`, `pnpm build`), which is now the gate. The Windows release-validation criteria in blocked task 0004 are deferred, not dropped: they need a runner and cannot be satisfied locally.
+
 #### Current direction — four deliverables
 
 1. **`nd-core` Rust sidecar MVP** — finish the open deltas above. The goal is a fast native execution layer, not a TypeScript-to-Rust translation.
@@ -56,9 +58,10 @@ Target: **fast native runtime + minimal round trips + structured agent actions +
 
 | Task | Pri | State |
 | --- | --- | --- |
-| [wip-0012](tasks/wip-0012-nd-core-format-lint-gate.md) | P0 | **in progress** — fmt/clippy repair proven; `validate` green, Windows reaches `cargo test` |
-| [wip-0013](tasks/wip-0013-windows-timing-flakes.md) | P0 | **in progress** — PowerShell cold-start deadline and metrics-settle races fixed; awaiting a green `windows-package` |
-| [blocked-0004](tasks/blocked-0004-windows-release-validation.md) | P0 | **blocked on fresh Windows release validation** — gated behind tasks 0012 and 0013 |
+| [wip-0012](tasks/wip-0012-nd-core-format-lint-gate.md) | P0 | **in progress** — fmt/clippy repair done and locally verified; CI confirmation deferred |
+| [wip-0013](tasks/wip-0013-windows-timing-flakes.md) | P0 | **in progress** — timing flakes fixed and locally verified; CI confirmation deferred |
+| [wip-0014](tasks/wip-0014-app-runtime-terminal-marker.md) | P1 | **in progress** — app-runtime terminal marker fixed, before/after reproduced locally; CI confirmation deferred |
+| [blocked-0004](tasks/blocked-0004-windows-release-validation.md) | P0 | **blocked on fresh Windows release validation** — implementation gated behind 0012-0014; needs a runner, deferred while CI is suspended |
 | [done-0005](tasks/done/done-0005-agent-task-measurement.md) | P1 | **done** — task-cost measurement + normal-loop baseline |
 | [done-0006](tasks/done/done-0006-nd-core-runtime-contract.md) | P1 | **done** — workspace/deadline/revision/cache/search/runtime contract |
 | [done-0007](tasks/done/done-0007-retire-legacy-paths-and-dispatch.md) | P1 | **done** — single production runtime, node-pty/legacy path retired, typed dispatch availability |
