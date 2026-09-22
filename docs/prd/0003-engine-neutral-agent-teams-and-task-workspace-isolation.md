@@ -360,7 +360,7 @@ See [agent-orchestration-reference-matrix.md](../plan/agent-orchestration-refere
 
 ## 19. Implementation status
 
-Approved on 2026-09-22. The implementation is carried by `feat/engine-neutral-agent-teams` and deliberately extends the existing task-worktree/control-plane path rather than creating a second scheduler.
+Approved on 2026-09-22. The implementation merged in PR #23 (`9e894dd7`) and deliberately extends the existing task-worktree/control-plane path rather than creating a second scheduler.
 
 Implemented surfaces:
 
@@ -375,7 +375,7 @@ Implemented surfaces:
 - the existing `scheduler-multi-agent` benchmark already records 1/2/4/8/10 workers, core/child memory, permit latency, process/workspace counts and worktree disk growth;
 - the maintained external reference/benchmark set remains in [agent-orchestration-reference-matrix.md](../plan/agent-orchestration-reference-matrix.md).
 
-Verification remains governed by repository CI and the separate full performance-evidence policy; approval of this PRD does not turn an unrun external-engine benchmark into a performance claim.
+Repository validation on the merged implementation tree is green in main CI run #800 rerun, including Desktop smoke. Final task archival remains merge-gated on the final ready-for-review PR running Linux validation, Windows packaging, and the full performance-evidence job. Approval of this PRD does not turn an unrun external-engine benchmark into a performance claim.
 
 ## 20. Rollback
 
