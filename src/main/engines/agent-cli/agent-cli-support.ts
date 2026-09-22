@@ -77,9 +77,9 @@ function resolveShimTarget(bin: string): ShimTarget | undefined {
 /**
  * Spawn a resolved CLI entry. npm-installed CLIs resolve to `.cmd`/`.bat`
  * shims on Windows, which Node refuses to spawn directly. A node shim is
- * resolved to its script and spawned without a shell; only a shim that cannot
- * be resolved goes through `cmd.exe /d /s /c`, where multi-line arguments do
- * not survive.
+ * resolved to its script and spawned without a shell. An unresolved shim may
+ * use `cmd.exe /d /s /c` only for simple arguments; multi-line or shell-sensitive
+ * arguments fail closed instead of being truncated or reinterpreted.
  */
 export function spawnCliCommand(
   spawnProcess: typeof spawn,
@@ -91,7 +91,10 @@ export function spawnCliCommand(
   if (!shimmed) return spawnProcess(bin, args, options)
   const target = resolveShimTarget(bin)
   if (target) return spawnProcess(target.command, [target.script, ...args], options)
-  const command = [bin, ...args].map((part) => (/[\s"^&|<>]/.test(part) ? `"${part.replace(/"/g, '""')}"` : part)).join(' ')
+  if (args.some((part) => /[\r\n"&|<>^%!]/.test(part))) {
+    throw new Error('Cannot safely pass multi-line or shell-sensitive arguments through unresolved Windows CLI shim: ' + bin)
+  }
+  const command = [bin, ...args].map((part) => (/[\s"]/.test(part) ? `"${part.replace(/"/g, '""')}"` : part)).join(' ')
   return spawnProcess('cmd.exe', ['/d', '/s', '/c', command], { ...options, windowsVerbatimArguments: true })
 }
 
