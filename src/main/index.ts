@@ -695,7 +695,18 @@ app.on('before-quit', (event) => {
     beginNdPencilClose(ndPencil)
   }
   if (closingServices.size === 0) {
-    void log.flush()
+    // Nothing tracked is left to close, but a browser daemon can still be running:
+    // it may have been started by a child that already exited.
+    console.log('[nd] exit sweep (no tracked services)')
+    event.preventDefault()
+    shutdownStarted = true
+    void stopAppOwnedBrowserDaemons()
+      .then((stopped) => console.log(`[nd] exit sweep stopped ${stopped} app-owned browser daemon(s)`))
+      .catch((error) => console.error('Failed to stop app-owned browser daemons:', error))
+      .finally(() => {
+        void log.flush()
+        app.exit(0)
+      })
     return
   }
   event.preventDefault()
@@ -717,7 +728,9 @@ app.on('before-quit', (event) => {
     // An engine or the Harness runtime can still start a browser daemon while it
     // stops. A daemon that outlives this process keeps inherited pipes open, so
     // take one last pass once every service close has settled.
-    await stopAppOwnedBrowserDaemons().catch((error) => console.error('Failed to stop app-owned browser daemons:', error))
+    await stopAppOwnedBrowserDaemons()
+      .then((stopped) => console.log(`[nd] exit sweep stopped ${stopped} app-owned browser daemon(s)`))
+      .catch((error) => console.error('Failed to stop app-owned browser daemons:', error))
     app.exit(0)
   })
 })

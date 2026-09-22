@@ -200,6 +200,7 @@ export class AgentBrowserClient {
         // the Electron process, where it holds inherited pipes open until its
         // idle timeout.
         const daemonPids = await this.daemonPids()
+        console.log(`[agent-browser] shutdown start: sessionTouched=${this.sessionTouched} sidecars=${daemonPids.length}`)
         if (this.sessionTouched || daemonPids.length > 0) {
           // Close the space this wrapper's environment points at, then the space a
           // config-only consumer resolves to. The namespace is pinned in the config
@@ -397,7 +398,7 @@ async function listProcProcesses(): Promise<ProcessRow[]> {
       // parentheses, so only the fields after the last ')' can be trusted.
       const stat = await fs.readFile(`/proc/${entry}/stat`, 'utf8')
       const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ')
-      const command = (await fs.readFile(`/proc/${entry}/cmdline`, 'utf8')).split(' ').filter(Boolean).join(' ')
+      const command = (await fs.readFile(`/proc/${entry}/cmdline`, 'utf8')).split('\0').filter(Boolean).join(' ')
       if (!command) continue
       rows.push({ pid: Number(entry), ppid: Number(fields[1]), command })
     } catch {
@@ -472,12 +473,15 @@ function isAppOwnedDaemon(row: ProcessRow, descendants: Set<number>, socketDir: 
  */
 export async function stopAgentBrowserDaemonProcesses(socketDir: string, configPath: string): Promise<number> {
   const rows = await listProcesses()
-  if (rows.length === 0) return 0
+  const matched = rows.filter((row) => row.pid !== process.pid && isAgentBrowserDaemonCommand(row.command))
   const descendants = descendantPids(rows, process.pid)
+  const owned = matched.filter((row) => isAppOwnedDaemon(row, descendants, socketDir, configPath))
+  console.log(
+    `[agent-browser] daemon sweep: scanned=${rows.length} matched=${matched.length} owned=${owned.length}` +
+      ` pids=${owned.map((row) => row.pid).join(',') || 'none'}`,
+  )
   let stopped = 0
-  for (const row of rows) {
-    if (row.pid === process.pid || !isAgentBrowserDaemonCommand(row.command)) continue
-    if (!isAppOwnedDaemon(row, descendants, socketDir, configPath)) continue
+  for (const row of owned) {
     await forceStopDaemon(row.pid, 0)
     stopped += 1
   }
