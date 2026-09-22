@@ -1,5 +1,3 @@
-import { compareRuntime, comparisonRow } from './comparison.mjs'
-
 const MIB = 1024 * 1024
 
 /**
@@ -12,13 +10,11 @@ const MIB = 1024 * 1024
  */
 const EXPECTED_BACKENDS = {
   coreSummary: 'rust-core',
-  legacyRuntime: 'legacy',
   rustRuntime: 'rust-core',
   packagedStartup: 'rust-core',
 }
 
-export function evaluateEvidence({ coreSummary, legacyRuntime, rustRuntime, packagedStartup }) {
-  const comparison = compareRuntime(legacyRuntime, rustRuntime)
+export function evaluateEvidence({ coreSummary, rustRuntime, packagedStartup }) {
   const checks = []
   const observations = []
 
@@ -29,7 +25,7 @@ export function evaluateEvidence({ coreSummary, legacyRuntime, rustRuntime, pack
     add(id, label, Number.isFinite(value) && predicate(value), Number.isFinite(value) ? value : null, budget, detail)
   }
 
-  const evidence = { coreSummary, legacyRuntime, rustRuntime, packagedStartup }
+  const evidence = { coreSummary, rustRuntime, packagedStartup }
   const backendMismatches = Object.entries(EXPECTED_BACKENDS)
     .filter(([document, expected]) => evidence[document]?.backend !== expected)
     .map(([document, expected]) => document + ' is labelled backend=' + JSON.stringify(evidence[document]?.backend ?? null) + ', expected ' + JSON.stringify(expected))
@@ -38,8 +34,8 @@ export function evaluateEvidence({ coreSummary, legacyRuntime, rustRuntime, pack
     'Every document is labelled with the backend that produced it',
     backendMismatches.length === 0,
     backendMismatches,
-    'core/rust/packaged = rust-core, legacy = legacy',
-    'A swapped or mislabelled pair satisfies the relative budgets in both directions, so the labels decide which document is the baseline.',
+    'core/runtime/packaged = rust-core',
+    'Release evidence must identify the single production backend before numeric budgets are trusted.',
     'identity',
   )
 
@@ -144,10 +140,8 @@ export function evaluateEvidence({ coreSummary, legacyRuntime, rustRuntime, pack
     'target gone, peer alive, cleanup complete, capacity reacquired',
   )
 
-  requireNumber('legacy-runtime-runs', 'Legacy comparison has at least 10 measured runs', legacyRuntime?.measuredRuns, (value) => value >= 10, '>= 10 runs')
-  requireNumber('rust-runtime-runs', 'Rust comparison has at least 10 measured runs', rustRuntime?.measuredRuns, (value) => value >= 10, '>= 10 runs')
-  add('same-machine', 'Legacy and Rust evidence use the same machine/commit/profile/fixture', comparison.sameMachine, comparison.mismatches, 'no provenance mismatch')
-  const documents = [coreSummary, legacyRuntime, rustRuntime, packagedStartup]
+  requireNumber('rust-runtime-runs', 'Rust runtime has at least 10 measured runs', rustRuntime?.measuredRuns, (value) => value >= 10, '>= 10 runs')
+  const documents = [coreSummary, rustRuntime, packagedStartup]
   const reference = rustRuntime
   const provenanceMismatches = []
   for (const [index, item] of documents.entries()) {
@@ -158,22 +152,11 @@ export function evaluateEvidence({ coreSummary, legacyRuntime, rustRuntime, pack
       if (item?.environment?.[key] !== reference?.environment?.[key]) provenanceMismatches.push(index + ':environment.' + key)
     }
   }
-  add('full-provenance', 'Core, legacy, Rust, and packaged evidence share one machine/commit/profile/fixture', provenanceMismatches.length === 0, provenanceMismatches, 'no provenance mismatch', undefined, 'identity')
+  add('full-provenance', 'Core, runtime, and packaged evidence share one machine/commit/profile/fixture', provenanceMismatches.length === 0, provenanceMismatches, 'no provenance mismatch', undefined, 'identity')
 
-  requireNumber(
-    'electron-event-loop-p95',
-    'Rust Electron main event-loop p95 under combined load',
-    rustRuntime?.summary?.eventLoopP95Ms?.p95,
-    (value) => value <= 16,
-    '<= 16 ms',
-  )
-  requireNumber(
-    'terminal-event-delivery-p95',
-    'Rust terminal native-event→Electron-handler p95',
-    rustRuntime?.summary?.terminalEventDeliveryP95Ms?.p95,
-    (value) => value <= 16,
-    '<= 16 ms',
-  )
+  requireNumber('electron-event-loop-p95', 'Rust Electron main event-loop p95 under combined load', rustRuntime?.summary?.eventLoopP95Ms?.p95, (value) => value <= 16, '<= 16 ms')
+  requireNumber('terminal-event-delivery-p95', 'Rust terminal native-event→Electron-handler p95', rustRuntime?.summary?.terminalEventDeliveryP95Ms?.p95, (value) => value <= 16, '<= 16 ms')
+  requireNumber('cancel-cleanup-bound', 'Rust cancel→tree-exit p95 stays inside the runtime hard-cleanup bound', rustRuntime?.summary?.cancelToExitMs?.p95, (value) => value <= 3_000, '<= 3000 ms')
   const longStalls = (rustRuntime?.samples ?? []).filter((sample) => Number(sample?.eventLoop?.maxMs) > 50)
   observations.push({
     id: 'electron-stalls-over-50ms',
@@ -182,26 +165,6 @@ export function evaluateEvidence({ coreSummary, legacyRuntime, rustRuntime, pack
     maxMs: Math.max(0, ...longStalls.map((sample) => Number(sample.eventLoop.maxMs) || 0)),
     attribution: 'combined terminal output + repeated Git refresh + two synthetic managed worker trees',
   })
-
-  const cpu = comparisonRow(comparison, 'main-cpu-p50')
-  add('relative-main-cpu', 'Rust reduces Electron main CPU under stress by at least 25%', cpu?.deltaPct !== null && cpu?.deltaPct <= -25, cpu?.deltaPct ?? null, '<= -25%')
-  const idle = comparisonRow(comparison, 'idle-backend-memory-p50')
-  add('relative-idle-memory', 'Rust idle backend memory regression stays within 20%', idle?.deltaPct !== null && idle?.deltaPct <= 20, idle?.deltaPct ?? null, '<= +20%')
-  const sessions = comparisonRow(comparison, 'session-growth-p50')
-  add(
-    'relative-session-scaling',
-    'Rust 1→10 session backend memory growth is lower than legacy',
-    Number.isFinite(sessions?.baseline) && Number.isFinite(sessions?.candidate) && sessions.candidate < sessions.baseline,
-    { legacy: sessions?.baseline ?? null, rust: sessions?.candidate ?? null },
-    'rust < legacy',
-  )
-  const cancel = comparisonRow(comparison, 'cancel-p95')
-  add('relative-cancel', 'Rust cancel→tree-exit p95 regresses no more than 10%', cancel?.deltaPct !== null && cancel?.deltaPct <= 10, cancel?.deltaPct ?? null, '<= +10%')
-  requireNumber('cancel-cleanup-bound', 'Rust cancel→tree-exit p95 stays inside the runtime hard-cleanup bound', cancel?.candidate, (value) => value <= 3_000, '<= 3000 ms')
-  const git = comparisonRow(comparison, 'git-refresh-p50')
-  add('relative-git', 'Rust Git refresh p50 regresses no more than 10%', git?.deltaPct !== null && git?.deltaPct <= 10, git?.deltaPct ?? null, '<= +10%')
-  const terminalRelative = comparisonRow(comparison, 'terminal-stress-p50')
-  add('relative-terminal', 'Rust terminal stress p50 regresses no more than 10%', terminalRelative?.deltaPct !== null && terminalRelative?.deltaPct <= 10, terminalRelative?.deltaPct ?? null, '<= +10%')
 
   requireNumber('packaged-startup-runs', 'Packaged Windows startup has at least 10 measured runs', packagedStartup?.measuredRuns, (value) => value >= 10, '>= 10 runs')
   add(
@@ -221,7 +184,6 @@ export function evaluateEvidence({ coreSummary, legacyRuntime, rustRuntime, pack
     checks,
     failures,
     observations,
-    comparison,
   }
 }
 
