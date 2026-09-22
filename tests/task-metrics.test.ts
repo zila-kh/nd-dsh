@@ -82,6 +82,13 @@ describe('TaskMetricsRecorder', () => {
     expect(recorder.samples()[0]!.escalations).toBe(2)
   })
 
+  it('counts a router escalation even when no engine approval frame exists', () => {
+    const recorder = new TaskMetricsRecorder()
+    begin(recorder)
+    recorder.noteEscalation('session-1')
+    expect(recorder.samples()[0]!.escalations).toBe(1)
+  })
+
   it('attributes boundary crossings through the active runtime permit', () => {
     const recorder = new TaskMetricsRecorder()
     begin(recorder)
