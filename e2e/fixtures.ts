@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
@@ -62,7 +62,21 @@ async function seedProviders(userDataDir: string): Promise<void> {
 export interface LaunchedApp {
   app: ElectronApplication
   page: Page
+  userDataDir: string
 }
+
+interface ProcessRow {
+  pid: number
+  ppid: number
+  command: string
+}
+
+interface AppDiagnostics {
+  stdout: string
+  stderr: string
+}
+
+const appDiagnostics = new WeakMap<ElectronApplication, AppDiagnostics>()
 
 /**
  * Launch the built ND-DSH app (`pnpm build` first — the launcher runs the
@@ -76,25 +90,74 @@ export async function launchApp(): Promise<LaunchedApp> {
   const app = await electron.launch({
     args: ['.', `--user-data-dir=${userDataDir}`],
   })
+  const child = app.process()
+  const diagnostics: AppDiagnostics = { stdout: '', stderr: '' }
+  appDiagnostics.set(app, diagnostics)
+  child.stdout?.setEncoding('utf8')
+  child.stderr?.setEncoding('utf8')
+  child.stdout?.on('data', (chunk: string) => { diagnostics.stdout = tail(diagnostics.stdout + chunk) })
+  child.stderr?.on('data', (chunk: string) => { diagnostics.stderr = tail(diagnostics.stderr + chunk) })
   const page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')
-  return { app, page }
+  return { app, page, userDataDir }
 }
 
 /**
- * Graceful quit with a bounded fallback. Capture the child-process handle
- * before `app.close()` starts: Playwright tears down its Electron wrapper as
- * part of close, so asking `app.process()` from a later timer can dereference
- * an already-disposed channel even though the OS process is still exiting.
+ * Shut the app down from inside Electron, then wait for the OS process.
+ *
+ * Playwright's ElectronApplication.close() owns a CDP/driver close handshake.
+ * On Linux CI that promise could remain pending after ND had already reached
+ * its own bounded before-quit path; starting it and then force-killing Electron
+ * left the worker with a half-closed Playwright transport and the runner hit its
+ * 120 s worker-teardown watchdog. Asking Electron to quit itself avoids that
+ * circular ownership: ND closes its services, the process exits, and Playwright
+ * observes the exit through its existing transport.
+ *
+ * If that graceful path ever regresses, print the exact process tree, command
+ * lines, captured app stderr/stdout tail, and cleanup path before killing the
+ * tree. Surviving descendants are treated as a test failure rather than hidden.
  */
 export async function closeApp(launched: LaunchedApp | undefined): Promise<void> {
   if (!launched) return
-  const { app } = launched
+  const { app, userDataDir } = launched
   const child = app.process()
-  const close = app.close().catch(() => undefined)
-  const settled = await settlesWithin(close, 8_000)
-  if (!settled && child.exitCode === null) forceKillProcessTree(child.pid)
-  await Promise.race([close, waitForExit(child, 5_000)])
+  const diagnostics = appDiagnostics.get(app)
+  const initialTree = processTree(child.pid)
+
+  let path: 'graceful' | 'force-kill' = 'graceful'
+  let quitRequestSettled = false
+  let exited = false
+  try {
+    // Schedule quit after the evaluate response is sent so the request itself
+    // is not racing the destruction of Electron's main-process transport.
+    quitRequestSettled = await settlesWithin(
+      app.evaluate(({ app }) => { setImmediate(() => app.quit()) }).catch(() => undefined),
+      2_000,
+    )
+    exited = await waitForExit(child, 8_000)
+
+    if (!exited) {
+      path = 'force-kill'
+      logShutdownDiagnostics(child.pid, path, quitRequestSettled, initialTree, diagnostics)
+      forceKillProcessTree(child.pid)
+      exited = await waitForExit(child, 5_000)
+    }
+
+    const survivors = survivingRows(initialTree)
+    if (survivors.length > 0) {
+      console.error('[e2e-close] descendant process survived app exit:', formatRows(survivors))
+      for (const row of [...survivors].reverse()) {
+        try { process.kill(row.pid, 'SIGKILL') } catch { /* already gone */ }
+      }
+      throw new Error(`Electron shutdown left descendant process(es): ${formatRows(survivors)}`)
+    }
+
+    console.log(`[e2e-close] path=${path} pid=${child.pid ?? 'unknown'} quitRequestSettled=${quitRequestSettled} exited=${exited} descendantsBefore=${initialTree.length}`)
+    if (!exited) throw new Error('Electron process did not exit after bounded e2e shutdown cleanup.')
+  } finally {
+    appDiagnostics.delete(app)
+    await rm(userDataDir, { recursive: true, force: true }).catch(() => undefined)
+  }
 }
 
 async function settlesWithin(promise: Promise<unknown>, timeoutMs: number): Promise<boolean> {
@@ -109,13 +172,13 @@ async function settlesWithin(promise: Promise<unknown>, timeoutMs: number): Prom
   }
 }
 
-async function waitForExit(child: ReturnType<ElectronApplication['process']>, timeoutMs: number): Promise<void> {
-  if (child.exitCode !== null) return
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, timeoutMs)
+async function waitForExit(child: ReturnType<ElectronApplication['process']>, timeoutMs: number): Promise<boolean> {
+  if (child.exitCode !== null) return true
+  return await new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => resolve(child.exitCode !== null), timeoutMs)
     child.once('exit', () => {
       clearTimeout(timer)
-      resolve()
+      resolve(true)
     })
   })
 }
@@ -123,8 +186,74 @@ async function waitForExit(child: ReturnType<ElectronApplication['process']>, ti
 function forceKillProcessTree(pid: number | undefined): void {
   if (pid == null) return
   if (process.platform === 'win32') {
-    spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+    const killer = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+    killer.unref()
     return
   }
-  try { process.kill(pid, 'SIGKILL') } catch { /* the child may have exited during close */ }
+  const rows = processTree(pid)
+  for (const row of [...rows].reverse()) {
+    try { process.kill(row.pid, 'SIGKILL') } catch { /* the child may have exited during cleanup */ }
+  }
+  try { process.kill(pid, 'SIGKILL') } catch { /* the child may have exited during cleanup */ }
+}
+
+function processTree(rootPid: number | undefined): ProcessRow[] {
+  if (rootPid == null || process.platform === 'win32') return []
+  const result = spawnSync('ps', ['-eo', 'pid=,ppid=,args='], { encoding: 'utf8' })
+  if (result.status !== 0 || !result.stdout) return []
+  const rows = result.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line): ProcessRow | undefined => {
+      const match = line.match(/^(\d+)\s+(\d+)\s+(.*)$/)
+      if (!match) return undefined
+      return { pid: Number(match[1]), ppid: Number(match[2]), command: match[3] ?? '' }
+    })
+    .filter((row): row is ProcessRow => row !== undefined)
+
+  const descendants: ProcessRow[] = []
+  const queue = [rootPid]
+  while (queue.length > 0) {
+    const parent = queue.shift()!
+    const children = rows.filter((row) => row.ppid === parent)
+    descendants.push(...children)
+    queue.push(...children.map((row) => row.pid))
+  }
+  return descendants
+}
+
+function survivingRows(initial: ProcessRow[]): ProcessRow[] {
+  if (initial.length === 0 || process.platform === 'win32') return []
+  const result = spawnSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' })
+  if (result.status !== 0 || !result.stdout) return []
+  const current = new Map<number, string>()
+  for (const line of result.stdout.split(/\r?\n/)) {
+    const match = line.trim().match(/^(\d+)\s+(.*)$/)
+    if (match) current.set(Number(match[1]), match[2] ?? '')
+  }
+  return initial.filter((row) => current.get(row.pid) === row.command)
+}
+
+function logShutdownDiagnostics(
+  pid: number | undefined,
+  path: 'graceful' | 'force-kill',
+  quitRequestSettled: boolean,
+  rows: ProcessRow[],
+  diagnostics: AppDiagnostics | undefined,
+): void {
+  console.error(`[e2e-close] path=${path} pid=${pid ?? 'unknown'} quitRequestSettled=${quitRequestSettled}`)
+  console.error(`[e2e-close] processTree=${formatRows(rows)}`)
+  if (diagnostics?.stderr) console.error(`[e2e-close] stderrTail:\n${diagnostics.stderr}`)
+  if (diagnostics?.stdout) console.error(`[e2e-close] stdoutTail:\n${diagnostics.stdout}`)
+}
+
+function formatRows(rows: ProcessRow[]): string {
+  return rows.length === 0
+    ? '[]'
+    : rows.map((row) => `${row.pid}<-${row.ppid} ${row.command}`).join(' | ')
+}
+
+function tail(value: string, max = 8_000): string {
+  return value.length <= max ? value : value.slice(-max)
 }
