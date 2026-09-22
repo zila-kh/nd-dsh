@@ -178,12 +178,18 @@ export class AgentBrowserClient {
     if (!this.sessionTouched) return
     if (!this.closing) {
       this.closing = (async () => {
+        // Capture the daemon pid *before* asking agent-browser to close the
+        // session. agent-browser may remove its pid file as part of close even
+        // when the daemon process is still alive; reading the file afterwards
+        // loses the only stable ownership handle and leaks the daemon beyond
+        // the Electron process (observed on Linux CI with agent-browser 0.34).
+        const daemonPid = await this.daemonPid()
         try {
           await this.run(['close'], [], SHUTDOWN_TIMEOUT_MS)
         } catch (error) {
           console.warn('[agent-browser] graceful session cleanup failed:', error instanceof Error ? error.message : String(error))
         }
-        await this.ensureDaemonStopped()
+        await this.ensureDaemonStopped(daemonPid)
       })().finally(() => {
         this.sessionTouched = false
         this.closing = undefined
@@ -204,16 +210,24 @@ export class AgentBrowserClient {
     }
   }
 
-  private async ensureDaemonStopped(): Promise<void> {
+  private async daemonPid(): Promise<number | undefined> {
     const pidPath = join(this.socketDir, `${this.sessionName}.pid`)
-    let pid: number
     try {
       const raw = await fs.readFile(pidPath, 'utf8')
-      pid = Number.parseInt(raw.trim(), 10)
+      const pid = Number.parseInt(raw.trim(), 10)
+      if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid) return undefined
+      return pid
     } catch {
-      return
+      return undefined
     }
-    if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid) return
+  }
+
+  private async ensureDaemonStopped(capturedPid?: number): Promise<void> {
+    // Prefer the pre-close pid because the CLI can unlink the pid file before
+    // the daemon has actually exited. Fall back to a post-close read for
+    // versions that leave the file in place.
+    const pid = capturedPid ?? await this.daemonPid()
+    if (pid === undefined) return
 
     const deadline = Date.now() + DAEMON_EXIT_GRACE_MS
     while (Date.now() < deadline) {
