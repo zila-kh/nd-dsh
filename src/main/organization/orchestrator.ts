@@ -1,16 +1,20 @@
+import { randomUUID } from 'node:crypto'
 import type { CodingEngineDescriptor, DshEventFrame } from '../../shared/contracts.js'
 import { ND_HARNESS_ENGINE_ID } from '../../shared/coding-engines.js'
 import type { OrganizationAgent, OrganizationRole, OrganizationRun, OrganizationRunReceipt, OrganizationTask, ProjectPlanInput } from '../../shared/organization.js'
+import { parseFastActionPlan } from '../../shared/fast-action.js'
 import type { CodingEngineRegistry } from '../engines/coding-engine-registry.js'
 import type { EngineSessionRouter } from '../engines/engine-session-router.js'
 import type { HarnessService } from '../harness/harness-service.js'
 import type { WorkspaceService } from '../workspace/workspace-service.js'
+import type { CoreClient } from '../core/core-client.js'
 import { taskMetricsRecorder } from '../metrics/task-metrics.js'
 import { isRetryableExecutionFailure, MAX_EXECUTION_ATTEMPTS, retryBackoffMs, stallTimeoutMs } from './execution-reliability.js'
 import type { OrganizationStore } from './store.js'
 import { TaskIntegrationConflictError, TaskWorktreeManager, type TaskWorktree } from './task-worktree.js'
 import { formatVerificationEvidence, runArtifactVerification, runVerification } from './verification-evidence.js'
 import { RuntimeCapacityError, type ExecutionCoordinator, type RuntimeAvailability } from './execution-coordinator.js'
+import { executePreparedFastPath, ND_FAST_PATH_ENGINE_ID, prepareFastPath, type FastPathAuditRecorder, type PreparedFastPath } from './fast-path.js'
 
 interface ReviewVerdict {
   verdict: 'pass' | 'fail'
@@ -84,6 +88,7 @@ export class OrganizationOrchestrator {
   private parallelFillProjects = new Set<string>()
   private stallReconcileBusy = false
   private dispatchAvailability: DispatchAvailabilityProvider | undefined
+  private fastPathAuditRecorder: FastPathAuditRecorder | undefined
   private readonly capacityWaiting = new Set<string>()
   private readonly structuredErrors = new Map<string, string>()
   private readonly taskWorktrees: TaskWorktreeManager
@@ -98,6 +103,7 @@ export class OrganizationOrchestrator {
     private readonly capabilities?: { assertUsableForAgent(agent?: { id?: string; roleId?: string; teamId?: string }): Promise<void> },
     private readonly executionCoordinator?: Pick<ExecutionCoordinator, 'releaseSession' | 'currentPermit'>,
     taskWorktrees?: TaskWorktreeManager,
+    private readonly core?: Pick<CoreClient, 'request'>,
   ) {
     this.taskWorktrees = taskWorktrees ?? new TaskWorktreeManager()
   }
@@ -109,6 +115,10 @@ export class OrganizationOrchestrator {
    */
   setDispatchAvailability(provider: DispatchAvailabilityProvider | undefined): void {
     this.dispatchAvailability = provider
+  }
+
+  setFastPathAuditRecorder(recorder: FastPathAuditRecorder | undefined): void {
+    this.fastPathAuditRecorder = recorder
   }
 
   /**
@@ -160,13 +170,36 @@ export class OrganizationOrchestrator {
     const fallbackRoute = retryablePreviousFailure
       ? this.pendingFallbackRoutes.get(taskId) ?? await this.selectFallbackProviderRoute(context)
       : undefined
-    // If the provider is temporarily busy and there is no distinct route,
-    // retry the original configured route within the normal attempt cap.
     const useFallbackRoute = Boolean(fallbackRoute)
-    const engine = await this.resolveTaskEngine(context.agent?.id, useFallbackRoute)
+
     const taskWorktree = await this.taskWorktrees.ensure(context.project.workspacePath, context.task.id)
     await this.assertTaskRunSlot(context.task.id, context.project.id, Boolean(taskWorktree))
     const attemptHead = taskWorktree ? await this.taskWorktrees.baseline(taskWorktree) : undefined
+    const workspaceRoot = taskWorktree?.root ?? context.project.workspacePath
+    let fastEscalationReason: string | undefined
+
+    const fastPlan = parseFastActionPlan(context.task.description)
+    if (fastPlan && workspaceRoot && this.core && this.fastPathAuditRecorder) {
+      const prepared = await prepareFastPath({
+        plan: fastPlan,
+        context: {
+          company: { id: context.company.id },
+          project: { id: context.project.id },
+          task: { id: context.task.id },
+          ...(context.agent ? { agent: { id: context.agent.id } } : {}),
+        },
+        root: workspaceRoot,
+        explicit,
+        policy: (action) => this.store.policy(context.company.id, action),
+        audit: this.fastPathAuditRecorder,
+      })
+      if (prepared.kind === 'ready') return this.runPreparedFastTask(context, prepared.prepared, taskWorktree, attemptHead, attempt)
+      fastEscalationReason = prepared.reason
+    } else if (fastPlan) {
+      fastEscalationReason = 'Fast path is unavailable without ND Core and the durable action-audit sink.'
+    }
+
+    const engine = await this.resolveTaskEngine(context.agent?.id, useFallbackRoute)
     const prompt = workerPrompt(context, engine, attempt, taskWorktree)
     let modelOpts = this.resolveAgentModel(context.agent, context.role)
     if (useFallbackRoute) {
@@ -191,9 +224,7 @@ export class OrganizationOrchestrator {
         ...(taskWorktree ? { parallelTask: true } : {}),
         engineId: engine.id,
         workspaceKind: taskWorktree ? 'git-worktree' : 'project-workspace',
-        ...((taskWorktree?.root ?? context.project.workspacePath)
-          ? { workspaceRoot: (taskWorktree?.root ?? context.project.workspacePath)! }
-          : {}),
+        ...(workspaceRoot ? { workspaceRoot } : {}),
         ...(taskWorktree ? { workspaceBranch: taskWorktree.branch } : {}),
         ...(attemptHead ? { baselineCommit: attemptHead } : {}),
         ...(this.executionCoordinator?.currentPermit()?.id ? { runtimePermitId: this.executionCoordinator.currentPermit()!.id } : {}),
@@ -204,6 +235,7 @@ export class OrganizationOrchestrator {
     this.executionRoutes.set(target.sessionId, effectiveRoute)
     this.noteProviderAttempt(taskId, effectiveRoute)
     this.lastProgressAt.set(target.sessionId, run.startedAt)
+    if (fastEscalationReason) taskMetricsRecorder()?.noteEscalation(target.sessionId)
 
     try {
       await this.store.markExecution(context.task.id, target.sessionId)
@@ -220,6 +252,84 @@ export class OrganizationOrchestrator {
       throw cause
     }
     return receipt(run)
+  }
+
+  private async runPreparedFastTask(
+    context: Awaited<ReturnType<OrganizationStore['taskContext']>>,
+    prepared: PreparedFastPath,
+    taskWorktree: TaskWorktree | undefined,
+    attemptHead: string | undefined,
+    attempt: number,
+  ): Promise<OrganizationRunReceipt> {
+    if (!this.core) throw new Error('ND Core is required for the fast path.')
+    const workspaceRoot = taskWorktree?.root ?? context.project.workspacePath
+    if (!workspaceRoot) throw new Error('Fast path requires a project workspace.')
+    const sessionId = 'fast-' + randomUUID()
+    const run = await this.store.beginRun(
+      'task-execution',
+      context.company.id,
+      context.project.id,
+      sessionId,
+      context.task.id,
+      context.task.goalId,
+      {
+        ...(taskWorktree ? { parallelTask: true } : {}),
+        engineId: ND_FAST_PATH_ENGINE_ID,
+        workspaceKind: taskWorktree ? 'git-worktree' : 'project-workspace',
+        workspaceRoot,
+        ...(taskWorktree ? { workspaceBranch: taskWorktree.branch } : {}),
+        ...(attemptHead ? { baselineCommit: attemptHead } : {}),
+        ...(this.executionCoordinator?.currentPermit()?.id ? { runtimePermitId: this.executionCoordinator.currentPermit()!.id } : {}),
+      },
+    )
+    if (taskWorktree && attemptHead) this.executionBaselines.set(sessionId, { worktree: taskWorktree, head: attemptHead })
+    this.executionRoutes.set(sessionId, { engineId: ND_FAST_PATH_ENGINE_ID, attempt })
+    this.lastProgressAt.set(sessionId, run.startedAt)
+    taskMetricsRecorder()?.noteRoute(sessionId, { engineId: ND_FAST_PATH_ENGINE_ID })
+
+    try {
+      await this.store.markExecution(context.task.id, sessionId)
+      const fast = await executePreparedFastPath(prepared, this.core)
+      const checkpointHead = taskWorktree ? await this.taskWorktrees.checkpoint(taskWorktree, context.task.title) : undefined
+      if (checkpointHead) await this.store.updateRunProvenance(run.id, { checkpointCommit: checkpointHead })
+      const verification = context.task.evidenceKind === 'artifact'
+        ? await runArtifactVerification(context.task.artifactPaths, workspaceRoot)
+        : await runVerification(context.project.testCommand, workspaceRoot)
+      taskMetricsRecorder()?.noteVerification(sessionId, verification.status, verification.durationMs)
+      const output = fast.output + formatVerificationEvidence(verification)
+
+      if (verification.status === 'failed') {
+        const reason = `Machine verification failed: ${verification.reason ?? `exit ${verification.exitCode ?? 'unknown'}`}`
+        await this.store.completeRun(run.id, output, reason)
+        await this.failTask(context.task.id, reason)
+        const queued = await this.queueVerificationRework(context.task.id, reason)
+        this.cleanupTaskRouting(context.task.id)
+        this.cleanupSession(sessionId)
+        if (queued) await this.continueProject(context.project.id)
+        return receipt(run)
+      }
+
+      const workflow = await this.workflowKinds(context.project.id)
+      if (!workflow.has('review') && taskWorktree) {
+        const integrated = await this.taskWorktrees.integrate(context.project.workspacePath, context.task.id)
+        await this.store.markIntegrated(context.task.id, integrated.head)
+      }
+      await this.store.completeRun(run.id, output)
+      if (workflow.has('review')) await this.store.markForReview(context.task.id, output)
+      else await this.store.completeWithoutReview(context.task.id, output)
+      this.cleanupTaskRouting(context.task.id)
+      this.cleanupSession(sessionId)
+      return receipt(run)
+    } catch (cause) {
+      const reason = errorMessage(cause)
+      if (await this.store.runBySession(sessionId)) {
+        await this.store.completeRun(run.id, undefined, reason).catch(() => undefined)
+        await this.failTask(context.task.id, reason)
+      }
+      this.cleanupTaskRouting(context.task.id)
+      this.cleanupSession(sessionId)
+      throw new Error('Fast path failed closed: ' + reason)
+    }
   }
 
   async reviewTask(taskId: string, explicit = true): Promise<OrganizationRunReceipt> {
@@ -715,6 +825,7 @@ export class OrganizationOrchestrator {
   }
 
   private async stopSession(sessionId: string): Promise<void> {
+    if (this.executionRoutes.get(sessionId)?.engineId === ND_FAST_PATH_ENGINE_ID) return
     if (this.engineRuns) return this.engineRuns.stopSession(sessionId)
     const result = await this.harness.gatewayRpc('session.cancel', { sessionId })
     if (!result.ok) throw new Error(result.error?.message ?? 'Harness session.cancel failed')
