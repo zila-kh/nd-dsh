@@ -143,7 +143,7 @@ export async function closeApp(launched: LaunchedApp | undefined): Promise<void>
       exited = await waitForExit(child, 5_000)
     }
 
-    const survivors = survivingRows(initialTree)
+    const survivors = await waitForDescendantsToExit(initialTree, 2_000)
     if (survivors.length > 0) {
       console.error('[e2e-close] descendant process survived app exit:', formatRows(survivors))
       for (const row of [...survivors].reverse()) {
@@ -221,6 +221,16 @@ function processTree(rootPid: number | undefined): ProcessRow[] {
     queue.push(...children.map((row) => row.pid))
   }
   return descendants
+}
+
+async function waitForDescendantsToExit(initial: ProcessRow[], timeoutMs: number): Promise<ProcessRow[]> {
+  const deadline = Date.now() + timeoutMs
+  let survivors = survivingRows(initial)
+  while (survivors.length > 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    survivors = survivingRows(initial)
+  }
+  return survivors
 }
 
 function survivingRows(initial: ProcessRow[]): ProcessRow[] {
