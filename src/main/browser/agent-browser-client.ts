@@ -1,6 +1,6 @@
 import { app } from 'electron'
 import { spawn } from 'node:child_process'
-import { existsSync, promises as fs } from 'node:fs'
+import { existsSync, readFileSync, promises as fs } from 'node:fs'
 import { delimiter, isAbsolute, join, resolve, sep } from 'node:path'
 
 interface RunResult {
@@ -19,8 +19,20 @@ const MAX_CAPTURE_CHARS = 2_000_000
 const BIND_COMMAND_TIMEOUT_MS = 10_000
 const BIND_RETRY_DELAY_MS = 2_500
 const SMOKE_TEST_TIMEOUT_MS = 15_000
-const SHUTDOWN_TIMEOUT_MS = 5_000
+// Shutdown must fit inside the app's own 5 s quit budget, and the CLI close is
+// only best effort: the identity sweep below is what actually guarantees the
+// daemon is gone. A long close here made the app exceed that budget and force
+// exit with the daemon still running.
+const SHUTDOWN_TIMEOUT_MS = 1_200
 const DAEMON_EXIT_GRACE_MS = 1_000
+/**
+ * Namespace that isolates this product's daemon sockets and restore state from
+ * any other agent-browser use on the machine. Pinned in the config file because
+ * a consumer that reads only that file — the Harness browser MCP — otherwise
+ * starts its daemon in the CLI's unnamespaced global state directory, where
+ * shutdown cannot find it.
+ */
+export const AGENT_BROWSER_DAEMON_NAMESPACE = 'nd-dsh'
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -49,8 +61,8 @@ export class AgentBrowserClient {
 
   constructor(cdpPort: number, projectRoot: string) {
     this.cdpPort = cdpPort
-    this.configPath = join(app.getPath('userData'), 'agent-browser.visible.json')
-    this.socketDir = join(app.getPath('userData'), 'agent-browser-runtime')
+    this.configPath = appBrowserConfigPath()
+    this.socketDir = appBrowserSocketDir()
     this.binary = this.resolveBinary(projectRoot)
     this.entryPath = resolve(
       process.env.ND_DSH_AGENT_BROWSER_ENTRY
@@ -98,6 +110,7 @@ export class AgentBrowserClient {
       $schema: 'https://agent-browser.dev/schema.json',
       cdp: String(this.cdpPort),
       session: this.sessionName,
+      namespace: AGENT_BROWSER_DAEMON_NAMESPACE,
       pinTab: true,
       json: true,
       contentBoundaries: true,
@@ -177,24 +190,33 @@ export class AgentBrowserClient {
   async close(): Promise<void> {
     if (!this.closing) {
       this.closing = (async () => {
-        // The socket directory is private to this ND app/userData. A daemon can
-        // be started by another app-owned client (for example the browser MCP)
-        // before this wrapper itself marks the session as touched, so ownership
-        // is determined by the pid file as well as sessionTouched.
+        // The socket directory is private to this ND app/userData, and every
+        // session in it belongs to this app. Another app-owned client (for
+        // example the Harness browser MCP) can start a daemon under its own
+        // session name before this wrapper marks its own session as touched, so
+        // ownership follows every pid sidecar in the directory as well as
+        // sessionTouched — not this wrapper's session name alone.
         //
-        // Capture the daemon pid *before* asking agent-browser to close the
-        // session. agent-browser may remove its pid file as part of close even
-        // when the daemon process is still alive; reading the file afterwards
+        // Capture the daemon pids *before* asking agent-browser to close the
+        // sessions. agent-browser may remove a pid file as part of close even
+        // when the daemon process is still alive; reading the files afterwards
         // loses the only stable ownership handle and leaks the daemon beyond
-        // the Electron process.
-        const daemonPid = await this.daemonPid()
-        if (!this.sessionTouched && daemonPid === undefined) return
-        try {
-          await this.run(['close'], [], SHUTDOWN_TIMEOUT_MS)
-        } catch (error) {
-          console.warn('[agent-browser] graceful session cleanup failed:', error instanceof Error ? error.message : String(error))
+        // the Electron process, where it holds inherited pipes open until its
+        // idle timeout.
+        const daemonPids = await this.daemonPids()
+        console.log(`[agent-browser] shutdown start: sessionTouched=${this.sessionTouched} sidecars=${daemonPids.length}`)
+        if (this.sessionTouched || daemonPids.length > 0) {
+          // Close the space this wrapper's environment points at, then the space a
+          // config-only consumer resolves to. The namespace is pinned in the config
+          // file, so the second call reaches a daemon the first cannot see.
+          await this.closeSessions()
+          await this.closeSessions({ withoutSocketDir: true })
+          await this.ensureDaemonsStopped(daemonPids)
         }
-        await this.ensureDaemonStopped(daemonPid)
+        // Runs unconditionally: a pid sidecar can name a client that has already
+        // exited while its daemon lives on, and that daemon is exactly the one
+        // that would hold inherited pipes open past this process.
+        await stopAgentBrowserDaemonProcesses(this.socketDir, this.configPath)
       })().finally(() => {
         this.sessionTouched = false
         this.closing = undefined
@@ -215,49 +237,28 @@ export class AgentBrowserClient {
     }
   }
 
-  private async daemonPid(): Promise<number | undefined> {
-    const pidPath = join(this.socketDir, `${this.sessionName}.pid`)
+  private async closeSessions(options: { withoutSocketDir?: boolean } = {}): Promise<void> {
     try {
-      const raw = await fs.readFile(pidPath, 'utf8')
-      const pid = Number.parseInt(raw.trim(), 10)
-      if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid) return undefined
-      return pid
-    } catch {
-      return undefined
+      // `close` ends one session; `--all` ends every session in the daemon space,
+      // which is what shutdown owns.
+      await this.run(['close', '--all'], [], SHUTDOWN_TIMEOUT_MS, options)
+    } catch (error) {
+      console.warn('[agent-browser] graceful session cleanup failed:', error instanceof Error ? error.message : String(error))
     }
   }
 
-  private async ensureDaemonStopped(capturedPid?: number): Promise<void> {
-    // Prefer the pre-close pid because the CLI can unlink the pid file before
+  /** Every daemon pid sidecar in the directories this app can own. */
+  private async daemonPids(): Promise<number[]> {
+    return daemonPidsFor(this.socketDir)
+  }
+
+  private async ensureDaemonsStopped(capturedPids: number[]): Promise<void> {
+    // Prefer the pre-close pids because the CLI can unlink a pid file before
     // the daemon has actually exited. Fall back to a post-close read for
-    // versions that leave the file in place.
-    const pid = capturedPid ?? await this.daemonPid()
-    if (pid === undefined) return
-
-    const deadline = Date.now() + DAEMON_EXIT_GRACE_MS
-    while (Date.now() < deadline) {
-      if (!isProcessAlive(pid)) return
-      await sleep(50)
-    }
-
-    console.warn(`[agent-browser] daemon ${pid} did not exit after close; forcing cleanup`)
-    if (process.platform === 'win32') {
-      await new Promise<void>((resolvePromise) => {
-        const killer = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], {
-          stdio: 'ignore',
-          windowsHide: true,
-        })
-        const done = (): void => resolvePromise()
-        killer.once('error', done)
-        killer.once('close', done)
-      })
-    } else {
-      try { process.kill(pid, 'SIGTERM') } catch { return }
-      await sleep(250)
-      if (isProcessAlive(pid)) {
-        try { process.kill(pid, 'SIGKILL') } catch { /* already exited */ }
-      }
-    }
+    // versions that leave the files in place.
+    const pids = new Set<number>(capturedPids)
+    for (const pid of await this.daemonPids()) pids.add(pid)
+    for (const pid of pids) await forceStopDaemon(pid, DAEMON_EXIT_GRACE_MS)
   }
 
   private resolveBinary(projectRoot: string): string {
@@ -271,7 +272,12 @@ export class AgentBrowserClient {
     return join(projectRoot, 'node_modules', '.bin', executable)
   }
 
-  private async run(command: string[], globalArguments: string[] = [], timeoutMs = COMMAND_TIMEOUT_MS): Promise<RunResult> {
+  private async run(
+    command: string[],
+    globalArguments: string[] = [],
+    timeoutMs = COMMAND_TIMEOUT_MS,
+    options: { withoutSocketDir?: boolean } = {},
+  ): Promise<RunResult> {
     if (this.binary.includes(sep) && !existsSync(this.binary)) {
       throw new Error(`agent-browser is missing from this ND install at ${this.binary}. Reinstall ND.`)
     }
@@ -290,7 +296,7 @@ export class AgentBrowserClient {
           PATH: process.env.PATH?.split(delimiter).filter(Boolean).join(delimiter),
           AGENT_BROWSER_CONFIG: this.configPath,
           AGENT_BROWSER_SESSION: this.sessionName,
-          AGENT_BROWSER_SOCKET_DIR: this.socketDir,
+          ...(options.withoutSocketDir ? {} : { AGENT_BROWSER_SOCKET_DIR: this.socketDir }),
           ...(this.electronNodeMode ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
         },
       })
@@ -333,4 +339,247 @@ export class AgentBrowserClient {
       })
     })
   }
+}
+
+/** The app's private daemon socket directory. */
+export function appBrowserSocketDir(): string {
+  return join(app.getPath('userData'), 'agent-browser-runtime')
+}
+
+/** The config file every app-owned agent-browser client reads. */
+export function appBrowserConfigPath(): string {
+  return join(app.getPath('userData'), 'agent-browser.visible.json')
+}
+
+/**
+ * Path fragment that identifies an agent-browser daemon on any install.
+ *
+ * Both shapes end in it: the CLI binary a development checkout runs
+ * (`node_modules/.pnpm/agent-browser@x/node_modules/agent-browser/bin/agent-browser-linux-x64`)
+ * and the packaged entry script the app runs under `ELECTRON_RUN_AS_NODE`
+ * (`app.asar/node_modules/agent-browser/bin/agent-browser.js`). Matching the
+ * containing Electron binary instead would match this app itself, and matching
+ * the bare name would match an unrelated agent-browser install on the machine.
+ */
+const DAEMON_COMMAND_MARKER = 'agent-browser/bin/agent-browser'
+
+export function isAgentBrowserDaemonCommand(command: string): boolean {
+  return command.replace(/\\/g, '/').includes(DAEMON_COMMAND_MARKER)
+}
+
+interface ProcessRow {
+  pid: number
+  ppid: number
+  command: string
+}
+
+/**
+ * Enumerate processes with their parent and command line.
+ *
+ * Linux is read from `/proc` rather than by spawning `ps`: this runs inside the
+ * app's own shutdown, where a `ps` that is missing, blocked, or shadowed would
+ * silently no-op the sweep that has to stop the daemon. Other platforms fall
+ * back to `ps`.
+ */
+async function listProcesses(): Promise<ProcessRow[]> {
+  const fromProc = await listProcProcesses()
+  return fromProc.length > 0 ? fromProc : listPsProcesses()
+}
+
+async function listProcProcesses(): Promise<ProcessRow[]> {
+  if (process.platform !== 'linux') return []
+  let entries: string[]
+  try {
+    entries = await fs.readdir('/proc')
+  } catch {
+    return []
+  }
+  const rows: ProcessRow[] = []
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) continue
+    try {
+      // `stat` is `pid (comm) state ppid ...`, and comm can hold spaces and
+      // parentheses, so only the fields after the last ')' can be trusted.
+      const stat = await fs.readFile(`/proc/${entry}/stat`, 'utf8')
+      const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ')
+      const command = (await fs.readFile(`/proc/${entry}/cmdline`, 'utf8')).split('\0').filter(Boolean).join(' ')
+      if (!command) continue
+      rows.push({ pid: Number(entry), ppid: Number(fields[1]), command })
+    } catch {
+      continue
+    }
+  }
+  return rows
+}
+
+async function listPsProcesses(): Promise<ProcessRow[]> {
+  if (process.platform === 'win32') return []
+  const listing = await new Promise<string>((resolvePromise) => {
+    const child = spawn('ps', ['-eo', 'pid=,ppid=,args='], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true })
+    let stdout = ''
+    child.stdout.setEncoding('utf8')
+    child.stdout.on('data', (chunk: string) => { stdout += chunk })
+    child.once('error', () => resolvePromise(''))
+    child.once('close', () => resolvePromise(stdout))
+  })
+  const rows: ProcessRow[] = []
+  for (const line of listing.split(/\r?\n/)) {
+    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/)
+    if (match) rows.push({ pid: Number(match[1]), ppid: Number(match[2]), command: match[3] ?? '' })
+  }
+  return rows
+}
+
+function descendantPids(rows: ProcessRow[], rootPid: number): Set<number> {
+  const children = new Map<number, number[]>()
+  for (const row of rows) {
+    const list = children.get(row.ppid)
+    if (list) list.push(row.pid)
+    else children.set(row.ppid, [row.pid])
+  }
+  const descendants = new Set<number>()
+  const queue = [rootPid]
+  while (queue.length > 0) {
+    for (const child of children.get(queue.shift()!) ?? []) {
+      if (descendants.has(child)) continue
+      descendants.add(child)
+      queue.push(child)
+    }
+  }
+  return descendants
+}
+
+/**
+ * Whether a matching process is this app's daemon rather than someone else's
+ * agent-browser use on the same machine.
+ *
+ * A daemon inherits the socket directory and config path of whoever started it,
+ * so on Linux its own environment is the answer. Where that is unreadable
+ * (macOS), being a descendant of this process is the next best evidence.
+ */
+function isAppOwnedDaemon(row: ProcessRow, descendants: Set<number>, socketDir: string, configPath: string): boolean {
+  try {
+    const environment = readFileSync(`/proc/${row.pid}/environ`, 'utf8')
+    return environment.includes(socketDir) || environment.includes(configPath)
+  } catch {
+    return descendants.has(row.pid)
+  }
+}
+
+/**
+ * Stop agent-browser daemons that belong to this app even when no pid sidecar
+ * names them.
+ *
+ * A sidecar records the pid of the client that asked for the daemon; when that
+ * client re-execs or the daemon detaches, the recorded pid is already gone while
+ * the daemon lives on. Ownership is therefore checked against the daemon's own
+ * process instead of against a pid file. Returns how many daemons it stopped.
+ */
+export async function stopAgentBrowserDaemonProcesses(socketDir: string, configPath: string): Promise<number> {
+  const rows = await listProcesses()
+  const matched = rows.filter((row) => row.pid !== process.pid && isAgentBrowserDaemonCommand(row.command))
+  const descendants = descendantPids(rows, process.pid)
+  const owned = matched.filter((row) => isAppOwnedDaemon(row, descendants, socketDir, configPath))
+  console.log(
+    `[agent-browser] daemon sweep: scanned=${rows.length} matched=${matched.length} owned=${owned.length}` +
+      ` pids=${owned.map((row) => row.pid).join(',') || 'none'}`,
+  )
+  let stopped = 0
+  for (const row of owned) {
+    await forceStopDaemon(row.pid, 0)
+    stopped += 1
+  }
+  return stopped
+}
+
+/**
+ * Daemon directories this app can own, most specific first.
+ *
+ * The namespace composes with the socket directory, so a consumer that inherits
+ * AGENT_BROWSER_SOCKET_DIR and one that only reads the config file resolve the
+ * same namespace under different roots. The pre-namespace root stays in the list
+ * so a daemon started by an earlier build is still reapable.
+ */
+function daemonRootsFor(socketDir: string): string[] {
+  return [
+    join(socketDir, 'namespaces', AGENT_BROWSER_DAEMON_NAMESPACE, 'run'),
+    join(app.getPath('home'), '.agent-browser', 'namespaces', AGENT_BROWSER_DAEMON_NAMESPACE, 'run'),
+    socketDir,
+  ]
+}
+
+async function daemonPidsFor(socketDir: string): Promise<number[]> {
+  const pids = new Set<number>()
+  for (const root of daemonRootsFor(socketDir)) {
+    let entries: string[]
+    try {
+      entries = await fs.readdir(root)
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (!entry.endsWith('.pid')) continue
+      const pid = await readPidFile(join(root, entry))
+      if (pid !== undefined) pids.add(pid)
+    }
+  }
+  return [...pids]
+}
+
+async function readPidFile(pidPath: string): Promise<number | undefined> {
+  try {
+    const raw = await fs.readFile(pidPath, 'utf8')
+    const pid = Number.parseInt(raw.trim(), 10)
+    if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid) return undefined
+    return pid
+  } catch {
+    return undefined
+  }
+}
+
+async function forceStopDaemon(pid: number, graceMs: number): Promise<void> {
+  const deadline = Date.now() + graceMs
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) return
+    await sleep(50)
+  }
+
+  console.warn(`[agent-browser] daemon ${pid} did not exit after close; forcing cleanup`)
+  if (process.platform === 'win32') {
+    await new Promise<void>((resolvePromise) => {
+      const killer = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      })
+      const done = (): void => resolvePromise()
+      killer.once('error', done)
+      killer.once('close', done)
+    })
+  } else {
+    try { process.kill(pid, 'SIGTERM') } catch { return }
+    await sleep(250)
+    if (isProcessAlive(pid)) {
+      try { process.kill(pid, 'SIGKILL') } catch { /* already exited */ }
+    }
+  }
+}
+
+/**
+ * Force-stop every browser daemon this app can own, with no graceful close.
+ *
+ * Called after the app's services have finished shutting down: an engine or the
+ * Harness runtime can still start a daemon while it stops, and a daemon that
+ * outlives the Electron process holds inherited pipes open until its own idle
+ * timeout. Returns how many daemons it had to stop.
+ */
+export async function stopAppOwnedBrowserDaemons(): Promise<number> {
+  const socketDir = appBrowserSocketDir()
+  let stopped = 0
+  for (const pid of await daemonPidsFor(socketDir)) {
+    if (!isProcessAlive(pid)) continue
+    await forceStopDaemon(pid, 0)
+    stopped += 1
+  }
+  stopped += await stopAgentBrowserDaemonProcesses(socketDir, appBrowserConfigPath())
+  return stopped
 }

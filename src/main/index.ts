@@ -13,6 +13,7 @@ import { ORGANIZATION_IPC } from '../shared/organization.js'
 import { TERMINAL_IPC } from '../shared/terminal.js'
 import { projectRoot } from './app-paths.js'
 import { BrowserController } from './browser/browser-controller.js'
+import { stopAppOwnedBrowserDaemons } from './browser/agent-browser-client.js'
 import { DEFAULT_BROWSER_URL } from './browser/browser-url.js'
 import { CapabilityAssignmentStore } from './capabilities/capability-assignment-store.js'
 import { CapabilityRegistry } from './capabilities/capability-registry.js'
@@ -694,7 +695,23 @@ app.on('before-quit', (event) => {
     beginNdPencilClose(ndPencil)
   }
   if (closingServices.size === 0) {
-    void log.flush()
+    // Nothing tracked is left to close, but a browser daemon can still be running:
+    // it may have been started by a child that already exited.
+    console.log('[nd] exit sweep (no tracked services)')
+    event.preventDefault()
+    shutdownStarted = true
+    void (async () => {
+      await stopAppOwnedBrowserDaemons()
+        .then((stopped) => console.log(`[nd] exit sweep pass 1 stopped ${stopped} app-owned browser daemon(s)`))
+        .catch((error) => console.error('Failed to stop app-owned browser daemons:', error))
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 750))
+      await stopAppOwnedBrowserDaemons()
+        .then((stopped) => console.log(`[nd] exit sweep pass 2 stopped ${stopped} app-owned browser daemon(s)`))
+        .catch((error) => console.error('Failed to stop app-owned browser daemons:', error))
+    })().finally(() => {
+      void log.flush()
+      app.exit(0)
+    })
     return
   }
   event.preventDefault()
@@ -702,9 +719,16 @@ app.on('before-quit', (event) => {
   const pending = [...closingServices]
   const shutdownTimeout = setTimeout(() => {
     console.warn('ND shutdown timed out waiting for background services; exiting forcefully.')
-    app.exit(0)
+    // Cleanup that has not settled never runs, so reap browser daemons here: a
+    // daemon that outlives this process keeps inherited pipes open after it, and
+    // the failed quit path is exactly when that happens.
+    const swept = stopAppOwnedBrowserDaemons()
+      .then((stopped) => console.log(`[nd] forced-exit sweep stopped ${stopped} app-owned browser daemon(s)`))
+      .catch(() => undefined)
+    void Promise.race([swept, new Promise((resolvePromise) => setTimeout(resolvePromise, 1_500))])
+      .finally(() => app.exit(0))
   }, 5_000)
-  void Promise.allSettled(pending).then((results) => {
+  void Promise.allSettled(pending).then(async (results) => {
     clearTimeout(shutdownTimeout)
     void log.flush()
     if (results.some((result) => result.status === 'rejected')) {
@@ -713,6 +737,18 @@ app.on('before-quit', (event) => {
       console.error('ND quit was canceled because the Freeform document could not be saved safely.')
       return
     }
+    // An engine or the Harness runtime can still start a browser daemon while it
+    // stops. A daemon that outlives this process keeps inherited pipes open, so
+    // take a last pass once every service close has settled — twice, with a beat
+    // between, because a child that is still tearing down can spawn its daemon
+    // just after the first pass has already looked.
+    await stopAppOwnedBrowserDaemons()
+      .then((stopped) => console.log(`[nd] exit sweep pass 1 stopped ${stopped} app-owned browser daemon(s)`))
+      .catch((error) => console.error('Failed to stop app-owned browser daemons:', error))
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 750))
+    await stopAppOwnedBrowserDaemons()
+      .then((stopped) => console.log(`[nd] exit sweep pass 2 stopped ${stopped} app-owned browser daemon(s)`))
+      .catch((error) => console.error('Failed to stop app-owned browser daemons:', error))
     app.exit(0)
   })
 })
