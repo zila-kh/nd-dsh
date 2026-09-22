@@ -56,14 +56,14 @@ Target: **fast native runtime + minimal round trips + structured agent actions +
 
 | Task | Pri | Owner | What it unblocks |
 | --- | --- | --- | --- |
-| [wip-0004](tasks/wip-0004-restore-green-ci-and-evidence.md) | P0 | ZCode | CI actually runs its gates on Windows; performance claims become verifiable and swap-proof |
+| [done-0004](tasks/done/done-0004-restore-green-ci-and-evidence.md) | P0 | ZCode | **done pending final archive merge gate** — green validate/Windows packaging + trustworthy full performance evidence |
 | [wip-0007](tasks/wip-0007-retire-legacy-paths-and-dispatch.md) | P1 | ZCode | one terminal runtime path; legacy backend switch scheduled out; autopilot capacity decided by query |
 | [wip-0009](tasks/wip-0009-windows-cli-shim-prompt-truncation.md) | P1 | ZCode | implementation landed in PR #21; keep open until CI evidence is reconciled |
-| [todo-0010](tasks/todo-0010-desktop-smoke-teardown.md) | P1 | unassigned | names the desktop-smoke teardown leak so `validate` can go green |
+| [done-0010](tasks/done/done-0010-desktop-smoke-teardown.md) | P1 | ChatGPT | **done** — leaked native agent-browser daemon named, fixed, regression-covered; Desktop smoke green in main run #800 rerun |
 | [todo-0008](tasks/todo-0008-agent-fast-path.md) | P2 | unassigned | one action vocabulary (unblocked), then the router and composite ops once measurement exists |
 | [done-0005](tasks/done/done-0005-agent-task-measurement.md) | P1 | ZCode | **done, verified** — task cost measurable: result kind, offline fixture and normal-loop baseline |
 | [done-0006](tasks/done/done-0006-nd-core-runtime-contract.md) | P1 | ZCode | **done, verified locally** — sidecar declared scope delivered; post-merge Linux CI exposed a workspace-path contract failure that task 0004 must reconcile |
-| [todo-0011](tasks/todo-0011-agent-team-task-workspace-isolation.md) | P1 | ChatGPT | **implementation complete; CI gate pending** — engine-neutral task workspace/session isolation, coordination provenance and conflict-aware integration; PRD 0003 |
+| [done-0011](tasks/done/done-0011-agent-team-task-workspace-isolation.md) | P1 | ChatGPT | **done pending final archive merge gate** — engine-neutral task workspace/session isolation, coordination provenance and conflict-aware integration; PRD 0003 |
 
 Claim a task by setting `Owner` and taking the prefix to `wip-`; the full per-task detail, acceptance criteria, and evidence references live under [docs/tasks/](tasks/).
 
@@ -125,8 +125,8 @@ Success criterion: users can tell why an engine is not ready before starting wor
 
 ## P1 — engine-neutral agent teams and task workspace isolation
 
-- PRD: [0003-engine-neutral-agent-teams-and-task-workspace-isolation.md](prd/0003-engine-neutral-agent-teams-and-task-workspace-isolation.md) — **approved 2026-09-22; implementation complete on feature branch, CI gate pending**.
-- Task: [todo-0011-agent-team-task-workspace-isolation.md](tasks/todo-0011-agent-team-task-workspace-isolation.md) — P1, implementation complete; archive after green CI.
+- PRD: [0003-engine-neutral-agent-teams-and-task-workspace-isolation.md](prd/0003-engine-neutral-agent-teams-and-task-workspace-isolation.md) — **approved 2026-09-22; implementation merged in PR #23; final evidence/archive gate in progress**.
+- Task: [done-0011-agent-team-task-workspace-isolation.md](tasks/done/done-0011-agent-team-task-workspace-isolation.md) — P1, done; archival merge is gated on the final ready-for-review CI/evidence run.
 - Reference/benchmark matrix: [agent-orchestration-reference-matrix.md](plan/agent-orchestration-reference-matrix.md).
 
 This work formalizes the existing per-task worktree/checkpoint/review/integration foundation as an engine-neutral company contract. The direct ZCode-assisted PR #21 shared-checkout episode is retained as a regression story, **not** as an ND organization-run failure or a claim about ZCode architecture. Target invariant: teams share knowledge and structured handoffs; independent durable writable tasks keep independent transaction/workspace lineage.
