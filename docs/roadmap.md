@@ -63,7 +63,7 @@ Target: **fast native runtime + minimal round trips + structured agent actions +
 | [todo-0008](tasks/todo-0008-agent-fast-path.md) | P2 | unassigned | one action vocabulary (unblocked), then the router and composite ops once measurement exists |
 | [done-0005](tasks/done/done-0005-agent-task-measurement.md) | P1 | ZCode | **done, verified** — task cost measurable: result kind, offline fixture and normal-loop baseline |
 | [done-0006](tasks/done/done-0006-nd-core-runtime-contract.md) | P1 | ZCode | **done, verified locally** — sidecar declared scope delivered; post-merge Linux CI exposed a workspace-path contract failure that task 0004 must reconcile |
-| [todo-0011](tasks/todo-0011-agent-team-task-workspace-isolation.md) | P1 | ChatGPT | **implementation complete; CI gate pending** — engine-neutral task workspace/session isolation, coordination provenance and conflict-aware integration; PRD 0003 |
+| [done-0011](tasks/done/done-0011-agent-team-task-workspace-isolation.md) | P1 | ChatGPT | **done** — engine-neutral task workspace/session isolation, coordination provenance and conflict-aware integration; merged in PR #23, archived after green main CI |
 
 Claim a task by setting `Owner` and taking the prefix to `wip-`; the full per-task detail, acceptance criteria, and evidence references live under [docs/tasks/](tasks/).
 
@@ -125,8 +125,8 @@ Success criterion: users can tell why an engine is not ready before starting wor
 
 ## P1 — engine-neutral agent teams and task workspace isolation
 
-- PRD: [0003-engine-neutral-agent-teams-and-task-workspace-isolation.md](prd/0003-engine-neutral-agent-teams-and-task-workspace-isolation.md) — **approved 2026-09-22; implementation complete on feature branch, CI gate pending**.
-- Task: [todo-0011-agent-team-task-workspace-isolation.md](tasks/todo-0011-agent-team-task-workspace-isolation.md) — P1, implementation complete; archive after green CI.
+- PRD: [0003-engine-neutral-agent-teams-and-task-workspace-isolation.md](prd/0003-engine-neutral-agent-teams-and-task-workspace-isolation.md) — **approved 2026-09-22; implementation merged in PR #23; archived after green main CI**.
+- Task: [done-0011-agent-team-task-workspace-isolation.md](tasks/done/done-0011-agent-team-task-workspace-isolation.md) — P1, done; engine-neutral teams and task workspace isolation landed.
 - Reference/benchmark matrix: [agent-orchestration-reference-matrix.md](plan/agent-orchestration-reference-matrix.md).
 
 This work formalizes the existing per-task worktree/checkpoint/review/integration foundation as an engine-neutral company contract. The direct ZCode-assisted PR #21 shared-checkout episode is retained as a regression story, **not** as an ND organization-run failure or a claim about ZCode architecture. Target invariant: teams share knowledge and structured handoffs; independent durable writable tasks keep independent transaction/workspace lineage.

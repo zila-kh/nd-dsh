@@ -360,7 +360,7 @@ See [agent-orchestration-reference-matrix.md](../plan/agent-orchestration-refere
 
 ## 19. Implementation status
 
-Approved on 2026-09-22. The implementation is carried by `feat/engine-neutral-agent-teams` and deliberately extends the existing task-worktree/control-plane path rather than creating a second scheduler.
+Approved on 2026-09-22. The implementation merged to `main` in PR #23 (`9e894dd7`) and deliberately extends the existing task-worktree/control-plane path rather than creating a second scheduler. Task 0011 is archived in [done-0011](../tasks/done/done-0011-agent-team-task-workspace-isolation.md).
 
 Implemented surfaces:
 
@@ -375,7 +375,7 @@ Implemented surfaces:
 - the existing `scheduler-multi-agent` benchmark already records 1/2/4/8/10 workers, core/child memory, permit latency, process/workspace counts and worktree disk growth;
 - the maintained external reference/benchmark set remains in [agent-orchestration-reference-matrix.md](../plan/agent-orchestration-reference-matrix.md).
 
-Verification remains governed by repository CI and the separate full performance-evidence policy; approval of this PRD does not turn an unrun external-engine benchmark into a performance claim.
+Verification of this work is repository CI on the merged implementation tree: `main` run [#800](https://github.com/zila-kh/nd-dsh/actions/runs/35685765665) is green, covering the Linux `validate` gate and the Windows packaging gate, with the task's regression set (`tests/task-worktree.test.ts`, `tests/zcode-cli-engine.test.ts`, `tests/engine-session-router.test.ts`, `tests/organization-workspace-provenance.test.ts`) passing locally. The separate full performance-evidence policy remains task 0004's; approval of this PRD does not turn an unrun external-engine benchmark into a performance claim.
 
 ## 20. Rollback
 
