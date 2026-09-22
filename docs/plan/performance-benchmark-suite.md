@@ -1,8 +1,15 @@
 # ND Performance Benchmark Suite
 
 Status: **implemented at runtime level, and extended here.** Sections 1-10 describe the suite that merged with PRD 0002 (`benchmarks/`, scripts `bench:smoke|record|compare|check|app|runtime`, CI wiring in `.github/workflows/ci.yml` and `benchmark-proof.yml`). Section 12 records the gaps that remain before this suite can measure agent-task cost and fast-path gains.
-Updated: 2026-09-21
+Updated: 2026-09-22
 Related: [PRD 0002](../prd/0002-rust-sidecar-mvp-migration.md) · [Parallel work distribution](parallel-work-distribution.md) · [Roadmap](../roadmap.md)
+
+
+## 0. 2026-09-22 convergence decision
+
+The migration-era dual-backend release gate is retired. Desktop production now has one runtime path: bundled `nd-core`; node-pty and `ND_DSH_CORE_BACKEND=legacy` are no longer runtime/packaging dependencies. Current `bench:record` therefore records absolute/correctness evidence for Rust core + Rust Electron runtime + the packaged app. `bench:compare` remains available for historical legacy-vs-Rust bundles.
+
+Agent-task measurement now includes matched `normal-read` and `fast-read` passes. The fast pass exercises the production organization router and a bounded composite `workspace.snapshot` operation, and it must reduce model round trips, model-visible tool calls and nd-core IPC crossings without reducing completion rate. Offline fixture wall time is not presented as model-latency evidence.
 
 ## 1. Why this exists
 
