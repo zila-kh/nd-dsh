@@ -57,7 +57,7 @@ Target: **fast native runtime + minimal round trips + structured agent actions +
 | Task | Pri | State |
 | --- | --- | --- |
 | [wip-0012](tasks/wip-0012-nd-core-format-lint-gate.md) | P0 | **in progress** — fmt/clippy repair proven; `validate` green, Windows reaches `cargo test` |
-| [wip-0013](tasks/wip-0013-windows-deadline-test-flake.md) | P0 | **in progress** — deadline raised for cold PowerShell start; awaiting a green `windows-package` |
+| [wip-0013](tasks/wip-0013-windows-timing-flakes.md) | P0 | **in progress** — PowerShell cold-start deadline and metrics-settle races fixed; awaiting a green `windows-package` |
 | [blocked-0004](tasks/blocked-0004-windows-release-validation.md) | P0 | **blocked on fresh Windows release validation** — gated behind tasks 0012 and 0013 |
 | [done-0005](tasks/done/done-0005-agent-task-measurement.md) | P1 | **done** — task-cost measurement + normal-loop baseline |
 | [done-0006](tasks/done/done-0006-nd-core-runtime-contract.md) | P1 | **done** — workspace/deadline/revision/cache/search/runtime contract |

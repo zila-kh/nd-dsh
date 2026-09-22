@@ -295,6 +295,28 @@ fn init_repository(root: &Path) {
 // Section 2: core-side deadlines and per-request cancellation
 // ---------------------------------------------------------------------------------
 
+/// Read the core's accounting once it has stopped moving.
+///
+/// A response is written from inside the dispatch job, and that job's registry entry and
+/// dispatcher slot are released only when the closure returns — after the response is
+/// already on the wire. A client that has just received a response can therefore still
+/// see its own request counted as in flight. That is an ordering fact, not a leak, and
+/// sampling it once turns the assertion below into a flake on a slow runner. Polling
+/// keeps the assertion honest: a slot that really leaked never settles, so it still
+/// fails the bound.
+fn settled_metrics(core: &mut Core, within: Duration) -> Value {
+    let started = Instant::now();
+    loop {
+        let metrics: Value = core.call("metrics.snapshot", json!({})).expect("metrics");
+        let alone = metrics["inFlightRequestCount"] == json!(1)
+            && metrics["dispatcher"]["active"] == json!(1);
+        if alone || started.elapsed() >= within {
+            return metrics;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
 #[test]
 fn deadline_expiry_stops_git_work_reports_its_code_and_leaves_no_orphan() {
     let fixture = temp_dir("deadline");
@@ -350,7 +372,7 @@ fn deadline_expiry_stops_git_work_reports_its_code_and_leaves_no_orphan() {
 
     // The metrics request is itself in flight while it is counted, so one active
     // slot is this observer; anything above that is a leaked slot.
-    let metrics: Value = core.call("metrics.snapshot", json!({})).expect("metrics");
+    let metrics = settled_metrics(&mut core, Duration::from_secs(5));
     assert_eq!(
         metrics["inFlightRequestCount"],
         json!(1),
@@ -409,7 +431,7 @@ fn cancelling_one_request_leaves_its_peer_running_and_releases_only_its_own_slot
     assert_eq!(peer_result["exitCode"], json!(0));
 
     // Only this observer is in flight by the time it is counted.
-    let metrics: Value = core.call("metrics.snapshot", json!({})).expect("metrics");
+    let metrics = settled_metrics(&mut core, Duration::from_secs(5));
     assert_eq!(metrics["inFlightRequestCount"], json!(1), "{metrics}");
     assert_eq!(metrics["dispatcher"]["active"], json!(1), "{metrics}");
     let _ = fs::remove_dir_all(&fixture);
