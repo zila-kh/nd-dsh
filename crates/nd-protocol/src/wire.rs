@@ -108,6 +108,12 @@ pub struct ProtocolWriter {
     worker: Mutex<Option<JoinHandle<()>>>,
 }
 
+impl Default for ProtocolWriter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ProtocolWriter {
     pub fn new() -> Self {
         let shared = Arc::new(OutShared {

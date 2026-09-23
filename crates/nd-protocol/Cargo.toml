@@ -1,5 +1,5 @@
 [package]
-name = "nd-core"
+name = "nd-protocol"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.98"
@@ -8,7 +8,9 @@ publish = false
 
 [dependencies]
 anyhow = "1"
-nd-protocol = { path = "../nd-protocol" }
-nd-runtime = { path = "../nd-runtime" }
+rmp-serde = "1.3"
 serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
 serde_json = "1"

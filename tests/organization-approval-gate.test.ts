@@ -64,4 +64,38 @@ describe('OrganizationApprovalGate', () => {
 
     expect(await gate.shouldForward(approval('git push origin main'))).toBe(true)
   })
+
+  it('falls back to human approval when an automatic allow cannot be journaled', async () => {
+    const responses: unknown[] = []
+    const store = {
+      runBySession: async () => run,
+      policy: async () => 'allow' as const,
+    }
+    const harness = { respond: async (_rpcId: string, value: unknown) => { responses.push(value) } }
+    const core = { request: async () => { throw new Error('journal unavailable') } }
+    const gate = new OrganizationApprovalGate(store as never, harness as never, core as never)
+
+    expect(await gate.shouldForward(approval('git push origin main'))).toBe(true)
+    expect(responses).toEqual([])
+  })
+
+  it('journals automatic policy decisions before resolving them', async () => {
+    const journal: unknown[] = []
+    const store = {
+      runBySession: async () => run,
+      policy: async () => 'deny' as const,
+    }
+    const harness = { respond: async () => undefined }
+    const core = { request: async (_method: string, value: unknown) => { journal.push(value); return {} } }
+    const gate = new OrganizationApprovalGate(store as never, harness as never, core as never)
+
+    expect(await gate.shouldForward(approval('terraform destroy production'))).toBe(false)
+    expect(journal).toHaveLength(1)
+    expect(journal[0]).toMatchObject({
+      kind: 'policy.decision',
+      state: 'complete',
+      companyId: 'company-1',
+      projectId: 'project-1',
+    })
+  })
 })

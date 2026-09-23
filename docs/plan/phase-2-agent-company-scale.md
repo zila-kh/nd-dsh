@@ -14,7 +14,7 @@ The user should manage outcomes, priorities, budget, and judgment. ND should man
 
 ## P2.1 — Parallel AI teams with per-task leases
 
-Detailed follow-on contract: [PRD 0003 — Engine-Neutral Agent Teams and Task Workspace Isolation](../prd/0003-engine-neutral-agent-teams-and-task-workspace-isolation.md), approved 2026-09-22 and implemented on the feature branch pending repository CI. Maintained external references and future comparative benchmark questions: [agent-orchestration-reference-matrix.md](agent-orchestration-reference-matrix.md).
+Detailed follow-on contract: [PRD 0003 — Engine-Neutral Agent Teams and Task Workspace Isolation](../prd/0003-engine-neutral-agent-teams-and-task-workspace-isolation.md), approved 2026-09-22 and implemented on the feature branch pending repository CI. Maintained external references and future comparative benchmark questions: [agent-orchestration-reference-matrix.md](agent-orchestration-reference-matrix.md). Runtime/company adoption sequencing derived from those references lives in [reference-inspired-runtime-company-evolution.md](reference-inspired-runtime-company-evolution.md).
 
 Run safe parallel project/company execution through task leases and isolated writable task transactions. Global planning mutations remain serialized; independent task execution/review is capacity-controlled instead of globally single-run.
 
@@ -201,6 +201,8 @@ ND selects routes using:
 - policy constraints
 
 Record every decision so routing can improve from actual outcomes.
+
+Implementation status: organization intent/policy and provider credentials/network remain in TypeScript; [WIP 0034](../tasks/wip-0034-rust-decision-kernel.md) now supplies the opt-in Rust threshold/selection/escalation kernel behind the same typed provider observations. Shared fixtures enforce TS/Rust parity; local live-provider evidence is the remaining promotion gate. Deterministic rules remain first, Laya/Jev remain replaceable providers, and strong reasoning review stays the fallback when confidence is insufficient.
 
 Example learned metric:
 
@@ -544,3 +546,18 @@ Phase 2 is complete when:
 9. Feedback can become verified implementation work with minimal manual setup without making every signal a task.
 
 Then Phase 3 can focus on end-to-end autonomous company operation and shipping.
+
+## Reference-derived Phase 2 additions
+
+The maintained reference set now explicitly includes LoopX, Bamboo-agent, Aex Brain, Pioneer, Moltis, OpenAI Codex, Goose, kern, Capsule, PocketPaw and the earlier QM/AWS/Orca/Paperclip/Gajae/LazyCodex/JCode references.
+
+Phase 2 should reuse those findings without changing ND's product boundary:
+
+- **Long-horizon continuation:** adopt typed continuation, evidence freshness, durable handoff, and targeted wake ideas from LoopX/QM without surrendering task/workspace authority.
+- **Runtime architecture:** use Bamboo/Pioneer/Brain as references for protocol/runtime/journal boundaries, but keep the crate count small until independent contracts justify splits.
+- **Execution security:** add sandbox providers inspired by Moltis/kern/Capsule while retaining Git worktrees as the provenance/checkpoint primitive.
+- **Observability:** add trace/correlation and support-bundle ideas inspired by Goose/Brain/JCode.
+- **Company quality:** add eval/budget surfaces inspired by Paperclip/LoopX/QM, using verified outcomes and human-attention cost rather than popularity or model reputation.
+- **Interoperability:** treat A2A/channels as scoped adapters inspired by PocketPaw; external messages remain typed signals/effects under ND policy.
+
+The detailed adoption order and acceptance criteria are in [reference-inspired-runtime-company-evolution.md](reference-inspired-runtime-company-evolution.md).

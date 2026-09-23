@@ -68,6 +68,12 @@ pub struct Dispatcher {
     workers: Vec<JoinHandle<()>>,
 }
 
+impl Default for Dispatcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Dispatcher {
     pub fn new() -> Self {
         let worker_count = std::thread::available_parallelism()

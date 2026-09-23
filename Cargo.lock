@@ -273,11 +273,32 @@ name = "nd-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "nd-protocol",
+ "nd-runtime",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "nd-protocol"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "nd-runtime"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
  "ignore",
  "libc",
+ "nd-protocol",
  "portable-pty",
  "regex",
- "rmp-serde",
  "serde",
  "serde_bytes",
  "serde_json",
