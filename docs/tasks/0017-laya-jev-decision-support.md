@@ -19,7 +19,7 @@ Add a typed System One decision-assist layer that improves ND review focus witho
 - Review-assist questions for acceptance coverage, scope risk, regression depth, and review route.
 - Durable provider-attempt receipts appended to the review summary.
 - Explicit invariant: decision support cannot establish PASS, override machine verification, waive policy, or replace independent workspace review.
-- Unit coverage for high-confidence Laya, Laya→Jev escalation, shadow mode, and provider failure containment.
+- Unit coverage for high-confidence Laya, Laya→Jev escalation, all-low-confidence fallback, shadow mode, provider failure containment, Laya provider-default routing, and Jev bearer/model defaults.
 
 ## Runtime configuration
 
@@ -64,7 +64,7 @@ Then validate shadow mode with a reachable local System One endpoint:
 
 ```bash
 ND_DECISION_SUPPORT_MODE=shadow \
-ND_LAYA_SYSTEMONE_URL=http://127.0.0.1:<port> \
+ND_LAYA_SYSTEMONE_URL=http://127.0.0.1:8765 \
 pnpm dev
 ```
 
@@ -80,7 +80,7 @@ Then validate assist mode:
 ```bash
 ND_DECISION_SUPPORT_MODE=assist \
 ND_DECISION_SUPPORT_CONFIDENCE=0.78 \
-ND_LAYA_SYSTEMONE_URL=http://127.0.0.1:<port> \
+ND_LAYA_SYSTEMONE_URL=http://127.0.0.1:8765 \
 ND_JEV_API_KEY=<secret> \
 pnpm dev
 ```
