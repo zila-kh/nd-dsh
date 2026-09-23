@@ -22,6 +22,10 @@ for (const marker of [
   'to: vendor/deepseek-harness',
   'from: .release/nd-core',
   'to: nd-core',
+  'from: .release/nd-browser-host',
+  'to: nd-browser-host',
+  'from: extensions/browser-companion',
+  'to: browser-companion',
   'from: node_modules/agent-browser',
   'from: resources/nd-pencil',
 ]) {
@@ -45,6 +49,11 @@ if (!configOnly) {
   const requiredFiles = [
     '.release/release-manifest.json',
     `.release/nd-core/${process.platform === 'win32' ? 'nd-core.exe' : 'nd-core'}`,
+    `.release/nd-browser-host/${process.platform === 'win32' ? 'nd-browser-host.exe' : 'nd-browser-host'}`,
+    'extensions/browser-companion/manifest.json',
+    'extensions/browser-companion/service-worker.js',
+    'scripts/nd-browser-companion-runtime.mjs',
+    'scripts/register-browser-native-host.mjs',
     '.release/harness/lib/bin.js',
     '.release/harness/LICENSE',
     '.release/harness/THIRD_PARTY_NOTICES.md',
@@ -68,6 +77,11 @@ if (!configOnly) {
   if (manifest.nodeRuntime?.mode !== 'electron-run-as-node') throw new Error('Packaged Node runtime mode is not declared')
   if (manifest.ndCore?.protocolVersion !== 1 || typeof manifest.ndCore?.sha256 !== 'string' || manifest.ndCore.sha256.length !== 64) {
     throw new Error('Packaged ND Core provenance is missing or invalid')
+  }
+  if (manifest.browserCompanion?.protocolVersion !== 1
+    || typeof manifest.browserCompanion?.nativeHostSha256 !== 'string'
+    || manifest.browserCompanion.nativeHostSha256.length !== 64) {
+    throw new Error('Packaged Browser Companion provenance is missing or invalid')
   }
 }
 

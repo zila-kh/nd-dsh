@@ -158,7 +158,7 @@ describe('ND extension portable runtime', () => {
       { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} },
     ])
     const names = replies.find((reply) => reply.id === 2)?.result?.tools?.map((tool) => tool.name)
-    expect(names).toEqual(['nd_extension_list', 'nd_extension_call'])
+    expect(names).toEqual(['nd_extension_list', 'nd_browser_call', 'nd_extension_call'])
   })
 
   it('forwards routed MCP call results as native gateway content', async () => {

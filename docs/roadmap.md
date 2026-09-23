@@ -64,7 +64,7 @@ Target: **fast native runtime + minimal round trips + structured agent actions +
 | [done-0015](tasks/done/done-0015-runtime-evidence-baseline.md) | P1 | **done** — runtime evidence bundle recorded locally, baseline committed (`benchmarks/baselines/win11-x64.json`); runner artifact stays in blocked-0004 |
 | [done-0016](tasks/done/done-0016-agent-task-baseline-fast-path-budgets.md) | P1 | **done** — agent-task baseline re-recorded against the §12.4 comparison; §9.1 router placement settled (main-process TypeScript) |
 | [todo-0017](tasks/todo-0017-windows-worktree-test-ebusy-flake.md) | P2 | **todo** — `pnpm test` intermittently fails in worktree teardown (`EBUSY` on `rmdir`) under parallel load; local gates are the only validation |
-| [wip-0018](tasks/wip-0018-rust-parallel-runtime-v2.md) | P1 | **implementation complete; manual validation pending** — Rust-owned project dev servers + task verification, bounded native Harness/direct transcript journals, single-owner terminal scrollback, and 100-session retention evidence; organization business persistence intentionally stays TypeScript until measured |
+| [wip-0018](tasks/wip-0018-rust-parallel-runtime-v2.md) | P1 | **done; merged and locally validated** — merged by `d1aed436`; reference bundle `2026-09-23T10-27-15-202Z-win32-x64` passed 24/24 checks at feature commit `ae801def` |
 | [blocked-0004](tasks/blocked-0004-windows-release-validation.md) | P0 | **blocked on fresh Windows release validation** — implementation complete (0012-0014 done) and baseline recorded (0015); needs the workflows restored and a runner |
 | [done-0005](tasks/done/done-0005-agent-task-measurement.md) | P1 | **done** — task-cost measurement + normal-loop baseline |
 | [done-0006](tasks/done/done-0006-nd-core-runtime-contract.md) | P1 | **done** — workspace/deadline/revision/cache/search/runtime contract |
@@ -139,6 +139,17 @@ Success criterion: users can tell why an engine is not ready before starting wor
 - Reference/benchmark matrix: [agent-orchestration-reference-matrix.md](plan/agent-orchestration-reference-matrix.md).
 
 This work formalizes the existing per-task worktree/checkpoint/review/integration foundation as an engine-neutral company contract. The direct ZCode-assisted PR #21 shared-checkout episode is retained as a regression story, **not** as an ND organization-run failure or a claim about ZCode architecture. Target invariant: teams share knowledge and structured handoffs; independent durable writable tasks keep independent transaction/workspace lineage.
+
+## P1 — Browser Companion MVP
+
+- PRD: [0004-browser-companion-mvp.md](prd/0004-browser-companion-mvp.md) — implementation on `feat/browser-companion-mvp`.
+- Task: [wip-0019-browser-companion-mvp.md](tasks/wip-0019-browser-companion-mvp.md) — implementation complete; local automated validation, real-Chrome smoke, and performance evidence pending.
+
+The MVP keeps the embedded ND browser and adds an explicit Native Messaging path
+for a user's existing Chrome/Chromium profile. It uses optional per-origin
+scripting permissions, semantic stale-safe element refs, single-writer tab
+leases, and the existing engine extension router. Company-level normalized
+browser action policy remains a follow-up requirement before enterprise claims.
 
 ## Public Beta P1 — best-in-class AI development environment
 

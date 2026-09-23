@@ -2,11 +2,13 @@
 
 > Priority: P1  
 > Owner: ND runtime  
-> Status: implementation complete — manual local validation/evidence handoff pending  
+> Status: done — merged to main after local validation and performance evidence  
 > Branch: `feat/rust-parallel-runtime-v2`  
 > Base: `main@5bc853d2`  
 > Validation mode: manual local only; GitHub Actions remains parked  
 > Updated: 2026-09-23
+>
+> Validation result: merged by `d1aed436` after the reference bundle `benchmark-results/2026-09-23T10-27-15-202Z-win32-x64` passed 24/24 checks at feature commit `ae801def`.
 
 ## Objective
 
@@ -238,11 +240,12 @@ On the Windows reference machine, after the correctness checklist is clean:
 - [ ] Confirm external engine memory is reported separately so vendor-process
   RSS does not hide an ND regression.
 
-## Exit / merge criteria
+## Exit / merge result
 
-Implementation work on this branch is complete. It is merge-ready only after the
-operator records the manual local correctness result and, for performance claims,
-the reference-machine evidence above.
+The operator completed the local correctness and reference-machine evidence pass.
+The resulting feature head `ae801def` was merged to `main` by `d1aed436`.
+The recorded bundle `benchmark-results/2026-09-23T10-27-15-202Z-win32-x64`
+passed 24/24 checks.
 
-No GitHub Actions result is required while Actions is intentionally parked; no
-acceptance criterion is silently waived.
+GitHub Actions remained intentionally parked; the merge relied on the documented
+local validation path rather than silently waiving the acceptance criteria.
