@@ -13,10 +13,11 @@ export function createDecisionSupportFromEnv(
 
   const layaUrl = env.ND_LAYA_SYSTEMONE_URL?.trim()
   if (layaUrl) {
+    const layaModel = env.ND_LAYA_MODEL?.trim()
     providers.push(new HttpDecisionProvider({
       id: 'laya',
       endpoint: layaUrl,
-      model: env.ND_LAYA_MODEL?.trim() || 'typed-decisions',
+      ...(layaModel ? { model: layaModel } : {}),
       timeoutMs,
       fetchImpl,
     }))
