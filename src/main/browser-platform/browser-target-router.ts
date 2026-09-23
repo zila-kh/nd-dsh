@@ -84,7 +84,8 @@ export class BrowserTargetRouter {
       const targetId = await this.resolveTargetId(params)
       return this.tabs(targetId)
     }
-    if (method === 'browser.attach') {
+    if (method === 'browser.attach') { 
+      this.requireAgentSession(context, method)
       const { target, targetId, tabId, tab } = await this.resolveTargetAndTab(params)
       const descriptor = await target.descriptor()
       const scope = await this.policy.trustedScope(context)
@@ -105,7 +106,8 @@ export class BrowserTargetRouter {
       if (released) this.onChanged?.()
       return { released }
     }
-    if (method === 'browser.openTab') {
+    if (method === 'browser.openTab') { 
+      this.requireAgentSession(context, method)
       const target = await this.resolveTarget(params)
       const descriptor = await target.descriptor()
       const url = typeof params.url === 'string' && params.url.trim() ? params.url.trim() : 'about:blank'
@@ -137,7 +139,8 @@ export class BrowserTargetRouter {
         throw cause
       }
     }
-    if (method === 'browser.activateTab') {
+    if (method === 'browser.activateTab') { 
+      this.requireAgentSession(context, method)
       const { target, targetId, tabId, tab } = await this.resolveTargetAndTab(params)
       const descriptor = await target.descriptor()
       return this.runAction(context, {
@@ -148,7 +151,8 @@ export class BrowserTargetRouter {
         origin: tab.origin,
       }, () => target.activateTab(tabId))
     }
-    if (method === 'browser.closeTab') {
+    if (method === 'browser.closeTab') { 
+      this.requireAgentSession(context, method)
       const { target, targetId, tabId, tab } = await this.resolveTargetAndTab(params)
       this.assertLease(params, targetId, tabId, context)
       const descriptor = await target.descriptor()
@@ -163,7 +167,8 @@ export class BrowserTargetRouter {
       this.onChanged?.()
       return result
     }
-    if (method === 'browser.history') {
+    if (method === 'browser.history') { 
+      this.requireAgentSession(context, method)
       const targetId = await this.resolveTargetId(params)
       if (targetId !== 'builtin') throw new Error('History is available only for the ND built-in browser')
       const descriptor = await this.builtin.descriptor()
@@ -173,7 +178,8 @@ export class BrowserTargetRouter {
         profileId: descriptor.profileId,
       }, () => this.browser.history(targetId))
     }
-    if (method === 'browser.autofill') {
+    if (method === 'browser.autofill') { 
+      this.requireAgentSession(context, method)
       const { target, targetId, tabId, tab } = await this.resolveTargetAndTab(params)
       this.assertLease(params, targetId, tabId, context)
       if (!target.autofillCredential) throw new Error('Selected browser target does not support ND credential autofill')
@@ -239,7 +245,8 @@ export class BrowserTargetRouter {
         origin: tab.origin,
       }, () => target.discoverSiteTools(tabId))
     }
-    if (method === 'browser.siteTool') {
+    if (method === 'browser.siteTool') { 
+      this.requireAgentSession(context, method)
       this.assertLease(params, targetId, tabId, context)
       const name = requiredString(params.name, 'name')
       const tools = await target.discoverSiteTools(tabId)
@@ -256,6 +263,7 @@ export class BrowserTargetRouter {
       }, () => target.callSiteTool(tabId, name, params.input ?? {}))
     }
 
+    this.requireAgentSession(context, method)
     this.assertLease(params, targetId, tabId, context)
     if (method === 'browser.navigate') {
       const url = requiredString(params.url, 'url')
@@ -343,6 +351,13 @@ export class BrowserTargetRouter {
     } catch (cause) {
       await this.policy.complete(envelope, decision, false, errorMessage(cause))
       throw cause
+    }
+  }
+
+  private requireAgentSession(context: BrowserActionContext, method: string): void {
+    if (context.source === 'renderer') return
+    if (!context.sessionId) {
+      throw new Error(`${method} requires the opaque browser access token for the current ND session`)
     }
   }
 
