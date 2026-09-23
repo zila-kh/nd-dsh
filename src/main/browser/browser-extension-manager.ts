@@ -55,6 +55,9 @@ export class BrowserExtensionManager {
     item.enabled = true
     if (!existing) this.value.extensions.push(item)
     await this.persist()
+    for (const [id, record] of [...this.records]) {
+      if (record.path === extensionPath) this.records.delete(id)
+    }
     const record = await this.loadOne(item, manifest)
     this.onChanged()
     return structuredClone(record)
@@ -69,6 +72,7 @@ export class BrowserExtensionManager {
     if (enabled) {
       item.enabled = true
       await this.persist()
+      this.records.delete(extensionId)
       await this.loadOne(item)
     } else {
       item.enabled = false
