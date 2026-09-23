@@ -13,6 +13,14 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.runtime.onStartup.addListener(() => { void ensureNative() })
 chrome.runtime.onConnect.addListener(() => undefined)
 
+chrome.tabs.onRemoved.addListener((tabId) => {
+  try {
+    nativePort?.postMessage({ version: PROTOCOL, kind: 'event', event: 'tab.closed', tabId })
+  } catch {
+    // The disconnect handler owns reconnect.
+  }
+})
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.kind === 'companion.status') {
     sendResponse({ connected })
