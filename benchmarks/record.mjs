@@ -34,6 +34,10 @@ Object.assign(shared, {
   ND_DSH_BENCH_FIXTURE_REVISION: 'prd-0002-v1',
   ND_DSH_BENCH_RUNS: String(runs),
 })
+// The recorder's own provenance must name the sidecar the measured steps ran.
+// They get the profile above; without this the summary would hash the debug
+// binary while all three documents it summarizes measured the release one.
+process.env.ND_DSH_BENCH_PROFILE = shared.ND_DSH_BENCH_PROFILE
 if (staged) {
   console.log('Staged release manifest identifies nd-core ' + staged.sha256.slice(0, 12) + ' (from ' + staged.path + ').')
 }
