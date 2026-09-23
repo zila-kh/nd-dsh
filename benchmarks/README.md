@@ -51,6 +51,8 @@ Rules this measurement keeps:
 
 That follows the discipline the runtime suite already states — local results are ignored, reviewed bundles are copied in intentionally — and the same record carries the fast-path proof: `normal-read` and `fast-read` run the same read-only task inside one recording, and `fastPathComparison` must show fewer model round trips, tool calls and nd-core IPC crossings per verified completion, at no completion-rate cost and under the escalation budget. `pnpm bench:tasks:check` re-derives that comparison from the raw samples offline — no Electron, no provider — so a rotted or hand-edited baseline fails, and a run may only replace the baseline when it passes its own verdict.
 
+The committed baseline was re-recorded on 2026-09-23 ([task 0016](../docs/tasks/done/done-0016-agent-task-baseline-fast-path-budgets.md)), and its measured delta per verified completion is model round trips 2 → 0, model-visible tool calls 3 → 0, nd-core IPC crossings 12.5 → 9, completion rate unchanged at 1.0, escalations 0. Its `artifact` field records that the raw bundle is a local recording (`ciRun: null`) because no runner produced it.
+
 ## Full MVP evidence
 
 Run `pnpm bench:record` on the documented Windows x64 reference machine. The default command intentionally rebuilds the Windows portable artifact so packaged startup and same-build runtime measurements refer to the current commit.

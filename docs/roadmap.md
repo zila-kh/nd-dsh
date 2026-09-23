@@ -35,7 +35,7 @@ These are blockers for a downloadable public beta, not optional polish.
 - Task: [done-0002-rust-sidecar-mvp-migration.md](tasks/done/done-0002-rust-sidecar-mvp-migration.md) — P0, merged as PR #20 (`588f3ed`).
 - Benchmark contract: [performance-benchmark-suite.md](plan/performance-benchmark-suite.md) — implemented at runtime level; §12 records the agent-task metrics, baseline policy, and fast-path proof, all closed as of 2026-09-23.
 - Parallel-agent scope: [parallel-work-distribution.md](plan/parallel-work-distribution.md) — D1-D3 implemented; see the open-delta list.
-- Agent fast path: [agent-fast-path.md](plan/agent-fast-path.md) — implemented (typed action space, deterministic-first router, composite core executor); the §12.4 budgets are wired and re-derived offline, and §9.1's router placement is settled by the measured IPC-crossing counts.
+- Agent fast path: [agent-fast-path.md](plan/agent-fast-path.md) — implemented (typed action space, deterministic-first router, composite core executor); the §12.4 budgets are wired and re-derived offline, and §9.1 is settled by the measured IPC-crossing counts — 12.5 → 9 per verified completion while the decision tier itself crosses zero times, so the router stays in main-process TypeScript.
 
 This approved MVP is the active implementation vehicle for the runtime-distribution, PTY/process, Git/worktree, parallel-worker capacity, packaged Windows smoke, and reproducible performance-proof portions of the roadmap. Organization/business truth remains TypeScript-owned; nd-core owns shared runtime permits, native process/resource lifecycle, and system-heavy services.
 
@@ -62,6 +62,8 @@ Target: **fast native runtime + minimal round trips + structured agent actions +
 | [done-0013](tasks/done/done-0013-windows-timing-flakes.md) | P0 | **done** — Windows timing flakes removed (PR #30); runner confirmation dropped when Actions was parked |
 | [done-0014](tasks/done/done-0014-app-runtime-terminal-marker.md) | P1 | **done** — app-runtime terminal marker fixed (PR #30); bundle confirmation dropped when Actions was parked |
 | [done-0015](tasks/done/done-0015-runtime-evidence-baseline.md) | P1 | **done** — runtime evidence bundle recorded locally, baseline committed (`benchmarks/baselines/win11-x64.json`); runner artifact stays in blocked-0004 |
+| [done-0016](tasks/done/done-0016-agent-task-baseline-fast-path-budgets.md) | P1 | **done** — agent-task baseline re-recorded against the §12.4 comparison; §9.1 router placement settled (main-process TypeScript) |
+| [todo-0017](tasks/todo-0017-windows-worktree-test-ebusy-flake.md) | P2 | **todo** — `pnpm test` intermittently fails in worktree teardown (`EBUSY` on `rmdir`) under parallel load; local gates are the only validation |
 | [blocked-0004](tasks/blocked-0004-windows-release-validation.md) | P0 | **blocked on fresh Windows release validation** — implementation complete (0012-0014 done) and baseline recorded (0015); needs the workflows restored and a runner |
 | [done-0005](tasks/done/done-0005-agent-task-measurement.md) | P1 | **done** — task-cost measurement + normal-loop baseline |
 | [done-0006](tasks/done/done-0006-nd-core-runtime-contract.md) | P1 | **done** — workspace/deadline/revision/cache/search/runtime contract |

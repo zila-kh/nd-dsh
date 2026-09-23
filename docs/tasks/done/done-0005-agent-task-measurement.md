@@ -66,7 +66,7 @@ Per task:
 | Result kind, aggregation, schema validation | `benchmarks/task-metrics.mjs`, `benchmarks/lib/task-metrics.mjs`, `benchmarks/lib/json-schema.mjs` |
 | Schema | `benchmarks/schema/task-metrics.schema.json` |
 | Deterministic offline CLI fixture | `benchmarks/fixtures/agent-task-cli.mjs`, `benchmarks/lib/fixture-workspace.mjs` |
-| Committed baseline | `benchmarks/baselines/agent-task-normal-loop.json` |
+| Committed baseline | `benchmarks/baselines/agent-task-normal-loop.json` (re-recorded 2026-09-23 by [done-0016](done-0016-agent-task-baseline-fast-path-budgets.md) once the §12.4 comparison became schema-required) |
 | Tests | `tests/task-metrics.test.ts`, `tests/agent-task-metrics.test.mjs` |
 
 Commands: `pnpm bench:tasks` (record), `pnpm bench:tasks:baseline` (record + refresh the committed baseline), `pnpm bench:tasks:check` (offline: schema, summary recomputation, fixture-expectation re-check). `bench:tasks:check` runs in the `validate` CI job.
