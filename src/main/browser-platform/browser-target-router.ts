@@ -346,42 +346,49 @@ export class BrowserTargetRouter {
       }, () => target.reload(tabId))
     }
     if (method === 'browser.click') {
+      const ref = requiredString(params.ref, 'ref')
+      const revision = requiredInteger(params.revision, 'revision')
+      const detail = await this.elementDetail(target, tabId, ref, revision)
       return this.runAction(context, {
         operation: 'browser.click',
         targetId,
         profileId: descriptor.profileId,
         tabId,
         origin: tab.origin,
-      }, () => target.click(tabId, requiredString(params.ref, 'ref'), requiredInteger(params.revision, 'revision')))
+        detail,
+      }, () => target.click(tabId, ref, revision))
     }
     if (method === 'browser.fill') {
+      const ref = requiredString(params.ref, 'ref')
+      const revision = requiredInteger(params.revision, 'revision')
+      const detail = await this.elementDetail(target, tabId, ref, revision)
       return this.runAction(context, {
         operation: 'browser.fill',
         targetId,
         profileId: descriptor.profileId,
         tabId,
         origin: tab.origin,
+        detail,
       }, () => target.fill(
         tabId,
-        requiredString(params.ref, 'ref'),
-        requiredInteger(params.revision, 'revision'),
+        ref,
+        revision,
         String(params.text ?? '').slice(0, 100_000),
       ))
     }
     if (method === 'browser.press') {
+      const ref = requiredString(params.ref, 'ref')
+      const revision = requiredInteger(params.revision, 'revision')
+      const key = requiredString(params.key, 'key')
+      const detail = `${await this.elementDetail(target, tabId, ref, revision)} key:${key}`
       return this.runAction(context, {
         operation: 'browser.press',
         targetId,
         profileId: descriptor.profileId,
         tabId,
         origin: tab.origin,
-        detail: typeof params.key === 'string' ? params.key : '',
-      }, () => target.press(
-        tabId,
-        requiredString(params.ref, 'ref'),
-        requiredInteger(params.revision, 'revision'),
-        requiredString(params.key, 'key'),
-      ))
+        detail,
+      }, () => target.press(tabId, ref, revision, key))
     }
     if (method === 'browser.scroll') {
       return this.runAction(context, {
@@ -421,6 +428,22 @@ export class BrowserTargetRouter {
       await this.policy.complete(envelope, decision, false, errorMessage(cause))
       throw cause
     }
+  }
+
+  private async elementDetail(target: BrowserTarget, tabId: string, ref: string, revision: number): Promise<string> {
+    const snapshot = await target.snapshot(tabId) as {
+      revision?: unknown
+      elements?: Array<{ ref?: unknown; name?: unknown; text?: unknown; href?: unknown; role?: unknown; type?: unknown }>
+    }
+    if (snapshot.revision !== revision) {
+      throw new Error('STALE_BROWSER_REFERENCE: Page changed after the snapshot; take a fresh snapshot before acting')
+    }
+    const element = snapshot.elements?.find((item) => item.ref === ref)
+    if (!element) throw new Error('STALE_BROWSER_REFERENCE: Element reference is stale; take a fresh snapshot')
+    return [element.name, element.text, element.href, element.role, element.type]
+      .filter((value): value is string => typeof value === 'string' && value.length > 0)
+      .join(' ')
+      .slice(0, 2_000)
   }
 
   private requireAgentSession(context: BrowserActionContext, method: string): void {
