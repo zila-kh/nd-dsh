@@ -2,7 +2,7 @@
 
 > Plan: [Reference-Inspired Runtime and Company Evolution](../plan/reference-inspired-runtime-company-evolution.md)  
 > Priority: P1  
-> Status: **implementation complete; local parity/live-provider validation pending**  
+> Status: **merged to main via PR #36; implementation complete; local parity/live-provider validation pending**  
 > Depends on: WIP 0031 and WIP 0033  
 > Prototype: `src/main/organization/decision-support*.ts`  
 > Owner: unassigned
