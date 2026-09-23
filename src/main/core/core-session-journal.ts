@@ -7,8 +7,8 @@ const MAX_BATCH_EVENTS = 256
 interface PendingBatch {
   events: SessionJournalEnvelope[]
   waiters: Array<{ resolve: () => void; reject: (error: Error) => void }>
-  timer?: ReturnType<typeof setTimeout>
-  active?: Promise<void>
+  timer: ReturnType<typeof setTimeout> | undefined
+  active: Promise<void> | undefined
 }
 
 interface CoreTailResult {
@@ -34,7 +34,7 @@ export class CoreSessionJournalStore implements SessionJournalStore {
     this.knownSessions.add(sessionId)
     let batch = this.pending.get(sessionId)
     if (!batch) {
-      batch = { events: [], waiters: [] }
+      batch = { events: [], waiters: [], timer: undefined, active: undefined }
       this.pending.set(sessionId, batch)
     }
     batch.events.push(...events)
