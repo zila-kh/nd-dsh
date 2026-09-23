@@ -17,6 +17,8 @@ import {
   type Deferred,
 } from './agent-cli-support.js'
 
+const LOCAL_TRANSCRIPT_EVENTS = 32
+
 export type StructuredCliEvent =
   | { kind: 'session'; sessionId: string }
   | { kind: 'text'; text: string }
@@ -428,6 +430,7 @@ export class StructuredCliEngine {
       time: Date.now(),
     }
     session.transcript.push(envelope)
+    if (session.transcript.length > LOCAL_TRANSCRIPT_EVENTS) session.transcript.splice(0, session.transcript.length - LOCAL_TRANSCRIPT_EVENTS)
     this.emitFrame({ kind: 'session-event', sessionId: session.sessionId, event: envelope })
   }
 
