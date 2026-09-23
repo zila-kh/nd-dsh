@@ -18,11 +18,13 @@ interface CoreTailResult {
 
 export class CoreSessionJournalStore implements SessionJournalStore {
   private readonly pending = new Map<string, PendingBatch>()
+  private readonly knownSessions = new Set<string>()
 
   constructor(private readonly core: Pick<CoreClient, 'request'>) {}
 
   append(sessionId: string, events: SessionJournalEnvelope[]): Promise<void> {
     if (!events.length) return Promise.resolve()
+    this.knownSessions.add(sessionId)
     let batch = this.pending.get(sessionId)
     if (!batch) {
       batch = { events: [], waiters: [], flushing: false }
@@ -53,7 +55,11 @@ export class CoreSessionJournalStore implements SessionJournalStore {
 
   async clear(): Promise<void> {
     await Promise.all([...this.pending.keys()].map((sessionId) => this.flush(sessionId)))
-    await this.core.request('sessionJournal.clear', {}, 5_000)
+    const sessions = [...this.knownSessions]
+    this.knownSessions.clear()
+    await Promise.all(sessions.map(async (sessionId) => {
+      await this.core.request('sessionJournal.drop', { sessionId }, 5_000).catch(() => undefined)
+    }))
   }
 
   private async flush(sessionId: string): Promise<void> {
