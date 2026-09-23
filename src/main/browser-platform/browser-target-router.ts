@@ -315,6 +315,36 @@ export class BrowserTargetRouter {
         detail: url,
       }, () => target.navigate(tabId, url))
     }
+    if (method === 'browser.back') {
+      return this.runAction(context, {
+        operation: 'browser.navigate.back',
+        action: 'browser.navigate',
+        targetId,
+        profileId: descriptor.profileId,
+        tabId,
+        origin: tab.origin,
+      }, () => target.back(tabId))
+    }
+    if (method === 'browser.forward') {
+      return this.runAction(context, {
+        operation: 'browser.navigate.forward',
+        action: 'browser.navigate',
+        targetId,
+        profileId: descriptor.profileId,
+        tabId,
+        origin: tab.origin,
+      }, () => target.forward(tabId))
+    }
+    if (method === 'browser.reload') {
+      return this.runAction(context, {
+        operation: 'browser.navigate.reload',
+        action: 'browser.navigate',
+        targetId,
+        profileId: descriptor.profileId,
+        tabId,
+        origin: tab.origin,
+      }, () => target.reload(tabId))
+    }
     if (method === 'browser.click') {
       return this.runAction(context, {
         operation: 'browser.click',
