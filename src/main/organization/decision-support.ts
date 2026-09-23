@@ -96,7 +96,7 @@ export class DecisionSupportService {
         continue
       }
 
-      if (attempt.result.minimumConfidence >= this.threshold || index === this.providers.length - 1) {
+      if (attempt.result.minimumConfidence >= this.threshold) {
         selectedProvider = provider.id
         break
       }
