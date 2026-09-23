@@ -491,7 +491,7 @@ export class OrganizationOrchestrator {
         data: {
           mode: decisionSupport.mode,
           threshold: decisionSupport.threshold,
-          selectedProvider: decisionSupport.selectedProvider,
+          ...(decisionSupport.selectedProvider ? { selectedProvider: decisionSupport.selectedProvider } : {}),
           escalated: decisionSupport.escalated,
           ...(decisionSupport.kernelError ? { kernelError: decisionSupport.kernelError } : {}),
           attempts: decisionSupport.attempts.map((attempt) => ({
