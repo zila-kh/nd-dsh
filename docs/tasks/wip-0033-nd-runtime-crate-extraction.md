@@ -1,9 +1,9 @@
-# TODO 0033 — Extract ND Runtime Services
+# WIP 0033 — Extract ND Runtime Services
 
 > Plan: [Reference-Inspired Runtime and Company Evolution](../plan/reference-inspired-runtime-company-evolution.md)  
 > Priority: P0  
 > Status: **implementation complete; local validation pending**  
-> Depends on: TODO 0031 and TODO 0032  
+> Depends on: WIP 0031 and WIP 0032  
 > Owner: unassigned
 
 ## Objective
