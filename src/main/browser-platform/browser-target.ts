@@ -20,4 +20,5 @@ export interface BrowserTarget {
   screenshot(tabId: string): Promise<unknown>
   discoverSiteTools(tabId: string): Promise<BrowserSiteToolDescriptor[]>
   callSiteTool(tabId: string, name: string, input: unknown): Promise<unknown>
+  autofillCredential?(tabId: string, username: string, password: string): Promise<unknown>
 }
