@@ -12,7 +12,7 @@ Add a typed System One decision-assist layer that improves ND review focus witho
 
 - `DecisionProvider` contract with typed `choice`, `score`, and `noul` answers.
 - Generic HTTP System One adapter using the Jev-compatible `/v1/systemone` request shape.
-- Laya support through the official Python package plus ND's loopback-only `scripts/laya-systemone-server.py` bridge; Laya remains the preferred first provider.
+- Laya support through upstream's official Jev-compatible `laya-serve`; Laya remains the preferred local first provider.
 - Jev/TypeSafe support as the optional escalation provider.
 - `shadow` mode: call configured providers, record receipts, never change reviewer context.
 - `assist` mode: use the first provider that meets the configured confidence threshold; escalate from Laya to Jev when needed.
@@ -30,7 +30,7 @@ ND_DECISION_SUPPORT_TIMEOUT_MS=4000
 
 # Local Laya / compatible System One endpoint
 ND_LAYA_SYSTEMONE_URL=http://127.0.0.1:8765
-ND_LAYA_MODEL=<local-model-id>
+ND_LAYA_MODEL=<optional-local-model-id>
 
 # Jev / TypeSafe
 ND_JEV_API_KEY=<secret>
@@ -38,14 +38,14 @@ ND_JEV_SYSTEMONE_URL=https://api.typesafe.ai/v1/systemone
 ND_JEV_MODEL=jev-latest
 ```
 
-Laya's upstream package exposes `Router.system_one` directly but does not currently ship an HTTP server, so ND includes a loopback-only adapter instead of bundling model weights into Electron.
+Current Laya ships an official Jev-compatible HTTP server. Keep it loopback-only for desktop use:
 
 ```bash
-python -m pip install laya
-python scripts/laya-systemone-server.py --port 8765 --preload
+python -m pip install "laya[serve]"
+LAYA_HOST=127.0.0.1 LAYA_PORT=8765 LAYA_PRELOAD=1 laya-serve
 ```
 
-Then set `ND_LAYA_SYSTEMONE_URL=http://127.0.0.1:8765`. The configured endpoint may be either a base URL or the full `/v1/systemone` URL.
+Then set `ND_LAYA_SYSTEMONE_URL=http://127.0.0.1:8765`. Leave `ND_LAYA_MODEL` unset to let Laya's Router choose its English/multilingual checkpoint. Set it explicitly only when you intentionally want a particular Laya checkpoint. The configured endpoint may be either a base URL or the full `/v1/systemone` URL.
 
 ## Manual validation handoff
 
