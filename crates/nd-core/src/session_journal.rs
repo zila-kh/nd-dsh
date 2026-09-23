@@ -49,6 +49,15 @@ pub struct SessionJournalTailParams {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SessionJournalAppendResult {
+    pub retained_events: usize,
+    pub retained_bytes: usize,
+    pub first_seq: Option<u64>,
+    pub last_seq: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionJournalTailResult {
     pub events: Vec<SessionJournalEnvelope>,
     pub retained_events: usize,
@@ -93,7 +102,7 @@ impl SessionJournalStore {
         }
     }
 
-    pub fn append(&self, params: SessionJournalAppendParams) -> Result<SessionJournalTailResult> {
+    pub fn append(&self, params: SessionJournalAppendParams) -> Result<SessionJournalAppendResult> {
         validate_session_id(&params.session_id)?;
         if params.events.len() > 1024 {
             bail!("session journal append batch is too large");
@@ -123,7 +132,12 @@ impl SessionJournalStore {
             });
             trim_journal(journal, max_events, max_bytes);
         }
-        Ok(tail_result(journal, self.max_events_per_session))
+        Ok(SessionJournalAppendResult {
+            first_seq: journal.events.front().map(|stored| stored.envelope.seq),
+            last_seq: journal.events.back().map(|stored| stored.envelope.seq),
+            retained_events: journal.events.len(),
+            retained_bytes: journal.bytes,
+        })
     }
 
     pub fn reset(&self, params: SessionJournalSessionParams) -> Result<bool> {
@@ -323,7 +337,7 @@ mod tests {
         assert!(
             store
                 .reset(SessionJournalSessionParams {
-                    session_id: "a".into()
+                    session_id: "a".into(),
                 })
                 .unwrap()
         );
