@@ -588,6 +588,7 @@ async function createWindow(cdpPort: number): Promise<void> {
     disposeDesignIpc()
     disposeTerminalIpc()
     disposeIpc()
+    disposeCoreReady()
     disposeHarnessJournalRecovery()
     void qa.dispose()
     void projectRuntime.dispose()
