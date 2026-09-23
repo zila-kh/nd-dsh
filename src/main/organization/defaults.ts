@@ -31,7 +31,7 @@ export function defaultPolicies(companyId: string): OrganizationPolicy[] {
     ['surface.open', 'allow', 'Opening an internal workspace surface is allowed.'],
     ['browser.read', 'allow', 'Agents may inspect already-approved browser pages and tabs.'],
     ['browser.navigate', 'allow', 'Agents may navigate approved browser targets unless a more specific policy applies.'],
-    ['browser.interact', 'ask', 'State-changing browser interactions require governed approval by default.'],
+    ['browser.interact', 'allow', 'Ordinary browser interactions are allowed; the normalized action classifier upgrades consequential operations before execution.'],
     ['browser.history', 'ask', 'Browser history access is sensitive and requires governed approval by default.'],
     ['browser.extension.manage', 'ask', 'Installing, enabling, disabling, or removing browser extensions requires approval.'],
     ['credential.use', 'ask', 'Using a saved browser credential requires human approval by default.'],
