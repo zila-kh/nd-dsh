@@ -37,7 +37,17 @@ interface CoreTerminalState {
   firstRetainedSeq: number
   droppedThroughSeq: number
   retainedBytes: number
-  bytes: Uint8Array
+  bytes: Uint8Array | number[]
+}
+
+/**
+ * `terminal.state` results are re-encoded through a JSON value inside nd-core, so
+ * the retained tail arrives as a number sequence — the encoding `terminal.create`
+ * accepts back. Output events keep the byte-string encoding, so both shapes reach
+ * this client as a byte source.
+ */
+function retainedTailBytes(bytes: Uint8Array | number[]): Uint8Array {
+  return bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes)
 }
 
 /**
@@ -66,7 +76,10 @@ export function createCorePtySpawner(core: CoreClient): PtySpawner {
       cols: options.cols,
       rows: options.rows,
       env: options.env,
-      initialBytes: new TextEncoder().encode(options.initialBuffer ?? ''),
+      // Request params are decoded as a JSON value on the core side, where a
+      // MessagePack byte string is unrepresentable — it fails the decode and
+      // takes the sidecar down. Bytes therefore travel as a number sequence.
+      initialBytes: Array.from(new TextEncoder().encode(options.initialBuffer ?? '')),
       initialSeq: options.initialOutputSeq ?? 0,
     })
     return new CorePtyProcess(core, result)
@@ -153,7 +166,7 @@ class CorePtyProcess implements PtyProcessLike {
       )
       return {
         seq: state.seq,
-        buffer: new TextDecoder().decode(state.bytes),
+        buffer: new TextDecoder().decode(retainedTailBytes(state.bytes)),
       }
     } catch {
       return undefined

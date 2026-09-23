@@ -201,6 +201,63 @@ describe('terminal restart and truthfulness', () => {
   })
 })
 
+describe('terminal wire shapes shared with nd-core', () => {
+  class TailCore {
+    readonly requests: Array<{ method: string; params: Record<string, unknown> }> = []
+    bytes: unknown = [104, 105]
+    seq = 3
+
+    onEvent(): () => void {
+      return () => undefined
+    }
+
+    async request<T>(method: string, params: Record<string, unknown>): Promise<T> {
+      this.requests.push({ method, params })
+      if (method === 'terminal.create') {
+        return { terminalId: params.terminalId, sessionId: params.sessionId, pid: 4100, shell: params.shell, generation: 0, restarted: false } as T
+      }
+      return { terminalId: params.terminalId, seq: this.seq, bytes: this.bytes } as T
+    }
+  }
+
+  it('sends a restorable tail as a JSON number sequence, not a byte string', async () => {
+    const core = new TailCore()
+    const spawn = createCorePtySpawner(core as never)
+    await spawn('cmd.exe', [], {
+      name: 'xterm-256color',
+      cols: 80,
+      rows: 24,
+      cwd: 'C:\\workspace',
+      env: {},
+      terminalId: 'terminal-1',
+      initialBuffer: 'prompt> ',
+      initialOutputSeq: 12,
+    })
+    const create = core.requests[0]!
+    expect(create.method).toBe('terminal.create')
+    // Params decode into a JSON value inside nd-core, where a MessagePack byte
+    // string is undecodable: it fails the whole frame and takes the sidecar down.
+    expect(create.params.initialBytes).toEqual(Array.from(new TextEncoder().encode('prompt> ')))
+    expect(create.params.initialSeq).toBe(12)
+  })
+
+  it('restores a retained tail that arrives in the encoding nd-core produces', async () => {
+    const core = new TailCore()
+    const process = await createCorePtySpawner(core as never)('cmd.exe', [], {
+      name: 'xterm-256color',
+      cols: 80,
+      rows: 24,
+      cwd: 'C:\\workspace',
+      env: {},
+      terminalId: 'terminal-1',
+    })
+    // `terminal.state` results are re-encoded through a JSON value on the core
+    // side, so the retained tail arrives as a number sequence rather than the
+    // byte string the `terminal.output` events carry.
+    await expect(process.tailState?.()).resolves.toEqual({ seq: 3, buffer: 'hi' })
+  })
+})
+
 describe('terminal reconciliation against the runtime that owns the shell', () => {
   class ShellPty implements PtyProcessLike {
     writes: string[] = []

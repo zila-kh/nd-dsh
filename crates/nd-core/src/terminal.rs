@@ -855,6 +855,56 @@ mod tests {
     }
 
     #[test]
+    fn create_params_decode_the_retained_tail_from_a_json_number_sequence() {
+        // The desktop reaches `terminal.create` through a JSON-valued boundary, so
+        // the retained tail arrives as `[104, 105]` rather than a byte string.
+        let params: TerminalCreateParams = serde_json::from_value(serde_json::json!({
+            "terminalId": "terminal-1",
+            "sessionId": "session-1",
+            "shell": "cmd.exe",
+            "cwd": "C:\\work",
+            "cols": 80,
+            "rows": 24,
+            "initialBytes": [104, 105],
+            "initialSeq": 7
+        }))
+        .unwrap();
+        assert_eq!(params.initial_bytes, b"hi");
+        assert_eq!(params.initial_seq, 7);
+    }
+
+    #[test]
+    fn state_result_encodes_the_retained_tail_as_a_number_sequence() {
+        // Results are re-encoded through a JSON value on the way out, so the
+        // retained tail reaches the desktop as `[104, 105]` — the same shape
+        // `terminal.create` accepts inbound. The desktop decodes that shape.
+        let state = TerminalStateResult {
+            terminal_id: "terminal-1".into(),
+            session_id: "session-1".into(),
+            shell: "cmd.exe".into(),
+            args: Vec::new(),
+            cwd: "C:\\work".into(),
+            pid: Some(12),
+            running: true,
+            generation: 1,
+            restart_count: 0,
+            exit_code: None,
+            exit_signal: None,
+            cols: 80,
+            rows: 24,
+            seq: 7,
+            first_retained_seq: 1,
+            dropped_through_seq: 0,
+            retained_bytes: 2,
+            tail_truncated: false,
+            bytes: b"hi".to_vec(),
+            emitted_at: 0,
+        };
+        let value = serde_json::to_value(state).unwrap();
+        assert_eq!(value["bytes"], serde_json::json!([104, 105]));
+    }
+
+    #[test]
     fn unknown_terminal_state_is_not_found_rather_than_empty() {
         let manager = TerminalManager::new(Arc::new(ProtocolWriter::new()));
         let error = manager
