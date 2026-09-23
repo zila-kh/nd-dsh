@@ -13,8 +13,8 @@ ND currently has two browser directions:
 
 1. the existing ND built-in Electron browser, optimized around the visible
    application/browser pane and agent-browser binding; and
-2. the Browser Companion in PR #32, which targets the user's existing Chrome
-   profile through an extension and Native Messaging.
+2. the Browser Companion, merged via PR #32 into `main@9e0fcc5`, which targets
+   the user's existing Chrome profile through an extension and Native Messaging.
 
 Without a unifying product contract, engines and users would need to understand
 two browser implementations, policy could diverge, and future features such as
@@ -60,19 +60,20 @@ Chrome profile. Agents use the same high-level tools regardless of the target.
 - no silent profile/account switching;
 - no browser implementation logic inside company/task domain objects;
 - no vendor-engine-specific browser APIs;
-- no replacement of PR #32 Native Messaging with a localhost network listener;
+- no replacement of the merged Browser Companion Native Messaging boundary with a localhost network listener;
 - no Chromium fork unless the runtime decision spike proves it necessary;
 - no Firefox/Safari requirement in this wave.
 
 ## 5. Dependency
 
-PR #32 / PRD 0004 is the external-browser transport foundation and remains
-independently reviewable.
+PRD 0004 / Browser Companion is now the merged external-browser transport
+foundation (`main@9e0fcc5`, PR #32).
 
-This PRD does not require PR #32 to be merged before planning, but implementation
-of CompanionBrowserTarget depends on its final approved contract.
+PRD 0005 must preserve that Native Messaging, per-origin permission, semantic
+snapshot and connection/lease baseline while adapting it behind BrowserTarget.
 
-Task number 0019 is reserved by PR #32. This PRD starts its task set at 0020.
+Task number 0019 belongs to the merged Browser Companion work. This PRD starts
+its task set at 0020.
 
 ## 6. Competitive behavior reference
 
