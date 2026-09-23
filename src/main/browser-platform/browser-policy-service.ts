@@ -231,7 +231,12 @@ export function classifyBrowserAction(operation: string, detail = ''): BrowserNo
   if (operation.includes('history')) return 'browser.history'
   if (operation.includes('extension')) return 'browser.extension.manage'
   if (operation.includes('navigate') || operation.includes('openTab')) return 'browser.navigate'
-  if (operation.includes('snapshot') || operation.includes('screenshot') || operation.includes('tabs') || operation.includes('siteTools.list')) {
+  if (operation.includes('snapshot')
+    || operation.includes('screenshot')
+    || operation.includes('tabs')
+    || operation.includes('waitFor')
+    || operation.includes('downloads')
+    || operation.includes('siteTools.list')) {
     return 'browser.read'
   }
   return 'browser.interact'
