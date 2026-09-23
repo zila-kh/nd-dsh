@@ -369,60 +369,62 @@ export function SettingsPane({
                 )}
 
                 {activeSubTab === 'browser' && (
-                  <SettingsSection title="Agent browser" className="mt-3.5">
-                    <div className="space-y-1.5">
-                      <SettingsRow>
-                        <div className={rowStack}>
-                          <strong className={rowTitle}>Browser control</strong>
-                          <span className={rowDesc}>The agent controls the visible Electron browser pane through the pinned browser bridge.</span>
-                        </div>
-                        <BridgePill state={browser?.agentBrowser ?? 'binding'}>
-                          {browser?.agentBrowser === 'ready' ? 'Linked' : browser?.agentBrowser === 'unavailable' ? 'Offline' : 'Linking'}
-                        </BridgePill>
-                      </SettingsRow>
-                      <SettingsRow>
-                        <div className={rowStack}>
-                          <strong className={rowTitle}>CDP port</strong>
-                          <span className={rowDesc}>Loopback debugging endpoint</span>
-                        </div>
-                        <span className={rowValueText}>{browser?.cdpPort ?? '—'}</span>
-                      </SettingsRow>
-                      <SettingsRow>
-                        <div className={rowStack}>
-                          <strong className={rowTitle}>Current page</strong>
-                          <span className={rowPathText} title={browser?.url}>{browser?.url ?? 'No page'}</span>
-                        </div>
-                      </SettingsRow>
-                    </div>
-                  </SettingsSection>
-                  <SettingsSection title="Browser companions" className="mt-3.5">
-                    <div className="space-y-1.5">
-                      {browserCompanion?.connections.length ? browserCompanion.connections.map((connection) => (
-                        <SettingsRow key={connection.id}>
-                          <div className={rowStack}>
-                            <strong className={rowTitle}>{connection.profileLabel}</strong>
-                            <span className={rowDesc}>{connection.browser} · extension {connection.extensionVersion}</span>
-                          </div>
-                          <StatusChip good={connection.connected}>{connection.connected ? 'Connected' : 'Offline'}</StatusChip>
-                        </SettingsRow>
-                      )) : (
+                  <>
+                    <SettingsSection title="Agent browser" className="mt-3.5">
+                      <div className="space-y-1.5">
                         <SettingsRow>
                           <div className={rowStack}>
-                            <strong className={rowTitle}>Chrome / Chromium</strong>
-                            <span className={rowDesc}>Install the ND Browser Companion extension and native host to use an existing signed-in browser profile.</span>
+                            <strong className={rowTitle}>Browser control</strong>
+                            <span className={rowDesc}>The agent controls the visible Electron browser pane through the pinned browser bridge.</span>
                           </div>
-                          <StatusChip>Not connected</StatusChip>
+                          <BridgePill state={browser?.agentBrowser ?? 'binding'}>
+                            {browser?.agentBrowser === 'ready' ? 'Linked' : browser?.agentBrowser === 'unavailable' ? 'Offline' : 'Linking'}
+                          </BridgePill>
                         </SettingsRow>
-                      )}
-                      <SettingsRow>
-                        <div className={rowStack}>
-                          <strong className={rowTitle}>Writable tab leases</strong>
-                          <span className={rowDesc}>One execution lane owns a writable tab at a time; disconnects revoke its leases.</span>
-                        </div>
-                        <span className={rowValueText}>{browserCompanion?.leases.length ?? 0}</span>
-                      </SettingsRow>
-                    </div>
-                  </SettingsSection>
+                        <SettingsRow>
+                          <div className={rowStack}>
+                            <strong className={rowTitle}>CDP port</strong>
+                            <span className={rowDesc}>Loopback debugging endpoint</span>
+                          </div>
+                          <span className={rowValueText}>{browser?.cdpPort ?? '—'}</span>
+                        </SettingsRow>
+                        <SettingsRow>
+                          <div className={rowStack}>
+                            <strong className={rowTitle}>Current page</strong>
+                            <span className={rowPathText} title={browser?.url}>{browser?.url ?? 'No page'}</span>
+                          </div>
+                        </SettingsRow>
+                      </div>
+                    </SettingsSection>
+                    <SettingsSection title="Browser companions" className="mt-3.5">
+                      <div className="space-y-1.5">
+                        {browserCompanion?.connections.length ? browserCompanion.connections.map((connection) => (
+                          <SettingsRow key={connection.id}>
+                            <div className={rowStack}>
+                              <strong className={rowTitle}>{connection.profileLabel}</strong>
+                              <span className={rowDesc}>{connection.browser} · extension {connection.extensionVersion}</span>
+                            </div>
+                            <StatusChip good={connection.connected}>{connection.connected ? 'Connected' : 'Offline'}</StatusChip>
+                          </SettingsRow>
+                        )) : (
+                          <SettingsRow>
+                            <div className={rowStack}>
+                              <strong className={rowTitle}>Chrome / Chromium</strong>
+                              <span className={rowDesc}>Install the ND Browser Companion extension and native host to use an existing signed-in browser profile.</span>
+                            </div>
+                            <StatusChip>Not connected</StatusChip>
+                          </SettingsRow>
+                        )}
+                        <SettingsRow>
+                          <div className={rowStack}>
+                            <strong className={rowTitle}>Writable tab leases</strong>
+                            <span className={rowDesc}>One execution lane owns a writable tab at a time; disconnects revoke its leases.</span>
+                          </div>
+                          <span className={rowValueText}>{browserCompanion?.leases.length ?? 0}</span>
+                        </SettingsRow>
+                      </div>
+                    </SettingsSection>
+                  </>
                 )}
 
                 {activeSubTab === 'about' && (
