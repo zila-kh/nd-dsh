@@ -46,6 +46,9 @@ That leaves a long-lived process class outside the shared Rust supervisor.
 - [x] Add `stopCoreManagedChildProcess`; its `kill()` maps to Rust `process.cancel` whole-tree teardown.
 - [x] Keep `ProjectRuntimeService` injectable so unit tests and non-core fallback tests remain possible.
 - [x] Add focused regression tests for shell argv and injected process-owner teardown.
+- [x] Route task machine-verification commands through the same unscoped Rust process supervisor.
+- [x] Make verification process ownership injectable so direct unit coverage can keep using the local Node fallback.
+- [x] Await process-owner teardown before verification cleanup restores a task worktree after timeout.
 
 ## Phase B — session/event retention
 
@@ -90,7 +93,7 @@ Run these locally from an up-to-date checkout of `feat/rust-parallel-runtime-v2`
 - [ ] `corepack pnpm core:test`
 - [ ] `corepack pnpm verify`
 - [ ] `corepack pnpm typecheck`
-- [ ] `corepack pnpm vitest run tests/project-runtime.test.ts`
+- [ ] `corepack pnpm vitest run tests/project-runtime.test.ts tests/beta-reliability.test.ts`
 - [ ] `corepack pnpm test`
 - [ ] `corepack pnpm build`
 - [ ] `corepack pnpm bench:smoke`
@@ -118,7 +121,7 @@ On macOS/Linux:
 
 - [ ] All manual local validation above is recorded.
 - [ ] Project start/stop behavior is unchanged from the UI's perspective.
-- [ ] Project dev servers appear under the single Rust process supervisor.
+- [ ] Project dev servers and task machine-verification commands appear under the single Rust process supervisor.
 - [ ] No project dev server is killed merely because a task execution permit is released.
 - [ ] Closing/stopping ND leaves zero project-runtime process descendants.
 - [ ] No regression in shell command quoting on supported platforms.
