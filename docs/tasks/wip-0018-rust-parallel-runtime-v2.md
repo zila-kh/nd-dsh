@@ -43,6 +43,9 @@ Runtime v2 extends that contract with native session-journal retention evidence.
 - [x] Verification waits for process-owner teardown before restoring a task
   worktree after timeout.
 - [x] Node fallback paths remain injectable and retain whole-tree cleanup.
+- [x] nd-core waits one bounded 250 ms drain window for stdout/stderr readers
+  before publishing process exit, so verification/dev-server final output is
+  not normally truncated while inherited descendant pipes can never hang exit.
 - [x] Focused project-runtime regression coverage is committed.
 
 ## Phase B — session/event/transcript retention — implemented
@@ -54,13 +57,17 @@ Runtime v2 extends that contract with native session-journal retention evidence.
 - [x] Added append/tail/drop/reset/clear RPCs and native retained-byte/event
   metrics.
 - [x] Electron batches journal appends over a small bounded window instead of
-  crossing core once per event.
+  crossing core once per event; append replies contain retention metadata only,
+  never the retained tail itself.
 - [x] `SessionEventHub` no longer owns a 10,000-object JavaScript journal per
   session; it keeps only live stream/baseline/write coordination state.
 - [x] Existing history wire shape and live `DshEventFrame` vocabulary are
   unchanged.
 - [x] Snapshot/reconnect sequence dedupe remains in TypeScript.
 - [x] Surface operations are retained by the native journal.
+- [x] If nd-core restarts while the Harness runtime survives, active follow
+  streams reopen and repopulate the volatile native journal from fresh runtime
+  snapshots instead of losing desktop history.
 
 ### Direct coding engines
 
@@ -72,8 +79,12 @@ Runtime v2 extends that contract with native session-journal retention evidence.
   historical `assistant/chunk` transcript behavior in native replay.
 - [x] Previously-unbounded Structured CLI and MiniMax local transcript arrays are
   now bounded to 32 events.
-- [x] Renderer transcript reads prefer the native 500-event replay and fall back
-  to the engine-local safety tail if nd-core has restarted.
+- [x] Direct-engine native retention is capped independently at 500 events /
+  2 MiB per session instead of inheriting the Harness 10,000-event / 8 MiB
+  ceiling.
+- [x] Renderer transcript reads merge/dedupe the native replay with the
+  engine-local safety tail, preserving immediate pre-restart context when
+  nd-core has restarted.
 - [x] ChatGPT Web intentionally keeps its existing durable 500-event transcript:
   it already owns restart persistence and is not an organization workspace
   worker. Moving it would expand persistence scope rather than solve the
@@ -109,6 +120,8 @@ chunk.
   the final tail, then the native resource is explicitly closed.
 - [x] Core-restart reconciliation falls back to the last durable terminal
   snapshot if the previous native tail is no longer available.
+- [x] Failed in-place shell restart materializes the native tail before teardown,
+  so restart failure cannot erase newer scrollback.
 - [x] Focused native-tail/live-state and desktop-restart regression tests are
   committed.
 
@@ -189,8 +202,10 @@ or `&&`.
   transcript/history must still show older entries from the native journal.
 - [ ] Exercise OpenCode/Goose/JCode/Hermes streaming and confirm
   `assistant/chunk` history is preserved.
-- [ ] Restart nd-core during a direct session and confirm the local safety tail
-  remains available while the engine heals.
+- [ ] Restart nd-core during a direct session and confirm the merged local
+  safety tail + new native events preserve immediate pre-restart context.
+- [ ] Restart nd-core during an active Harness session and confirm its thread
+  history is rebuilt from the runtime snapshot without duplicates.
 
 ### Manual terminal smoke
 
