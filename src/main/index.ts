@@ -140,6 +140,9 @@ async function createWindow(cdpPort: number): Promise<void> {
   // nd-core is the production desktop runtime boundary. Startup fails closed
   // when the bundled sidecar is unavailable instead of changing semantics.
   await core.start()
+  await core.request('effectJournal.configure', {
+    path: join(userData, 'effect-journal.jsonl'),
+  }, 5_000)
   markStartup('core-ready')
   activeCore = core
   workspace.attachFileSystem(createCoreWorkspaceFileSystem(core))
@@ -326,7 +329,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   // engine router admits them by the exact roots ND created — never by a path
   // shape a caller could construct.
   engineRouter.setWorktreeGuard((cwd) => taskWorktrees.ownsRoot(cwd))
-  const decisionSupport = createDecisionSupportFromEnv()
+  const decisionSupport = createDecisionSupportFromEnv(process.env, fetch, core)
   const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter, projectRuntime, capabilities, executionCoordinator, taskWorktrees, core, { spawnProcess: unscopedCoreSpawn, stopProcess: stopCoreManagedChildProcess }, decisionSupport)
   const approvalGate = new OrganizationApprovalGate(organizationStore, harness)
   const qa = new QaService()
