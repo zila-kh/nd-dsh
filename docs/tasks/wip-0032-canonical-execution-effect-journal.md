@@ -1,4 +1,4 @@
-# TODO 0032 — Canonical Execution and Effect Journal
+# WIP 0032 — Canonical Execution and Effect Journal
 
 > Plan: [Reference-Inspired Runtime and Company Evolution](../plan/reference-inspired-runtime-company-evolution.md)  
 > Priority: P0  
