@@ -3,7 +3,7 @@
 > Plan: [Reference-Inspired Runtime and Company Evolution](../plan/reference-inspired-runtime-company-evolution.md)  
 > Priority: P0  
 > Status: todo  
-> Depends on: TODO 0020; coordinate with TODO 0021  
+> Depends on: TODO 0020 and TODO 0021  
 > Owner: unassigned
 
 ## Objective
