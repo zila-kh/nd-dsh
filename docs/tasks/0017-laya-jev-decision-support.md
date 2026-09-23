@@ -2,7 +2,8 @@
 
 Status: **implementation complete; local validation pending**
 
-Branch: `feat/decision-support-laya-jev`
+Integrated branch: `feat/reference-architecture-plan`  
+Original implementation branch: `feat/decision-support-laya-jev`
 
 ## Goal
 
@@ -52,7 +53,7 @@ Then set `ND_LAYA_SYSTEMONE_URL=http://127.0.0.1:8765`. Leave `ND_LAYA_MODEL` un
 Run locally from the repository root:
 
 ```bash
-git switch feat/decision-support-laya-jev
+git switch feat/reference-architecture-plan
 git pull
 pnpm typecheck
 pnpm test -- decision-support
@@ -90,3 +91,5 @@ Verify a high-confidence Laya response avoids the Jev request; a low-confidence 
 ## Follow-up evidence before broader authority
 
 Do not promote System One providers from review-assist into controlling task lifecycle routes until ND has recorded enough real-task samples to measure calibration, false-allow rate, false-rework rate, rework count, verified completion rate, latency, cost, and human corrections.
+
+The TypeScript implementation is the behavioral prototype. The reference architecture moves the provider-neutral decision kernel into Rust via [TODO 0023](todo-0023-rust-decision-kernel.md) after `nd-protocol`/`nd-runtime` extraction proves the boundary.
