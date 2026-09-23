@@ -137,6 +137,7 @@ Success criterion: users can tell why an engine is not ready before starting wor
 - Plan: [reference-inspired-runtime-company-evolution.md](plan/reference-inspired-runtime-company-evolution.md).
 - Maintained research set: [agent-orchestration-reference-matrix.md](plan/agent-orchestration-reference-matrix.md).
 - Scope: protocol contract extraction, canonical execution/effect journal, thin Rust runtime composition, sandbox-provider seam, trace inspector, durable team mailbox/wake, eval/budget/interoperability follow-ons.
+- Initial tickets: [todo-0020](tasks/todo-0020-nd-protocol-extraction.md) -> [todo-0021](tasks/todo-0021-canonical-execution-effect-journal.md) -> [todo-0022](tasks/todo-0022-nd-runtime-crate-extraction.md).
 - Reference set now includes earlier QM/AWS/Orca/Paperclip/Gajae/LazyCodex/JCode work plus LoopX, Bamboo-agent, Aex Brain, Pioneer, Moltis, OpenAI Codex, Goose, kern, Capsule, and PocketPaw.
 
 This is **not** approval for a broad Rust rewrite. The adoption order is evidence-driven: `nd-protocol` -> durable effect journal -> `nd-runtime` extraction first; sandboxing/observability/coordination follow only after those contracts are stable. Organization/business truth remains ND-owned and TypeScript-owned until a separately approved migration proves value.
