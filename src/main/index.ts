@@ -238,6 +238,11 @@ async function createWindow(cdpPort: number): Promise<void> {
     maxBytes: 2 * 1024 * 1024,
   })
   const harness = new HarnessService(workspace, browser, providers, externalElements, sessionArchive, usageLedger, harnessJournal)
+  const disposeHarnessJournalRecovery = core.onEvent('core.ready', () => {
+    void harness.rehydrateEventJournal().catch((error) => {
+      console.error('Failed to rebuild Harness history after ND Core restart:', error)
+    })
+  })
   const codexEngine = new CodexCliEngine({ log: (line) => console.log(line), spawnProcess: engineSpawn })
   activeCodexEngine = codexEngine
   const antigravityEngine = new AntigravityEngine({ log: (line) => console.log(line), spawnProcess: engineSpawn })
@@ -583,6 +588,7 @@ async function createWindow(cdpPort: number): Promise<void> {
     disposeDesignIpc()
     disposeTerminalIpc()
     disposeIpc()
+    disposeHarnessJournalRecovery()
     void qa.dispose()
     void projectRuntime.dispose()
     design.destroy()
