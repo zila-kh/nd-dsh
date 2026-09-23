@@ -278,6 +278,7 @@ export class TerminalManager {
     await this.persist()
     for (const [sessionId, runtimes] of this.runtimes) for (const terminalId of [...runtimes.keys()]) this.detach(sessionId, terminalId, true)
     await this.persistChain
+    await this.stateEventChain.catch(() => undefined)
   }
 
   private async restoreRunning(session: StoredSession): Promise<void> {
@@ -391,6 +392,48 @@ export class TerminalManager {
     if (!session.activeTerminalId || !terminalIds.has(session.activeTerminalId)) session.activeTerminalId = visible ?? session.terminals[0]?.id ?? null
   }
 
+  private async snapshotSession(session: StoredSession): Promise<StoredSession> {
+    const snapshot = cloneSession(session)
+    await Promise.all(snapshot.terminals.map(async (copy) => {
+      const original = session.terminals.find((terminal) => terminal.id === copy.id)
+      if (!original) return
+      const tail = await this.replayTail(original, this.runtime(session.sessionId, original.id))
+      copy.buffer = tail.buffer.slice(-MAX_BUFFER)
+      copy.outputSeq = Math.max(copy.outputSeq, tail.seq)
+    }))
+    return snapshot
+  }
+
+  private async replayTail(terminal: TerminalSnapshot, runtime: Runtime | undefined): Promise<{ buffer: string; seq: number }> {
+    if (!runtime?.process.tailState) {
+      return { buffer: terminal.buffer, seq: terminal.outputSeq }
+    }
+    const native = await runtime.process.tailState().catch(() => undefined)
+    if (native) return { buffer: native.buffer, seq: native.seq }
+
+    // The sidecar may have restarted between the last output event and this
+    // state/persistence read. The last durable snapshot is safer than replacing
+    // scrollback with an empty native tail from a new sidecar generation.
+    return await this.persistedTail(terminal.sessionId, terminal.id)
+      ?? { buffer: terminal.buffer, seq: terminal.outputSeq }
+  }
+
+  private async persistedTail(sessionId: string, terminalId: string): Promise<{ buffer: string; seq: number } | undefined> {
+    try {
+      const parsed = JSON.parse(await fs.readFile(this.options.storePath, 'utf8')) as StoreFile
+      const terminal = parsed.sessions
+        ?.find((session) => session.sessionId === sessionId)
+        ?.terminals?.find((item) => item.id === terminalId)
+      if (!terminal) return undefined
+      return {
+        buffer: String(terminal.buffer ?? '').slice(-MAX_BUFFER),
+        seq: Math.max(0, Math.floor(terminal.outputSeq ?? 0)),
+      }
+    } catch {
+      return undefined
+    }
+  }
+
   private runtime(sessionId: string, terminalId: string): Runtime | undefined { return this.runtimes.get(sessionId)?.get(terminalId) }
   private detach(sessionId: string, terminalId: string, kill: boolean): void {
     const group = this.runtimes.get(sessionId); const runtime = group?.get(terminalId); if (!runtime) return
@@ -398,17 +441,25 @@ export class TerminalManager {
     runtime.data.dispose(); runtime.exit.dispose(); if (kill) try { runtime.process.kill() } catch { /* already exited */ }
   }
   private changed(sessionId: string): void { this.schedulePersist(); this.emit(sessionId) }
-  private emit(sessionId: string): void { this.options.onState?.({ sessionId, state: cloneSession(this.getSession(sessionId)) }) }
+  private emit(sessionId: string): void {
+    this.stateEventChain = this.stateEventChain.catch(() => undefined).then(async () => {
+      const state = await this.snapshotSession(this.getSession(sessionId))
+      this.options.onState?.({ sessionId, state })
+    })
+  }
   private schedulePersist(): void {
     if (this.closing) return
     if (this.persistTimer) clearTimeout(this.persistTimer)
     this.persistTimer = setTimeout(() => { this.persistTimer = undefined; void this.persist().catch((error) => console.error('[terminal] persist failed:', error)) }, 120)
   }
   private async persist(): Promise<void> {
-    const payload: StoreFile = { version: 1, sessions: [...this.sessions.values()].map(cloneSession) }
-    this.persistChain = this.persistChain.then(async () => {
+    const sessions = await Promise.all([...this.sessions.values()].map((session) => this.snapshotSession(session)))
+    const payload: StoreFile = { version: 1, sessions }
+    this.persistChain = this.persistChain.catch(() => undefined).then(async () => {
       await fs.mkdir(dirname(this.options.storePath), { recursive: true })
-      const temp = `${this.options.storePath}.tmp`; await fs.writeFile(temp, `${JSON.stringify(payload, null, 2)}\n`, 'utf8'); await fs.rename(temp, this.options.storePath)
+      const temp = `${this.options.storePath}.tmp`
+      await fs.writeFile(temp, `${JSON.stringify(payload, null, 2)}\n`, 'utf8')
+      await fs.rename(temp, this.options.storePath)
     })
     return this.persistChain
   }
