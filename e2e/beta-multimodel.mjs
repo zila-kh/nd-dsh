@@ -1,12 +1,14 @@
+import 'dotenv/config'
 /**
  * Multi-agent, multi-model beta driver — 3 combo routes only.
  *
- * Mirrors a real ND-DSH user profile: the throwaway profile is seeded by
- * COPYING the developer's real providers.json and provider-secrets.json, then
- * trimming the model list to ONLY the three allowed combos (combo-free,
- * combo-free1, combo-free-2). No catalog auto-discovery happens anywhere in the
- * app — the agent model picker is `providers.flatMap(p => p.models)` — so the
- * three configured models are exactly the three selectable ones.
+ * Preferred local mode reads one shared OpenAI-compatible endpoint/key and
+ * exactly three model ids from .env (E2E_MODEL_1/2/3). For backward
+ * compatibility, when those variables are absent the driver can still mirror
+ * the developer's existing provider profile. No catalog auto-discovery happens
+ * anywhere in the app — the agent model picker is
+ * `providers.flatMap(p => p.models)` — so the three configured models are
+ * exactly the three selectable ones.
  *
  * Builds a 5-agent / 3-team company, assigns each agent one of the three
  * combos, then runs the autopilot pipeline (PM plan -> automatic least-open-work
@@ -14,11 +16,11 @@
  * independent review). The driver never reassigns planned work manually: it
  * fails if both same-role builder routes are not exercised by ND itself:
  *
- *   AI PM      -> combo-free1   (cx/gpt-5.6-luna)
- *   Builder    -> combo-free    (ocg/mimo-v2.5)
- *   Builder 2  -> combo-free-2  (ocg/longcat-2.0)
- *   Reviewer   -> combo-free1   (independent of both builder tiers)
- *   Researcher -> combo-free
+ *   AI PM      -> E2E_MODEL_2
+ *   Builder    -> E2E_MODEL_1
+ *   Builder 2  -> E2E_MODEL_3
+ *   Reviewer   -> E2E_MODEL_2 (independent of both builder tiers)
+ *   Researcher -> E2E_MODEL_1
  *
  * Usage: node e2e/beta-multimodel.mjs   (build first: pnpm build)
  */
@@ -40,15 +42,28 @@ const RUN_ROOT = join(tmpdir(), 'nd-dsh-beta-multimodel')
 // providers.json + provider-secrets.json (same safeStorage credential) into a
 // throwaway profile and rewrites the model list to EXACTLY the three combos.
 const SOURCE_PROFILE = process.env.BETA_SOURCE_PROFILE ?? join(process.env.APPDATA ?? '', 'nd-dsh')
-const COMBO_IDS = ['combo-free', 'combo-free1', 'combo-free-2']
+const ENV_MODEL_BASE_URL = process.env.E2E_MODEL_BASE_URL?.trim() ?? ''
+const ENV_MODEL_API_KEY = process.env.E2E_MODEL_API_KEY?.trim() ?? ''
+const ENV_MODEL_IDS = [
+  process.env.E2E_MODEL_1?.trim() ?? '',
+  process.env.E2E_MODEL_2?.trim() ?? '',
+  process.env.E2E_MODEL_3?.trim() ?? '',
+]
+const ENV_MODEL_CONFIGURED = Boolean(ENV_MODEL_BASE_URL || ENV_MODEL_API_KEY || ENV_MODEL_IDS.some(Boolean))
+if (ENV_MODEL_CONFIGURED && (!ENV_MODEL_BASE_URL || !ENV_MODEL_API_KEY || ENV_MODEL_IDS.some((id) => !id))) {
+  throw new Error(
+    'Incomplete E2E model configuration. Set E2E_MODEL_BASE_URL, E2E_MODEL_API_KEY, E2E_MODEL_1, E2E_MODEL_2 and E2E_MODEL_3 together.',
+  )
+}
+const COMBO_IDS = ENV_MODEL_CONFIGURED ? ENV_MODEL_IDS : ['combo-free', 'combo-free1', 'combo-free-2']
 
 // ── One combo per agent; reviewer stays off both builder tiers ───────────────
 const AGENT_MODELS = {
-  'AI PM': 'combo-free1',
-  Builder: 'combo-free',
-  'Builder 2': 'combo-free-2',
-  Reviewer: 'combo-free1',
-  Researcher: 'combo-free',
+  'AI PM': COMBO_IDS[1],
+  Builder: COMBO_IDS[0],
+  'Builder 2': COMBO_IDS[2],
+  Reviewer: COMBO_IDS[1],
+  Researcher: COMBO_IDS[0],
 }
 // Fresh Git repository: per-task worktrees (real parallel execution) require one.
 const TARGET_WS = process.env.BETA_TARGET_WS ?? 'C:\\Users\\dila\\Documents\\GitHub\\nd-dsh-beta-teams'
@@ -119,6 +134,21 @@ function ensureGitWorkspace(root) {
  * working without ever handling the secret in this script.
  */
 function seedProfile(userDataDir) {
+  if (ENV_MODEL_CONFIGURED) {
+    const provider = {
+      id: 'e2e-openai-compatible',
+      name: 'E2E OpenAI Compatible',
+      enabled: true,
+      baseUrl: ENV_MODEL_BASE_URL,
+      apiFormat: 'OpenAI compatible (/v1/chat/completions)',
+      apiKey: ENV_MODEL_API_KEY,
+      models: COMBO_IDS.map((id) => ({ id, context: process.env.E2E_MODEL_CONTEXT?.trim() || '256000' })),
+    }
+    writeFileSync(join(userDataDir, 'providers.json'), JSON.stringify([provider], null, 2))
+    log(`seeded .env provider "${provider.name}" (${provider.id}) baseUrl=${provider.baseUrl} models=[${COMBO_IDS.join(', ')}] credential=configured`)
+    return provider
+  }
+
   const providersPath = join(SOURCE_PROFILE, 'providers.json')
   const secretsPath = join(SOURCE_PROFILE, 'provider-secrets.json')
   const providers = JSON.parse(readFileSync(providersPath, 'utf8'))
