@@ -83,7 +83,7 @@ impl SessionJournalStore {
         Self {
             sessions: Mutex::new(HashMap::new()),
             max_events_per_session: max_events_per_session.max(1),
-            max_bytes_per_session: max_bytes_per_session.max(1024),
+            max_bytes_per_session: max_bytes_per_session.max(1),
         }
     }
 
