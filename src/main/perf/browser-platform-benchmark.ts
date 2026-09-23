@@ -69,6 +69,23 @@ export async function runBrowserPlatformBenchmark(input: {
     await input.browser.activateTab(tabId)
     await input.browser.navigate(`${origin}/actions?n=0`, tabId)
 
+    const firstSnapshot = await input.browser.semanticSnapshot(tabId) as {
+      revision?: number
+      elements?: Array<{ ref?: string; name?: string; text?: string; type?: string; sensitive?: boolean }>
+    }
+    const password = firstSnapshot.elements?.find((item) => item.type === 'password')
+    const passwordRedacted = Boolean(password?.sensitive && (password.text ?? '') === '')
+    const staleCandidate = firstSnapshot.elements?.find((item) => item.name === 'Increment')
+    let staleRefRejected = false
+    if (staleCandidate?.ref && Number.isInteger(firstSnapshot.revision)) {
+      await input.browser.click(tabId, staleCandidate.ref, firstSnapshot.revision!)
+      try {
+        await input.browser.click(tabId, staleCandidate.ref, firstSnapshot.revision!)
+      } catch (cause) {
+        staleRefRejected = cause instanceof Error && /STALE_BROWSER_REFERENCE|stale|changed after the snapshot/i.test(cause.message)
+      }
+    }
+
     const snapshotMs: number[] = []
     const clickMs: number[] = []
     const navigateMs: number[] = []
@@ -122,6 +139,10 @@ export async function runBrowserPlatformBenchmark(input: {
       },
       builtIn: {
         scalePoints: [1, 2, 4, 8],
+        correctness: {
+          passwordRedacted,
+          staleRefRejected,
+        },
         points,
         snapshotMs: summarize(snapshotMs),
         clickMs: summarize(clickMs),
