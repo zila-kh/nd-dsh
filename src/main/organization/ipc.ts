@@ -21,7 +21,7 @@ import { OrganizationStrategyPlane } from './strategy-plane.js'
 import type { OrganizationStore } from './store.js'
 
 const MUTATIONS = new Set([
-  'company.create', 'company.update', 'company.activate', 'project.create', 'project.update', 'project.activate', 'project.remove',
+  'company.create', 'company.update', 'company.activate', 'company.remove', 'project.create', 'project.update', 'project.activate', 'project.remove',
   'team.create', 'role.create', 'role.update', 'agent.create', 'agent.update', 'skill.create', 'workflow.create', 'goal.create', 'task.create',
   'task.update', 'memory.add', 'policy.set',
 ])
@@ -98,11 +98,22 @@ export function registerOrganizationIpc(
   handle(ORGANIZATION_IPC.mutate, async (_event, value) => {
     const mutation = asMutation(value)
     await projectWorkspace.assertCanMutate(mutation)
-    // Removal stops the project's live work first: agents, sessions and the
-    // ND-managed dev server must not keep running for a project ND forgets.
+    // Removal stops live work first: agents, sessions and the ND-managed dev
+    // server must not keep running for records ND forgets.
     if (mutation.type === 'project.remove') {
       await orchestrator.stopProjectWork(mutation.id)
       if (projectRuntime) await projectRuntime.stop(mutation.id)
+    }
+    if (mutation.type === 'company.remove') {
+      const preState = await store.state()
+      for (const run of preState.runs.filter((item) => item.companyId === mutation.id && item.status === 'running')) {
+        await orchestrator.cancelRun(run.id)
+      }
+      if (projectRuntime) {
+        for (const project of preState.projects.filter((item) => item.companyId === mutation.id)) {
+          await projectRuntime.stop(project.id)
+        }
+      }
     }
     const state = await store.mutate(mutation)
     await projectWorkspace.afterOrganizationMutation(mutation, state)
