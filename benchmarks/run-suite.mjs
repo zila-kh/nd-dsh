@@ -29,6 +29,13 @@ async function benchmarkStartup() {
   const healthRoundTripMs = []
   const readyMemory = []
   const runs = smoke ? 2 : 10
+  // One unmeasured launch. A freshly linked nd-core is cold in the file cache and
+  // gets its first anti-malware scan, which measured 135-190 ms against 20-40 ms
+  // warm; with ten samples the p95 is the maximum, so that artifact alone decided
+  // the release gate. The cold value is recorded rather than discarded.
+  const cold = await CoreRpc.launch()
+  const coldSpawnMs = cold.startupMs
+  await cold.close()
   for (let index = 0; index < runs; index += 1) {
     const client = await CoreRpc.launch()
     samples.push(client.startupMs)
@@ -41,6 +48,7 @@ async function benchmarkStartup() {
   }
   return writeResult(outputDir, 'core-startup', {
     measuredRuns: runs,
+    coldSpawnMs,
     samplesMs: samples,
     summaryMs: summarize(samples),
     healthRoundTripMs,
