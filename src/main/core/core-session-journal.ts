@@ -59,7 +59,10 @@ export class CoreSessionJournalStore implements SessionJournalStore {
   private async flush(sessionId: string): Promise<void> {
     const batch = this.pending.get(sessionId)
     if (!batch) return
-    if (batch.active) return batch.active
+    if (batch.active) {
+      await batch.active
+      return this.flush(sessionId)
+    }
     if (batch.events.length === 0) return
 
     if (batch.timer) {
