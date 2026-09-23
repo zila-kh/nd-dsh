@@ -55,6 +55,13 @@ export class UnifiedBrowserTabLeaseStore {
     return structuredClone(lease)
   }
 
+  releaseOwned(leaseId: string, ownerId: string): boolean {
+    const lease = this.byId.get(leaseId)
+    if (!lease) return false
+    if (lease.ownerId !== ownerId) throw new Error('Browser tab lease belongs to a different execution lane')
+    return this.release(leaseId)
+  }
+
   release(leaseId: string): boolean {
     const lease = this.byId.get(leaseId)
     if (!lease) return false
