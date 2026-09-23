@@ -1,8 +1,8 @@
 ---
 id: "0005"
 title: "Unified Browser Platform — Built-in Browser + Chrome Companion"
-status: proposed
-last-audit: 2026-09-23
+status: implementation-complete-validation-pending
+last-audit: 2026-09-24
 ---
 
 # PRD 0005 — Unified Browser Platform
@@ -448,3 +448,27 @@ A representative end-to-end flow:
 
 Implementation may parallelize after 0020/0021, but those two gates are
 sequential and mandatory.
+
+
+## 21. Implementation status
+
+Implementation is complete on `feat/unified-browser-platform`.
+
+Implemented task set:
+
+- 0020 — Electron retained as the built-in runtime with an explicit compatibility ceiling;
+- 0021 — common BrowserTarget contract/router;
+- 0022 — real multi-tab built-in browser on the persistent ND profile;
+- 0023 — Chrome Companion adapter behind the common contract;
+- 0024 — history, downloads and browser-data controls;
+- 0025 — safeStorage-backed credential vault and mediated autofill;
+- 0026 — built-in unpacked extension manager with explicit compatibility status;
+- 0027 — site-tool/WebMCP-style discovery and invocation;
+- 0028 — trusted agent access tokens, scoped leases, action normalization,
+  approvals and receipts;
+- 0029 — Auto / @Browser / @Chrome / exact-tab target controls;
+- 0030 — focused correctness tests and unified browser benchmark harness.
+
+Remaining work is local validation/evidence only. No correctness, extension
+compatibility, Chrome Companion, credential-backend or performance result is
+claimed until the operator records the local handoff evidence.
