@@ -142,6 +142,7 @@ export class SessionEventHub {
         seq: event.seq,
         ...(event.time === undefined ? {} : { time: event.time }),
         ...(event.data === undefined ? {} : { data: event.data }),
+        ...(event.surfaceOp === undefined ? {} : { surfaceOp: event.surfaceOp }),
       })
       if (frame.type === 'event') {
         this.emit({
@@ -152,6 +153,7 @@ export class SessionEventHub {
             seq: event.seq,
             time: event.time ?? Date.now(),
             ...(event.data === undefined ? {} : { data: event.data }),
+            ...(event.surfaceOp === undefined ? {} : { surfaceOp: event.surfaceOp }),
           },
         })
       }
@@ -193,6 +195,7 @@ function asEnvelope(value: unknown): SessionJournalEnvelope | undefined {
     seq: envelope.seq,
     ...(typeof envelope.time === 'number' ? { time: envelope.time } : {}),
     ...(envelope.data === undefined ? {} : { data: envelope.data }),
+    ...(envelope.surfaceOp === undefined ? {} : { surfaceOp: envelope.surfaceOp }),
   }
 }
 
