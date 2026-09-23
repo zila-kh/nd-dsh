@@ -63,6 +63,26 @@ export class SessionEventHub {
   }
 
   /**
+   * Rebuild volatile native retention after nd-core restarts while the Harness
+   * runtime is still alive. Reopening each interesting follow asks the runtime
+   * for a fresh snapshot, so core failure never becomes permanent chat-history
+   * loss in the desktop.
+   */
+  async rehydrate(): Promise<void> {
+    if (!this.active) return
+    const sessionIds = [...this.handles.keys()]
+    for (const handle of this.handles.values()) handle.close()
+    this.handles.clear()
+    this.baselines.clear()
+    this.pendingWrites.clear()
+    this.resetPromise = this.store.clear().catch(() => undefined)
+    await this.resetPromise
+    await Promise.all(sessionIds.map(async (sessionId) => {
+      await this.open(sessionId).catch(() => undefined)
+    }))
+  }
+
+  /**
    * Adopt a session's live journal before its next prompt, so the turn's
    * events arrive as live appends instead of being swallowed by a later
    * snapshot's silent baseline adoption. Resolves once the opening snapshot
