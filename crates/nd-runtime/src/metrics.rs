@@ -7,6 +7,12 @@ pub struct MetricsRegistry {
     workspace_roots: Mutex<HashSet<String>>,
 }
 
+impl Default for MetricsRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MetricsRegistry {
     pub fn new() -> Self {
         Self {
