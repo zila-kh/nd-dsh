@@ -23,7 +23,7 @@ interface HttpDecisionProviderOptions {
 export class HttpDecisionProvider implements DecisionProvider {
   readonly id: string
   private readonly endpoint: string
-  private readonly model?: string
+  private readonly model: string | undefined
   private readonly headers: Record<string, string>
   private readonly timeoutMs: number
   private readonly fetchImpl: typeof fetch
