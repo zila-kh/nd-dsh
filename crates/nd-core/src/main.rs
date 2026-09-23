@@ -235,6 +235,7 @@ fn dispatch(
                 "effectJournalRecordCount": effect_journal.record_count,
                 "effectJournalBytes": effect_journal.bytes,
                 "effectJournalLastSeq": effect_journal.last_seq,
+                "effectJournalMaxBytes": effect_journal.max_bytes,
                 "inFlightRequestCount": state.interrupts.active_count(),
                 "pendingRpcCount": dispatch.active + dispatch.queued_high + dispatch.queued_normal + dispatch.queued_background,
                 "dispatcher": dispatch,
