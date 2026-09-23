@@ -38,6 +38,10 @@ export function registerBrowserPlatformIpc(
   })
   handle(BROWSER_PLATFORM_IPC.cancelDownload, (downloadId) =>
     service.cancelDownload(asString(downloadId, 'Download id', 512)))
+  handle(BROWSER_PLATFORM_IPC.openDownload, (downloadId) =>
+    service.openDownload(asString(downloadId, 'Download id', 512)))
+  handle(BROWSER_PLATFORM_IPC.revealDownload, (downloadId) =>
+    service.revealDownload(asString(downloadId, 'Download id', 512)))
   handle(BROWSER_PLATFORM_IPC.installExtension, async () => {
     const result = await dialog.showOpenDialog(window, {
       title: 'Load unpacked browser extension',
@@ -61,6 +65,14 @@ export function registerBrowserPlatformIpc(
   })
   handle(BROWSER_PLATFORM_IPC.removeCredential, (credentialId) =>
     service.removeCredential(asString(credentialId, 'Credential id', 512)))
+  handle(BROWSER_PLATFORM_IPC.autofillCredential, (credentialId, targetId, tabId) =>
+    service.autofillCredential(
+      asString(credentialId, 'Credential id', 512),
+      optionalString(targetId, 512),
+      optionalString(tabId, 512),
+    ))
+  handle(BROWSER_PLATFORM_IPC.siteTools, (targetId, tabId) =>
+    service.siteTools(optionalString(targetId, 512), optionalString(tabId, 512)))
   handle(BROWSER_PLATFORM_IPC.setSitePermission, (origin, permission, effect) => {
     if (effect !== 'allow' && effect !== 'deny') throw new Error('Browser permission effect must be allow or deny')
     return service.setSitePermission(
