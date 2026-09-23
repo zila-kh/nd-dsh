@@ -176,9 +176,9 @@ test('creates two companies, three projects and four tiny tasks with hard owners
   expect(bTeams).toHaveLength(3)
   expect(aAgents).toHaveLength(4)
   expect(bAgents).toHaveLength(4)
-  expect(new Set(aRoles.map((item) => item.id)).intersection(new Set(bRoles.map((item) => item.id)).size).toBe(0)
-  expect(new Set(aTeams.map((item) => item.id)).intersection(new Set(bTeams.map((item) => item.id)).size).toBe(0)
-  expect(new Set(aAgents.map((item) => item.id)).intersection(new Set(bAgents.map((item) => item.id)).size).toBe(0)
+  expect(aRoles.some((left) => bRoles.some((right) => right.id === left.id))).toBe(false)
+  expect(aTeams.some((left) => bTeams.some((right) => right.id === left.id))).toBe(false)
+  expect(aAgents.some((left) => bAgents.some((right) => right.id === left.id))).toBe(false)
 
   expect(snapshot.memory.filter((item) => item.companyId === companyA!.id)).toHaveLength(1)
   expect(snapshot.memory.filter((item) => item.companyId === companyB!.id)).toHaveLength(1)
