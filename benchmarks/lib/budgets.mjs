@@ -84,10 +84,10 @@ export function evaluateEvidence({ coreSummary, rustRuntime, packagedStartup }) 
   )
   add(
     'shared-workspace-scaling',
-    'Shared workspace resource count stays one for 1/2/4/8/10 sessions',
-    [1, 2, 4, 8, 10].every((count) => memoryPoints.some((point) => point.count === count && point.workspaceCount === 1)),
+    'Shared workspace resource count stays one through 100 logical sessions',
+    [1, 2, 4, 8, 10, 25, 50, 100].every((count) => memoryPoints.some((point) => point.count === count && point.workspaceCount === 1)),
     memoryPoints.map((point) => ({ count: point.count, workspaceCount: point.workspaceCount })),
-    'workspaceCount=1 at 1/2/4/8/10',
+    'workspaceCount=1 at 1/2/4/8/10/25/50/100',
   )
 
   const terminal = coreSummary.benchmarks?.['terminal-throughput']
@@ -115,16 +115,48 @@ export function evaluateEvidence({ coreSummary, rustRuntime, packagedStartup }) 
   const parallelCounts = Array.isArray(parallel?.points) ? parallel.points.map((point) => point.count) : []
   add(
     'parallel-worker-points',
-    'Parallel scheduler records 1/2/4/8/10 workers',
-    [1, 2, 4, 8, 10].every((count) => parallelCounts.includes(count)),
+    'Parallel scheduler records the full 100-worker scale contract',
+    [1, 2, 4, 8, 10, 25, 50, 100].every((count) => parallelCounts.includes(count)),
     parallelCounts,
-    '1/2/4/8/10',
+    '1/2/4/8/10/25/50/100',
   )
   add(
     'parallel-worktree-cost',
     'Parallel benchmark records worktree disk cost',
     Array.isArray(parallel?.points) && parallel.points.every((point) => Number.isFinite(point.worktreeDiskBytes) && point.worktreeDiskBytes >= 0),
     parallel?.points?.map((point) => ({ count: point.count, worktreeDiskBytes: point.worktreeDiskBytes })) ?? null,
+    'measured for every point',
+  )
+
+  const journal = coreSummary.benchmarks?.['session-journal-scaling']
+  const journalPoints = Array.isArray(journal?.points) ? journal.points : []
+  const journalCounts = journalPoints.map((point) => point.count)
+  add(
+    'session-journal-scale-points',
+    'Native session journal records the full 100-session scale contract',
+    [1, 2, 4, 8, 10, 25, 50, 100].every((count) => journalCounts.includes(count)),
+    journalCounts,
+    '1/2/4/8/10/25/50/100',
+  )
+  add(
+    'session-journal-retention-bound',
+    'Native session journal stays inside its configured per-session byte bound',
+    journalPoints.length > 0 && journalPoints.every((point) =>
+      Number.isFinite(point.retainedBytes)
+      && Number.isFinite(point.maxBytesPerSession)
+      && point.retainedBytes <= point.count * point.maxBytesPerSession),
+    journalPoints.map((point) => ({
+      count: point.count,
+      retainedBytes: point.retainedBytes,
+      maxBytesPerSession: point.maxBytesPerSession,
+    })),
+    'retainedBytes <= sessions * maxBytesPerSession',
+  )
+  add(
+    'session-journal-tail-latency',
+    'Native journal tail latency is recorded at every scale point',
+    journalPoints.length > 0 && journalPoints.every((point) => Number.isFinite(point.tailLatencyMs) && point.tailLatencyMs >= 0),
+    journalPoints.map((point) => ({ count: point.count, tailLatencyMs: point.tailLatencyMs })),
     'measured for every point',
   )
 
