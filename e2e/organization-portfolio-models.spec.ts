@@ -1,5 +1,6 @@
-import 'dotenv/config'
 /// <reference lib="dom" />
+
+import 'dotenv/config'
 
 import { expect, test } from '@playwright/test'
 import type { OrganizationDesktopApi, OrganizationRun, OrganizationSnapshot } from '../src/shared/organization.js'
