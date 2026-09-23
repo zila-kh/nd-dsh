@@ -132,7 +132,7 @@ Every earlier step passes — including Benchmark smoke, Migration unit tests, U
 
 ## 4. Evidence integrity — baselines, backend identity, binary hash
 
-Three holes weaken results the suite already produces. All are described in [performance-benchmark-suite.md §12](../plan/performance-benchmark-suite.md#12-remaining-gaps--agent-task-metrics-baselines-and-fast-path-proof).
+Three holes weaken results the suite already produces. All are described in [performance-benchmark-suite.md §12](../plan/performance-benchmark-suite.md#12-gap-closures--agent-task-metrics-baselines-and-fast-path-proof).
 
 1. **No committed baseline.** `benchmark-results/` is gitignored and no baseline JSON is tracked, so "before → after" has nowhere to live and historical claims depend on someone still having the old bundle on disk. — **Decided:** one committed, reviewed summary per reference machine under `benchmarks/baselines/`, raw bundles attached to the run that produced them; reasoning, contents and refresh protocol in [performance-baseline-policy.md](../plan/performance-baseline-policy.md). The first runtime baseline can only be recorded once the `performance-evidence` job completes.
 2. **Evidence never asserts which backend produced it.** `benchmarks/lib/budgets.mjs` checks same-machine and full-provenance equality but never asserts `backend === 'legacy'` versus `'rust-core'`. A swapped or mislabelled pair would satisfy every existing gate and could pass the relative budgets. — **Closed:** the `backend-identity` gate requires each document's recorded backend to match the run that produced it.

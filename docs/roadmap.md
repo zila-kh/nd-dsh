@@ -33,9 +33,9 @@ These are blockers for a downloadable public beta, not optional polish.
 
 - PRD: [0002-rust-sidecar-mvp-migration.md](prd/0002-rust-sidecar-mvp-migration.md) — **MVP merged; reconverging on open deltas** (see §5.0).
 - Task: [done-0002-rust-sidecar-mvp-migration.md](tasks/done/done-0002-rust-sidecar-mvp-migration.md) — P0, merged as PR #20 (`588f3ed`).
-- Benchmark contract: [performance-benchmark-suite.md](plan/performance-benchmark-suite.md) — implemented at runtime level; §12 records what is still unmeasurable.
+- Benchmark contract: [performance-benchmark-suite.md](plan/performance-benchmark-suite.md) — implemented at runtime level; §12 records the agent-task metrics, baseline policy, and fast-path proof, all closed as of 2026-09-23.
 - Parallel-agent scope: [parallel-work-distribution.md](plan/parallel-work-distribution.md) — D1-D3 implemented; see the open-delta list.
-- Agent fast path: [agent-fast-path.md](plan/agent-fast-path.md) — proposed; **gated on measurement, not started**.
+- Agent fast path: [agent-fast-path.md](plan/agent-fast-path.md) — implemented (typed action space, deterministic-first router, composite core executor); the §12.4 budgets are wired and re-derived offline, and §9.1's router placement is settled by the measured IPC-crossing counts.
 
 This approved MVP is the active implementation vehicle for the runtime-distribution, PTY/process, Git/worktree, parallel-worker capacity, packaged Windows smoke, and reproducible performance-proof portions of the roadmap. Organization/business truth remains TypeScript-owned; nd-core owns shared runtime permits, native process/resource lifecycle, and system-heavy services.
 
@@ -49,7 +49,7 @@ This approved MVP is the active implementation vehicle for the runtime-distribut
 
 1. **`nd-core` Rust sidecar MVP** — finish the open deltas above. The goal is a fast native execution layer, not a TypeScript-to-Rust translation.
 2. **Remaining TODOs + [parallel-work-distribution.md](plan/parallel-work-distribution.md)** — integrated into that MVP rather than cut as a separate project.
-3. **Benchmark/performance suite** — extend the existing runtime-level suite (which is real and shipped) with agent-task metrics, committed baselines, and backend-identity assertions: [performance-benchmark-suite.md §12](plan/performance-benchmark-suite.md#12-remaining-gaps--agent-task-metrics-baselines-and-fast-path-proof). Agent-task metrics and the committed normal-loop baseline landed with task 0005 (`pnpm bench:tasks`, `pnpm bench:tasks:check`); the backend-identity assertions remain in task 0004.
+3. **Benchmark/performance suite** — extend the existing runtime-level suite (which is real and shipped) with agent-task metrics, committed baselines, and backend-identity assertions: [performance-benchmark-suite.md §12](plan/performance-benchmark-suite.md#12-gap-closures--agent-task-metrics-baselines-and-fast-path-proof). Agent-task metrics, the normal-loop baseline and its fast-path budget wiring landed with tasks 0005 and 0008 (`pnpm bench:tasks`, `pnpm bench:tasks:check`); the backend-identity assertions remain in task 0004.
 4. **Typed fast-agent path + escalation** — [agent-fast-path.md](plan/agent-fast-path.md). Cheap decision tier over a typed action space, composite core operations, escalation to a powerful model only when reasoning is required. Its action vocabulary must reuse the P3.2 normalized action envelope rather than forking a second one.
 
 Target: **fast native runtime + minimal round trips + structured agent actions + a powerful model only when reasoning is actually required.** Benchmark evidence decides what moves next; TypeScript stays where it is not the bottleneck.

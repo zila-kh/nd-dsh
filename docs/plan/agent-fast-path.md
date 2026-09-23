@@ -1,6 +1,6 @@
 # ND Agent Fast Path — typed action space, cheap routing, and bundled core operations
 
-Status: **implemented as [task 0008](../tasks/done/done-0008-agent-fast-path.md) (2026-09-22); what is open is budget wiring, not architecture.** The typed action space, the deterministic-first router with fail-closed escalation, the revision-aware `workspace.snapshot`, and a matched normal-read/fast-read measurement are in the product path — the task record is the authority on exact scope. What remains is §5 step 3: turning the recorded counters into relative budgets ([performance-benchmark-suite.md](performance-benchmark-suite.md) §12.4), and settling the §9 open questions with that metric in hand. This plan is Phases 2 and 4 of the Rust-sidecar direction, not a separate architecture.
+Status: **implemented as [task 0008](../tasks/done/done-0008-agent-fast-path.md) (2026-09-22), with its budgets wired 2026-09-23.** The typed action space, the deterministic-first router with fail-closed escalation, the revision-aware `workspace.snapshot`, and a matched normal-read/fast-read measurement are in the product path — the task record is the authority on exact scope. §5 step 3 is done: the counters are enforced as relative budgets ([performance-benchmark-suite.md](performance-benchmark-suite.md) §12.4). Of the §9 open questions, §9.1 is settled with the measured IPC-crossing numbers in hand; §9.2-§9.5 remain open. This plan is Phases 2 and 4 of the Rust-sidecar direction, not a separate architecture.
 Updated: 2026-09-21
 Related: [PRD 0002](../prd/0002-rust-sidecar-mvp-migration.md) · [Performance benchmark suite](performance-benchmark-suite.md) · [Phase 1 reliability](phase-1-beta-reliability.md) · [Phase 3 autonomous company](phase-3-autonomous-software-company.md) · [Roadmap](../roadmap.md)
 
@@ -117,7 +117,7 @@ That makes the honest build order:
 
 Without step 1, step 3 is unfalsifiable and this plan becomes an unverifiable architecture claim of exactly the kind PRD 0002 §8.17 rules out.
 
-**Status (2026-09-23):** step 1 is done — the agent-task metrics and a committed normal-loop baseline landed with task 0005 — and step 2 is done with task 0008, which built the action space, the router, and the matched `normal-read` / `fast-read` measurement. Step 4's composite (`workspace.snapshot`) landed with it, measured rather than asserted. Step 3 is the open half: the counters are recorded, but the before → after comparison is not yet enforced as a budget.
+**Status (2026-09-23):** step 1 is done — the agent-task metrics and a committed normal-loop baseline landed with task 0005 — and step 2 is done with task 0008, which built the action space, the router, and the matched `normal-read` / `fast-read` measurement. Step 4's composite (`workspace.snapshot`) landed with it, measured rather than asserted. Step 3 is no longer the open half: the before → after comparison is enforced as a budget ([performance-benchmark-suite.md](performance-benchmark-suite.md) §12.4), recorded by `pnpm bench:tasks:baseline` and re-derived offline by `pnpm bench:tasks:check`.
 
 ## 6. Non-goals
 
@@ -146,8 +146,8 @@ Measurable, on the same machine, fixtures, and run count, with results committed
 
 - [ ] Every fast-path verb resolves to a P3.2 envelope kind, asserted by a conformance test rather than by review.
 - [ ] Agent-task benchmark reports, per task: total wall time, model round trips, tool calls, IPC crossings, bytes sent to the model, and completion rate — for both the normal loop and the fast path.
-- [ ] A recorded normal-loop baseline exists before the router is built, and the post-router comparison reports before → after on the same fixture set.
-- [ ] Escalation rate is reported as a metric, with a budget that fails the check when exceeded.
+- [x] A recorded normal-loop baseline exists before the router is built, and the post-router comparison reports before → after on the same fixture set. — `benchmarks/baselines/agent-task-normal-loop.json` (task 0005) is the baseline; the matched `normal-read` / `fast-read` arms are compared per verified completion by `compareFastPath()`, enforced in the run verdict and re-derived offline by `pnpm bench:tasks:check`.
+- [x] Escalation rate is reported as a metric, with a budget that fails the check when exceeded. — `fastPathComparison` fails the run when the fast arm's mean escalations per completed task exceed 0.1.
 - [ ] No fast-path action executes without envelope evaluation; a denied action fails closed exactly as it does on the normal path.
 - [ ] Destructive verbs (`source.write`, `shell.execute`, `git.push`, deployment/data kinds) are never executed by the router without the existing approval gate.
 - [ ] Any composite core operation is justified by a measured IPC-crossing reduction and replaces, rather than layers over, single-op usage at that call site.

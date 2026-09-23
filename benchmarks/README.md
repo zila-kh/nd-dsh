@@ -49,7 +49,7 @@ Rules this measurement keeps:
 
 `benchmarks/baselines/agent-task-normal-loop.json` is the committed, reviewed baseline for the normal agent loop: one recorded bundle from the Windows x64 reference machine, refreshed deliberately by a documented PR (`pnpm bench:tasks:baseline`) rather than by every run. Local run directories under `benchmark-results/` stay ignored by Git.
 
-That follows the discipline the runtime suite already states — local results are ignored, reviewed bundles are copied in intentionally — and it is what makes a `normal loop → fast path` comparison reviewable: same fixture revision, same pass definitions, same counter set, against a record anyone can re-check offline with `pnpm bench:tasks:check`.
+That follows the discipline the runtime suite already states — local results are ignored, reviewed bundles are copied in intentionally — and the same record carries the fast-path proof: `normal-read` and `fast-read` run the same read-only task inside one recording, and `fastPathComparison` must show fewer model round trips, tool calls and nd-core IPC crossings per verified completion, at no completion-rate cost and under the escalation budget. `pnpm bench:tasks:check` re-derives that comparison from the raw samples offline — no Electron, no provider — so a rotted or hand-edited baseline fails, and a run may only replace the baseline when it passes its own verdict.
 
 ## Full MVP evidence
 

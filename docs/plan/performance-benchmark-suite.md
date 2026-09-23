@@ -519,11 +519,11 @@ Raw result bundle: <artifact/path>
 
 Numbers are generated from JSON. They are never handwritten into the PR without the matching raw result.
 
-## 12. Remaining gaps — agent-task metrics, baselines, and fast-path proof
+## 12. Gap closures — agent-task metrics, baselines, and fast-path proof
 
 Sections 1-11 describe a suite that measures the **runtime**: startup, memory, terminal, Git, event-loop lag, cancellation, packaging. That is the right layer for proving the Rust migration. It cannot measure the agent, and it cannot prove a fast-agent-path gain, because the fast path's claims are about **how many times we call the model and how many times we cross the boundary**, not how fast Rust is.
 
-Four gaps, in dependency order.
+Four gaps were identified, in dependency order; all four are addressed as of 2026-09-23, with the closure recorded in place. 12.5 and 12.6 record two further findings about coverage and the headless client.
 
 ### 12.1 Agent-task-level metrics — implemented (task 0005)
 
@@ -570,7 +570,7 @@ Add: a backend-identity assertion per evidence file, and — because `commit`/`b
 
 **Implemented (task 0004).** `benchmarks/lib/budgets.mjs` now refuses to trust numbers before identity: `EXPECTED_BACKENDS` asserts each evidence document's `backend` label (a mismatch is reported with `kind: 'identity'`, never as a budget violation), and `core-binary-identity` requires every document to name the same `nd-core` sha256 — a missing hash fails the check, so a mix-up between two nd-core builds cannot pass either. `benchmarks/verify-evidence-identity.mjs` proves both gates fail closed by feeding them a deliberately swapped and mislabelled bundle, and it runs as its own CI step. Release evidence is Rust-only since task 0007 removed the legacy switch, so the historical `legacyRuntime.backend === 'legacy'` label is no longer a release prerequisite; legacy-vs-Rust bundles remain usable through `bench:compare`.
 
-### 12.4 No agent-level budgets yet — the fast path exists, the comparison is not wired
+### 12.4 Agent-level fast-path budgets — implemented (task 0008 / wired 2026-09-23)
 
 A normal-loop baseline now exists (12.2), so the missing half was the fast path itself: nothing distinguishes a normal agent loop run from a fast-path run while the fast path does not exist (see [agent-fast-path.md](agent-fast-path.md)). Now that it does, §8-style relative budgets apply to the agent metrics as well, measured as counters per *verified completion* so that doing less cannot read as doing better:
 
@@ -581,7 +581,7 @@ A normal-loop baseline now exists (12.2), so the missing half was the fast path 
 
 One legitimate exception to §2's "no live-model dependency": a *task-cost* measurement that counts round trips, tool calls, and bytes may include a live-model fixture, because those counters do not depend on model latency. Wall-time claims still may not: the committed baseline is recorded with the offline fixture and is stamped `wallTimeScope: excludes-model-latency`, so its wall times are product overhead and not a user-facing latency claim.
 
-**Status (2026-09-23): the fast path exists; the budgets do not.** [Task 0008](../tasks/done/done-0008-agent-fast-path.md) shipped the typed action space, the deterministic-first router with fail-closed escalation, and a matched `normal-read` / `fast-read` measurement, so both arms can be recorded through the production path. What is still missing is the enforcement half: relative budgets on these counters against the committed baseline (`benchmarks/baselines/agent-task-normal-loop.json`), failing the check when round trips or IPC crossings per verified completion do not decrease, completion rate drops, or the escalation ceiling is exceeded. Until that wiring lands, the counters are recorded evidence rather than a gate.
+**Status (2026-09-23): the budgets are wired.** [Task 0008](../tasks/done/done-0008-agent-fast-path.md) shipped the typed action space, the deterministic-first router with fail-closed escalation, and the matched `normal-read` / `fast-read` arms; enforcement landed with them in `compareFastPath()` (`benchmarks/task-metrics.mjs`) and is a required part of a recorded result since this reconciliation. A run fails its own verdict when the fast arm's means per *verified completion* do not reduce model round trips, model-visible tool calls or nd-core IPC crossings, when its completion rate drops, or when its escalations per task exceed the 0.1 budget. Both arms are recorded inside one run, so the difference is attributable to the router rather than to drift between recording days; the committed baseline keeps its role as the reviewed record of the normal loop. `pnpm bench:tasks:check` re-derives the comparison from the stored raw samples offline, so a rotted or hand-edited baseline fails without starting Electron, `--baseline` refuses to write when the run's own verdict fails, and the schema requires the comparison so a result recorded before it cannot pass as a baseline.
 
 ### 12.5 CI does not enforce budgets on ordinary PRs
 

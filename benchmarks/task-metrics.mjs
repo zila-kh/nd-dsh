@@ -168,6 +168,13 @@ async function record() {
 
   const samples = recorded.flatMap((entry) => entry.raw.samples)
   const tasks = recorded.flatMap((entry) => entry.raw.tasks)
+  const passes = recorded.map((entry) => ({
+    name: entry.pass.name,
+    tasks: entry.raw.tasks,
+    samples: entry.raw.samples.length,
+    workspaceRoot: entry.raw.workspaceRoot,
+    droppedSamples: entry.raw.droppedSamples ?? 0,
+  }))
   const document = {
     schemaVersion: 1,
     benchmark: TASK_METRICS_BENCHMARK,
@@ -194,26 +201,27 @@ async function record() {
       runtimePath,
       passes: PASSES.map((pass) => ({ name: pass.name, tasks: pass.tasks, ...pass.fixture })),
     },
-    passes: recorded.map((entry) => ({
-      name: entry.pass.name,
-      tasks: entry.raw.tasks,
-      samples: entry.raw.samples.length,
-      workspaceRoot: entry.raw.workspaceRoot,
-      droppedSamples: entry.raw.droppedSamples ?? 0,
-    })),
+    passes,
     samples,
     summary: summarizeTaskSamples(samples, { wallTimeScope: 'excludes-model-latency' }),
     expectations: evaluateTaskExpectations(tasks, samples),
-    fastPathComparison: compareFastPath(recorded, samples),
+    fastPathComparison: compareFastPath(passes, samples),
   }
   assertTaskMetricsResult(document)
 
   await fs.writeFile(join(outputDir, 'agent-task-metrics.json'), JSON.stringify(document, null, 2) + '\n', 'utf8')
   const verdict = judge(document)
   if (args.includes('--baseline')) {
-    await fs.mkdir(join(benchmarkRoot, 'benchmarks', 'baselines'), { recursive: true })
-    await fs.writeFile(BASELINE_PATH, JSON.stringify(document, null, 2) + '\n', 'utf8')
-    process.stdout.write(`[agent-task] baseline written to ${relativeToRepo(BASELINE_PATH)}\n`)
+    // A baseline is a reviewed claim about the normal loop, so only a run that
+    // passed its own verdict may replace it; writing before the verdict is
+    // known would let a regression quietly become the new reference.
+    if (verdict.status === 'pass') {
+      await fs.mkdir(join(benchmarkRoot, 'benchmarks', 'baselines'), { recursive: true })
+      await fs.writeFile(BASELINE_PATH, JSON.stringify(document, null, 2) + '\n', 'utf8')
+      process.stdout.write(`[agent-task] baseline written to ${relativeToRepo(BASELINE_PATH)}\n`)
+    } else {
+      process.stdout.write('[agent-task] baseline NOT written: this run failed its own verdict.\n')
+    }
   }
   process.stdout.write(JSON.stringify({ outputDir, ...verdict }, null, 2) + '\n')
   if (verdict.status !== 'pass') process.exitCode = 1
@@ -231,11 +239,18 @@ async function verifyResult(target) {
   const stored = JSON.stringify(document.summary)
   const actual = JSON.stringify(recomputed)
   const expectations = evaluateTaskExpectations(document.passes.flatMap((pass) => pass.tasks ?? []), document.samples)
+  // The §12.4 fast-path budgets are re-derived from the stored raw samples too,
+  // so a hand-edited or rotted comparison fails offline, and a result recorded
+  // before the comparison existed cannot pass as a baseline.
+  const fastPathComparison = compareFastPath(document.passes, document.samples)
+  const comparisonMatches = JSON.stringify(document.fastPathComparison) === JSON.stringify(fastPathComparison)
   const verdict = {
-    status: stored === actual && !expectations.deviations.length ? 'pass' : 'fail',
+    status: stored === actual && !expectations.deviations.length && comparisonMatches && fastPathComparison.status === 'pass' ? 'pass' : 'fail',
     file: relativeToRepo(target),
     schema: 'valid',
     summaryRecomputed: stored === actual,
+    fastPathComparisonRecomputed: comparisonMatches,
+    fastPathComparison,
     completedTasks: recomputed.completedTasks,
     tasks: recomputed.tasks,
     completionRate: recomputed.completionRate,
@@ -251,7 +266,10 @@ function judge(document) {
   const failures = []
   if (summary.unfinishedTasks > 0) failures.push(`${summary.unfinishedTasks} task(s) never reached a terminal state`)
   if (expectations.deviations.length) failures.push(...expectations.deviations.map((item) => `${item.field}: expected ${JSON.stringify(item.expected)}, observed ${JSON.stringify(item.observed)}`))
-  if (document.fastPathComparison?.status === 'fail') failures.push(...document.fastPathComparison.failures)
+  const comparison = document.fastPathComparison
+  if (comparison?.status !== 'pass') {
+    failures.push(...(comparison?.failures ?? ['the fast-path comparison (normal-read vs fast-read arms) is missing from this result']))
+  }
   return {
     status: failures.length ? 'fail' : 'pass',
     tasks: summary.tasks,
@@ -259,6 +277,7 @@ function judge(document) {
     completionRate: summary.completionRate,
     counts: summary.counters,
     perCompletedTask: summary.perCompletedTask,
+    fastPathComparison: comparison,
     fixtureChecks: expectations.checked,
     failures,
   }
@@ -351,32 +370,53 @@ function relativeToRepo(path) {
   return resolve(path).slice(benchmarkRoot.length + 1).replaceAll('\\', '/')
 }
 
-function compareFastPath(recorded, samples) {
-  const rows = (name) => {
-    const pass = recorded.find((entry) => entry.pass.name === name)
-    if (!pass) return []
-    const ids = new Set(pass.raw.tasks.map((task) => task.runId))
+/**
+ * The §12.4 fast-path budgets, derived from the raw samples instead of trusted
+ * from a stored summary. The matched `normal-read` and `fast-read` arms run in
+ * the same recording, so the difference between them is attributable to the
+ * router rather than to drift between recording days. Counters are means per
+ * *verified completion*, never per attempt: a fast arm that completes less of
+ * its work must not read as cheaper, which is also why the completion-rate
+ * regression below is a failure rather than a warning.
+ */
+function compareFastPath(passes, samples) {
+  const arm = (name) => {
+    const pass = passes.find((entry) => entry.name === name)
+    if (pass === undefined) return []
+    const ids = new Set((pass.tasks ?? []).map((task) => task.runId))
     return samples.filter((sample) => ids.has(sample.runId))
   }
-  const normal = rows('normal-read')
-  const fast = rows('fast-read')
   const mean = (values) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0
-  const metrics = (items) => ({
-    modelRoundTrips: mean(items.map((x) => x.modelRoundTrips)),
-    toolCalls: mean(items.map((x) => x.toolCalls)),
-    ipcCrossings: mean(items.map((x) => x.ipcCrossings)),
-    escalations: mean(items.map((x) => x.escalations)),
-    completionRate: items.length ? items.filter((x) => x.completedTask).length / items.length : 0,
-  })
-  const normalMetrics = metrics(normal)
-  const fastMetrics = metrics(fast)
+  const metrics = (items) => {
+    const completed = items.filter((sample) => sample.completedTask === true)
+    const perCompleted = (key) => mean(completed.map((sample) => sample[key]))
+    return {
+      samples: items.length,
+      completed: completed.length,
+      completionRate: items.length ? completed.length / items.length : 0,
+      modelRoundTrips: perCompleted('modelRoundTrips'),
+      toolCalls: perCompleted('toolCalls'),
+      ipcCrossings: perCompleted('ipcCrossings'),
+      escalations: perCompleted('escalations'),
+    }
+  }
+  const normal = metrics(arm('normal-read'))
+  const fast = metrics(arm('fast-read'))
+  if (normal.completed === 0 || fast.completed === 0) {
+    return {
+      status: 'not-run',
+      normal,
+      fast,
+      failures: ['the matched normal-read and fast-read arms did not both record a verified completion, so the §12.4 budgets were not measured'],
+    }
+  }
   const failures = []
-  if (!(fastMetrics.modelRoundTrips < normalMetrics.modelRoundTrips)) failures.push('fast path did not reduce model round trips')
-  if (!(fastMetrics.toolCalls < normalMetrics.toolCalls)) failures.push('fast path did not reduce model-visible tool calls')
-  if (!(fastMetrics.ipcCrossings < normalMetrics.ipcCrossings)) failures.push('fast path did not reduce nd-core IPC crossings')
-  if (fastMetrics.completionRate < normalMetrics.completionRate) failures.push('fast path completion rate regressed')
-  if (fastMetrics.escalations > 0.1) failures.push('fast path escalation rate exceeded the deterministic fixture budget')
-  return { status: failures.length ? 'fail' : 'pass', normal: normalMetrics, fast: fastMetrics, failures }
+  if (!(fast.modelRoundTrips < normal.modelRoundTrips)) failures.push('fast path did not reduce model round trips per verified completion')
+  if (!(fast.toolCalls < normal.toolCalls)) failures.push('fast path did not reduce model-visible tool calls per verified completion')
+  if (!(fast.ipcCrossings < normal.ipcCrossings)) failures.push('fast path did not reduce nd-core IPC crossings per verified completion')
+  if (fast.completionRate < normal.completionRate) failures.push('fast path completion rate regressed')
+  if (fast.escalations > 0.1) failures.push('fast path escalation rate exceeded the deterministic fixture budget')
+  return { status: failures.length ? 'fail' : 'pass', normal, fast, failures }
 }
 
 async function rm(path) {
