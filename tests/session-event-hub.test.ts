@@ -152,7 +152,7 @@ describe('SessionEventHub', () => {
     await firstRead
 
     const rebuilding = hub.rehydrate()
-    await Promise.resolve()
+    for (let index = 0; index < 5 && !entries.has('s1'); index += 1) await Promise.resolve()
     const reopened = entries.get('s1')
     expect(reopened).toBeDefined()
     reopened!.onFrame(snapshot([
