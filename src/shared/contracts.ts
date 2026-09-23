@@ -96,6 +96,10 @@ export interface BrowserState {
   visible: boolean
   cdpPort: number
   targetId?: string
+  profileId?: string
+  activeTabId?: string
+  tabs?: import('./browser-platform.js').BrowserTabDescriptor[]
+  downloads?: import('./browser-platform.js').BrowserDownloadRecord[]
   agentBrowser: AgentBrowserState
   agentBrowserError?: string
   inspectMode?: boolean
