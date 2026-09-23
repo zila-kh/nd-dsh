@@ -54,7 +54,7 @@ Required behavior covered by Rust tests:
 - protocol version/frame/error vocabulary and TS contract parity;
 - existing bounded MessagePack queue/decode behavior;
 - canonical effect journal known-complete dedupe after reload;
-- uncertain effect recovery and blind-retry refusal;
+- uncertain effect recovery and blind-retry refusal, including unmatched persisted `intent` records becoming `outcomeUncertain` after restart;
 - Rust decision kernel high-confidence, escalation, all-low fallback and shadow semantics;
 - the shared Rust/TypeScript decision fixture corpus.
 
@@ -290,7 +290,8 @@ The Rust unit suite verifies journal reload semantics. Also do one desktop resta
 4. relaunch with the same user-data directory;
 5. confirm startup succeeds and the existing `effect-journal.jsonl` is replayed;
 6. run another task and confirm sequence numbers continue monotonically;
-7. confirm the previous known-complete idempotency records are still present.
+7. confirm the previous known-complete idempotency records are still present;
+8. if you use a fixture/debug RPC to leave an unmatched `intent`, restart and confirm `effectJournal.state` reports `outcomeUncertain` and rejects a blind new `intent` until reconciled.
 
 Do not intentionally repeat a real external side effect merely to test dedupe.
 
