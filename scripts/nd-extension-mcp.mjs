@@ -52,6 +52,7 @@ const TOOLS = [
         deltaX: { type: 'number' },
         deltaY: { type: 'number' },
         credentialId: { type: 'string' },
+        downloadId: { type: 'string' },
         name: { type: 'string' },
         input: { type: 'object' }
       },
