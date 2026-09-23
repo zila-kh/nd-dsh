@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { execFile, spawn } from 'node:child_process'
+import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
@@ -23,6 +23,11 @@ export interface VerificationEvidence {
   artifacts?: Array<{ path: string; kind: 'file' | 'directory'; size: number; sha256: string }>
 }
 
+export interface VerificationProcessRuntime {
+  spawnProcess: typeof spawn
+  stopProcess(child: ChildProcess): Promise<void>
+}
+
 /**
  * Run the deterministic project check owned by ND. The reviewer may add
  * semantic judgment later, but it cannot turn a red machine check green.
@@ -32,7 +37,7 @@ export interface VerificationEvidence {
  * caches, generated files, or other artifacts; none of those are allowed to
  * leak into review or the next retry attempt.
  */
-export async function runVerification(command: string | undefined, cwd: string | undefined): Promise<VerificationEvidence> {
+export async function runVerification(command: string | undefined, cwd: string | undefined, runtime?: VerificationProcessRuntime): Promise<VerificationEvidence> {
   const startedAt = Date.now()
   const cleaned = command?.trim()
   if (!cleaned) return finish({ status: 'skipped', startedAt, reason: 'Project has no configured test command.' })
@@ -49,11 +54,15 @@ export async function runVerification(command: string | undefined, cwd: string |
 
   const timeoutMs = verificationTimeoutMs()
   return new Promise<VerificationEvidence>((resolveEvidence) => {
-    const child = spawn(cleaned, {
+    const invocation = verificationShell(cleaned)
+    const spawnProcess = runtime?.spawnProcess ?? spawn
+    const stopProcess = runtime?.stopProcess ?? stopVerificationProcess
+    const child = spawnProcess(invocation.command, invocation.args, {
       cwd,
-      shell: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: process.env,
+      windowsHide: true,
+      detached: process.platform !== 'win32',
     })
     let stdout = ''
     let stderr = ''
@@ -102,13 +111,46 @@ export async function runVerification(command: string | undefined, cwd: string |
     }) })
 
     timer = setTimeout(() => {
-      try { child.kill(process.platform === 'win32' ? undefined : 'SIGTERM') } catch { /* already stopped */ }
-      void done({
-        status: 'failed', command: cleaned, cwd, startedAt,
-        ...outputFields(), reason: `Verification timed out after ${timeoutMs}ms.`,
-      })
+      void stopProcess(child)
+        .catch(() => undefined)
+        .then(() => done({
+          status: 'failed', command: cleaned, cwd, startedAt,
+          ...outputFields(), reason: `Verification timed out after ${timeoutMs}ms.`,
+        }))
     }, timeoutMs)
     timer.unref()
+  })
+}
+
+function verificationShell(command: string): { command: string; args: string[] } {
+  if (process.platform === 'win32') {
+    return {
+      command: process.env.COMSPEC?.trim() || 'cmd.exe',
+      args: ['/d', '/s', '/c', command],
+    }
+  }
+  return { command: '/bin/sh', args: ['-c', command] }
+}
+
+async function stopVerificationProcess(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return
+  await new Promise<void>((resolveStop) => {
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const finish = (): void => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      resolveStop()
+    }
+    child.once('exit', finish)
+    child.once('error', finish)
+    timer = setTimeout(finish, 3_000)
+    try {
+      child.kill(process.platform === 'win32' ? undefined : 'SIGTERM')
+    } catch {
+      finish()
+    }
   })
 }
 
