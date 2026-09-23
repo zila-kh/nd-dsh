@@ -19,6 +19,7 @@ Add a durable ND-owned journal for autonomous company execution/effect intent, o
 - known-complete effects are deduplicated after restart;
 - repeated in-progress intents are deduplicated;
 - uncertain outcomes reject a fresh intent until explicitly reconciled to complete/failed;
+- an unmatched persisted `intent` loaded after process restart is promoted to `outcomeUncertain`, so a dead process is never mistaken for still-running work;
 - per-record and data payload bounds plus a fail-closed 64 MiB canonical-journal retention bound;
 - replay/stats RPCs and metrics exposure;
 - crash/restart fixtures for known-complete dedupe and uncertain recovery;
