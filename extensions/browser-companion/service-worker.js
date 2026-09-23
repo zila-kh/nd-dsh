@@ -4,6 +4,7 @@ const VERSION = chrome.runtime.getManifest().version
 
 let nativePort
 let reconnectTimer
+let connecting
 let connected = false
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -35,8 +36,22 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
 void ensureNative()
 
+// Chrome fires `onInstalled`/`onStartup` while this module's own
+// `ensureNative()` call is still awaiting storage, so concurrent callers must
+// share one attempt: a second port would register a second companion (two
+// installation ids, two connected records).
 async function ensureNative(force = false) {
+  if (connecting) return connecting
   if (nativePort && !force) return
+  connecting = connectNative()
+  try {
+    await connecting
+  } finally {
+    connecting = undefined
+  }
+}
+
+async function connectNative() {
   if (nativePort) {
     try { nativePort.disconnect() } catch {}
     nativePort = undefined
