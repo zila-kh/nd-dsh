@@ -152,6 +152,7 @@ async function probeSession(ses, origin) {
   }
 
   const downloadPath = join(userData, 'runtime-spike-download.txt')
+  const downloadView = createView(ses, window)
   try {
     const done = new Promise((resolvePromise, reject) => {
       const timer = setTimeout(() => reject(new Error('download timed out')), 15_000)
@@ -164,12 +165,14 @@ async function probeSession(ses, origin) {
         })
       })
     })
-    window.webContents.downloadURL(origin + '/download')
+    downloadView.webContents.downloadURL(origin + '/download')
     await done
     await access(downloadPath)
     result.download = (await readFile(downloadPath, 'utf8')) === 'nd-browser-runtime-spike\n'
   } catch (cause) {
     recordFailure('session.download', cause)
+  } finally {
+    destroyView(downloadView, window)
   }
 
   return result
