@@ -15,6 +15,8 @@ import { TaskIntegrationConflictError, TaskWorktreeManager, type TaskWorktree } 
 import { formatVerificationEvidence, runArtifactVerification, runVerification, type VerificationProcessRuntime } from './verification-evidence.js'
 import { RuntimeCapacityError, type ExecutionCoordinator, type RuntimeAvailability } from './execution-coordinator.js'
 import { executePreparedFastPath, ND_FAST_PATH_ENGINE_ID, prepareFastPath, type FastPathAuditRecorder, type PreparedFastPath } from './fast-path.js'
+import { formatDecisionSupportForReviewer, formatDecisionSupportReceipt, type DecisionSupportReceipt } from './decision-support-contract.js'
+import type { DecisionSupportService } from './decision-support.js'
 
 interface ReviewVerdict {
   verdict: 'pass' | 'fail'
@@ -91,6 +93,7 @@ export class OrganizationOrchestrator {
   private fastPathAuditRecorder: FastPathAuditRecorder | undefined
   private readonly capacityWaiting = new Set<string>()
   private readonly structuredErrors = new Map<string, string>()
+  private readonly decisionSupportReceipts = new Map<string, DecisionSupportReceipt>()
   private readonly taskWorktrees: TaskWorktreeManager
 
   constructor(
@@ -105,6 +108,7 @@ export class OrganizationOrchestrator {
     taskWorktrees?: TaskWorktreeManager,
     private readonly core?: Pick<CoreClient, 'request'>,
     private readonly verificationRuntime?: VerificationProcessRuntime,
+    private readonly decisionSupport?: DecisionSupportService,
   ) {
     this.taskWorktrees = taskWorktrees ?? new TaskWorktreeManager()
   }
@@ -369,8 +373,21 @@ export class OrganizationOrchestrator {
     if (taskWorktree && reviewHead) this.reviewWorktrees.set(sessionId, { worktree: taskWorktree, head: reviewHead })
     this.lastProgressAt.set(sessionId, run.startedAt)
     await this.store.markReviewStarted(taskId, sessionId, reviewerAgent?.id)
+    const decisionSupport = await this.decisionSupport?.reviewAssist({
+      company: context.company.name,
+      project: context.project.name,
+      task: {
+        id: context.task.id,
+        title: context.task.title,
+        description: context.task.description,
+        acceptanceCriteria: context.task.acceptanceCriteria,
+        ...(context.task.workScopes ? { workScopes: context.task.workScopes } : {}),
+        ...(context.task.resultSummary ? { resultSummary: context.task.resultSummary } : {}),
+      },
+    })
+    if (decisionSupport) this.decisionSupportReceipts.set(sessionId, decisionSupport)
     try {
-      await this.harness.run(reviewPrompt(context.task, context, taskWorktree), { sessionId, ...modelOpts })
+      await this.harness.run(reviewPrompt(context.task, context, taskWorktree, formatDecisionSupportForReviewer(decisionSupport)), { sessionId, ...modelOpts })
     } catch (cause) {
       const active = await this.store.runBySession(sessionId)
       if (active) {
@@ -679,7 +696,7 @@ export class OrganizationOrchestrator {
     this.structuredInFlight.add(sessionId)
     try {
       const issueText = review.issues?.length ? `\nIssues: ${review.issues.join('; ')}` : ''
-      let summary = `${review.summary}${issueText}`
+      let summary = `${review.summary}${issueText}${formatDecisionSupportReceipt(this.decisionSupportReceipts.get(sessionId))}`
       const context = await this.store.taskContext(taskId)
       let passed = review.verdict === 'pass'
       let integrationConflict = false
@@ -994,6 +1011,7 @@ export class OrganizationOrchestrator {
     this.executionRoutes.delete(sessionId)
     this.canceledSessions.delete(sessionId)
     this.lastProgressAt.delete(sessionId)
+    this.decisionSupportReceipts.delete(sessionId)
   }
 
   private assertPolicy(effect: 'allow' | 'ask' | 'deny', explicit: boolean, label: string): void {
@@ -1043,11 +1061,11 @@ function workerPrompt(context: Awaited<ReturnType<OrganizationStore['taskContext
   return `You are ${context.agent?.name ?? 'an AI worker'} acting as ${context.role?.name ?? 'Software Engineer'} inside company ${context.company.name}.\nCompany mission: ${context.company.mission}\nProject: ${context.project.name}\nObjective: ${context.project.objective}\nTask: ${context.task.title}\nExecution attempt: ${attempt}/${MAX_EXECUTION_ATTEMPTS}\nDescription: ${context.task.description}\nAcceptance criteria:\n${context.task.acceptanceCriteria.map((item) => `- ${item}`).join('\n')}${reviewFeedback}\nResponsibilities: ${context.role?.responsibility ?? 'Complete the assigned work.'}\nRole instructions: ${context.role?.systemPrompt ?? 'Execute carefully and verify the result.'}\nRelevant skills:\n${context.skills.map((item) => `- ${item.name}: ${item.instructions}`).join('\n')}\nRelevant memory:\n${context.memory.map((item) => `- ${item.title}: ${item.content}`).join('\n') || '- none'}\nPolicies:\n${context.policies.map((item) => `- ${item.action}: ${item.effect}`).join('\n')}${engineInstructions}${isolation}\nInspect before editing, run meaningful validation, and finish with a concise result summary for the independent reviewer.`
 }
 
-function reviewPrompt(task: OrganizationTask, context: Awaited<ReturnType<OrganizationStore['taskContext']>>, worktree?: TaskWorktree): string {
+function reviewPrompt(task: OrganizationTask, context: Awaited<ReturnType<OrganizationStore['taskContext']>>, worktree?: TaskWorktree, decisionSupport = ''): string {
   const isolation = worktree
     ? `\nReview the isolated task branch ${worktree.branch} in the current worktree. Do not edit, commit, switch branches, merge, or push; a PASS is valid only while the exact checkpoint stays unchanged.\n`
     : ''
-  return `You are an independent reviewer for ${context.company.name}. Do not assume the worker succeeded. Inspect the actual workspace and verify the task against acceptance criteria. ND machine verification has already run when a project test command is configured; reviewer prose cannot override a red machine check.\nProject: ${context.project.name}\nTask: ${task.title}\nDescription: ${task.description}\nAcceptance criteria:\n${task.acceptanceCriteria.map((item) => `- ${item}`).join('\n')}\nWorker summary:\n${task.resultSummary ?? 'No summary provided.'}${isolation}\n\nRun relevant additional checks. Then return exactly one JSON object between <nd-dsh-review> and </nd-dsh-review>:\n<nd-dsh-review>{"verdict":"pass|fail","summary":"evidence-based review","issues":["..."],"memory":[{"title":"lesson","content":"durable lesson","tags":["review"]}]}</nd-dsh-review>`
+  return `You are an independent reviewer for ${context.company.name}. Do not assume the worker succeeded. Inspect the actual workspace and verify the task against acceptance criteria. ND machine verification has already run when a project test command is configured; reviewer prose cannot override a red machine check.\nProject: ${context.project.name}\nTask: ${task.title}\nDescription: ${task.description}\nAcceptance criteria:\n${task.acceptanceCriteria.map((item) => `- ${item}`).join('\n')}\nWorker summary:\n${task.resultSummary ?? 'No summary provided.'}${isolation}${decisionSupport}\n\nRun relevant additional checks. Then return exactly one JSON object between <nd-dsh-review> and </nd-dsh-review>:\n<nd-dsh-review>{"verdict":"pass|fail","summary":"evidence-based review","issues":["..."],"memory":[{"title":"lesson","content":"durable lesson","tags":["review"]}]}</nd-dsh-review>`
 }
 
 function receipt(run: OrganizationRun): OrganizationRunReceipt {

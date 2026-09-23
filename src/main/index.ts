@@ -45,6 +45,7 @@ import { HarnessService } from './harness/harness-service.js'
 import { registerIpc } from './ipc.js'
 import { setTaskMetricsRecorder, taskMetricsRecorder, TaskMetricsRecorder } from './metrics/task-metrics.js'
 import { OrganizationApprovalGate } from './organization/approval-gate.js'
+import { createDecisionSupportFromEnv } from './organization/decision-support-config.js'
 import { ExecutionCoordinator } from './organization/execution-coordinator.js'
 import { registerOrganizationIpc } from './organization/ipc.js'
 import { OrganizationOrchestrator } from './organization/orchestrator.js'
@@ -325,7 +326,8 @@ async function createWindow(cdpPort: number): Promise<void> {
   // engine router admits them by the exact roots ND created — never by a path
   // shape a caller could construct.
   engineRouter.setWorktreeGuard((cwd) => taskWorktrees.ownsRoot(cwd))
-  const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter, projectRuntime, capabilities, executionCoordinator, taskWorktrees, core, { spawnProcess: unscopedCoreSpawn, stopProcess: stopCoreManagedChildProcess })
+  const decisionSupport = createDecisionSupportFromEnv()
+  const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter, projectRuntime, capabilities, executionCoordinator, taskWorktrees, core, { spawnProcess: unscopedCoreSpawn, stopProcess: stopCoreManagedChildProcess }, decisionSupport)
   const approvalGate = new OrganizationApprovalGate(organizationStore, harness)
   const qa = new QaService()
   qa.setProjectRoot(workspace.state().root)
