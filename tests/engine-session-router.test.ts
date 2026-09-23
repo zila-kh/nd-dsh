@@ -120,6 +120,57 @@ describe('direct engine workspace context', () => {
 })
 
 describe('native direct transcript retention', () => {
+  it('merges the local safety tail with post-restart native events', async () => {
+    const journal = {
+      async append() {},
+      async tail() {
+        return [
+          { type: 'assistant/message', seq: 101, time: 101, data: { text: 'after restart' } },
+          { type: 'assistant/message', seq: 102, time: 102, data: { text: 'after restart 2' } },
+        ]
+      },
+      async clear() {},
+    }
+    const fallbackEvents = Array.from({ length: 32 }, (_, index) => ({
+      type: 'assistant/message',
+      seq: 69 + index,
+      time: 69 + index,
+      data: { text: 'fallback-' + (69 + index) },
+    }))
+    const direct = {
+      run: async () => ({ sessionId: 'session-native' }),
+      stop: async () => {},
+      listModels: async () => [],
+      ownsSession: (id: string) => id === 'session-native',
+      createSession: async () => ({ sessionId: 'session-native' }),
+      listSessions: () => [],
+      transcript: () => ({ sessionId: 'session-native', engineId: 'codex-cli', events: fallbackEvents }),
+      handlesApproval: () => false,
+      respond: async () => {},
+      setEmitter: () => {},
+    }
+    const harness = { run: vi.fn(), stop: vi.fn(), gatewayRpc: vi.fn(async () => ({ ok: true })), status: () => ({}) }
+    const workspace = { state: () => workspaceState, assertUsable: vi.fn() }
+    const router = new EngineSessionRouter(
+      harness as never,
+      direct as never,
+      workspace as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      journal,
+    )
+
+    const transcript = await router.transcript('session-native')
+    expect(transcript.events[0]?.seq).toBe(69)
+    expect(transcript.events.at(-1)?.seq).toBe(102)
+    expect(transcript.events).toHaveLength(34)
+  })
+
   it('replays more history than the engine-local safety tail', async () => {
     const retained = new Map<string, Array<{ type: string; seq: number; time?: number; data?: unknown }>>()
     const journal = {
