@@ -177,8 +177,10 @@ export class TerminalManager {
     const terminal = await this.owned(sessionId, terminalId)
     const runtime = this.runtime(terminal.sessionId, terminal.id)
     terminal.status = 'starting'; terminal.updatedAt = Date.now(); delete terminal.exitCode; delete terminal.error
-    append(terminal, '\r\n\x1b[2m[ND] Restarted terminal.\x1b[0m\r\n')
+    const restartMarker = '\r\n\x1b[2m[ND] Restarted terminal.\x1b[0m\r\n'
     if (runtime?.process.restart) {
+      if (runtime.process.appendHistory) await runtime.process.appendHistory(restartMarker)
+      else append(terminal, restartMarker)
       // The runtime keeps the terminal's identity across the restart, so its output
       // sequence and its listeners continue rather than starting a new terminal.
       try {
@@ -199,6 +201,7 @@ export class TerminalManager {
         throw new Error(terminal.error)
       }
     }
+    append(terminal, restartMarker)
     this.detach(terminal.sessionId, terminal.id, true)
     delete terminal.pid
     await this.spawn(terminal, terminal.shell || undefined, false)
