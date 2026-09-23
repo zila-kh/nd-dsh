@@ -1,6 +1,6 @@
 # Reference-Inspired Runtime and Company Evolution Plan
 
-Status: proposed architecture plan  
+Status: **P0/P1 implementation slice complete; local validation pending**  
 Updated: 2026-09-24  
 Related: [PRD 0002](../prd/0002-rust-sidecar-mvp-migration.md) · [PRD 0003](../prd/0003-engine-neutral-agent-teams-and-task-workspace-isolation.md) · [Agent orchestration reference matrix](agent-orchestration-reference-matrix.md) · [Performance benchmark suite](performance-benchmark-suite.md) · [Phase 2 company scale](phase-2-agent-company-scale.md)
 
@@ -34,17 +34,19 @@ This plan deliberately keeps the current ND differentiators:
 
 ## 2. Current ND baseline
 
-At this plan's creation the Rust workspace is intentionally small:
+The implemented reference-architecture slice now has this Rust workspace:
 
 ```text
 crates/
+├── nd-protocol/
+├── nd-runtime/
 ├── nd-core/
 └── nd-browser-host/
 ```
 
-`nd-core` already owns shared runtime permits plus system-heavy primitives such as process, terminal, workspace, Git/search/revision, bounded protocol queues, deadlines/cancellation, cache, metrics, and a bounded session journal. Electron main still owns organization/business truth and engine orchestration.
+`nd-protocol` owns the wire/error contract. `nd-runtime` owns system-heavy services, the canonical effect journal, and the typed decision kernel. `nd-core` is now a thin composition/dispatch binary with only `src/main.rs`. Electron main still owns organization/business truth, provider credentials/network transport, and engine orchestration.
 
-This was the correct MVP shape. The next change should create only boundaries that have an independent protocol, durability contract, security boundary, or test/benchmark surface.
+This keeps crate boundaries tied to an independent protocol, durability contract, security boundary, or measurable runtime surface rather than mirroring another repository for appearance.
 
 ## 3. Reference synthesis
 
@@ -84,28 +86,18 @@ Do not jump from two crates to dozens of feature crates. Split only where the bo
 
 ```text
 crates/
-├── nd-protocol/        # P0
+├── nd-protocol/        # implemented P0
 │   ├── request/response/event envelopes
-│   ├── protocol versioning
-│   ├── error vocabulary
-│   ├── resource + sequence identity
-│   └── generated TypeScript/schema contracts
+│   ├── protocol versioning + frame limits
+│   └── error vocabulary + TS parity checks
 │
-├── nd-journal/         # P0
-│   ├── canonical execution/effect records
-│   ├── idempotency
-│   ├── recovery/reconciliation
-│   └── durable cursors
-│
-├── nd-runtime/         # P0 foundation, P1 decision kernel
-│   ├── scheduler
-│   ├── process
-│   ├── terminal
-│   ├── workspace
-│   ├── git/search/revision
-│   ├── deadline/cancellation
-│   ├── decision/       # typed rules/providers/calibration/receipts
-│   └── runtime metrics/cache
+├── nd-runtime/         # implemented P0/P1 foundation
+│   ├── scheduler/process/terminal
+│   ├── workspace/git/search/revision
+│   ├── deadline/cancellation/cache/metrics
+│   ├── session journal
+│   ├── effect_journal  # fsync + idempotency + recovery
+│   └── decision        # typed threshold/escalation/receipts
 │
 ├── nd-sandbox/         # P1, provider contract first
 │   ├── policy
@@ -275,28 +267,35 @@ Primary references: LoopX, QM, LazyCodex.
 
 The first Laya/Jev implementation in Electron main is the behavioral prototype, not the final runtime boundary. After `nd-protocol` and `nd-runtime` extraction stabilize, move the provider-neutral decision kernel into `nd-runtime`.
 
-Target flow:
+Implemented flow:
 
 ```text
-typed ND state
-  -> deterministic rules
-  -> Laya local System One provider
-  -> Jev optional escalation / second opinion
-  -> reasoning-model escalation signal when confidence remains insufficient
-  -> existing ND policy / verification / independent review authority
+Electron main provider gateway
+  ├── Laya HTTP via upstream laya-serve
+  └── Jev HTTPS + secure credential boundary
+             │ typed provider observations
+             v
+nd-core / nd-runtime Rust decision kernel
+  ├── threshold + selection
+  ├── continue/escalate decision
+  └── typed receipt
+             v
+existing ND policy / machine verification / independent review authority
 ```
 
 Rules:
 
-- keep Company/Project/Task business truth TypeScript-owned in this phase;
-- Rust owns the typed decision request/result/receipt, provider ordering, confidence threshold, timeout/failure containment, calibration hooks, and decision metrics;
-- Laya initially stays out-of-process through upstream `laya-serve`; do not port or bundle its model merely to make the architecture look more native;
-- Jev remains an optional HTTPS provider behind the same contract;
-- future ONNX/native inference may replace only the Laya provider implementation after matched quality/performance evidence;
+- Company/Project/Task business truth stays TypeScript-owned in this phase;
+- provider credentials, HTTPS, timeout handling, and network policy stay in the existing Electron main provider gateway;
+- Rust owns the reusable typed attempt/result validation, confidence threshold, selection, continuation/escalation semantics, and receipt;
+- Laya stays out-of-process through upstream `laya-serve`; no model weights are bundled merely to make the boundary more native;
+- Jev remains an optional HTTPS provider behind the same typed observation contract;
+- one shared fixture corpus checks TypeScript/Rust cascade parity;
+- future ONNX/native inference may replace the local provider transport without changing the Rust decision contract;
 - decision support never overrides machine verification, policy gates, exact-evidence rules, or independent semantic review;
-- shadow parity must precede any Rust path becoming authoritative for additional lifecycle decisions.
+- Rust remains opt-in until local shadow/live-provider evidence promotes it.
 
-Implementation ticket: [TODO 0034 — Move Decision Support Kernel into Rust](../tasks/wip-0034-rust-decision-kernel.md).
+Implementation ticket: [WIP 0034 — Rust Decision Kernel](../tasks/wip-0034-rust-decision-kernel.md).
 
 ## 7. P2 — company quality and interoperability
 
@@ -373,7 +372,7 @@ Primary reference: PocketPaw.
 | 8 | employee evals + budget envelopes | P2 | feeds measurable routing/company quality |
 | 9 | portable company packages + A2A/notifications | P2 | interoperability after core authority is stable |
 
-P0 items should be delivered incrementally. Do not land all three as one giant Rust rewrite.
+Orders 1–4 are implemented on `feat/reference-architecture-plan`; local correctness/performance/live-provider evidence is the remaining merge gate. Orders 5–9 remain follow-on work and are not silently claimed complete by this PR.
 
 ## 9. Benchmark and proof contract
 
