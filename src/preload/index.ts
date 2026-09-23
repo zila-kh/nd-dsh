@@ -17,6 +17,7 @@ import {
   type BrowserPlatformState,
   type BrowserSelection,
   type BrowserSitePermission,
+  type BrowserSiteToolDescriptor,
   type BrowserTabDescriptor,
 } from '../shared/browser-platform.js'
 import { IPC, type DesktopApi, type ModelProvider } from '../shared/contracts.js'
@@ -167,12 +168,18 @@ const api: DesktopApi = {
     history: (targetId?: string) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.history, targetId) as Promise<BrowserHistoryEntry[]>,
     clearBrowserData: (input: { targetId?: string; origin?: string; history?: boolean }) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.clearData, input) as Promise<void>,
     cancelDownload: (downloadId: string) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.cancelDownload, downloadId) as Promise<boolean>,
+    openDownload: (downloadId: string) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.openDownload, downloadId) as Promise<boolean>,
+    revealDownload: (downloadId: string) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.revealDownload, downloadId) as Promise<boolean>,
     installExtension: () => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.installExtension) as Promise<BrowserExtensionRecord | null>,
     setExtensionEnabled: (extensionId: string, enabled: boolean) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.extensionEnabled, extensionId, enabled) as Promise<BrowserExtensionRecord[]>,
     removeExtension: (extensionId: string) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.removeExtension, extensionId) as Promise<BrowserExtensionRecord[]>,
     saveCredential: (input: { origin: string; username: string; password: string; label?: string }) =>
       ipcRenderer.invoke(BROWSER_PLATFORM_IPC.saveCredential, input) as Promise<BrowserCredentialSummary>,
     removeCredential: (credentialId: string) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.removeCredential, credentialId) as Promise<boolean>,
+    autofillCredential: (credentialId: string, targetId?: string, tabId?: string) =>
+      ipcRenderer.invoke(BROWSER_PLATFORM_IPC.autofillCredential, credentialId, targetId, tabId) as Promise<{ ok: true; credentialId: string; username: string }>,
+    siteTools: (targetId?: string, tabId?: string) =>
+      ipcRenderer.invoke(BROWSER_PLATFORM_IPC.siteTools, targetId, tabId) as Promise<BrowserSiteToolDescriptor[]>,
     setSitePermission: (origin: string, permission: string, effect: 'allow' | 'deny') =>
       ipcRenderer.invoke(BROWSER_PLATFORM_IPC.setSitePermission, origin, permission, effect) as Promise<BrowserSitePermission>,
     resolveApproval: (approvalId: string, allowed: boolean) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.resolveApproval, approvalId, allowed) as Promise<boolean>,
