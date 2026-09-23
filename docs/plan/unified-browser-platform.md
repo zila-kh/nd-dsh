@@ -2,8 +2,8 @@
 
 > Status: planning only
 > Branch: `feat/unified-browser-platform-plan`
-> Base: `main@d1aed436`
-> Depends on: PR #32 / Browser Companion MVP
+> Base: `main@9e0fcc5`
+> Builds on: Browser Companion MVP merged via PR #32 (`main@9e0fcc5`)
 > Updated: 2026-09-23
 
 ## Objective
@@ -184,7 +184,7 @@ claim that Electron is Chrome.
 
 ## Existing-Chrome target
 
-PR #32 provides the external Chrome path:
+The Browser Companion MVP merged via PR #32 provides the external Chrome path:
 
 - Chrome MV3 extension;
 - Native Messaging;
@@ -306,10 +306,10 @@ capability.
 
 | Task | Scope | Depends on |
 | --- | --- | --- |
-| 0020 | built-in browser runtime capability spike + decision | PR #32 reference only |
+| 0020 | built-in browser runtime capability spike + decision | Browser Companion merged baseline reference |
 | 0021 | BrowserTarget contract + target router | 0020 |
 | 0022 | built-in multi-tab/profile target | 0021 |
-| 0023 | Browser Companion adapter convergence | PR #32, 0021 |
+| 0023 | Browser Companion adapter convergence | merged Browser Companion baseline, 0021 |
 | 0024 | built-in history/download/browser-data manager | 0022 |
 | 0025 | credential vault + password/autofill mediation | 0020, 0022 |
 | 0026 | built-in extension manager + compatibility matrix | 0020, 0022 |
@@ -374,7 +374,7 @@ Planning is complete when:
 
 - PRD 0005 is approved;
 - task 0020-0030 scopes are accepted;
-- PR #32 remains independently reviewable;
+- the Browser Companion baseline already merged on `main` remains preserved as the external-browser foundation;
 - no browser-platform implementation has been added to this documentation branch.
 
 Then implementation starts with task 0020 only.
