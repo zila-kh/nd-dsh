@@ -33,6 +33,7 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
   const addressFocused = useRef(false)
   const [address, setAddress] = useState(state?.url ?? 'about:blank')
   const [platform, setPlatform] = useState<BrowserPlatformState | null>(null)
+  const [siteToolCount, setSiteToolCount] = useState(0)
 
   const builtinTabs = state?.tabs ?? []
   const activeTabId = state?.activeTabId
@@ -61,6 +62,19 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
       dispose()
     }
   }, [])
+
+  useEffect(() => {
+    let mounted = true
+    const selectedTabId = platform?.selection.mode === 'tab' && platform.selection.targetId === targetForTabs
+      ? platform.selection.tabId
+      : targetForTabs === 'builtin'
+        ? state?.activeTabId
+        : targetTabs.find((tab) => tab.active)?.id
+    void window.ndDsh.browserPlatform.siteTools(targetForTabs, selectedTabId)
+      .then((tools) => { if (mounted) setSiteToolCount(tools.length) })
+      .catch(() => { if (mounted) setSiteToolCount(0) })
+    return () => { mounted = false }
+  }, [platform?.selection, state?.activeTabId, state?.url, targetForTabs, targetTabs])
 
   const runBrowserAction = async (action: () => Promise<unknown>): Promise<void> => {
     try {
@@ -294,6 +308,11 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
         {state?.downloads?.some((item) => item.state === 'progressing' || item.state === 'starting') ? (
           <BridgePill state="binding" title="Built-in browser download in progress">
             Downloading
+          </BridgePill>
+        ) : null}
+        {siteToolCount > 0 ? (
+          <BridgePill state="ready" title="Structured WebMCP site tools are available on the selected tab">
+            Site tools: {siteToolCount}
           </BridgePill>
         ) : null}
         <BridgePill state={state?.agentBrowser ?? 'binding'} title={state?.agentBrowserError}>
