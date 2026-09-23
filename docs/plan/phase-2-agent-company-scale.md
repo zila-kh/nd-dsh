@@ -202,7 +202,7 @@ ND selects routes using:
 
 Record every decision so routing can improve from actual outcomes.
 
-Implementation direction: keep organization intent and policy in TypeScript, but route typed low-cost decisions through the Rust decision kernel after [TODO 0023](../tasks/todo-0023-rust-decision-kernel.md) reaches parity. Deterministic rules remain first; Laya/Jev are replaceable System One providers; strong reasoning models remain the escalation path when confidence is insufficient.
+Implementation direction: keep organization intent and policy in TypeScript, but route typed low-cost decisions through the Rust decision kernel after [TODO 0034](../tasks/todo-0034-rust-decision-kernel.md) reaches parity. Deterministic rules remain first; Laya/Jev are replaceable System One providers; strong reasoning models remain the escalation path when confidence is insufficient.
 
 Example learned metric:
 
