@@ -90,6 +90,11 @@ export class HarnessService {
     return { ...this.statusValue }
   }
 
+  /** Rebuild the volatile nd-core event journal from live Harness snapshots. */
+  async rehydrateEventJournal(): Promise<void> {
+    await this.eventHub.rehydrate()
+  }
+
   /** Consume the user's cancellation intent for one session exactly once. */
   consumeCanceledSession(sessionId: string): boolean {
     return this.canceledSessions.delete(sessionId)
