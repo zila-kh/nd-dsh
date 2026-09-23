@@ -81,6 +81,7 @@ export class BrowserTargetRouter {
       return this.selection()
     }
     if (method === 'browser.tabs') {
+      this.requireAgentSession(context, method)
       const targetId = await this.resolveTargetId(params)
       return this.tabs(targetId)
     }
@@ -171,6 +172,7 @@ export class BrowserTargetRouter {
       return result
     }
     if (method === 'browser.downloads') {
+      this.requireAgentSession(context, method)
       const targetId = await this.resolveTargetId(params)
       if (targetId !== 'builtin') throw new Error('Download state is available only for the ND built-in browser')
       const descriptor = await this.builtin.descriptor()
@@ -245,6 +247,7 @@ export class BrowserTargetRouter {
     const descriptor = await target.descriptor()
 
     if (method === 'browser.snapshot') {
+      this.requireAgentSession(context, method)
       return this.runAction(context, {
         operation: 'browser.snapshot',
         targetId,
@@ -254,6 +257,7 @@ export class BrowserTargetRouter {
       }, () => target.snapshot(tabId))
     }
     if (method === 'browser.screenshot') {
+      this.requireAgentSession(context, method)
       return this.runAction(context, {
         operation: 'browser.screenshot',
         targetId,
@@ -263,6 +267,7 @@ export class BrowserTargetRouter {
       }, () => target.screenshot(tabId))
     }
     if (method === 'browser.waitFor') {
+      this.requireAgentSession(context, method)
       return this.runAction(context, {
         operation: 'browser.waitFor',
         targetId,
@@ -276,6 +281,7 @@ export class BrowserTargetRouter {
       }))
     }
     if (method === 'browser.siteTools') {
+      this.requireAgentSession(context, method)
       return this.runAction(context, {
         operation: 'browser.siteTools.list',
         targetId,
