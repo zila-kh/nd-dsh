@@ -331,7 +331,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   engineRouter.setWorktreeGuard((cwd) => taskWorktrees.ownsRoot(cwd))
   const decisionSupport = createDecisionSupportFromEnv(process.env, fetch, core)
   const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter, projectRuntime, capabilities, executionCoordinator, taskWorktrees, core, { spawnProcess: unscopedCoreSpawn, stopProcess: stopCoreManagedChildProcess }, decisionSupport)
-  const approvalGate = new OrganizationApprovalGate(organizationStore, harness)
+  const approvalGate = new OrganizationApprovalGate(organizationStore, harness, core)
   const qa = new QaService()
   qa.setProjectRoot(workspace.state().root)
   const disposeIpc = registerIpc({ window, preloadPath: preload, browser, dshSurface, engines, engineRouter, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, qa, sessionArchive, usageLedger, capabilities, organizationStore })
