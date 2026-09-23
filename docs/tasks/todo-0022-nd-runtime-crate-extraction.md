@@ -2,7 +2,7 @@
 
 > Plan: [Reference-Inspired Runtime and Company Evolution](../plan/reference-inspired-runtime-company-evolution.md)  
 > Priority: P0  
-> Status: todo  
+> Status: **implementation complete; local validation pending**  
 > Depends on: TODO 0020 and TODO 0021  
 > Owner: unassigned
 
@@ -10,9 +10,9 @@
 
 Move system-heavy implementations behind a focused `nd-runtime` crate while keeping `nd-core` as the shipped thin composition binary.
 
-## Scope
+## Implemented
 
-Candidate runtime services:
+`crates/nd-runtime` now owns:
 
 - scheduler;
 - process lifecycle;
@@ -20,19 +20,29 @@ Candidate runtime services:
 - workspace;
 - Git/search/revision;
 - deadlines/cancellation;
-- cache/metrics.
+- response cache and runtime metrics;
+- session journal;
+- workspace snapshot;
+- platform process-tree support;
+- canonical effect journal;
+- typed decision kernel.
 
-## Rules
+`crates/nd-core/src` now contains only `main.rs`: startup, service composition, protocol dispatch, and shutdown.
 
-- protocol types do not depend on runtime implementations;
-- runtime code does not import Electron/product UI concepts;
-- organization/business truth remains TypeScript-owned;
-- no behavior change is accepted merely to complete the move;
-- do not create additional feature crates unless an independent contract/security/durability boundary justifies them.
+The old implementation copies were removed from `nd-core`; this is a real extraction rather than duplicated modules.
 
-## Acceptance
+## Rules preserved
 
-- `nd-core` composes services and owns startup/shutdown/dispatch only;
-- current correctness tests remain green locally;
-- cold start, memory, terminal/workspace/Git benchmarks show no unjustified regression;
-- packaging remains one normal ND Core binary.
+- `nd-protocol` does not depend on runtime implementations;
+- `nd-runtime` imports no Electron/product UI concepts;
+- Company/Project/Task business truth remains TypeScript-owned;
+- packaging still builds one normal `nd-core` binary;
+- no transport change was introduced by the crate split.
+
+## Acceptance status
+
+Implementation is complete. Local clippy/tests plus cold-start/runtime benchmark comparison remain required before merge to `main`.
+
+## Handoff
+
+See [Reference Architecture Local Validation Handoff](../plan/reference-architecture-local-validation-handoff.md).
