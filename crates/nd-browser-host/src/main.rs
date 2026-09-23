@@ -2,8 +2,6 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::json;
 use std::env;
-#[cfg(not(unix))]
-use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::thread;
@@ -18,71 +16,130 @@ struct Discovery {
     token: String,
 }
 
-enum LocalStream {
-    #[cfg(unix)]
-    Unix(std::os::unix::net::UnixStream),
-    #[cfg(not(unix))]
-    File(File),
-}
+#[cfg(unix)]
+type LocalStream = std::os::unix::net::UnixStream;
 
-impl LocalStream {
-    fn connect(endpoint: &str) -> Result<Self> {
-        #[cfg(unix)]
-        {
-            return Ok(Self::Unix(
-                std::os::unix::net::UnixStream::connect(endpoint)
-                    .with_context(|| format!("connect ND browser socket {endpoint}"))?,
-            ));
+#[cfg(windows)]
+type LocalStream = windows_pipe::OverlappedPipe;
+
+/// Windows coordinates I/O on a synchronous pipe handle: while one thread holds
+/// a pending read, a write from the other thread waits for that read to finish.
+/// A command/response round trip therefore stalled until the desktop sent fresh
+/// traffic, which never happens while it awaits the response. Overlapped I/O
+/// with one event per direction is the documented way to keep both directions
+/// of a named pipe live at once.
+#[cfg(windows)]
+mod windows_pipe {
+    use anyhow::{Context, Result};
+    use std::io::{self, Read, Write};
+    use std::mem;
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
+    use windows_sys::Win32::Foundation::{
+        ERROR_BROKEN_PIPE, ERROR_IO_PENDING, HANDLE, WAIT_OBJECT_0,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{ReadFile, WriteFile};
+    use windows_sys::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
+    use windows_sys::Win32::System::Threading::{
+        CreateEventW, INFINITE, ResetEvent, WaitForSingleObject,
+    };
+
+    const FILE_FLAG_OVERLAPPED: u32 = 0x4000_0000;
+
+    pub struct OverlappedPipe {
+        handle: OwnedHandle,
+        read_event: OwnedHandle,
+        write_event: OwnedHandle,
+    }
+
+    impl OverlappedPipe {
+        pub fn connect(endpoint: &str) -> Result<Self> {
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .custom_flags(FILE_FLAG_OVERLAPPED)
+                .open(endpoint)
+                .with_context(|| format!("open ND browser pipe {endpoint}"))?;
+            Ok(Self {
+                handle: OwnedHandle::from(file),
+                read_event: completion_event()?,
+                write_event: completion_event()?,
+            })
         }
-        #[cfg(not(unix))]
-        {
-            Ok(Self::File(
-                OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .open(endpoint)
-                    .with_context(|| format!("open ND browser pipe {endpoint}"))?,
-            ))
+
+        pub fn try_clone(&self) -> Result<Self> {
+            Ok(Self {
+                handle: self.handle.try_clone()?,
+                read_event: completion_event()?,
+                write_event: completion_event()?,
+            })
+        }
+
+        fn transfer(&self, buffer: *mut u8, length: usize, outbound: bool) -> io::Result<u32> {
+            let length = length.min(u32::MAX as usize) as u32;
+            let handle: HANDLE = self.handle.as_raw_handle() as HANDLE;
+            let event: HANDLE = if outbound {
+                self.write_event.as_raw_handle() as HANDLE
+            } else {
+                self.read_event.as_raw_handle() as HANDLE
+            };
+            // One operation per direction is ever in flight, so clearing the
+            // event here keeps it from reporting an earlier completion.
+            unsafe { ResetEvent(event) };
+            let mut overlapped: OVERLAPPED = unsafe { mem::zeroed() };
+            overlapped.hEvent = event;
+            let mut transferred = 0u32;
+            let started = unsafe {
+                if outbound {
+                    WriteFile(handle, buffer, length, &mut transferred, &mut overlapped)
+                } else {
+                    ReadFile(handle, buffer, length, &mut transferred, &mut overlapped)
+                }
+            };
+            if started != 0 {
+                return Ok(transferred);
+            }
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() != Some(ERROR_IO_PENDING as i32) {
+                return Err(error);
+            }
+            if unsafe { WaitForSingleObject(event, INFINITE) } != WAIT_OBJECT_0 {
+                return Err(io::Error::last_os_error());
+            }
+            if unsafe { GetOverlappedResult(handle, &overlapped, &mut transferred, 0) } == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(transferred)
         }
     }
 
-    fn try_clone(&self) -> Result<Self> {
-        match self {
-            #[cfg(unix)]
-            Self::Unix(stream) => Ok(Self::Unix(stream.try_clone()?)),
-            #[cfg(not(unix))]
-            Self::File(file) => Ok(Self::File(file.try_clone()?)),
+    fn completion_event() -> Result<OwnedHandle> {
+        let handle = unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) };
+        if handle.is_null() {
+            return Err(io::Error::last_os_error().into());
         }
+        Ok(unsafe { OwnedHandle::from_raw_handle(handle as RawHandle) })
     }
-}
 
-impl Read for LocalStream {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        match self {
-            #[cfg(unix)]
-            Self::Unix(stream) => stream.read(buf),
-            #[cfg(not(unix))]
-            Self::File(file) => file.read(buf),
-        }
-    }
-}
-
-impl Write for LocalStream {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        match self {
-            #[cfg(unix)]
-            Self::Unix(stream) => stream.write(buf),
-            #[cfg(not(unix))]
-            Self::File(file) => file.write(buf),
+    impl Read for OverlappedPipe {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            match self.transfer(buf.as_mut_ptr(), buf.len(), false) {
+                Ok(transferred) => Ok(transferred as usize),
+                // The desktop closed the pipe: report EOF rather than a failure.
+                Err(error) if error.raw_os_error() == Some(ERROR_BROKEN_PIPE as i32) => Ok(0),
+                Err(error) => Err(error),
+            }
         }
     }
 
-    fn flush(&mut self) -> io::Result<()> {
-        match self {
-            #[cfg(unix)]
-            Self::Unix(stream) => stream.flush(),
-            #[cfg(not(unix))]
-            Self::File(file) => file.flush(),
+    impl Write for OverlappedPipe {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.transfer(buf.as_ptr().cast_mut(), buf.len(), true)
+                .map(|transferred| transferred as usize)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
         }
     }
 }
