@@ -1,8 +1,8 @@
 # Task 0017 — Laya + Jev decision support
 
-Status: **implementation complete; local validation pending**
+Status: **merged to main via PR #36; implementation complete; local validation pending**
 
-Integrated branch: `feat/reference-architecture-plan`  
+Historical integration branch: `feat/reference-architecture-plan`  
 Original implementation branch: `feat/decision-support-laya-jev`
 
 ## Goal
@@ -53,8 +53,8 @@ Then set `ND_LAYA_SYSTEMONE_URL=http://127.0.0.1:8765`. Leave `ND_LAYA_MODEL` un
 Run locally from the repository root:
 
 ```bash
-git switch feat/reference-architecture-plan
-git pull
+git switch main
+git pull --ff-only
 pnpm typecheck
 pnpm test -- decision-support
 pnpm test
