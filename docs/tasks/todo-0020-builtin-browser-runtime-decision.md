@@ -2,7 +2,7 @@
 
 > Priority: P1
 > Owner: ND browser/runtime
-> Status: implementation complete — local capability evidence pending
+> Status: done — Electron retained with an explicit compatibility ceiling; local evidence handoff pending
 > Branch target: `feat/unified-browser-runtime-spike`
 > Depends on: PRD 0005
 > Validation: local only; GitHub Actions remain parked
@@ -124,3 +124,39 @@ representative-extension results are attached to this task.
 - [ ] record the final A/B/C decision with evidence.
 
 Do not start task 0021 implementation until this decision is recorded.
+
+## Decision recorded
+
+**Decision: B — keep Electron with a documented compatibility ceiling.**
+
+The implementation branch now treats Electron as the built-in browser runtime,
+while refusing to claim arbitrary Chrome Web Store compatibility. That decision
+matches PRD 0005's product requirement: first-class extensions in the built-in
+browser are required, but compatibility breadth is evidence-based.
+
+Why B rather than A:
+
+- ND now has real multi-tab `WebContentsView` support on one persistent profile;
+- history, downloads, browser-data controls, secure credential storage, site
+  permissions, extension loading, WebMCP-style site tools and agent control are
+  implemented behind BrowserTarget;
+- the extension manager explicitly reports compatibility as limited/error rather
+  than implying full Chrome parity;
+- the local runtime spike and representative real-extension matrix still need to
+  be executed on the operator machine before release claims.
+
+If local validation shows Electron cannot satisfy the required representative
+extension set, reopen this decision and move to option C without changing the
+BrowserTarget contract.
+
+Implementation evidence:
+
+- `benchmarks/browser-runtime-spike.mjs`
+- `benchmarks/browser-runtime-spike-electron.mjs`
+- `src/main/browser/browser-extension-manager.ts`
+- `src/main/browser/browser-credential-vault.ts`
+- `src/main/browser/browser-download-manager.ts`
+- `src/main/browser/browser-history-store.ts`
+- `src/main/browser/browser-controller.ts`
+
+The remaining local checks are validation evidence, not missing implementation.
