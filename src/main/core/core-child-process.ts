@@ -48,6 +48,40 @@ export function createCoreSpawn(
   return spawn
 }
 
+/**
+ * Stop a child whose lifecycle is owned by nd-core.
+ *
+ * `ChildProcess.kill()` on the adapter maps to `process.cancel`, which is the
+ * whole-tree teardown boundary implemented by the Rust supervisor. Callers that
+ * use this helper must therefore create the child through `createCoreSpawn`;
+ * unlike the legacy Node teardown helpers, this path never launches taskkill or
+ * signals a process group from Electron.
+ */
+export async function stopCoreManagedChildProcess(
+  child: ChildProcess,
+  timeoutMs = 5_000,
+): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return
+  await new Promise<void>((resolve) => {
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const finish = (): void => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      resolve()
+    }
+    child.once('exit', finish)
+    child.once('error', finish)
+    timer = setTimeout(finish, Math.max(250, timeoutMs))
+    try {
+      if (!child.kill()) finish()
+    } catch {
+      finish()
+    }
+  })
+}
+
 class CoreChildProcess extends EventEmitter {
   readonly stdin: Writable
   readonly stdout = new PassThrough()
