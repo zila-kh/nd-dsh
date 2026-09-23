@@ -8,6 +8,38 @@ import { TerminalManager, type PtyProcessLike, type PtySpawnOptions } from '../s
 const dirs: string[] = []
 afterEach(async () => { await Promise.all(dirs.splice(0).map((path) => rm(path, { recursive: true, force: true }))) })
 
+class NativeTailPty implements PtyProcessLike {
+  writes: string[] = []
+  killed = false
+  private data: ((value: string) => void) | undefined
+  private exit: ((value: { exitCode: number; signal?: number }) => void) | undefined
+  private tail: string
+  private seq: number
+
+  constructor(
+    readonly pid: number,
+    initialBuffer = '',
+    initialSeq = 0,
+  ) {
+    this.tail = initialBuffer
+    this.seq = initialSeq
+  }
+
+  write(data: string): void { this.writes.push(data) }
+  resize(): void {}
+  kill(): void { this.killed = true }
+  onData(listener: (data: string) => void) { this.data = listener; return { dispose: () => { this.data = undefined } } }
+  onExit(listener: (event: { exitCode: number; signal?: number }) => void) { this.exit = listener; return { dispose: () => { this.exit = undefined } } }
+  async tailState(): Promise<{ seq: number; buffer: string }> { return { seq: this.seq, buffer: this.tail } }
+  async appendHistory(data: string): Promise<void> { this.tail = `${this.tail}${data}`.slice(-(512 * 1024)) }
+  emit(data: string): void {
+    this.seq += 1
+    this.tail = `${this.tail}${data}`.slice(-(512 * 1024))
+    this.data?.(data)
+  }
+  emitExit(exitCode: number): void { this.exit?.({ exitCode }) }
+}
+
 class FakePty implements PtyProcessLike {
   writes: string[] = []
   killed = false
@@ -78,6 +110,66 @@ describe('TerminalManager', () => {
     const restored = new TerminalManager({ storePath: join(root, 'terminals.json'), workspace: { state: () => ({ root, name: 'fixture' }) }, spawn: () => { const pty = new FakePty(2000 + restoredPtys.length); restoredPtys.push(pty); return pty } })
     await restored.initialize(); const state = await restored.state('chat-a')
     expect(restoredPtys).toHaveLength(1); expect(state.terminals[0]!.id).toBe(id); expect(state.terminals[0]!.status).toBe('running'); expect(state.terminals[0]!.recovered).toBe(true); expect(state.terminals[0]!.buffer).toContain('before restart'); expect(state.terminals[0]!.buffer).toContain('Restored terminal')
+    await restored.shutdown()
+  })
+
+  it('reads live scrollback from the native tail instead of requiring a JS hot buffer', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nd-terminal-native-')); dirs.push(root)
+    const ptys: NativeTailPty[] = []
+    const manager = new TerminalManager({
+      storePath: join(root, 'terminals.json'),
+      workspace: { state: () => ({ root, name: 'fixture' }) },
+      spawn: (_file, _args, options) => {
+        const pty = new NativeTailPty(3000 + ptys.length, options.initialBuffer, options.initialOutputSeq)
+        ptys.push(pty)
+        return pty
+      },
+    })
+    await manager.initialize()
+    const created = await manager.create({ sessionId: 'chat-native' })
+    ptys[0]!.emit('native scrollback\r\n')
+    const state = await manager.state('chat-native')
+    expect(state.terminals[0]!.id).toBe(created.terminals[0]!.id)
+    expect(state.terminals[0]!.buffer).toContain('native scrollback')
+    expect(state.terminals[0]!.outputSeq).toBe(1)
+    await manager.shutdown()
+  })
+
+  it('seeds the native tail from persisted scrollback after desktop restart', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nd-terminal-native-restore-')); dirs.push(root)
+    const storePath = join(root, 'terminals.json')
+    const firstPtys: NativeTailPty[] = []
+    const first = new TerminalManager({
+      storePath,
+      workspace: { state: () => ({ root, name: 'fixture' }) },
+      spawn: (_file, _args, options) => {
+        const pty = new NativeTailPty(3100 + firstPtys.length, options.initialBuffer, options.initialOutputSeq)
+        firstPtys.push(pty)
+        return pty
+      },
+    })
+    await first.initialize()
+    const created = await first.create({ sessionId: 'chat-native' })
+    firstPtys[0]!.emit('before native restart\r\n')
+    await first.shutdown()
+
+    const restoredPtys: NativeTailPty[] = []
+    const restored = new TerminalManager({
+      storePath,
+      workspace: { state: () => ({ root, name: 'fixture' }) },
+      spawn: (_file, _args, options) => {
+        const pty = new NativeTailPty(3200 + restoredPtys.length, options.initialBuffer, options.initialOutputSeq)
+        restoredPtys.push(pty)
+        return pty
+      },
+    })
+    await restored.initialize()
+    const state = await restored.state('chat-native')
+    expect(restoredPtys).toHaveLength(1)
+    expect(state.terminals[0]!.id).toBe(created.terminals[0]!.id)
+    expect(state.terminals[0]!.buffer).toContain('before native restart')
+    expect(state.terminals[0]!.buffer).toContain('Restored terminal')
+    expect(state.terminals[0]!.recovered).toBe(true)
     await restored.shutdown()
   })
 
