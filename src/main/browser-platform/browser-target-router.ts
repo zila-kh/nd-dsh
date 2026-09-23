@@ -67,7 +67,7 @@ export class BrowserTargetRouter {
   async tabs(targetId?: string): Promise<BrowserTabDescriptor[]> {
     if (targetId) return (await this.target(targetId)).listTabs()
     const targets = await this.targetInstances()
-    return (await Promise.all(targets.map((target) => target.listTabs()))).flat()
+    return (await Promise.all(targets.map((target) => target.listTabs().catch(() => [])))).flat()
   }
 
   async call(method: string, params: Record<string, unknown>, source: 'agent' | 'renderer' = 'agent'): Promise<unknown> {
