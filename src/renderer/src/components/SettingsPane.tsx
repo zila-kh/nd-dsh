@@ -96,6 +96,8 @@ export function SettingsPane({
   const [credentialOrigin, setCredentialOrigin] = useState('')
   const [credentialUsername, setCredentialUsername] = useState('')
   const [credentialPassword, setCredentialPassword] = useState('')
+  const [permissionOrigin, setPermissionOrigin] = useState('')
+  const [permissionName, setPermissionName] = useState('notifications')
 
   const activeSubTab = propSubTab ?? internalSubTab
   const handleSelectSubTab = (selected: GeneralSubTab): void => {
@@ -468,6 +470,43 @@ export function SettingsPane({
                                   .catch((cause) => onError(errorMessage(cause)))
                               }}>Cancel</SettingsButton>
                             ) : <StatusChip good={download.state === 'completed'}>{download.state}</StatusChip>}
+                          </SettingsRow>
+                        ))}
+                        <SettingsRow>
+                          <div className="grid min-w-0 flex-1 grid-cols-2 gap-1.5">
+                            <input
+                              aria-label="Site permission origin"
+                              placeholder="https://example.com"
+                              value={permissionOrigin}
+                              onChange={(event) => setPermissionOrigin(event.target.value)}
+                              className="min-w-0 rounded-md border border-border bg-background px-2 py-1 text-[10px] outline-none"
+                            />
+                            <input
+                              aria-label="Browser permission name"
+                              placeholder="notifications"
+                              value={permissionName}
+                              onChange={(event) => setPermissionName(event.target.value)}
+                              className="min-w-0 rounded-md border border-border bg-background px-2 py-1 text-[10px] outline-none"
+                            />
+                          </div>
+                          <div className="flex shrink-0 gap-1.5">
+                            <SettingsButton onClick={() => {
+                              void window.ndDsh.browserPlatform.setSitePermission(permissionOrigin, permissionName, 'deny')
+                                .catch((cause) => onError(errorMessage(cause)))
+                            }}>Deny</SettingsButton>
+                            <SettingsButton onClick={() => {
+                              void window.ndDsh.browserPlatform.setSitePermission(permissionOrigin, permissionName, 'allow')
+                                .catch((cause) => onError(errorMessage(cause)))
+                            }}>Allow</SettingsButton>
+                          </div>
+                        </SettingsRow>
+                        {(browserPlatform?.sitePermissions ?? []).slice(0, 12).map((permission) => (
+                          <SettingsRow key={`${permission.origin}:${permission.permission}`}>
+                            <div className={rowStack}>
+                              <strong className={rowTitle}>{permission.permission}</strong>
+                              <span className={rowDesc}>{permission.origin}</span>
+                            </div>
+                            <StatusChip good={permission.effect === 'allow'}>{permission.effect}</StatusChip>
                           </SettingsRow>
                         ))}
                         <SettingsRow>
