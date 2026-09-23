@@ -171,6 +171,13 @@ export interface BrowserCredentialSummary {
   updatedAt: number
 }
 
+export interface BrowserSitePermission {
+  origin: string
+  permission: string
+  effect: 'allow' | 'deny'
+  updatedAt: number
+}
+
 export interface BrowserSiteToolDescriptor {
   name: string
   title?: string
@@ -192,6 +199,7 @@ export interface BrowserPlatformState {
   downloads: BrowserDownloadRecord[]
   extensions: BrowserExtensionRecord[]
   credentials: BrowserCredentialSummary[]
+  sitePermissions: BrowserSitePermission[]
   approvals: BrowserApprovalRequest[]
   receipts: BrowserActionReceipt[]
 }
@@ -210,6 +218,7 @@ export interface BrowserPlatformDesktopApi {
   removeExtension(extensionId: string): Promise<BrowserExtensionRecord[]>
   saveCredential(input: { origin: string; username: string; password: string; label?: string }): Promise<BrowserCredentialSummary>
   removeCredential(credentialId: string): Promise<boolean>
+  setSitePermission(origin: string, permission: string, effect: 'allow' | 'deny'): Promise<BrowserSitePermission>
   resolveApproval(approvalId: string, allowed: boolean): Promise<boolean>
   onChanged(listener: (state: BrowserPlatformState) => void): () => void
 }
@@ -228,6 +237,7 @@ export const BROWSER_PLATFORM_IPC = {
   removeExtension: 'browser-platform:remove-extension',
   saveCredential: 'browser-platform:save-credential',
   removeCredential: 'browser-platform:remove-credential',
+  setSitePermission: 'browser-platform:set-site-permission',
   resolveApproval: 'browser-platform:resolve-approval',
   changedEvent: 'browser-platform:changed-event',
 } as const
