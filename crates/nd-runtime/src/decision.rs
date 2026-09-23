@@ -113,10 +113,11 @@ pub fn evaluate(params: DecisionEvaluateParams) -> Result<DecisionEvaluateResult
             selected_provider.is_none() && attempted < params.provider_count
         }
     };
-    let escalated = attempted > 1
-        || (attempted == 1
-            && selected_provider.is_none()
-            && params.provider_count > 1);
+    let escalated = params.mode == DecisionSupportMode::Assist
+        && (attempted > 1
+            || (attempted == 1
+                && selected_provider.is_none()
+                && params.provider_count > 1));
 
     Ok(DecisionEvaluateResult {
         receipt: DecisionReceipt {
@@ -320,5 +321,6 @@ mod tests {
         .unwrap();
         assert_eq!(result.receipt.selected_provider, None);
         assert!(result.should_continue);
+        assert!(!result.receipt.escalated);
     }
 }
