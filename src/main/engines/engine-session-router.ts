@@ -5,6 +5,7 @@ import type {
   EngineModelOption,
   EngineSessionSummary,
   EngineSessionTranscript,
+  SessionEventEnvelope,
   HarnessRunOptions,
   HarnessRunResult,
   HarnessStatus,
@@ -19,12 +20,19 @@ import {
   PI_CODING_ENGINE_ID,
   ZCODE_CLI_ENGINE_ID,
 } from '../../shared/coding-engines.js'
-import { MINIMAX_CLI_ENGINE_ID } from '../../shared/extra-coding-engines.js'
+import {
+  GOOSE_CLI_ENGINE_ID,
+  HERMES_CLI_ENGINE_ID,
+  JCODE_CLI_ENGINE_ID,
+  MINIMAX_CLI_ENGINE_ID,
+  OPENCODE_CLI_ENGINE_ID,
+} from '../../shared/extra-coding-engines.js'
 import type { BrowserController } from '../browser/browser-controller.js'
 import { appendWorkspaceContext } from '../../shared/workspace-context.js'
 import type { ExtensionRouter } from '../extensions/extension-router.js'
 import type { GitService } from '../git/git-service.js'
 import type { HarnessService } from '../harness/harness-service.js'
+import type { SessionJournalStore } from '../harness/session-journal-store.js'
 import { taskMetricsRecorder } from '../metrics/task-metrics.js'
 import { tokenSaverRuntime } from '../token-saver/token-saver-runtime.js'
 import { sessionInWorkspace } from '../workspace/path-utils.js'
@@ -35,8 +43,16 @@ import type { CursorCliEngine } from './cursor/cursor-cli-engine.js'
 import { ChatGptWebEngine } from './chatgpt-web/chatgpt-web-engine.js'
 import type { CodexCliEngine } from './codex/codex-cli-engine.js'
 import { createExtraCliEngines } from './agent-cli/extra-cli-engines.js'
+import { TRANSCRIPT_EVENT_TYPES } from './agent-cli/agent-cli-support.js'
 import type { PiCodingEngine } from './pi/pi-coding-engine.js'
 import type { ZcodeCliEngine } from './zcode/zcode-cli-engine.js'
+
+const STRUCTURED_TRANSCRIPT_ENGINE_IDS = new Set([
+  OPENCODE_CLI_ENGINE_ID,
+  GOOSE_CLI_ENGINE_ID,
+  JCODE_CLI_ENGINE_ID,
+  HERMES_CLI_ENGINE_ID,
+])
 
 export interface ChatGptWebRuntime {
   browser: BrowserController
@@ -108,6 +124,7 @@ export class EngineSessionRouter {
     cursor?: CursorCliEngine,
     claude?: ClaudeCodeCliEngine,
     directSpawnProcess: typeof spawn = spawn,
+    private readonly sessionJournal?: SessionJournalStore,
   ) {
     this.directEngines.set(CODEX_CLI_ENGINE_ID, codex)
     if (antigravity) this.directEngines.set(ANTIGRAVITY_ENGINE_ID, antigravity)
@@ -148,8 +165,12 @@ export class EngineSessionRouter {
 
   /** Every direct engine emits through the same ND organization/renderer fan-out. */
   setEmitter(emit: (frame: DshEventFrame) => void): void {
-    this.chatGptWeb?.setEmitter(emit)
-    for (const direct of this.directEngines.values()) direct.setEmitter?.(emit)
+    const routed = (frame: DshEventFrame): void => {
+      this.captureDirectTranscript(frame)
+      emit(frame)
+    }
+    this.chatGptWeb?.setEmitter(routed)
+    for (const direct of this.directEngines.values()) direct.setEmitter?.(routed)
   }
 
   private get zcode(): ZcodeCliEngine | undefined {
@@ -362,12 +383,58 @@ export class EngineSessionRouter {
     return [...workspaceSessions, ...interactiveSessions]
   }
 
-  transcript(sessionId: string): EngineSessionTranscript {
+  async transcript(sessionId: string): Promise<EngineSessionTranscript> {
     for (const direct of this.directEngines.values()) {
-      if (direct.ownsSession(sessionId)) return direct.transcript(sessionId)
+      if (!direct.ownsSession(sessionId)) continue
+      const fallback = direct.transcript(sessionId)
+      const events = await this.nativeTranscript(sessionId, fallback.events)
+      return { ...fallback, events }
     }
-    if (this.chatGptWeb?.ownsSession(sessionId)) return this.chatGptWeb.transcript(sessionId)
+    if (this.chatGptWeb?.ownsSession(sessionId)) {
+      // ChatGPT Web already owns durable restart persistence. Keep it out of
+      // the volatile nd-core journal so this migration does not duplicate its
+      // 500-event retained history or change browser-session recovery.
+      return this.chatGptWeb.transcript(sessionId)
+    }
     throw new Error(`No engine owns session: ${sessionId}`)
+  }
+
+  private captureDirectTranscript(frame: DshEventFrame): void {
+    if (!this.sessionJournal || frame.kind !== 'session-event' || !frame.sessionId || !frame.event) return
+    const engineId = this.engineForSession(frame.sessionId)
+    if (engineId === CHATGPT_WEB_ENGINE_ID) return
+    const structuredChunk = STRUCTURED_TRANSCRIPT_ENGINE_IDS.has(engineId) && frame.event.type === 'assistant/chunk'
+    if (!TRANSCRIPT_EVENT_TYPES.has(frame.event.type) && !structuredChunk) return
+    void this.sessionJournal.append(frame.sessionId, [{
+      type: frame.event.type,
+      seq: frame.event.seq,
+      time: frame.event.time,
+      ...(frame.event.data === undefined ? {} : { data: frame.event.data }),
+      ...(frame.event.surfaceOp === undefined ? {} : { surfaceOp: frame.event.surfaceOp }),
+    }]).catch(() => undefined)
+  }
+
+  private async nativeTranscript(sessionId: string, fallback: SessionEventEnvelope[]): Promise<SessionEventEnvelope[]> {
+    if (!this.sessionJournal) return fallback
+    const native = await this.sessionJournal.tail(sessionId, 500).catch(() => [])
+    if (native.length === 0) return fallback
+
+    // nd-core journals are intentionally volatile. After a sidecar restart the
+    // first new native event must not hide the adapter's local safety tail from
+    // just before the restart. Merge by the session sequence; in the normal
+    // case the fallback is simply a 32-event subset of native history.
+    const bySeq = new Map<number, SessionEventEnvelope>()
+    for (const event of fallback) bySeq.set(event.seq, event)
+    for (const event of native) {
+      bySeq.set(event.seq, {
+        type: event.type,
+        seq: event.seq,
+        time: event.time ?? Date.now(),
+        ...(event.data === undefined ? {} : { data: event.data }),
+        ...(event.surfaceOp === undefined ? {} : { surfaceOp: event.surfaceOp }),
+      })
+    }
+    return [...bySeq.values()].sort((left, right) => left.seq - right.seq).slice(-500)
   }
 
   /**

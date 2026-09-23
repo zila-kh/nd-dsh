@@ -6,6 +6,8 @@ import { stripWorkspaceContext } from '../../../shared/workspace-context.js'
 import { deferred, engineEnvironment, killProcessTree, spawnCliCommand, type Deferred } from './agent-cli-support.js'
 import { minimaxBinPath } from './extra-cli-paths.js'
 
+const LOCAL_TRANSCRIPT_EVENTS = 32
+
 interface MiniMaxSession {
   sessionId: string
   model?: string
@@ -175,6 +177,7 @@ export class MiniMaxCliEngine {
   private record(session: MiniMaxSession, type: string, data: unknown): void {
     const event: SessionEventEnvelope = { type, seq: ++session.sequence, time: Date.now(), data }
     session.transcript.push(event)
+    if (session.transcript.length > LOCAL_TRANSCRIPT_EVENTS) session.transcript.splice(0, session.transcript.length - LOCAL_TRANSCRIPT_EVENTS)
     this.onEvent?.({ kind: 'session-event', sessionId: session.sessionId, event })
   }
 }

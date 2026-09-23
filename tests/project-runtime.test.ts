@@ -39,7 +39,7 @@ interface Fixture {
   workspaceRoot: string
   readyUrls: string[]
   children: FakeChild[]
-  spawnCommands: Array<{ command: string; cwd?: string }>
+  spawnCommands: Array<{ command: string; args: string[]; cwd?: string }>
 }
 
 async function serviceFixture(options?: Partial<ProjectRuntimeOptions>): Promise<Fixture> {
@@ -60,8 +60,10 @@ async function serviceFixture(options?: Partial<ProjectRuntimeOptions>): Promise
   }
   fixture.service = new ProjectRuntimeService({
     store,
-    spawnProcess: ((command: string, opts: { cwd?: string }) => {
-      fixture.spawnCommands.push({ command, ...(opts?.cwd ? { cwd: opts.cwd } : {}) })
+    spawnProcess: ((command: string, argsOrOptions?: string[] | { cwd?: string }, maybeOptions?: { cwd?: string }) => {
+      const args = Array.isArray(argsOrOptions) ? argsOrOptions : []
+      const opts = Array.isArray(argsOrOptions) ? maybeOptions : argsOrOptions
+      fixture.spawnCommands.push({ command, args, ...(opts?.cwd ? { cwd: opts.cwd } : {}) })
       const child = fakeChild()
       fixture.children.push(child)
       return child.process
@@ -184,9 +186,33 @@ describe('ProjectRuntimeService', () => {
     const status = await fixture.service.start(fixture.projectId)
     expect(status.state).toBe('ready')
     expect(status.pid).toBe(4242)
-    expect(fixture.spawnCommands[0]?.cwd).toBe(fixture.workspaceRoot)
+    const spawned = fixture.spawnCommands[0]
+    expect(spawned?.cwd).toBe(fixture.workspaceRoot)
+    if (process.platform === 'win32') {
+      expect(spawned?.command).toMatch(/(?:^|[\\/])cmd\.exe$/i)
+      // The command is wrapped so `cmd /d /s /c` strips one outer quote pair
+      // and runs the configured command with its own quotes intact.
+      expect(spawned?.args).toEqual(['/d', '/s', '/c', '"npm run dev"'])
+    } else {
+      expect(spawned).toMatchObject({ command: '/bin/sh', args: ['-c', 'npm run dev'] })
+    }
     expect(fixture.children[0]?.killed).toBe(false)
     expect(fixture.readyUrls).toEqual(['http://localhost:3000/'])
+  })
+
+  it('uses an injected process-owner teardown hook for Rust-managed dev servers', async () => {
+    const stopped: number[] = []
+    const fixture = await serviceFixture({
+      stopProcess: async (child) => {
+        if (child.pid !== undefined) stopped.push(child.pid)
+        child.kill()
+      },
+    })
+    await fixture.store.mutate({ type: 'project.update', id: fixture.projectId, patch: { startCommand: 'npm run dev' } })
+    await fixture.service.start(fixture.projectId)
+    await fixture.service.stop(fixture.projectId)
+    expect(stopped).toEqual([4242])
+    expect(fixture.children[0]?.killed).toBe(true)
   })
 
   it('stops a running dev server tree on demand and reports stopped', async () => {

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { execFile, spawn } from 'node:child_process'
+import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
@@ -23,6 +23,11 @@ export interface VerificationEvidence {
   artifacts?: Array<{ path: string; kind: 'file' | 'directory'; size: number; sha256: string }>
 }
 
+export interface VerificationProcessRuntime {
+  spawnProcess: typeof spawn
+  stopProcess(child: ChildProcess): Promise<void>
+}
+
 /**
  * Run the deterministic project check owned by ND. The reviewer may add
  * semantic judgment later, but it cannot turn a red machine check green.
@@ -32,7 +37,7 @@ export interface VerificationEvidence {
  * caches, generated files, or other artifacts; none of those are allowed to
  * leak into review or the next retry attempt.
  */
-export async function runVerification(command: string | undefined, cwd: string | undefined): Promise<VerificationEvidence> {
+export async function runVerification(command: string | undefined, cwd: string | undefined, runtime?: VerificationProcessRuntime): Promise<VerificationEvidence> {
   const startedAt = Date.now()
   const cleaned = command?.trim()
   if (!cleaned) return finish({ status: 'skipped', startedAt, reason: 'Project has no configured test command.' })
@@ -49,11 +54,16 @@ export async function runVerification(command: string | undefined, cwd: string |
 
   const timeoutMs = verificationTimeoutMs()
   return new Promise<VerificationEvidence>((resolveEvidence) => {
-    const child = spawn(cleaned, {
+    const invocation = verificationShell(cleaned)
+    const spawnProcess = runtime?.spawnProcess ?? spawn
+    const stopProcess = runtime?.stopProcess ?? stopVerificationProcess
+    const child = spawnProcess(invocation.command, invocation.args, {
       cwd,
-      shell: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: process.env,
+      windowsHide: true,
+      windowsVerbatimArguments: process.platform === 'win32',
+      detached: process.platform !== 'win32',
     })
     let stdout = ''
     let stderr = ''
@@ -71,6 +81,10 @@ export async function runVerification(command: string | undefined, cwd: string |
     child.stderr?.on('data', (chunk) => { stderr = capture(stderr, chunk) })
 
     let timer: NodeJS.Timeout
+    // Teardown of a timed-out process produces its own exit event, which would
+    // otherwise win the race against the timeout branch and report the kill's
+    // exit code as the reason the check failed.
+    let timedOut = false
     const done = async (value: Omit<VerificationEvidence, 'completedAt' | 'durationMs'>): Promise<void> => {
       if (settled) return
       settled = true
@@ -95,20 +109,91 @@ export async function runVerification(command: string | undefined, cwd: string |
       ...outputFields(), reason: error.message,
     }) })
     child.once('exit', (code, signal) => { void done({
-      status: code === 0 ? 'passed' : 'failed', command: cleaned, cwd, startedAt,
+      status: code === 0 && !timedOut ? 'passed' : 'failed', command: cleaned, cwd, startedAt,
       ...(typeof code === 'number' ? { exitCode: code } : {}),
       ...outputFields(),
-      ...(code === 0 ? {} : { reason: `Verification command exited ${signal ?? String(code ?? 'without a code')}.` }),
+      ...(code === 0 && !timedOut ? {} : { reason: timedOut ? `Verification timed out after ${timeoutMs}ms.` : `Verification command exited ${signal ?? String(code ?? 'without a code')}.` }),
     }) })
 
     timer = setTimeout(() => {
-      try { child.kill(process.platform === 'win32' ? undefined : 'SIGTERM') } catch { /* already stopped */ }
-      void done({
-        status: 'failed', command: cleaned, cwd, startedAt,
-        ...outputFields(), reason: `Verification timed out after ${timeoutMs}ms.`,
-      })
+      timedOut = true
+      void stopProcess(child)
+        .catch(() => undefined)
+        .then(() => done({
+          status: 'failed', command: cleaned, cwd, startedAt,
+          ...outputFields(), reason: `Verification timed out after ${timeoutMs}ms.`,
+        }))
     }, timeoutMs)
     timer.unref()
+  })
+}
+
+function verificationShell(command: string): { command: string; args: string[] } {
+  if (process.platform === 'win32') {
+    return {
+      command: process.env.COMSPEC?.trim() || 'cmd.exe',
+      // `cmd /d /s /c` strips one outer quote pair and runs the rest as-is, so
+      // the command is pre-wrapped to keep inner quotes, pipes and `&&` chains
+      // intact. Inner quotes must reach cmd.exe unescaped: the caller requests
+      // verbatim argument delivery.
+      args: ['/d', '/s', '/c', `"${command}"`],
+    }
+  }
+  return { command: '/bin/sh', args: ['-c', command] }
+}
+
+async function stopVerificationProcess(child: ChildProcess): Promise<void> {
+  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return
+  const pid = child.pid
+  if (process.platform === 'win32') {
+    await new Promise<void>((resolveStop) => {
+      let settled = false
+      const finish = (): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        try { child.kill() } catch { /* already gone */ }
+        resolveStop()
+      }
+      const timer = setTimeout(finish, 3_000)
+      try {
+        const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], {
+          stdio: 'ignore',
+          windowsHide: true,
+        })
+        killer.once('close', finish)
+        killer.once('error', finish)
+      } catch {
+        finish()
+      }
+    })
+    return
+  }
+
+  let groupSignalled = false
+  try {
+    process.kill(-pid, 'SIGTERM')
+    groupSignalled = true
+  } catch {
+    try { child.kill('SIGTERM') } catch { return }
+  }
+  await new Promise<void>((resolveStop) => {
+    let settled = false
+    const finish = (): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolveStop()
+    }
+    const timer = setTimeout(() => {
+      try {
+        if (groupSignalled) process.kill(-pid, 'SIGKILL')
+        else child.kill('SIGKILL')
+      } catch { /* already gone */ }
+      finish()
+    }, 3_000)
+    child.once('exit', finish)
+    child.once('error', finish)
   })
 }
 

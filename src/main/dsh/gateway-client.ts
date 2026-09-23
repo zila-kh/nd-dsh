@@ -15,7 +15,7 @@ export interface SessionStreamFrame {
   /** Snapshot only: the opening journal window. */
   records?: unknown[]
   /** Event frames only. */
-  event?: { type: string; seq: number; time?: number; data?: unknown }
+  event?: { type: string; seq: number; time?: number; data?: unknown; surfaceOp?: unknown }
   /** Error frames only. */
   message?: string
 }
@@ -492,6 +492,7 @@ function asStreamFrame(value: unknown): SessionStreamFrame | undefined {
         seq: event.seq,
         ...(typeof event.time === 'number' ? { time: event.time } : {}),
         ...(event.data !== undefined ? { data: event.data } : {}),
+        ...(event.surfaceOp !== undefined ? { surfaceOp: event.surfaceOp } : {}),
       },
     }
   }

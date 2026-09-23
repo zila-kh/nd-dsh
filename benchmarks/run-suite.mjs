@@ -410,6 +410,65 @@ function sumMemoryBytes(items) {
   return measured ? total : null
 }
 
+async function benchmarkSessionJournalScaling() {
+  const client = await CoreRpc.launch()
+  const targetCounts = smoke ? [1, 2] : LOGICAL_SCALE_POINTS
+  const eventsPerSession = smoke ? 20 : 200
+  const payload = 'j'.repeat(smoke ? 64 : 256)
+  const sessions = []
+  try {
+    const points = []
+    for (const count of targetCounts) {
+      while (sessions.length < count) {
+        const index = sessions.length
+        const sessionId = 'journal-session-' + index
+        const events = Array.from({ length: eventsPerSession }, (_, eventIndex) => ({
+          type: eventIndex % 5 === 0 ? 'tool/result' : 'assistant/chunk',
+          seq: eventIndex + 1,
+          time: eventIndex + 1,
+          data: { text: payload, session: index, event: eventIndex },
+        }))
+        await client.request('sessionJournal.append', { sessionId, events })
+        sessions.push(sessionId)
+      }
+      const tailStarted = performance.now()
+      const tail = await client.request('sessionJournal.tail', {
+        sessionId: sessions[count - 1],
+        maxMessages: 50,
+      })
+      const tailLatencyMs = performance.now() - tailStarted
+      const metrics = await client.request('metrics.snapshot')
+      const memory = await processMemory(client.pid)
+      check(metrics.sessionJournalSessionCount === count, 'session journal session count mismatch at ' + count)
+      check(metrics.sessionJournalEventCount === count * eventsPerSession, 'session journal event count mismatch at ' + count)
+      check(Array.isArray(tail.events) && tail.events.length === Math.min(50, eventsPerSession), 'session journal tail length mismatch at ' + count)
+      points.push({
+        count,
+        eventsPerSession,
+        coreMemory: memory,
+        retainedSessions: metrics.sessionJournalSessionCount,
+        retainedEvents: metrics.sessionJournalEventCount,
+        retainedBytes: metrics.sessionJournalBytes,
+        maxEventsPerSession: metrics.sessionJournalMaxEventsPerSession,
+        maxBytesPerSession: metrics.sessionJournalMaxBytesPerSession,
+        tailLatencyMs,
+        pendingRpcCount: metrics.pendingRpcCount,
+        queuedEventCount: metrics.queuedEventCount,
+        queuedEventBytes: metrics.queuedEventBytes,
+      })
+    }
+    return writeResult(outputDir, 'session-journal-scaling', {
+      scaleContract: SCALE_CONTRACT,
+      scalePoints: targetCounts,
+      eventsPerSession,
+      points,
+    })
+  } finally {
+    await client.request('sessionJournal.clear', {}).catch(() => undefined)
+    await client.close()
+  }
+}
+
 async function benchmarkCancellation() {
   const client = await CoreRpc.launch()
   const fixture = join(benchmarkRoot, 'benchmarks', 'fixtures', 'synthetic-worker.mjs')
@@ -505,6 +564,7 @@ try {
     benchmarkTerminal,
     benchmarkGit,
     benchmarkParallelAgents,
+    benchmarkSessionJournalScaling,
     benchmarkCancellation,
   ]) {
     results.push(await run())

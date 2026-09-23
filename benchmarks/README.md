@@ -14,6 +14,30 @@ These benchmarks are release evidence for PRD 0002. They use deterministic local
 - `pnpm bench:tasks:check` — offline check of the committed agent-task baseline; runs on ordinary PRs.
 - `pnpm bench:contract` — runtime-contract measurements: revision-marker cost, the revision-keyed cache's effect on `git.status`/`git.log` and its invalidation under external mutation, bounded search latency and payload size, explicit truncation, cancel-to-stop latency, and core deadline expiry.
 
+## Parallel-runtime v2 retention evidence
+
+The release-core suite now includes the `rust-parallel-runtime-v2` scale contract at
+`1/2/4/8/10/25/50/100` logical sessions/workers.
+
+`session-journal-scaling.json` specifically exercises the native bounded event
+journal added for high-concurrency chat/team workloads. It records retained
+session/event/byte counts, the configured per-session byte ceiling, nd-core
+memory and journal-tail RPC latency at every scale point. `bench:check` requires
+all scale points and verifies that retained journal bytes never exceed the
+configured aggregate bound.
+
+Terminal metrics continue to report retained native terminal count/bytes. In v2,
+active terminal scrollback is owned by nd-core; Electron materializes the tail
+only for state delivery and durable desktop-restart snapshots instead of keeping
+a second 512 KiB hot string per terminal.
+
+Direct coding-engine transcript events are also mirrored into the native journal.
+That owner is capped at 500 events / 2 MiB per session, while adapters keep only
+a 32-event local safety tail used to bridge an nd-core restart. ChatGPT Web is
+excluded from this native mirror and retains its existing durable transcript
+because that engine already owns restart persistence and is not used as an
+organization workspace worker.
+
 ## Agent-task measurement
 
 The runtime benchmarks above measure nd-core and Electron. They cannot measure the agent, so `bench:tasks` records what one task costs:
@@ -96,11 +120,14 @@ Historical same-machine legacy-vs-Rust `electron-responsiveness.json` files rema
 
 Runtime baselines follow [the baseline policy](../docs/plan/performance-baseline-policy.md): the reviewed summary is committed per reference machine (`benchmarks/baselines/win11-x64.json`, recorded 2026-09-23 by [task 0015](../docs/tasks/done/done-0015-runtime-evidence-baseline.md)), the raw bundle stays gitignored, and the baseline's `artifact` field says where that bundle lives. The full recorder uses at least 10 measured runs for startup and short-latency evidence and reports p50/p95.
 
-## GitHub Actions checkpoint runs
+## Validation while GitHub Actions is parked
 
-Draft PR commits intentionally skip the heavy CI jobs. Use **Actions → ci → Run workflow** for checkpoints:
+GitHub Actions is intentionally parked while runtime v2 is being stabilized.
+Do not treat a missing runner result as waived evidence: run the local handoff in
+[task 0018](../docs/tasks/wip-0018-rust-parallel-runtime-v2.md), including
+`pnpm bench:smoke` for development and `pnpm bench:record` +
+`pnpm bench:check` on the Windows reference machine when recording reviewed
+performance evidence.
 
-- leave `full_benchmark=false` for the normal Linux validation + Windows package/smoke gates;
-- set `full_benchmark=true` for the Windows production performance evidence run only.
-
-The full benchmark job uploads `prd-0002-performance-evidence` containing the generated Markdown summary and raw JSON samples.
+The existing workflow definitions remain parked for later restoration; runtime-v2
+work does not require enabling them.

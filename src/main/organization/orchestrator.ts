@@ -12,7 +12,7 @@ import { taskMetricsRecorder } from '../metrics/task-metrics.js'
 import { isRetryableExecutionFailure, MAX_EXECUTION_ATTEMPTS, retryBackoffMs, stallTimeoutMs } from './execution-reliability.js'
 import type { OrganizationStore } from './store.js'
 import { TaskIntegrationConflictError, TaskWorktreeManager, type TaskWorktree } from './task-worktree.js'
-import { formatVerificationEvidence, runArtifactVerification, runVerification } from './verification-evidence.js'
+import { formatVerificationEvidence, runArtifactVerification, runVerification, type VerificationProcessRuntime } from './verification-evidence.js'
 import { RuntimeCapacityError, type ExecutionCoordinator, type RuntimeAvailability } from './execution-coordinator.js'
 import { executePreparedFastPath, ND_FAST_PATH_ENGINE_ID, prepareFastPath, type FastPathAuditRecorder, type PreparedFastPath } from './fast-path.js'
 
@@ -104,6 +104,7 @@ export class OrganizationOrchestrator {
     private readonly executionCoordinator?: Pick<ExecutionCoordinator, 'releaseSession' | 'currentPermit'>,
     taskWorktrees?: TaskWorktreeManager,
     private readonly core?: Pick<CoreClient, 'request'>,
+    private readonly verificationRuntime?: VerificationProcessRuntime,
   ) {
     this.taskWorktrees = taskWorktrees ?? new TaskWorktreeManager()
   }
@@ -294,7 +295,7 @@ export class OrganizationOrchestrator {
       if (checkpointHead) await this.store.updateRunProvenance(run.id, { checkpointCommit: checkpointHead })
       const verification = context.task.evidenceKind === 'artifact'
         ? await runArtifactVerification(context.task.artifactPaths, workspaceRoot)
-        : await runVerification(context.project.testCommand, workspaceRoot)
+        : await runVerification(context.project.testCommand, workspaceRoot, this.verificationRuntime)
       taskMetricsRecorder()?.noteVerification(sessionId, verification.status, verification.durationMs)
       const output = fast.output + formatVerificationEvidence(verification)
 
@@ -562,7 +563,7 @@ export class OrganizationOrchestrator {
         if (checkpointHead) await this.store.updateRunProvenance(run.id, { checkpointCommit: checkpointHead })
         const verification = context.task.evidenceKind === 'artifact'
           ? await runArtifactVerification(context.task.artifactPaths, worktree?.root ?? context.project.workspacePath)
-          : await runVerification(context.project.testCommand, worktree?.root ?? context.project.workspacePath)
+          : await runVerification(context.project.testCommand, worktree?.root ?? context.project.workspacePath, this.verificationRuntime)
         taskMetricsRecorder()?.noteVerification(sessionId, verification.status, verification.durationMs)
         const output = `${workerOutput}${formatVerificationEvidence(verification)}`
         if (verification.status === 'failed') {

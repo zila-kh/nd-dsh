@@ -23,14 +23,89 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
+use std::time::Duration;
 use uuid::Uuid;
 
 /// Retained output per terminal. Bounded so terminal output cannot grow without
 /// limit; the oldest retained chunk is dropped once the tail is full, and the
 /// dropped sequence number is reported rather than hidden.
-const MAX_TERMINAL_TAIL_BYTES: usize = 256 * 1024;
+const MAX_TERMINAL_TAIL_BYTES: usize = 512 * 1024;
+
+/// The retained tail crosses a JSON-valued boundary in both directions — request
+/// params are decoded as a JSON value, and results are re-encoded through one. A
+/// MessagePack byte string is unrepresentable there, and a number sequence makes
+/// the desktop copy every byte element on each state read (a saturated tail is
+/// half a megabyte, and the terminal dock reads state while output is streaming).
+/// Base64 keeps the tail a single string on the wire: one encode here, one decode
+/// in the client.
+mod tail_bytes {
+    use serde::de::Error as _;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    pub fn encode(bytes: &[u8]) -> String {
+        let mut text = String::with_capacity(bytes.len().div_ceil(3) * 4);
+        for chunk in bytes.chunks(3) {
+            let first = chunk[0] as u32;
+            let second = chunk.get(1).copied().unwrap_or(0) as u32;
+            let third = chunk.get(2).copied().unwrap_or(0) as u32;
+            let packed = (first << 16) | (second << 8) | third;
+            text.push(ALPHABET[(packed >> 18) as usize & 0x3f] as char);
+            text.push(ALPHABET[(packed >> 12) as usize & 0x3f] as char);
+            text.push(if chunk.len() > 1 {
+                ALPHABET[(packed >> 6) as usize & 0x3f] as char
+            } else {
+                '='
+            });
+            text.push(if chunk.len() > 2 {
+                ALPHABET[packed as usize & 0x3f] as char
+            } else {
+                '='
+            });
+        }
+        text
+    }
+
+    pub fn decode(text: &str) -> Result<Vec<u8>, String> {
+        let mut bytes = Vec::with_capacity(text.len() / 4 * 3);
+        let mut buffer = 0u32;
+        let mut bits = 0u32;
+        for character in text.bytes() {
+            if character == b'=' {
+                break;
+            }
+            let value = match character {
+                b'A'..=b'Z' => character - b'A',
+                b'a'..=b'z' => character - b'a' + 26,
+                b'0'..=b'9' => character - b'0' + 52,
+                b'+' => 62,
+                b'/' => 63,
+                b'\n' | b'\r' => continue,
+                _ => return Err(format!("invalid base64 character {character:#04x}")),
+            } as u32;
+            buffer = (buffer << 6) | value;
+            bits += 6;
+            if bits >= 8 {
+                bits -= 8;
+                bytes.push((buffer >> bits) as u8);
+                buffer &= (1 << bits) - 1;
+            }
+        }
+        Ok(bytes)
+    }
+
+    pub fn serialize<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&encode(bytes))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        decode(&text).map_err(D::Error::custom)
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -45,6 +120,10 @@ pub struct TerminalCreateParams {
     pub rows: u16,
     #[serde(default)]
     pub env: HashMap<String, String>,
+    #[serde(default, deserialize_with = "tail_bytes::deserialize")]
+    pub initial_bytes: Vec<u8>,
+    #[serde(default)]
+    pub initial_seq: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -60,6 +139,13 @@ pub struct TerminalResizeParams {
     pub terminal_id: String,
     pub cols: u16,
     pub rows: u16,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalHistoryAppendParams {
+    pub terminal_id: String,
+    pub data: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -122,7 +208,7 @@ pub struct TerminalStateResult {
     pub dropped_through_seq: u64,
     pub retained_bytes: usize,
     pub tail_truncated: bool,
-    #[serde(with = "serde_bytes")]
+    #[serde(serialize_with = "tail_bytes::serialize")]
     pub bytes: Vec<u8>,
     pub emitted_at: u64,
 }
@@ -179,7 +265,10 @@ struct OutputTail {
 }
 
 impl OutputTail {
-    fn push(&mut self, seq: u64, bytes: Vec<u8>) {
+    fn push(&mut self, seq: u64, mut bytes: Vec<u8>) {
+        if bytes.len() > MAX_TERMINAL_TAIL_BYTES {
+            bytes = bytes.split_off(bytes.len() - MAX_TERMINAL_TAIL_BYTES);
+        }
         if self.chunks.is_empty() {
             self.first_retained_seq = seq;
         }
@@ -270,12 +359,17 @@ impl TerminalManager {
         }
         let spec = spec_from(&params)?;
         let shell = spec.shell.clone();
+        let mut initial_tail = OutputTail::default();
+        if !params.initial_bytes.is_empty() {
+            initial_tail.push(params.initial_seq, params.initial_bytes.clone());
+        }
         let runtime = self.spawn_runtime(
             &terminal_id,
             spec,
             0,
             0,
-            Arc::new(Mutex::new(OutputTail::default())),
+            Arc::new(Mutex::new(initial_tail)),
+            params.initial_seq,
         )?;
         {
             let mut terminals = self
@@ -338,12 +432,10 @@ impl TerminalManager {
             generation,
             restart_count,
             Arc::clone(&previous.tail),
+            previous.seq.load(Ordering::Relaxed),
         )?;
         // Sequence numbers continue across the restart, so a client can order events
         // from both shells without a gap.
-        runtime
-            .seq
-            .store(previous.seq.load(Ordering::Relaxed), Ordering::Relaxed);
         {
             let mut terminals = self
                 .terminals
@@ -458,6 +550,23 @@ impl TerminalManager {
         Ok(())
     }
 
+    pub fn append_history(&self, params: TerminalHistoryAppendParams) -> Result<()> {
+        let runtime = self.runtime(&params.terminal_id)?;
+        if params.data.len() > 64 * 1024 {
+            bail!("terminal history append is too large");
+        }
+        if params.data.is_empty() {
+            return Ok(());
+        }
+        let seq = runtime.seq.load(Ordering::Relaxed);
+        let mut tail = runtime
+            .tail
+            .lock()
+            .map_err(|_| anyhow::anyhow!("terminal tail lock poisoned"))?;
+        tail.push(seq, params.data.into_bytes());
+        Ok(())
+    }
+
     pub fn close(&self, params: TerminalCloseParams) -> Result<bool> {
         let runtime = {
             let mut terminals = self
@@ -556,6 +665,7 @@ impl TerminalManager {
         generation: u64,
         restart_count: u64,
         tail: Arc<Mutex<OutputTail>>,
+        initial_seq: u64,
     ) -> Result<Arc<TerminalRuntime>> {
         validate_dimensions(spec.cols, spec.rows)?;
 
@@ -615,7 +725,7 @@ impl TerminalManager {
             running: AtomicBool::new(true),
             exit: Mutex::new(None),
             tail,
-            seq: AtomicU64::new(0),
+            seq: AtomicU64::new(initial_seq),
             #[cfg(unix)]
             process_group,
             #[cfg(windows)]
@@ -625,8 +735,10 @@ impl TerminalManager {
         let output_writer = Arc::clone(&self.writer);
         let output_id = terminal_id.to_owned();
         let output_runtime = Arc::clone(&runtime);
+        let (output_done_tx, output_done_rx) = mpsc::sync_channel(1);
         thread::spawn(move || {
             stream_output(output_writer, output_runtime, output_id, session_id, reader);
+            let _ = output_done_tx.send(());
         });
 
         let manager = Arc::clone(self);
@@ -645,26 +757,27 @@ impl TerminalManager {
             if let Ok(mut exit) = wait_runtime.exit.lock() {
                 *exit = Some((exit_code, signal.clone()));
             }
+            // Give the PTY reader one bounded window to drain final shell output
+            // into the retained tail before terminal.exit. A descendant can keep
+            // the PTY open, so this must never become an unbounded join.
+            let _ = output_done_rx.recv_timeout(Duration::from_millis(250));
 
             // Only the generation that is still the terminal may publish its exit.
-            // A superseded shell has been replaced: reporting it would let a client
-            // conclude the live terminal ended.
-            let removed = manager
+            // Keep the current runtime in the registry after exit so its bounded
+            // tail remains replayable until the desktop explicitly closes it.
+            let is_current = manager
                 .terminals
                 .lock()
                 .ok()
-                .and_then(|mut terminals| terminals.remove(&wait_id));
-            let current = match removed {
-                Some(current) if Arc::ptr_eq(&current, &wait_runtime) => current,
-                Some(newer) => {
-                    if let Ok(mut terminals) = manager.terminals.lock() {
-                        terminals.insert(wait_id.clone(), newer);
-                    }
-                    return;
-                }
-                None => return,
-            };
-            drop(current);
+                .and_then(|terminals| {
+                    terminals
+                        .get(&wait_id)
+                        .map(|current| Arc::ptr_eq(current, &wait_runtime))
+                })
+                .unwrap_or(false);
+            if !is_current {
+                return;
+            }
 
             let event = TerminalExit {
                 terminal_id: wait_id.clone(),
@@ -809,10 +922,90 @@ mod tests {
             tail.push(seq, chunk.clone());
         }
         assert!(tail.bytes <= MAX_TERMINAL_TAIL_BYTES);
-        assert_eq!(tail.bytes, 8 * 32 * 1024);
-        assert_eq!(tail.first_retained_seq, 9);
-        assert_eq!(tail.dropped_through_seq, 8);
+        assert_eq!(tail.bytes, 16 * 32 * 1024);
+        assert_eq!(tail.first_retained_seq, 1);
+        assert_eq!(tail.dropped_through_seq, 0);
         assert_eq!(tail.drain().len(), tail.bytes);
+    }
+
+    #[test]
+    fn create_params_decode_the_retained_tail_from_a_base64_string() {
+        // The desktop reaches `terminal.create` through a JSON-valued boundary, so
+        // the retained tail arrives as a string rather than a byte string.
+        let params: TerminalCreateParams = serde_json::from_value(serde_json::json!({
+            "terminalId": "terminal-1",
+            "sessionId": "session-1",
+            "shell": "cmd.exe",
+            "cwd": "C:\\work",
+            "cols": 80,
+            "rows": 24,
+            "initialBytes": "aGk=",
+            "initialSeq": 7
+        }))
+        .unwrap();
+        assert_eq!(params.initial_bytes, b"hi");
+        assert_eq!(params.initial_seq, 7);
+    }
+
+    #[test]
+    fn create_params_reject_a_tail_that_is_not_base64() {
+        let error = serde_json::from_value::<TerminalCreateParams>(serde_json::json!({
+            "terminalId": "terminal-1",
+            "sessionId": "session-1",
+            "shell": "cmd.exe",
+            "cwd": "C:\\work",
+            "cols": 80,
+            "rows": 24,
+            "initialBytes": [104, 105]
+        }))
+        .unwrap_err();
+        assert!(error.to_string().contains("invalid type"), "{error}");
+    }
+
+    #[test]
+    fn tail_base64_round_trips_every_padding_length() {
+        for length in 0..=8 {
+            let bytes: Vec<u8> = (0..length).map(|index| (index * 37 + 200) as u8).collect();
+            let encoded = tail_bytes::encode(&bytes);
+            assert_eq!(
+                tail_bytes::decode(&encoded).unwrap(),
+                bytes,
+                "length {length}"
+            );
+        }
+        assert_eq!(tail_bytes::encode(b"hi"), "aGk=");
+        assert_eq!(tail_bytes::encode(b"hey"), "aGV5");
+    }
+
+    #[test]
+    fn state_result_encodes_the_retained_tail_as_a_base64_string() {
+        // Results are re-encoded through a JSON value on the way out, so the
+        // retained tail reaches the desktop as `"aGk="` — the same shape
+        // `terminal.create` accepts inbound. The desktop decodes that shape.
+        let state = TerminalStateResult {
+            terminal_id: "terminal-1".into(),
+            session_id: "session-1".into(),
+            shell: "cmd.exe".into(),
+            args: Vec::new(),
+            cwd: "C:\\work".into(),
+            pid: Some(12),
+            running: true,
+            generation: 1,
+            restart_count: 0,
+            exit_code: None,
+            exit_signal: None,
+            cols: 80,
+            rows: 24,
+            seq: 7,
+            first_retained_seq: 1,
+            dropped_through_seq: 0,
+            retained_bytes: 2,
+            tail_truncated: false,
+            bytes: b"hi".to_vec(),
+            emitted_at: 0,
+        };
+        let value = serde_json::to_value(state).unwrap();
+        assert_eq!(value["bytes"], serde_json::json!("aGk="));
     }
 
     #[test]

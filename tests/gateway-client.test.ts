@@ -114,10 +114,10 @@ describe('GatewayClient.followSession', () => {
         records: [{ type: 'event', event: { type: 'user/message', seq: 1, time: 1, data: {} } }],
       })
       await handle.ready
-      opened.reply({ type: 'event', event: { type: 'assistant/chunk', seq: 3, time: 3, data: {} } })
+      opened.reply({ type: 'event', event: { type: 'assistant/chunk', seq: 3, time: 3, data: {}, surfaceOp: { op: 'workbench/open', surface: 'review' } } })
       await vi.waitFor(() => expect(frames).toHaveLength(2))
       expect(frames[0]).toMatchObject({ type: 'snapshot', cursor: 2 })
-      expect(frames[1]).toMatchObject({ type: 'event', event: { type: 'assistant/chunk', seq: 3 } })
+      expect(frames[1]).toMatchObject({ type: 'event', event: { type: 'assistant/chunk', seq: 3, surfaceOp: { op: 'workbench/open', surface: 'review' } } })
       handle.close()
     } finally {
       client.close()
