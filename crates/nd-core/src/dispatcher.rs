@@ -201,13 +201,19 @@ pub fn priority_for_method(method: &str) -> Priority {
         | "terminal.close"
         | "terminal.state"
         | "terminal.restart"
+        | "sessionJournal.tail"
         | "process.write"
         | "process.closeStdin"
         | "process.cancel"
         | "scheduler.heartbeat"
         | "scheduler.release"
         | "scheduler.bind" => Priority::High,
-        "scheduler.snapshot" | "process.snapshot" | "workspace.list" => Priority::Background,
+        "scheduler.snapshot"
+        | "process.snapshot"
+        | "workspace.list"
+        | "sessionJournal.reset"
+        | "sessionJournal.drop"
+        | "sessionJournal.clear" => Priority::Background,
         _ => Priority::Normal,
     }
 }
