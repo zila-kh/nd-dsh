@@ -14,6 +14,8 @@ import { bundledResourceRoot, projectRoot } from './app-paths.js'
 import { BrowserController } from './browser/browser-controller.js'
 import { BrowserCompanionService } from './browser-companion/browser-companion-service.js'
 import { registerBrowserCompanionIpc } from './browser-companion/ipc.js'
+import { BrowserPlatformService } from './browser-platform/browser-platform-service.js'
+import { registerBrowserPlatformIpc } from './browser-platform/ipc.js'
 import { stopAppOwnedBrowserDaemons } from './browser/agent-browser-client.js'
 import { DEFAULT_BROWSER_URL } from './browser/browser-url.js'
 import { CapabilityAssignmentStore } from './capabilities/capability-assignment-store.js'
@@ -82,6 +84,7 @@ let mainWindow: BrowserWindow | undefined
 let activeHarness: HarnessService | undefined
 let activeBrowser: BrowserController | undefined
 let activeBrowserCompanion: BrowserCompanionService | undefined
+let activeBrowserPlatform: BrowserPlatformService | undefined
 let activeCodexEngine: CodexCliEngine | undefined
 let activeAntigravityEngine: AntigravityEngine | undefined
 let activeZcodeEngine: ZcodeCliEngine | undefined
@@ -194,7 +197,7 @@ async function createWindow(cdpPort: number): Promise<void> {
     } catch { return undefined }
   }
 
-  const browser = new BrowserController(window, cdpPort, projectRoot(), { reservedOrigin })
+  const browser = new BrowserController(window, cdpPort, projectRoot(), { reservedOrigin, dataPath: userData })
   activeBrowser = browser
   const browserCompanion = new BrowserCompanionService({
     dataPath: userData,
