@@ -381,8 +381,8 @@ export class OrganizationOrchestrator {
         title: context.task.title,
         description: context.task.description,
         acceptanceCriteria: context.task.acceptanceCriteria,
-        workScopes: context.task.workScopes,
-        resultSummary: context.task.resultSummary,
+        ...(context.task.workScopes ? { workScopes: context.task.workScopes } : {}),
+        ...(context.task.resultSummary ? { resultSummary: context.task.resultSummary } : {}),
       },
     })
     if (decisionSupport) this.decisionSupportReceipts.set(sessionId, decisionSupport)
