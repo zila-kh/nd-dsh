@@ -85,8 +85,13 @@ const appDiagnostics = new WeakMap<ElectronApplication, AppDiagnostics>()
  * instance independent of any production ND-DSH instance the developer has
  * running, since the single-instance lock is scoped to the userData path.
  */
-export async function launchApp(): Promise<LaunchedApp> {
-  const userDataDir = await mkdtemp(join(tmpdir(), 'nd-dsh-e2e-'))
+export interface LaunchAppOptions {
+  /** Reuse an existing profile when a spec needs to prove restart persistence. */
+  userDataDir?: string
+}
+
+export async function launchApp(options: LaunchAppOptions = {}): Promise<LaunchedApp> {
+  const userDataDir = options.userDataDir ?? await mkdtemp(join(tmpdir(), 'nd-dsh-e2e-'))
   await seedProviders(userDataDir)
   const app = await electron.launch({
     args: ['.', `--user-data-dir=${userDataDir}`],
@@ -118,7 +123,12 @@ export async function launchApp(): Promise<LaunchedApp> {
  * lines, captured app stderr/stdout tail, and cleanup path before killing the
  * tree. Surviving descendants are treated as a test failure rather than hidden.
  */
-export async function closeApp(launched: LaunchedApp | undefined): Promise<void> {
+export interface CloseAppOptions {
+  /** Keep the throwaway profile on disk so the same spec can relaunch it. */
+  removeUserData?: boolean
+}
+
+export async function closeApp(launched: LaunchedApp | undefined, options: CloseAppOptions = {}): Promise<void> {
   if (!launched) return
   const { app, userDataDir } = launched
   const child = app.process()
@@ -162,7 +172,9 @@ export async function closeApp(launched: LaunchedApp | undefined): Promise<void>
     if (!exited) throw new Error('Electron process did not exit after bounded e2e shutdown cleanup.')
   } finally {
     appDiagnostics.delete(app)
-    await rm(userDataDir, { recursive: true, force: true }).catch(() => undefined)
+    if (options.removeUserData !== false) {
+      await rm(userDataDir, { recursive: true, force: true }).catch(() => undefined)
+    }
   }
 }
 
