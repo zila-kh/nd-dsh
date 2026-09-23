@@ -178,6 +178,18 @@ export class OrganizationOrchestrator {
     const useFallbackRoute = Boolean(fallbackRoute)
 
     const taskWorktree = await this.taskWorktrees.ensure(context.project.workspacePath, context.task.id)
+    if (taskWorktree) {
+      await this.journalEffect({
+        kind: 'workspace.allocate',
+        state: 'complete',
+        companyId: context.company.id,
+        projectId: context.project.id,
+        taskId: context.task.id,
+        resourceId: context.task.id,
+        idempotencyKey: `workspace.allocate:${context.task.id}`,
+        data: { branch: taskWorktree.branch },
+      })
+    }
     await this.assertTaskRunSlot(context.task.id, context.project.id, Boolean(taskWorktree))
     const attemptHead = taskWorktree ? await this.taskWorktrees.baseline(taskWorktree) : undefined
     const workspaceRoot = taskWorktree?.root ?? context.project.workspacePath
@@ -215,9 +227,43 @@ export class OrganizationOrchestrator {
     if (!taskWorktree) await this.prepareWorkspace(context.project.workspacePath)
     await this.warmProjectTarget(context.project.id)
     await this.capabilities?.assertUsableForAgent(context.agent)
-    const target = this.engineRuns
-      ? await this.engineRuns.createSession(engine.id, taskWorktree?.root)
-      : { engineId: ND_HARNESS_ENGINE_ID, sessionId: await this.createHarnessSession(taskWorktree?.root) }
+    const sessionEffectKey = `engine.session:${context.task.id}:${attempt}`
+    await this.journalEffect({
+      kind: 'engine.session',
+      state: 'intent',
+      companyId: context.company.id,
+      projectId: context.project.id,
+      taskId: context.task.id,
+      idempotencyKey: sessionEffectKey,
+      data: { engineId: engine.id, attempt },
+    })
+    let target: { engineId: string; sessionId: string }
+    try {
+      target = this.engineRuns
+        ? await this.engineRuns.createSession(engine.id, taskWorktree?.root)
+        : { engineId: ND_HARNESS_ENGINE_ID, sessionId: await this.createHarnessSession(taskWorktree?.root) }
+      await this.journalEffect({
+        kind: 'engine.session',
+        state: 'complete',
+        companyId: context.company.id,
+        projectId: context.project.id,
+        taskId: context.task.id,
+        resourceId: target.sessionId,
+        idempotencyKey: sessionEffectKey,
+        data: { engineId: target.engineId, attempt },
+      })
+    } catch (cause) {
+      await this.journalEffect({
+        kind: 'engine.session',
+        state: 'failed',
+        companyId: context.company.id,
+        projectId: context.project.id,
+        taskId: context.task.id,
+        idempotencyKey: sessionEffectKey,
+        data: { engineId: engine.id, attempt, error: errorMessage(cause) },
+      }).catch(() => undefined)
+      throw cause
+    }
     const run = await this.store.beginRun(
       'task-execution',
       context.company.id,
@@ -296,11 +342,38 @@ export class OrganizationOrchestrator {
       await this.store.markExecution(context.task.id, sessionId)
       const fast = await executePreparedFastPath(prepared, this.core)
       const checkpointHead = taskWorktree ? await this.taskWorktrees.checkpoint(taskWorktree, context.task.title) : undefined
-      if (checkpointHead) await this.store.updateRunProvenance(run.id, { checkpointCommit: checkpointHead })
+      if (checkpointHead) {
+        await this.store.updateRunProvenance(run.id, { checkpointCommit: checkpointHead })
+        await this.journalEffect({
+          kind: 'checkpoint',
+          state: 'complete',
+          companyId: context.company.id,
+          projectId: context.project.id,
+          taskId: context.task.id,
+          runId: run.id,
+          resourceId: checkpointHead,
+          idempotencyKey: `checkpoint:${run.id}:${checkpointHead}`,
+        })
+      }
       const verification = context.task.evidenceKind === 'artifact'
         ? await runArtifactVerification(context.task.artifactPaths, workspaceRoot)
         : await runVerification(context.project.testCommand, workspaceRoot, this.verificationRuntime)
       taskMetricsRecorder()?.noteVerification(sessionId, verification.status, verification.durationMs)
+      await this.journalEffect({
+        kind: 'verification.receipt',
+        state: 'complete',
+        companyId: context.company.id,
+        projectId: context.project.id,
+        taskId: context.task.id,
+        runId: run.id,
+        idempotencyKey: `verification:${run.id}`,
+        data: {
+          status: verification.status,
+          durationMs: verification.durationMs,
+          exitCode: verification.exitCode,
+          reason: verification.reason,
+        },
+      })
       const output = fast.output + formatVerificationEvidence(verification)
 
       if (verification.status === 'failed') {
@@ -316,7 +389,27 @@ export class OrganizationOrchestrator {
 
       const workflow = await this.workflowKinds(context.project.id)
       if (!workflow.has('review') && taskWorktree) {
+        const integrationKey = `integration:${context.task.id}:${run.id}`
+        await this.journalEffect({
+          kind: 'integration',
+          state: 'intent',
+          companyId: context.company.id,
+          projectId: context.project.id,
+          taskId: context.task.id,
+          runId: run.id,
+          idempotencyKey: integrationKey,
+        })
         const integrated = await this.taskWorktrees.integrate(context.project.workspacePath, context.task.id)
+        await this.journalEffect({
+          kind: 'integration',
+          state: 'complete',
+          companyId: context.company.id,
+          projectId: context.project.id,
+          taskId: context.task.id,
+          runId: run.id,
+          resourceId: integrated.head,
+          idempotencyKey: integrationKey,
+        })
         await this.store.markIntegrated(context.task.id, integrated.head)
       }
       await this.store.completeRun(run.id, output)
@@ -577,11 +670,38 @@ export class OrganizationOrchestrator {
         const context = await this.store.taskContext(run.taskId)
         const worktree = await this.taskWorktrees.existing(context.project.workspacePath, run.taskId)
         const checkpointHead = worktree ? await this.taskWorktrees.checkpoint(worktree, context.task.title) : undefined
-        if (checkpointHead) await this.store.updateRunProvenance(run.id, { checkpointCommit: checkpointHead })
+        if (checkpointHead) {
+          await this.store.updateRunProvenance(run.id, { checkpointCommit: checkpointHead })
+          await this.journalEffect({
+            kind: 'checkpoint',
+            state: 'complete',
+            companyId: context.company.id,
+            projectId: context.project.id,
+            taskId: context.task.id,
+            runId: run.id,
+            resourceId: checkpointHead,
+            idempotencyKey: `checkpoint:${run.id}:${checkpointHead}`,
+          })
+        }
         const verification = context.task.evidenceKind === 'artifact'
           ? await runArtifactVerification(context.task.artifactPaths, worktree?.root ?? context.project.workspacePath)
           : await runVerification(context.project.testCommand, worktree?.root ?? context.project.workspacePath, this.verificationRuntime)
         taskMetricsRecorder()?.noteVerification(sessionId, verification.status, verification.durationMs)
+        await this.journalEffect({
+          kind: 'verification.receipt',
+          state: 'complete',
+          companyId: context.company.id,
+          projectId: context.project.id,
+          taskId: context.task.id,
+          runId: run.id,
+          idempotencyKey: `verification:${run.id}`,
+          data: {
+            status: verification.status,
+            durationMs: verification.durationMs,
+            exitCode: verification.exitCode,
+            reason: verification.reason,
+          },
+        })
         const output = `${workerOutput}${formatVerificationEvidence(verification)}`
         if (verification.status === 'failed') {
           const message = `Machine verification failed: ${verification.reason ?? `exit ${verification.exitCode ?? 'unknown'}`}`
@@ -595,7 +715,27 @@ export class OrganizationOrchestrator {
         }
         const workflow = await this.workflowKinds(run.projectId)
         if (!workflow.has('review') && worktree) {
+          const integrationKey = `integration:${run.taskId}:${run.id}`
+          await this.journalEffect({
+            kind: 'integration',
+            state: 'intent',
+            companyId: context.company.id,
+            projectId: context.project.id,
+            taskId: run.taskId,
+            runId: run.id,
+            idempotencyKey: integrationKey,
+          })
           const integrated = await this.taskWorktrees.integrate(context.project.workspacePath, run.taskId)
+          await this.journalEffect({
+            kind: 'integration',
+            state: 'complete',
+            companyId: context.company.id,
+            projectId: context.project.id,
+            taskId: run.taskId,
+            runId: run.id,
+            resourceId: integrated.head,
+            idempotencyKey: integrationKey,
+          })
           await this.store.markIntegrated(run.taskId, integrated.head)
         }
         await this.store.completeRun(run.id, output)
@@ -703,11 +843,41 @@ export class OrganizationOrchestrator {
       if (passed) {
         const checkpoint = this.reviewWorktrees.get(sessionId)
         if (checkpoint) {
+          const integrationKey = `integration:${taskId}:${sessionId}`
           try {
             await this.taskWorktrees.assertUnchanged(checkpoint.worktree, checkpoint.head)
+            await this.journalEffect({
+              kind: 'integration',
+              state: 'intent',
+              companyId: context.company.id,
+              projectId: context.project.id,
+              taskId,
+              runId: sessionId,
+              idempotencyKey: integrationKey,
+            })
             const integrated = await this.taskWorktrees.integrate(context.project.workspacePath, taskId)
+            await this.journalEffect({
+              kind: 'integration',
+              state: 'complete',
+              companyId: context.company.id,
+              projectId: context.project.id,
+              taskId,
+              runId: sessionId,
+              resourceId: integrated.head,
+              idempotencyKey: integrationKey,
+            })
             await this.store.markIntegrated(taskId, integrated.head)
           } catch (cause) {
+            await this.journalEffect({
+              kind: 'integration',
+              state: cause instanceof TaskIntegrationConflictError ? 'failed' : 'uncertain',
+              companyId: context.company.id,
+              projectId: context.project.id,
+              taskId,
+              runId: sessionId,
+              idempotencyKey: integrationKey,
+              data: { error: errorMessage(cause) },
+            }).catch(() => undefined)
             passed = false
             integrationConflict = cause instanceof TaskIntegrationConflictError
             summary = `${summary}\nIntegration/evidence gate: ${errorMessage(cause)}`
@@ -721,6 +891,20 @@ export class OrganizationOrchestrator {
         && context.company.autonomyLevel >= 4
         && executionAttempts < MAX_EXECUTION_ATTEMPTS
 
+      await this.journalEffect({
+        kind: 'review.result',
+        state: 'complete',
+        companyId: context.company.id,
+        projectId: context.project.id,
+        taskId,
+        runId: sessionId,
+        idempotencyKey: `review:${taskId}:${sessionId}`,
+        data: {
+          verdict: passed ? 'pass' : 'fail',
+          issueCount: review.issues?.length ?? 0,
+          integrationConflict,
+        },
+      })
       await this.store.completeReview(taskId, passed, summary, review.memory ?? [])
       if (automaticRework) await this.store.queueRework(taskId, summary)
     } finally {
@@ -835,6 +1019,31 @@ export class OrganizationOrchestrator {
   private routeEvidence(sessionId: string): string {
     const route = this.executionRoutes.get(sessionId)
     return route ? `\n\n<nd-dsh-execution-route>${JSON.stringify(route)}</nd-dsh-execution-route>` : ''
+  }
+
+  private async journalEffect(input: {
+    kind: string
+    state: 'intent' | 'complete' | 'failed' | 'uncertain'
+    companyId?: string
+    projectId?: string
+    taskId?: string
+    runId?: string
+    resourceId?: string
+    idempotencyKey?: string
+    data?: unknown
+  }): Promise<void> {
+    if (!this.core) return
+    await this.core.request('effectJournal.append', {
+      kind: input.kind,
+      state: input.state,
+      ...(input.companyId ? { companyId: input.companyId } : {}),
+      ...(input.projectId ? { projectId: input.projectId } : {}),
+      ...(input.taskId ? { taskId: input.taskId } : {}),
+      ...(input.runId ? { runId: input.runId } : {}),
+      ...(input.resourceId ? { resourceId: input.resourceId } : {}),
+      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+      ...(input.data === undefined ? {} : { data: input.data }),
+    }, 5_000)
   }
 
   private cleanupTaskRouting(taskId: string): void {
