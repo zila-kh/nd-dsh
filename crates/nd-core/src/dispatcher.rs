@@ -201,6 +201,7 @@ pub fn priority_for_method(method: &str) -> Priority {
         | "terminal.close"
         | "terminal.state"
         | "terminal.restart"
+        | "terminal.appendHistory"
         | "sessionJournal.tail"
         | "process.write"
         | "process.closeStdin"
