@@ -137,10 +137,10 @@ Success criterion: users can tell why an engine is not ready before starting wor
 - Plan: [reference-inspired-runtime-company-evolution.md](plan/reference-inspired-runtime-company-evolution.md).
 - Maintained research set: [agent-orchestration-reference-matrix.md](plan/agent-orchestration-reference-matrix.md).
 - Scope: protocol contract extraction, canonical execution/effect journal, thin Rust runtime composition, Rust decision kernel/provider seam, sandbox-provider seam, trace inspector, durable team mailbox/wake, eval/budget/interoperability follow-ons.
-- Initial tickets: [wip-0031](tasks/wip-0031-nd-protocol-extraction.md) -> [wip-0032](tasks/wip-0032-canonical-execution-effect-journal.md) -> [wip-0033](tasks/wip-0033-nd-runtime-crate-extraction.md) -> [wip-0034](tasks/wip-0034-rust-decision-kernel.md).
+- Implemented validation tickets: [wip-0031](tasks/wip-0031-nd-protocol-extraction.md) -> [wip-0032](tasks/wip-0032-canonical-execution-effect-journal.md) -> [wip-0033](tasks/wip-0033-nd-runtime-crate-extraction.md) -> [wip-0034](tasks/wip-0034-rust-decision-kernel.md). Code is complete on the branch; local correctness/performance/live-provider evidence remains before merge.
 - Reference set now includes earlier QM/AWS/Orca/Paperclip/Gajae/LazyCodex/JCode work plus LoopX, Bamboo-agent, Aex Brain, Pioneer, Moltis, OpenAI Codex, Goose, kern, Capsule, and PocketPaw.
 
-This is **not** approval for a broad Rust rewrite. The adoption order is evidence-driven: `nd-protocol` -> durable effect journal -> `nd-runtime` extraction -> Rust decision kernel first; sandboxing/observability/coordination follow only after those contracts are stable. Organization/business truth remains ND-owned and TypeScript-owned until a separately approved migration proves value.
+This is **not** a broad Rust rewrite. The first slice is implemented: `nd-protocol` -> durable effect journal -> `nd-runtime` extraction -> Rust decision kernel. Sandbox/trace/mailbox/eval follow-ons remain separate work after local evidence validates these contracts. Organization/business truth remains ND-owned and TypeScript-owned until a separately approved migration proves value.
 
 ## P1 — engine-neutral agent teams and task workspace isolation
 
@@ -240,7 +240,7 @@ Success criterion: changing coding engine does not require rebuilding the compan
 - Capability metadata: context, reasoning, vision, computer use, tool calling.
 - Cost/token/latency metadata and budgets.
 - Provider health, rate-limit circuit breakers, fallback routes, and explicit audit of every routing decision.
-- Reuse the Rust decision-kernel contract for typed routing/triage after TODO 0034 proves parity; keep provider/model identity separate from employee/workflow identity.
+- Reuse the Rust decision-kernel contract for typed routing/triage after WIP 0034 proves parity; keep provider/model identity separate from employee/workflow identity.
 - Credential-source metadata (`secure-store`, `environment`, `ambient`) so Settings can explain what can and cannot be cleared locally without exposing a secret value.
 
 Success criterion: ND can choose a model based on job requirements, budget, latency, and health without changing the employee/workflow identity.
