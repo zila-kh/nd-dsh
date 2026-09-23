@@ -969,6 +969,7 @@ const SEMANTIC_DRIVER_SCRIPT = `(() => {
       const element = requireElement(input);
       element.scrollIntoView({ block: 'center', inline: 'center' });
       element.click();
+      revision += 1;
       return { ok: true, revision };
     },
     fill(input) {
@@ -977,12 +978,14 @@ const SEMANTIC_DRIVER_SCRIPT = `(() => {
       if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
         element.focus();
         setNativeValue(element, value);
+        revision += 1;
         return { ok: true, revision };
       }
       if (element instanceof HTMLElement && element.isContentEditable) {
         element.focus();
         element.textContent = value;
         element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
+        revision += 1;
         return { ok: true, revision };
       }
       throw coded('NOT_EDITABLE', 'Referenced element is not editable');
@@ -997,6 +1000,7 @@ const SEMANTIC_DRIVER_SCRIPT = `(() => {
         const form = element.closest('form');
         if (form instanceof HTMLFormElement) form.requestSubmit();
       }
+      revision += 1;
       return { ok: true, revision };
     },
     scroll(input) {
