@@ -72,7 +72,7 @@ try {
 
   let decision = 'B-candidate'
   if (!coreBrowserPass || !extensionBaselinePass || !multiTabPass) decision = 'C-candidate'
-  else if (capabilities.extensions.mv3?.runtimeMessaging && capabilities.webMcp.navigatorPresent) decision = 'A-candidate'
+  else if (capabilities.extensions.mv3?.runtimeMessaging && capabilities.webMcp.documentPresent) decision = 'A-candidate'
 
   const result = {
     schemaVersion: 1,
@@ -90,7 +90,7 @@ try {
       extensionBaselinePass,
       multiTabPass,
       credentialVaultPrimitiveAvailable: capabilities.runtime.safeStorageAvailable,
-      webMcpNavigatorPresent: capabilities.webMcp.navigatorPresent,
+      webMcpNavigatorPresent: capabilities.webMcp.documentPresent,
     },
     capabilities,
     observations,
@@ -267,19 +267,19 @@ async function probeWebMcp(ses, origin, hostWindow) {
   try {
     await view.webContents.loadURL(origin + '/webmcp')
     const state = await view.webContents.executeJavaScript(`({
-      navigatorPresent: 'modelContext' in navigator,
-      type: typeof navigator.modelContext
+      documentPresent: 'modelContext' in document,
+      type: typeof document.modelContext
     })`)
     return {
-      navigatorPresent: state.navigatorPresent === true,
+      documentPresent: state.documentPresent === true,
       type: state.type,
-      note: state.navigatorPresent
-        ? 'A WebMCP-like navigator surface is visible in the current Chromium runtime; protocol behavior still needs a fixture/manual validation.'
-        : 'No WebMCP navigator surface is enabled by default in this runtime. Treat WebMCP as capability-gated/experimental until task 0027 validates the chosen runtime path.',
+      note: state.documentPresent
+        ? 'A WebMCP-like document surface is visible in the current Chromium runtime; protocol behavior still needs a fixture/manual validation.'
+        : 'No WebMCP document surface is enabled by default in this runtime. Treat WebMCP as capability-gated/experimental until task 0027 validates the chosen runtime path.',
     }
   } catch (cause) {
     recordFailure('webmcp.presence', cause)
-    return { navigatorPresent: false, type: 'unknown', error: cause instanceof Error ? cause.message : String(cause) }
+    return { documentPresent: false, type: 'unknown', error: cause instanceof Error ? cause.message : String(cause) }
   } finally {
     destroyView(view, hostWindow)
   }
