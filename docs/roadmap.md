@@ -137,7 +137,7 @@ Success criterion: users can tell why an engine is not ready before starting wor
 - Plan: [reference-inspired-runtime-company-evolution.md](plan/reference-inspired-runtime-company-evolution.md).
 - Maintained research set: [agent-orchestration-reference-matrix.md](plan/agent-orchestration-reference-matrix.md).
 - Scope: protocol contract extraction, canonical execution/effect journal, thin Rust runtime composition, Rust decision kernel/provider seam, sandbox-provider seam, trace inspector, durable team mailbox/wake, eval/budget/interoperability follow-ons.
-- Initial tickets: [todo-0031](tasks/todo-0031-nd-protocol-extraction.md) -> [todo-0032](tasks/todo-0032-canonical-execution-effect-journal.md) -> [todo-0033](tasks/todo-0033-nd-runtime-crate-extraction.md) -> [todo-0034](tasks/todo-0034-rust-decision-kernel.md).
+- Initial tickets: [wip-0031](tasks/wip-0031-nd-protocol-extraction.md) -> [wip-0032](tasks/wip-0032-canonical-execution-effect-journal.md) -> [wip-0033](tasks/wip-0033-nd-runtime-crate-extraction.md) -> [wip-0034](tasks/wip-0034-rust-decision-kernel.md).
 - Reference set now includes earlier QM/AWS/Orca/Paperclip/Gajae/LazyCodex/JCode work plus LoopX, Bamboo-agent, Aex Brain, Pioneer, Moltis, OpenAI Codex, Goose, kern, Capsule, and PocketPaw.
 
 This is **not** approval for a broad Rust rewrite. The adoption order is evidence-driven: `nd-protocol` -> durable effect journal -> `nd-runtime` extraction -> Rust decision kernel first; sandboxing/observability/coordination follow only after those contracts are stable. Organization/business truth remains ND-owned and TypeScript-owned until a separately approved migration proves value.
