@@ -726,8 +726,8 @@ export class OrganizationOrchestrator {
           data: {
             status: verification.status,
             durationMs: verification.durationMs,
-            exitCode: verification.exitCode,
-            reason: verification.reason,
+            ...(verification.exitCode === undefined ? {} : { exitCode: verification.exitCode }),
+            ...(verification.reason ? { reason: verification.reason } : {}),
           },
         })
         const output = `${workerOutput}${formatVerificationEvidence(verification)}`
