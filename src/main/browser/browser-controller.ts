@@ -79,8 +79,10 @@ export class BrowserController {
       const pageOrigin = permissionOrigin(details.requestingUrl || webContents.getURL())
       callback(Boolean(pageOrigin && this.permissionStore.effect(pageOrigin, permission) === 'allow'))
     })
-    this.browserSessionValue.setPermissionCheckHandler((_webContents, permission, requestingOrigin) =>
-      Boolean(requestingOrigin && this.permissionStore.effect(requestingOrigin, permission) === 'allow'))
+    this.browserSessionValue.setPermissionCheckHandler((_webContents, permission, requestingOrigin) => {
+      const pageOrigin = permissionOrigin(requestingOrigin)
+      return Boolean(pageOrigin && this.permissionStore.effect(pageOrigin, permission) === 'allow')
+    })
     this.downloads = new BrowserDownloadManager(
       this.browserSessionValue,
       BUILTIN_BROWSER_TARGET_ID,
