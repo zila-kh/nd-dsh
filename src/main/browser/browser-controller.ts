@@ -188,6 +188,7 @@ export class BrowserController {
     const tab = this.tabs.get(tabId)
     if (!tab) return false
     const wasActive = tabId === this.activeTabIdValue
+    if (wasActive && this.binding) await this.binding.catch(() => undefined)
     await Promise.allSettled([tab.inspector.stop(), tab.annotator.cancel()])
     try {
       if (!this.window.isDestroyed()) this.window.contentView.removeChildView(tab.view)
