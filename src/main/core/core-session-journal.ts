@@ -8,7 +8,6 @@ interface PendingBatch {
   events: SessionJournalEnvelope[]
   waiters: Array<{ resolve: () => void; reject: (error: Error) => void }>
   timer?: ReturnType<typeof setTimeout>
-  flushing: boolean
   active?: Promise<void>
 }
 
@@ -35,7 +34,7 @@ export class CoreSessionJournalStore implements SessionJournalStore {
     this.knownSessions.add(sessionId)
     let batch = this.pending.get(sessionId)
     if (!batch) {
-      batch = { events: [], waiters: [], flushing: false }
+      batch = { events: [], waiters: [] }
       this.pending.set(sessionId, batch)
     }
     batch.events.push(...events)
@@ -85,8 +84,6 @@ export class CoreSessionJournalStore implements SessionJournalStore {
     }
     const events = batch.events.splice(0)
     const waiters = batch.waiters.splice(0)
-    batch.flushing = true
-
     const active = (async () => {
       try {
         for (let index = 0; index < events.length; index += MAX_BATCH_EVENTS) {
@@ -103,7 +100,6 @@ export class CoreSessionJournalStore implements SessionJournalStore {
         for (const waiter of waiters) waiter.reject(error)
         throw error
       } finally {
-        batch.flushing = false
         batch.active = undefined
         if (batch.events.length > 0) {
           void this.flush(sessionId).catch(() => undefined)
