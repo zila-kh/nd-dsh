@@ -193,6 +193,12 @@ export class TerminalManager {
         this.changed(terminal.sessionId)
         return await this.snapshotSession(this.sessions.get(terminal.sessionId)!)
       } catch (error) {
+        // A failed in-place restart can leave the previous native shell/tail as
+        // the only copy newer than the last disk snapshot. Materialize it before
+        // closing the resource so restart failure never erases scrollback.
+        const tail = await this.replayTail(terminal, runtime)
+        terminal.buffer = tail.buffer.slice(-MAX_BUFFER)
+        terminal.outputSeq = Math.max(terminal.outputSeq, tail.seq)
         this.detach(terminal.sessionId, terminal.id, true)
         terminal.status = 'error'
         terminal.error = `Failed to restart shell: ${error instanceof Error ? error.message : String(error)}`
