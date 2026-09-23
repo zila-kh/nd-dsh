@@ -2,6 +2,7 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::json;
 use std::env;
+#[cfg(not(unix))]
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
@@ -20,6 +21,7 @@ struct Discovery {
 enum LocalStream {
     #[cfg(unix)]
     Unix(std::os::unix::net::UnixStream),
+    #[cfg(not(unix))]
     File(File),
 }
 
@@ -48,6 +50,7 @@ impl LocalStream {
         match self {
             #[cfg(unix)]
             Self::Unix(stream) => Ok(Self::Unix(stream.try_clone()?)),
+            #[cfg(not(unix))]
             Self::File(file) => Ok(Self::File(file.try_clone()?)),
         }
     }
@@ -58,6 +61,7 @@ impl Read for LocalStream {
         match self {
             #[cfg(unix)]
             Self::Unix(stream) => stream.read(buf),
+            #[cfg(not(unix))]
             Self::File(file) => file.read(buf),
         }
     }
@@ -68,6 +72,7 @@ impl Write for LocalStream {
         match self {
             #[cfg(unix)]
             Self::Unix(stream) => stream.write(buf),
+            #[cfg(not(unix))]
             Self::File(file) => file.write(buf),
         }
     }
@@ -76,6 +81,7 @@ impl Write for LocalStream {
         match self {
             #[cfg(unix)]
             Self::Unix(stream) => stream.flush(),
+            #[cfg(not(unix))]
             Self::File(file) => file.flush(),
         }
     }
