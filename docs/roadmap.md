@@ -6,7 +6,7 @@ This roadmap is ordered by release risk. ND-DSH is coding-first; broader busines
 
 The `ai-company-workflow` branch already contains the product vertical slice:
 
-- Secure Electron/React desktop shell with one canonical visible browser target.
+- Secure Electron/React desktop shell with one canonical visible built-in browser target plus an explicit existing-profile Browser Companion target.
 - Pinned Harness runtime behind an ND adapter and loopback gateway.
 - Provider-neutral model routing with DeepSeek as a compatibility default rather than product architecture.
 - OS-backed encrypted provider credentials when a secure key store exists.
@@ -142,14 +142,36 @@ This work formalizes the existing per-task worktree/checkpoint/review/integratio
 
 ## P1 — Browser Companion MVP
 
-- PRD: [0004-browser-companion-mvp.md](prd/0004-browser-companion-mvp.md) — implementation on `feat/browser-companion-mvp`.
-- Task: [wip-0019-browser-companion-mvp.md](tasks/wip-0019-browser-companion-mvp.md) — implementation complete; local automated validation, real-Chrome smoke, and performance evidence pending.
+- PRD: [0004-browser-companion-mvp.md](prd/0004-browser-companion-mvp.md) — implementation baseline merged via PR #32 (`main@9e0fcc5`).
+- Task: [wip-0019-browser-companion-mvp.md](tasks/wip-0019-browser-companion-mvp.md) — implementation merged; local automated validation, real-Chrome smoke, and performance evidence remain pending.
 
 The MVP keeps the embedded ND browser and adds an explicit Native Messaging path
 for a user's existing Chrome/Chromium profile. It uses optional per-origin
 scripting permissions, semantic stale-safe element refs, single-writer tab
 leases, and the existing engine extension router. Company-level normalized
 browser action policy remains a follow-up requirement before enterprise claims.
+
+## P1 — unified browser platform
+
+- Plan: [unified-browser-platform.md](plan/unified-browser-platform.md)
+- PRD: [0005-unified-browser-platform.md](prd/0005-unified-browser-platform.md) — proposed.
+- Planning branch: `feat/unified-browser-platform-plan`.
+- External-browser foundation: Browser Companion merged via PR #32 (`main@9e0fcc5`).
+- Task set: 0020-0030.
+
+Target product shape:
+
+- ND built-in browser remains a first-class browser owned by ND;
+- built-in browser extension support is a **required** capability, not delegated to the external Chrome Companion;
+- built-in browser grows into a persistent multi-tab browser with history, downloads, secure password/autofill mediation, extensions, WebMCP/site tools, inspect/annotation and exact-visible-tab agent control;
+- Chrome Companion remains the explicit path to the user's existing Chrome profile, tabs, sessions and installed Chrome extensions;
+- one BrowserTarget/router contract serves both targets across supported engines;
+- `@Browser`, `@Chrome`, `@Tab` and safe Auto routing make browser identity explicit;
+- trusted tab leases, normalized browser actions, organization policy and audit apply consistently across both targets.
+
+**Runtime gate:** task 0020 decides whether Electron can satisfy the required built-in browser baseline. Electron may remain only if the representative extension set and the rest of the browser requirements pass. If it cannot, ND will select a more Chromium-compatible embedded runtime behind the same BrowserTarget contract rather than dropping built-in extension support.
+
+ND must not claim "100% Chrome Web Store compatibility" until reproducible evidence proves that breadth. The product requirement is first-class built-in extensions plus an evidence-based compatibility level.
 
 ## Public Beta P1 — best-in-class AI development environment
 
@@ -168,14 +190,22 @@ browser action policy remains a follow-up requirement before enterprise claims.
 
 ### Browser engineering surface
 
-- Multi-tab UI backed by known CDP target ids.
-- Console/network drawers.
-- Device/viewport presets and screenshot history.
+This section is superseded and expanded by PRD 0005.
+
+- Multi-tab built-in browser with stable ND tab ids rather than agent-facing CDP ids.
+- Persistent ND browser profile with cookies/site data/history.
+- First-class built-in browser extension support with a compatibility matrix.
+- Downloads, browser-data controls and private/reset flows.
+- Secure password/autofill mediation without exposing raw secrets to agents.
+- WebMCP/site-tool discovery and invocation when websites expose structured tools.
+- Console/network drawers, device/viewport presets and screenshot history.
 - Element highlight/inspect overlays.
 - Action timeline tying browser state to agent tool calls.
-- Per-origin privacy controls and browser-data reset/private mode.
+- Unified BrowserTarget routing across built-in browser and Chrome Companion.
+- `@Browser`, `@Chrome`, `@Tab`, and safe Auto target selection.
+- Per-origin privacy controls, trusted tab leases, normalized actions and company policy.
 
-Success criterion: a software team can implement, debug, visually verify, review, and ship a normal application change without leaving ND-DSH.
+Success criterion: a software team can implement, debug, visually verify, review, and ship a normal application change without leaving ND-DSH, while agents can use either the built-in browser or an explicitly connected real-Chrome profile through the same governed browser capability.
 
 ## P1 — ND Skills and MCP control plane
 
