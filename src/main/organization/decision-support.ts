@@ -2,6 +2,7 @@ import {
   REVIEW_ASSIST_QUESTIONS,
   answerConfidence,
   reviewAssistState,
+  type DecisionKernel,
   type DecisionProvider,
   type DecisionProviderAttempt,
   type DecisionProviderResult,
@@ -69,6 +70,7 @@ export class DecisionSupportService {
     readonly mode: DecisionSupportMode,
     private readonly providers: DecisionProvider[],
     private readonly threshold = 0.78,
+    private readonly kernel?: DecisionKernel,
   ) {}
 
   async reviewAssist(input: ReviewAssistInput): Promise<DecisionSupportReceipt | undefined> {
@@ -84,11 +86,25 @@ export class DecisionSupportService {
     const attempts: DecisionProviderAttempt[] = []
     let selectedProvider: string | undefined
     let escalated = false
+    let kernelReceipt: DecisionSupportReceipt | undefined
 
     for (let index = 0; index < this.providers.length; index++) {
       const provider = this.providers[index]!
       const attempt = await attemptProvider(provider, state, questions)
       attempts.push(attempt)
+
+      if (this.kernel) {
+        const evaluation = await this.kernel.evaluate({
+          purpose,
+          mode: this.mode,
+          threshold: this.threshold,
+          providerCount: this.providers.length,
+          attempts,
+        })
+        kernelReceipt = evaluation.receipt
+        if (!evaluation.shouldContinue) return evaluation.receipt
+        continue
+      }
 
       if (this.mode === 'shadow') continue
       if (!attempt.ok || !attempt.result) {
@@ -104,6 +120,7 @@ export class DecisionSupportService {
       escalated ||= index < this.providers.length - 1
     }
 
+    if (kernelReceipt) return kernelReceipt
     return {
       purpose,
       mode: this.mode,
