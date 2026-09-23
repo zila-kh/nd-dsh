@@ -101,8 +101,11 @@ export class BrowserTargetRouter {
       return { lease, tab }
     }
     if (method === 'browser.detach') {
+      this.requireAgentSession(context, method)
       const leaseId = requiredString(params.leaseId, 'leaseId')
-      const released = this.leases.release(leaseId)
+      const released = context.source === 'renderer'
+        ? this.leases.release(leaseId)
+        : this.leases.releaseOwned(leaseId, context.sessionId!)
       if (released) this.onChanged?.()
       return { released }
     }
