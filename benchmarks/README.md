@@ -6,7 +6,7 @@ These benchmarks are release evidence for PRD 0002. They use deterministic local
 - `node benchmarks/terminal-handshake-proof.mjs` — proves the benchmark client's Windows terminal handshake both ways: a client that stops answering fails loudly inside the grace window, and the same terminal finishes once it answers.
 - `node benchmarks/verify-evidence-identity.mjs` — proves the production evidence identity gates on synthetic bundles: a mislabelled runtime or mismatched nd-core executable is refused by `bench:check` as an `[identity]` failure.
 - `pnpm bench:record` — one-shot Windows reference run. It builds the current portable app, records release-core results, records the Rust Electron runtime and packaged startup, evaluates absolute/correctness budgets, and writes `summary.json` plus generated `summary.md`.
-- `pnpm bench:compare <legacy.json> <rust.json>` — compare two same-machine `electron-responsiveness.json` files. Provenance mismatch exits non-zero.
+- `pnpm bench:compare <baseline.json> <candidate.json>` — compare two same-machine `electron-responsiveness.json` files. Provenance mismatch exits non-zero.
 - `pnpm bench:check <bundle/summary.json>` — reload raw JSON and recompute all PRD budgets; missing or failed evidence exits non-zero.
 - `pnpm bench:app` — packaged Electron startup only; requires `ND_DSH_BENCH_PACKAGED_APP`.
 - `pnpm bench:runtime` — convenience Rust-only same-build Electron stress run for development.
@@ -92,7 +92,7 @@ Production evidence still fails closed on identity:
 
 Historical same-machine legacy-vs-Rust `electron-responsiveness.json` files remain comparable with `pnpm bench:compare`. They are historical migration evidence, not a prerequisite for current release recording.
 
-Runtime baselines follow [the baseline policy](../docs/plan/performance-baseline-policy.md). The full recorder uses at least 10 measured runs for startup and short-latency evidence and reports p50/p95.
+Runtime baselines follow [the baseline policy](../docs/plan/performance-baseline-policy.md): the reviewed summary is committed per reference machine (`benchmarks/baselines/win11-x64.json`, recorded 2026-09-23 by [task 0015](../docs/tasks/done/done-0015-runtime-evidence-baseline.md)), the raw bundle stays gitignored, and the baseline's `artifact` field says where that bundle lives. The full recorder uses at least 10 measured runs for startup and short-latency evidence and reports p50/p95.
 
 ## GitHub Actions checkpoint runs
 

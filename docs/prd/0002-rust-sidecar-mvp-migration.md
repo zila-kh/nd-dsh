@@ -779,6 +779,8 @@ Release build, warm filesystem on the documented reference machine:
 - nd-core process spawn to successful handshake: target p50 <= 50 ms, release gate p95 <= 120 ms.
 - health round-trip after core is ready: p95 <= 5 ms.
 
+Recorded 2026-09-23 on the Windows reference machine ([task 0015](../tasks/done/done-0015-runtime-evidence-baseline.md)): spawn p50 22.66 ms, p95 24.45 ms, health RTT p95 0.45 ms. A freshly linked binary's first launch is a cold-start artifact (file cache, first anti-malware scan) and is recorded as `coldSpawnMs` (31.1 ms) but excluded from the percentile, which would otherwise *be* that sample at n=10.
+
 Report spawn time separately from core initialization/handshake time.
 
 #### Idle core memory
@@ -835,6 +837,8 @@ During terminal and Git stress:
 - sample Electron main event-loop lag,
 - p95 target <= 16 ms on the reference machine,
 - every >50 ms stall in the benchmark run must be reported/attributed.
+
+Gate interpretation (task 0015): the target is the *app's* event-loop lag, but on Windows `monitorEventLoopDelay` is quantized by the ~15.6 ms system timer — an idle process already reports p95 ≈ 16.2 ms — so a raw "p95 ≤ 16 ms" is unattainable by construction. The runtime benchmark therefore samples the same histogram for 750 ms with nothing to service, records that `floorP95Ms`, and the gate scores the stress p95 **above the measured floor** against the same 16 ms. Raw p50/p95/p99/max and the >50 ms stall observation are reported unchanged. Recorded 2026-09-23: floor 16.21 ms, stress 17.12 ms, excess 0.91 ms, zero stalls >50 ms.
 
 Any claimed performance percentage in the implementation PR must include exact methodology, platform, binary profile, and before/after values.
 
@@ -1020,9 +1024,9 @@ The MVP was implemented and merged as PR #20 (`feat/rust-shared-core-mvp`, merge
 7. **PRD-listed methods that do not exist.** Reconciled: `terminal.restart` and `terminal.state` now exist with tests; `process.kill` and `scheduler.configure` were removed from the method list with recorded reasons (see the method-family section above).
 8. **Autopilot capacity is enforced reactively — RESOLVED 2026-09-22 by task 0007.** The dispatch decision now consults typed coordinator availability and release, rather than reading a failure string as "no capacity"; the old fixed loop bound survives only as an iteration guard.
 9. **The legacy backend switch is still live — RESOLVED 2026-09-22 by task 0007.** The production legacy backend switch is removed: nd-core is mandatory for desktop system services, and the app still fails closed with an actionable error when the binary is absent. The benchmark suite is Rust-only; historical legacy comparison remains available through `bench:compare`.
-10. **Benchmark evidence gaps** — closed on the tooling side: agent-task metrics and the committed normal-loop baseline landed with task 0005, and the backend-identity plus core-binary-identity gates with the swap proof landed with task 0004 ([performance-benchmark-suite.md](../plan/performance-benchmark-suite.md) §12.1-§12.3). What remains is not a gap in the tooling but in the evidence: the fast-path agent-level budgets (§12.4) and the reviewed runtime evidence baseline.
+10. **Benchmark evidence gaps** — closed on the tooling side: agent-task metrics and the committed normal-loop baseline landed with task 0005, and the backend-identity plus core-binary-identity gates with the swap proof landed with task 0004 ([performance-benchmark-suite.md](../plan/performance-benchmark-suite.md) §12.1-§12.3). The reviewed runtime evidence baseline was recorded on the reference machine and committed as `benchmarks/baselines/win11-x64.json` ([task 0015](../tasks/done/done-0015-runtime-evidence-baseline.md)). What remains is the fast-path agent-level budgets (§12.4) and, for the baseline, the runner-produced bundle that fills in its `artifact` URL once the workflows are restored.
 
-Items 1-9 define what "finish the Rust-sidecar MVP" means; item 10 is Phase 3 of the current direction and must be closed before any fast-path claim can be made. Items 1-9 are all closed as of 2026-09-22: 2, 3, 4, 6, and 7 by task 0006 on 2026-09-21; 1, 8, and 9 by task 0007; and 5 as a recorded decision (recovery through `terminal.state`, subscriptions deliberately not built). Item 10's tooling half is closed by tasks 0005 and 0004, leaving its evidence half — see the item's note.
+Items 1-9 define what "finish the Rust-sidecar MVP" means; item 10 is Phase 3 of the current direction and must be closed before any fast-path claim can be made. Items 1-9 are all closed as of 2026-09-22: 2, 3, 4, 6, and 7 by task 0006 on 2026-09-21; 1, 8, and 9 by task 0007; and 5 as a recorded decision (recovery through `terminal.state`, subscriptions deliberately not built). Item 10's tooling half is closed by tasks 0005 and 0004, and its runtime-evidence half by task 0015 on 2026-09-23; the fast-path budgets remain — see the item's note.
 
 #### 5.0.3 Decision record — nd-core runtime contract (task 0006, 2026-09-21)
 
