@@ -48,6 +48,26 @@ export class BrowserPlatformService {
       this.credentials,
       this.accessTokens,
     )
+    this.browser.setDownloadAuthorizationHandler(async (request) => {
+      try {
+        const { envelope, decision } = await this.policy.authorize(
+          { source: 'agent', sessionId: request.sessionId },
+          {
+            operation: 'browser.download',
+            action: 'file.download',
+            targetId: BUILTIN_BROWSER_TARGET_ID,
+            profileId: this.browser.profileId(),
+            ...(request.tabId ? { tabId: request.tabId } : {}),
+            ...(request.origin ? { origin: request.origin } : {}),
+            detail: `${request.filename} ${request.url}`.slice(0, 2_000),
+          },
+        )
+        await this.policy.complete(envelope, decision, true)
+        return true
+      } catch {
+        return false
+      }
+    })
     this.policy.setOnChanged(() => { void this.emit() })
     this.router.setOnChanged(() => { void this.emit() })
     this.browser.setTabClosedListener((tabId) => {
@@ -66,6 +86,7 @@ export class BrowserPlatformService {
     if (this.closed) return
     this.closed = true
     this.companion.setAgentDispatcher(undefined)
+    this.browser.setDownloadAuthorizationHandler(undefined)
     this.browser.setTabClosedListener(undefined)
     this.policy.setOnChanged(undefined)
     this.router.setOnChanged(undefined)
