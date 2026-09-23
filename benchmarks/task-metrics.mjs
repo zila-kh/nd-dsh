@@ -136,14 +136,19 @@ const PASSES = [
 /**
  * Concurrency budgets for the matched pair above.
  *
- * The speedup floor is deliberately modest: the product's execution pool
- * defaults to two workers per project, so four dispatched tasks can reach at
- * best ~2x, and the floor only has to refute "these never actually overlapped".
- * `peakConcurrency` carries the sharper claim, because it reports the ceiling
- * the product imposed rather than the one the pass asked for.
+ * Both arms dispatch four tasks, and the product's default execution pool is
+ * also four, so `peakConcurrency` is expected to reach 4: a lower number means
+ * either the pool ceiling or the dispatch path regressed, and both are worth
+ * failing on rather than merely observing.
+ *
+ * The speedup floor sits well under the ~3.8 measured on the reference machine
+ * so a slower or busier machine can still record a baseline, but far above the
+ * ~1.0 a serialized arm produces. It is a ratio computed inside each arm, not a
+ * wall-clock threshold, so it does not drift with the hardware.
  */
-const PARALLEL_SPEEDUP_FLOOR = 1.25
+const PARALLEL_SPEEDUP_FLOOR = 2.5
 const PARALLEL_IPC_GROWTH_BUDGET = 1.2
+const PARALLEL_MIN_PEAK_CONCURRENCY = 4
 
 const BASELINE_PATH = join(benchmarkRoot, 'benchmarks', 'baselines', 'agent-task-normal-loop.json')
 const require = createRequire(import.meta.url)
@@ -496,11 +501,10 @@ function compareFastPath(passes, samples) {
  * computed inside each arm, plus the overlap observed between the recorded
  * intervals.
  *
- * `peakConcurrency` is reported as a measurement rather than a budget because it
- * is the product's decision, not the pass's: the execution pool defaults to two
- * workers per project, so four dispatched tasks legitimately overlap two at a
- * time. The floor below only has to refute the failure mode that matters, which
- * is a parallel arm that never ran anything concurrently at all.
+ * `peakConcurrency` is a budget and not merely an observation because it reports
+ * the ceiling the product imposed, which is what a user actually experiences:
+ * four dispatched tasks that only ever overlap two is a regression in the
+ * execution pool even when the wall time still looks better than sequential.
  */
 function compareParallel(passes, samples) {
   const arm = (name) => {
@@ -527,7 +531,7 @@ function compareParallel(passes, samples) {
   const budgets = {
     speedupFloor: PARALLEL_SPEEDUP_FLOOR,
     ipcGrowthBudget: PARALLEL_IPC_GROWTH_BUDGET,
-    minPeakConcurrency: 2,
+    minPeakConcurrency: PARALLEL_MIN_PEAK_CONCURRENCY,
   }
   if (sequential.completed === 0 || parallel.completed === 0) {
     return {

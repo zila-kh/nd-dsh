@@ -24,7 +24,24 @@ import type { ExecutionCoordinator, RuntimeAvailability, RuntimePoolClaim } from
 
 const DAY_MS = 24 * 60 * 60 * 1_000
 const DEFAULT_LEASE_MS = 30 * 60 * 1_000
-const DEFAULT_MAX_PARALLEL_WORKERS = 2
+/**
+ * How many of one project's tasks may execute at the same time when the company
+ * has not set its own budget.
+ *
+ * Each worker costs a Git worktree plus an engine session. Measured by the
+ * agent-task benchmark's matched sequential/parallel arms, four identical tasks
+ * dispatched together finish in about a quarter of the sequential wall time
+ * (speedup 3.82 of a theoretical 4) while per-task wall cost rises ~5% and
+ * per-task nd-core IPC crossings stay exactly flat — so the ceiling is disk and
+ * provider concurrency rather than ND's own overhead.
+ *
+ * Those tasks all ran on the single seeded Builder agent, which is worth
+ * knowing before assuming a wider ceiling needs a wider workforce.
+ *
+ * This bounds *simultaneous* runs, not how many tasks a user may start: an
+ * explicit dispatch beyond the ceiling waits for a slot instead of failing.
+ */
+const DEFAULT_MAX_PARALLEL_WORKERS = 4
 const DEFAULT_MAX_REVIEW_WORKERS = 2
 const EMPTY: OrganizationControlSnapshot = {
   version: 1,

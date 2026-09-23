@@ -169,8 +169,8 @@ describe('agent-task result kind', () => {
       parallelComparison: {
         status: 'pass',
         sequential: { tasks: 4, spanMs: 4_000, sumTaskWallMs: 3_600, meanTaskWallMs: 900, speedup: 0.9, peakConcurrency: 1, samples: 4, completed: 4, completionRate: 1, modelRoundTrips: 3, toolCalls: 3, ipcCrossings: 12 },
-        parallel: { tasks: 4, spanMs: 2_000, sumTaskWallMs: 3_600, meanTaskWallMs: 900, speedup: 1.8, peakConcurrency: 2, samples: 4, completed: 4, completionRate: 1, modelRoundTrips: 3, toolCalls: 3, ipcCrossings: 13 },
-        budgets: { speedupFloor: 1.25, ipcGrowthBudget: 1.2, minPeakConcurrency: 2 },
+        parallel: { tasks: 4, spanMs: 1_000, sumTaskWallMs: 3_600, meanTaskWallMs: 900, speedup: 3.6, peakConcurrency: 4, samples: 4, completed: 4, completionRate: 1, modelRoundTrips: 3, toolCalls: 3, ipcCrossings: 13 },
+        budgets: { speedupFloor: 2.5, ipcGrowthBudget: 1.2, minPeakConcurrency: 4 },
         failures: [],
       },
     }
