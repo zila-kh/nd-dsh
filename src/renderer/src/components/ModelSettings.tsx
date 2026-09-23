@@ -379,7 +379,7 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
         </button>
       </header>
 
-      <div className="grid min-h-0 grid-cols-[240px_minmax(0,1fr)] gap-4 px-6 pb-6">
+      <div className="grid min-h-0 overflow-hidden grid-cols-[240px_minmax(0,1fr)] gap-4 px-6 pb-6">
         <aside className="flex min-h-0 flex-col overflow-auto" aria-label="Providers">
           <div className="px-1.5 pb-1.5 pt-2.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-(--models-faint)">Providers</div>
           {providers.map((provider) => (
@@ -391,7 +391,7 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
         </aside>
 
         {selected ? (
-          <div className="flex min-h-0 flex-col rounded-[14px] border border-(--models-border) bg-(--models-surface) p-[22px]">
+          <div className="flex min-h-0 flex-col overflow-auto rounded-[14px] border border-(--models-border) bg-(--models-surface) p-[22px]">
             <header className="mb-[18px] flex items-center justify-between gap-3">
               <div className="flex min-w-0 items-center gap-2">
                 {renamingProvider ? (
