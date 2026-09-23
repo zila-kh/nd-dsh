@@ -215,6 +215,33 @@ describe('decision support cascade', () => {
     expect(request).toHaveBeenCalledTimes(1)
   })
 
+  it('falls back to the independent reviewer when the Rust kernel fails', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      model: 'english',
+      answers: {
+        review_route: {
+          type: 'choice',
+          choice: 'standard_review',
+          confidence: 0.91,
+        },
+      },
+    }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    const request = vi.fn(async () => {
+      throw new Error('rust kernel unavailable')
+    })
+    const service = createDecisionSupportFromEnv({
+      ND_DECISION_SUPPORT_MODE: 'assist',
+      ND_DECISION_SUPPORT_RUNTIME: 'rust',
+      ND_LAYA_SYSTEMONE_URL: 'http://127.0.0.1:8765',
+    }, fetchImpl as typeof fetch, { request } as never)
+
+    const receipt = await service?.reviewAssist(input)
+
+    expect(receipt?.selectedProvider).toBeUndefined()
+    expect(receipt?.kernelError).toContain('rust kernel unavailable')
+    expect(formatDecisionSupportForReviewer(receipt)).toBe('')
+  })
+
   it('contains provider failures and continues the cascade', async () => {
     const laya: DecisionProvider = {
       id: 'laya',
