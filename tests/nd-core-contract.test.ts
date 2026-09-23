@@ -204,7 +204,7 @@ describe('terminal restart and truthfulness', () => {
 describe('terminal wire shapes shared with nd-core', () => {
   class TailCore {
     readonly requests: Array<{ method: string; params: Record<string, unknown> }> = []
-    bytes: unknown = [104, 105]
+    bytes: unknown = 'aGk='
     seq = 3
 
     onEvent(): () => void {
@@ -220,7 +220,7 @@ describe('terminal wire shapes shared with nd-core', () => {
     }
   }
 
-  it('sends a restorable tail as a JSON number sequence, not a byte string', async () => {
+  it('sends a restorable tail as base64, not a byte string or byte sequence', async () => {
     const core = new TailCore()
     const spawn = createCorePtySpawner(core as never)
     await spawn('cmd.exe', [], {
@@ -237,7 +237,9 @@ describe('terminal wire shapes shared with nd-core', () => {
     expect(create.method).toBe('terminal.create')
     // Params decode into a JSON value inside nd-core, where a MessagePack byte
     // string is undecodable: it fails the whole frame and takes the sidecar down.
-    expect(create.params.initialBytes).toEqual(Array.from(new TextEncoder().encode('prompt> ')))
+    // A number sequence would decode, but the desktop would then hand nd-core a
+    // half-megabyte array per state read, so the tail travels as base64.
+    expect(create.params.initialBytes).toBe('cHJvbXB0PiA=')
     expect(create.params.initialSeq).toBe(12)
   })
 
@@ -252,8 +254,8 @@ describe('terminal wire shapes shared with nd-core', () => {
       terminalId: 'terminal-1',
     })
     // `terminal.state` results are re-encoded through a JSON value on the core
-    // side, so the retained tail arrives as a number sequence rather than the
-    // byte string the `terminal.output` events carry.
+    // side, so the retained tail arrives as base64 rather than the byte string
+    // the `terminal.output` events carry.
     await expect(process.tailState?.()).resolves.toEqual({ seq: 3, buffer: 'hi' })
   })
 })

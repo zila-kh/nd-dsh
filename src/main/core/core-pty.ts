@@ -37,17 +37,22 @@ interface CoreTerminalState {
   firstRetainedSeq: number
   droppedThroughSeq: number
   retainedBytes: number
-  bytes: Uint8Array | number[]
+  bytes: string
 }
 
 /**
- * `terminal.state` results are re-encoded through a JSON value inside nd-core, so
- * the retained tail arrives as a number sequence — the encoding `terminal.create`
- * accepts back. Output events keep the byte-string encoding, so both shapes reach
- * this client as a byte source.
+ * The retained tail crosses nd-core twice through a JSON-valued boundary: request
+ * params are decoded as a JSON value, and `terminal.state` results are re-encoded
+ * through one. A byte string is unrepresentable there, and a number sequence costs
+ * this client a per-element copy of half a megabyte on every state read, so the
+ * tail travels as base64 in both directions. Output events keep the byte-string
+ * encoding and never take this path.
+ *
+ * `Buffer.from` already returns a `Uint8Array`; copying it again through the typed
+ * array iterator turns a decoder call into a per-byte walk of a saturated tail.
  */
-function retainedTailBytes(bytes: Uint8Array | number[]): Uint8Array {
-  return bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes)
+function retainedTailBytes(bytes: string): Uint8Array {
+  return Buffer.from(bytes, 'base64')
 }
 
 /**
@@ -78,8 +83,9 @@ export function createCorePtySpawner(core: CoreClient): PtySpawner {
       env: options.env,
       // Request params are decoded as a JSON value on the core side, where a
       // MessagePack byte string is unrepresentable — it fails the decode and
-      // takes the sidecar down. Bytes therefore travel as a number sequence.
-      initialBytes: Array.from(new TextEncoder().encode(options.initialBuffer ?? '')),
+      // takes the sidecar down. The tail travels as base64, the same string
+      // encoding `terminal.state` reports it back in.
+      initialBytes: Buffer.from(options.initialBuffer ?? '').toString('base64'),
       initialSeq: options.initialOutputSeq ?? 0,
     })
     return new CorePtyProcess(core, result)

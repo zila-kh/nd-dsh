@@ -428,8 +428,8 @@ mod tests {
     fn rejects_a_byte_string_inside_params_instead_of_guessing() {
         // Request params decode into a JSON value, which has no byte-string shape:
         // a MessagePack `bin` inside params fails the whole frame. Senders must
-        // therefore encode retained bytes as a number sequence, the way the
-        // desktop's `terminal.create` call does.
+        // therefore encode retained bytes as text, the way the desktop's
+        // `terminal.create` call sends its base64 tail.
         #[derive(serde::Serialize)]
         struct BinParamsFrame<'a> {
             version: u16,

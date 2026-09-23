@@ -33,6 +33,80 @@ use uuid::Uuid;
 /// dropped sequence number is reported rather than hidden.
 const MAX_TERMINAL_TAIL_BYTES: usize = 512 * 1024;
 
+/// The retained tail crosses a JSON-valued boundary in both directions — request
+/// params are decoded as a JSON value, and results are re-encoded through one. A
+/// MessagePack byte string is unrepresentable there, and a number sequence makes
+/// the desktop copy every byte element on each state read (a saturated tail is
+/// half a megabyte, and the terminal dock reads state while output is streaming).
+/// Base64 keeps the tail a single string on the wire: one encode here, one decode
+/// in the client.
+mod tail_bytes {
+    use serde::de::Error as _;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    pub fn encode(bytes: &[u8]) -> String {
+        let mut text = String::with_capacity(bytes.len().div_ceil(3) * 4);
+        for chunk in bytes.chunks(3) {
+            let first = chunk[0] as u32;
+            let second = chunk.get(1).copied().unwrap_or(0) as u32;
+            let third = chunk.get(2).copied().unwrap_or(0) as u32;
+            let packed = (first << 16) | (second << 8) | third;
+            text.push(ALPHABET[(packed >> 18) as usize & 0x3f] as char);
+            text.push(ALPHABET[(packed >> 12) as usize & 0x3f] as char);
+            text.push(if chunk.len() > 1 {
+                ALPHABET[(packed >> 6) as usize & 0x3f] as char
+            } else {
+                '='
+            });
+            text.push(if chunk.len() > 2 {
+                ALPHABET[packed as usize & 0x3f] as char
+            } else {
+                '='
+            });
+        }
+        text
+    }
+
+    pub fn decode(text: &str) -> Result<Vec<u8>, String> {
+        let mut bytes = Vec::with_capacity(text.len() / 4 * 3);
+        let mut buffer = 0u32;
+        let mut bits = 0u32;
+        for character in text.bytes() {
+            if character == b'=' {
+                break;
+            }
+            let value = match character {
+                b'A'..=b'Z' => character - b'A',
+                b'a'..=b'z' => character - b'a' + 26,
+                b'0'..=b'9' => character - b'0' + 52,
+                b'+' => 62,
+                b'/' => 63,
+                b'\n' | b'\r' => continue,
+                _ => return Err(format!("invalid base64 character {character:#04x}")),
+            } as u32;
+            buffer = (buffer << 6) | value;
+            bits += 6;
+            if bits >= 8 {
+                bits -= 8;
+                bytes.push((buffer >> bits) as u8);
+                buffer &= (1 << bits) - 1;
+            }
+        }
+        Ok(bytes)
+    }
+
+    pub fn serialize<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&encode(bytes))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        decode(&text).map_err(D::Error::custom)
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalCreateParams {
@@ -46,7 +120,7 @@ pub struct TerminalCreateParams {
     pub rows: u16,
     #[serde(default)]
     pub env: HashMap<String, String>,
-    #[serde(default, with = "serde_bytes")]
+    #[serde(default, deserialize_with = "tail_bytes::deserialize")]
     pub initial_bytes: Vec<u8>,
     #[serde(default)]
     pub initial_seq: u64,
@@ -134,7 +208,7 @@ pub struct TerminalStateResult {
     pub dropped_through_seq: u64,
     pub retained_bytes: usize,
     pub tail_truncated: bool,
-    #[serde(with = "serde_bytes")]
+    #[serde(serialize_with = "tail_bytes::serialize")]
     pub bytes: Vec<u8>,
     pub emitted_at: u64,
 }
@@ -855,9 +929,9 @@ mod tests {
     }
 
     #[test]
-    fn create_params_decode_the_retained_tail_from_a_json_number_sequence() {
+    fn create_params_decode_the_retained_tail_from_a_base64_string() {
         // The desktop reaches `terminal.create` through a JSON-valued boundary, so
-        // the retained tail arrives as `[104, 105]` rather than a byte string.
+        // the retained tail arrives as a string rather than a byte string.
         let params: TerminalCreateParams = serde_json::from_value(serde_json::json!({
             "terminalId": "terminal-1",
             "sessionId": "session-1",
@@ -865,7 +939,7 @@ mod tests {
             "cwd": "C:\\work",
             "cols": 80,
             "rows": 24,
-            "initialBytes": [104, 105],
+            "initialBytes": "aGk=",
             "initialSeq": 7
         }))
         .unwrap();
@@ -874,9 +948,39 @@ mod tests {
     }
 
     #[test]
-    fn state_result_encodes_the_retained_tail_as_a_number_sequence() {
+    fn create_params_reject_a_tail_that_is_not_base64() {
+        let error = serde_json::from_value::<TerminalCreateParams>(serde_json::json!({
+            "terminalId": "terminal-1",
+            "sessionId": "session-1",
+            "shell": "cmd.exe",
+            "cwd": "C:\\work",
+            "cols": 80,
+            "rows": 24,
+            "initialBytes": [104, 105]
+        }))
+        .unwrap_err();
+        assert!(error.to_string().contains("invalid type"), "{error}");
+    }
+
+    #[test]
+    fn tail_base64_round_trips_every_padding_length() {
+        for length in 0..=8 {
+            let bytes: Vec<u8> = (0..length).map(|index| (index * 37 + 200) as u8).collect();
+            let encoded = tail_bytes::encode(&bytes);
+            assert_eq!(
+                tail_bytes::decode(&encoded).unwrap(),
+                bytes,
+                "length {length}"
+            );
+        }
+        assert_eq!(tail_bytes::encode(b"hi"), "aGk=");
+        assert_eq!(tail_bytes::encode(b"hey"), "aGV5");
+    }
+
+    #[test]
+    fn state_result_encodes_the_retained_tail_as_a_base64_string() {
         // Results are re-encoded through a JSON value on the way out, so the
-        // retained tail reaches the desktop as `[104, 105]` — the same shape
+        // retained tail reaches the desktop as `"aGk="` — the same shape
         // `terminal.create` accepts inbound. The desktop decodes that shape.
         let state = TerminalStateResult {
             terminal_id: "terminal-1".into(),
@@ -901,7 +1005,7 @@ mod tests {
             emitted_at: 0,
         };
         let value = serde_json::to_value(state).unwrap();
-        assert_eq!(value["bytes"], serde_json::json!([104, 105]));
+        assert_eq!(value["bytes"], serde_json::json!("aGk="));
     }
 
     #[test]
