@@ -2,130 +2,225 @@
 
 > Priority: P1  
 > Owner: ND runtime  
-> Status: WIP — process-ownership convergence implemented; retention migration follows measured evidence  
+> Status: implementation complete — manual local validation/evidence handoff pending  
 > Branch: `feat/rust-parallel-runtime-v2`  
-> Base synced: `main@5bc853d2` on 2026-09-23  
+> Base: `main@5bc853d2`  
 > Validation mode: manual local only; GitHub Actions remains parked  
 > Updated: 2026-09-23
 
 ## Objective
 
-Reduce Electron-main RAM, process handles, event churn, and duplicated state as ND scales from a few workers to many companies/projects/teams with 10/25/50/100 concurrent logical workers.
+Make ND's multi-company / multi-project / multi-team runtime scale cheaply toward
+10/25/50/100 concurrent logical workers without turning the product into a
+TypeScript-to-Rust rewrite.
 
-The rule is **benchmark-directed migration**, not “rewrite TypeScript in Rust”:
+The ownership rule for this wave is:
 
-- TypeScript keeps company semantics, planning, policy, prompts, engine protocol interpretation, and UI.
-- `nd-core` owns machine-wide scheduling and system-heavy/shared runtime work.
-- A migration must preserve the external ND contract and prove a resource or latency win before deeper business logic moves.
+- TypeScript keeps company semantics, planning, policy, prompts, engine-specific
+  protocol interpretation, workflow decisions, approvals, and UI.
+- `nd-core` owns machine-wide scheduling, native process lifecycle, PTYs,
+  bounded high-volume retention, and other shared system-heavy resources.
+- Migration stops where measurement does not justify it.
 
-## Current baseline
+## Scale contract already on main
 
-The 100-worker scale contract is already merged to `main`:
+The benchmark contract records `1/2/4/8/10/25/50/100` sessions/workers and
+separates Electron-main memory, nd-core memory, managed worker memory, external
+engine memory, event queues, worktree cost, and control latencies.
 
-- logical/runtime scale points: `1/2/4/8/10/25/50/100`;
-- scheduler/process/worktree benchmark records core, managed-worker, external-worker, queue and disk measurements;
-- Electron runtime benchmark records RSS plus JS heap/external/array-buffer memory and core retained-resource counters.
+Runtime v2 extends that contract with native session-journal retention evidence.
 
-This task continues from that merged baseline rather than duplicating it.
+## Phase A — process ownership convergence — implemented
 
-## Phase A — project process ownership convergence
-
-### Why
-
-Direct coding-engine children already spawn through `createCoreSpawn`, but `ProjectRuntimeService` still launched dev servers directly from Electron with `node:child_process.spawn({ shell: true })` and maintained its own platform-specific tree teardown.
-
-That leaves a long-lived process class outside the shared Rust supervisor.
-
-### Implemented on this branch
-
-- [x] Resolve project start commands through an explicit platform shell:
+- [x] Project dev servers use an unscoped `createCoreSpawn(core)`; they are
+  project-owned resources and never inherit a task permit accidentally.
+- [x] Project start commands keep shell semantics explicitly:
   - Windows: `COMSPEC /d /s /c <command>`
   - POSIX: `/bin/sh -c <command>`
-- [x] Use a dedicated `createCoreSpawn(core)` for project dev servers.
-- [x] Do **not** attach project dev servers to the current worker/task permit.
-- [x] Add `stopCoreManagedChildProcess`; its `kill()` maps to Rust `process.cancel` whole-tree teardown.
-- [x] Keep `ProjectRuntimeService` injectable so unit tests and non-core fallback tests remain possible.
-- [x] Add focused regression tests for shell argv and injected process-owner teardown.
-- [x] Route task machine-verification commands through the same unscoped Rust process supervisor.
-- [x] Make verification process ownership injectable so direct unit coverage can keep using the local Node fallback.
-- [x] Await process-owner teardown before verification cleanup restores a task worktree after timeout.
+- [x] `stopCoreManagedChildProcess` maps teardown to Rust `process.cancel`
+  whole-tree ownership.
+- [x] Task machine-verification commands use the same unscoped Rust supervisor.
+- [x] Verification waits for process-owner teardown before restoring a task
+  worktree after timeout.
+- [x] Node fallback paths remain injectable and retain whole-tree cleanup.
+- [x] Focused project-runtime regression coverage is committed.
 
-## Phase B — session/event retention
+## Phase B — session/event/transcript retention — implemented
 
-Next candidate after Phase A validation:
+### Harness sessions
 
-- measure Electron retention for session journals and direct-engine transcripts at 10/25/50/100 sessions;
-- move bounded normalized event retention toward a shared native store only if JS heap/GC evidence justifies it;
-- preserve engine-specific parsing/routing in TypeScript;
-- prefer batched append/tail RPCs so moving storage does not increase IPC crossings.
+- [x] Added bounded `SessionJournalStore` to nd-core.
+- [x] Default bound is 10,000 events **and** 8 MiB per session.
+- [x] Added append/tail/drop/reset/clear RPCs and native retained-byte/event
+  metrics.
+- [x] Electron batches journal appends over a small bounded window instead of
+  crossing core once per event.
+- [x] `SessionEventHub` no longer owns a 10,000-object JavaScript journal per
+  session; it keeps only live stream/baseline/write coordination state.
+- [x] Existing history wire shape and live `DshEventFrame` vocabulary are
+  unchanged.
+- [x] Snapshot/reconnect sequence dedupe remains in TypeScript.
+- [x] Surface operations are retained by the native journal.
 
-Important current hotspots:
+### Direct coding engines
 
-- `SessionEventHub`: bounded journal up to 10,000 envelopes per session;
-- direct engines: up to 500 transcript envelopes per session;
-- renderer copies can multiply the live-object cost.
+- [x] Normalized direct-engine transcript events are mirrored once at the common
+  `EngineSessionRouter` boundary; vendor adapters remain Rust-agnostic.
+- [x] Codex, Claude, Cursor, Pi, Antigravity and ZCode keep only a 32-event JS
+  safety tail instead of 500 live event objects.
+- [x] Structured CLI engines (OpenCode, Goose, JCode, Hermes) retain their
+  historical `assistant/chunk` transcript behavior in native replay.
+- [x] Previously-unbounded Structured CLI and MiniMax local transcript arrays are
+  now bounded to 32 events.
+- [x] Renderer transcript reads prefer the native 500-event replay and fall back
+  to the engine-local safety tail if nd-core has restarted.
+- [x] ChatGPT Web intentionally keeps its existing durable 500-event transcript:
+  it already owns restart persistence and is not an organization workspace
+  worker. Moving it would expand persistence scope rather than solve the
+  parallel-worker hotspot.
 
-## Phase C — terminal retention convergence
+### Evidence
 
-The Rust PTY already retains a bounded live tail, but Electron also keeps/persists terminal scrollback.
+- [x] Added `session-journal-scaling` benchmark at
+  `1/2/4/8/10/25/50/100`.
+- [x] It records retained sessions/events/bytes, native memory, tail latency and
+  queue metrics.
+- [x] Budget checks require the full scale grid and enforce the configured
+  aggregate byte bound.
+- [x] Added focused batched-journal ownership/replay tests.
 
-Do not remove the JS/persisted buffer until Rust has a durable replacement: current desktop restart behavior restores scrollback, while the in-memory Rust tail dies with `nd-core`.
+## Phase C — terminal retention convergence — implemented
 
-Target:
+The production PTY was already Rust-owned, but Electron also retained a second
+hot 512 KiB scrollback string and repeatedly concatenated it on every output
+chunk.
 
-- durable native terminal tail/session metadata;
-- one authoritative retained byte budget;
-- Electron keeps only the active renderer-facing tail;
-- no loss of restart/restore semantics.
+- [x] nd-core terminal tail now matches the desktop 512 KiB bound.
+- [x] Active scrollback has one hot owner: nd-core.
+- [x] Electron no longer concatenates the live terminal buffer when the PTY
+  exposes the native tail contract.
+- [x] State delivery and `terminals.json` persistence materialize the Rust tail
+  only when needed.
+- [x] Persisted scrollback and output sequence seed the native tail after desktop
+  restart, preserving existing restore behavior.
+- [x] Restart/restore notices can be appended directly to native history without
+  inventing shell output events.
+- [x] Exited shells remain in nd-core just long enough for Electron to capture
+  the final tail, then the native resource is explicitly closed.
+- [x] Core-restart reconciliation falls back to the last durable terminal
+  snapshot if the previous native tail is no longer available.
+- [x] Focused native-tail/live-state and desktop-restart regression tests are
+  committed.
 
-## Phase D — organization persistence only if measured
+## Phase D — organization persistence — closed by evidence rule, not migrated
 
-`OrganizationStore` still clones and serializes whole snapshots. Consider incremental native persistence (for example append log/SQLite + snapshots) only after the 100-worker measurements show it is material.
+`OrganizationStore` remains TypeScript-owned in this wave.
 
-Business rules remain TypeScript-owned.
+That is deliberate:
+
+- company/task/workflow truth is business state, not a native runtime primitive;
+- the existing 100-worker measurements now expose Electron heap/RSS and native
+  retention separately;
+- no recorded v2 evidence yet demonstrates that whole-snapshot organization
+  persistence is the dominant high-concurrency cost;
+- introducing SQLite/append-log semantics without that evidence would enlarge
+  the migration and persistence failure surface for speculative benefit.
+
+If the local 100-worker evidence later shows organization serialization/GC is a
+material bottleneck, open a new measured task for an incremental persistence
+backend. Do not reopen this runtime-v2 branch merely to increase Rust coverage.
+
+## Intentionally not migrated in v2
+
+These remain TypeScript by design unless later profiling says otherwise:
+
+- company/team/role/project/task semantics;
+- prompts, routing policy and model/provider selection;
+- engine-specific protocol parsing;
+- approvals and workflow decisions;
+- React/renderer state;
+- user-triggered QA tooling and one-per-app helper processes where worker count
+  does not multiply the cost;
+- ChatGPT Web's durable transcript store.
 
 ## Manual local validation handoff
 
-Do **not** enable or run GitHub Actions for this task.
+**Do not enable or run GitHub Actions for this task.**
 
-Run these locally from an up-to-date checkout of `feat/rust-parallel-runtime-v2`:
+From an up-to-date checkout of `feat/rust-parallel-runtime-v2` run:
 
 - [ ] `corepack pnpm core:test`
 - [ ] `corepack pnpm verify`
 - [ ] `corepack pnpm typecheck`
-- [ ] `corepack pnpm vitest run tests/project-runtime.test.ts tests/beta-reliability.test.ts`
+- [ ] `corepack pnpm vitest run tests/project-runtime.test.ts tests/beta-reliability.test.ts tests/session-event-hub.test.ts tests/core-session-journal.test.ts tests/terminal-manager.test.ts tests/nd-core-contract.test.ts tests/engine-session-router.test.ts tests/extra-coding-engines.test.ts tests/agent-cli-engines.test.ts`
 - [ ] `corepack pnpm test`
 - [ ] `corepack pnpm build`
 - [ ] `corepack pnpm bench:smoke`
 
-Known local-suite caveat: [todo-0017](todo-0017-windows-worktree-test-ebusy-flake.md) records an intermittent Windows `EBUSY` teardown race in `tests/task-worktree.test.ts`. If the only full-suite failure is that exact known teardown symptom, preserve the log and run the focused worktree test instead of treating it as proof this runtime change failed.
+Known caveat: [todo-0017](todo-0017-windows-worktree-test-ebusy-flake.md)
+records an intermittent Windows `EBUSY` teardown race in
+`tests/task-worktree.test.ts`. If that exact teardown symptom is the only
+full-suite failure, preserve the log and run the focused worktree spec; do not
+silently rerun until green.
 
-### Manual project-runtime smoke
+### Manual project/runtime smoke
 
-On Windows (highest priority for this slice):
+On Windows:
 
-- [ ] Configure a project start command such as `pnpm dev`.
-- [ ] Start it from ND; target becomes ready and logs stream normally.
-- [ ] Verify `nd-core` process metrics include the managed dev-server process.
-- [ ] Stop the project; the whole dev-server descendant tree exits and the port is released.
-- [ ] Restart repeatedly; only one live tree owns the port.
-- [ ] Switch to another workspace; the previous project's dev server exits.
-- [ ] Close ND while the server is running; no child process remains.
-- [ ] Try a shell command containing quoting and `&&` to confirm the explicit `cmd.exe /c` path preserves normal start-command semantics.
+- [ ] Configure a project start command such as `pnpm dev`; start it from ND.
+- [ ] Confirm the target becomes ready and logs stream.
+- [ ] Confirm nd-core process metrics include the managed dev-server/verification
+  processes.
+- [ ] Stop/restart/switch workspaces and confirm descendant trees and ports are
+  released.
+- [ ] Close ND with a server active and confirm no project child remains.
+- [ ] Exercise quoting plus `&&` through the explicit `cmd.exe /c` path.
+- [ ] Trigger a task verification timeout/cancel and confirm no verifier
+  descendants remain.
 
-On macOS/Linux:
+On macOS/Linux, repeat start/stop/restart with a shell command containing a pipe
+or `&&`.
 
-- [ ] Repeat start/stop/restart with a command that uses a pipe or `&&`; `/bin/sh -c` must preserve it.
+### Manual chat/transcript smoke
 
-## Acceptance for Phase A
+- [ ] Run a Harness session long enough to produce history, reload its thread and
+  confirm history/live events are not duplicated.
+- [ ] Run a direct coding-engine session with more than 32 normalized events;
+  transcript/history must still show older entries from the native journal.
+- [ ] Exercise OpenCode/Goose/JCode/Hermes streaming and confirm
+  `assistant/chunk` history is preserved.
+- [ ] Restart nd-core during a direct session and confirm the local safety tail
+  remains available while the engine heals.
 
-- [ ] All manual local validation above is recorded.
-- [ ] Project start/stop behavior is unchanged from the UI's perspective.
-- [ ] Project dev servers and task machine-verification commands appear under the single Rust process supervisor.
-- [ ] No project dev server is killed merely because a task execution permit is released.
-- [ ] Closing/stopping ND leaves zero project-runtime process descendants.
-- [ ] No regression in shell command quoting on supported platforms.
+### Manual terminal smoke
 
-## Merge rule
+- [ ] Generate substantial terminal output; live rendering remains continuous.
+- [ ] Re-read terminal state and confirm scrollback is present.
+- [ ] Restart the shell and confirm the ND restart marker plus prior scrollback.
+- [ ] Restart the desktop and confirm persisted scrollback seeds the new native
+  terminal.
+- [ ] Restart nd-core unexpectedly and confirm reconciliation marks the old shell
+  exited without replacing the last durable scrollback with an empty buffer.
+- [ ] Close terminals and confirm `retainedTerminalCount` does not leak upward.
 
-Do not merge Phase B/C/D merely because they increase Rust coverage. Each later migration needs a before/after measurement from the committed 100-worker contract and must preserve the existing ND external contract.
+## Full performance evidence handoff
+
+On the Windows reference machine, after the correctness checklist is clean:
+
+- [ ] `corepack pnpm bench:record`
+- [ ] `corepack pnpm bench:check <generated bundle/summary.json>`
+- [ ] Compare Electron-main RSS/heap and nd-core RSS at 10/25/50/100 against the
+  pre-v2 reference bundle.
+- [ ] Inspect `session-journal-scaling.json` for the native retained-byte bound
+  and tail latency.
+- [ ] Confirm external engine memory is reported separately so vendor-process
+  RSS does not hide an ND regression.
+
+## Exit / merge criteria
+
+Implementation work on this branch is complete. It is merge-ready only after the
+operator records the manual local correctness result and, for performance claims,
+the reference-machine evidence above.
+
+No GitHub Actions result is required while Actions is intentionally parked; no
+acceptance criterion is silently waived.
