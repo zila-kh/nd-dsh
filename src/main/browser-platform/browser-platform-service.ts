@@ -118,6 +118,7 @@ export class BrowserPlatformService {
       downloads: this.browser.listDownloads(),
       extensions: this.extensions.list(),
       credentials,
+      sitePermissions: this.browser.sitePermissions(),
       approvals: this.policy.approvals(),
       receipts,
     }
@@ -204,6 +205,12 @@ export class BrowserPlatformService {
     const removed = await this.credentials.remove(credentialId)
     if (removed) await this.emit()
     return removed
+  }
+
+  async setSitePermission(origin: string, permission: string, effect: 'allow' | 'deny') {
+    const record = await this.browser.setSitePermission(origin, permission, effect)
+    await this.emit()
+    return record
   }
 
   resolveApproval(approvalId: string, allowed: boolean): boolean {
