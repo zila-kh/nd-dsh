@@ -63,7 +63,7 @@ Target: **fast native runtime + minimal round trips + structured agent actions +
 | [done-0014](tasks/done/done-0014-app-runtime-terminal-marker.md) | P1 | **done** — app-runtime terminal marker fixed (PR #30); bundle confirmation dropped when Actions was parked |
 | [done-0015](tasks/done/done-0015-runtime-evidence-baseline.md) | P1 | **done** — runtime evidence bundle recorded locally, baseline committed (`benchmarks/baselines/win11-x64.json`); runner artifact stays in blocked-0004 |
 | [done-0016](tasks/done/done-0016-agent-task-baseline-fast-path-budgets.md) | P1 | **done** — agent-task baseline re-recorded against the §12.4 comparison; §9.1 router placement settled (main-process TypeScript) |
-| [todo-0017](tasks/todo-0017-windows-worktree-test-ebusy-flake.md) | P2 | **todo** — `pnpm test` intermittently fails in worktree teardown (`EBUSY` on `rmdir`) under parallel load; local gates are the only validation |
+| [wip-0017](tasks/wip-0017-windows-worktree-test-ebusy-flake.md) | P2 | **implementation complete; local Windows confirmation pending** — teardown uses the repository's bounded transient-lock retry policy; product Git/worktree behavior is unchanged |
 | [wip-0018](tasks/wip-0018-rust-parallel-runtime-v2.md) | P1 | **done; merged and locally validated** — merged by `d1aed436`; reference bundle `2026-09-23T10-27-15-202Z-win32-x64` passed 24/24 checks at feature commit `ae801def` |
 | [blocked-0004](tasks/blocked-0004-windows-release-validation.md) | P0 | **blocked on fresh Windows release validation** — implementation complete (0012-0014 done) and baseline recorded (0015); needs the workflows restored and a runner |
 | [done-0005](tasks/done/done-0005-agent-task-measurement.md) | P1 | **done** — task-cost measurement + normal-loop baseline |
@@ -137,7 +137,7 @@ Success criterion: users can tell why an engine is not ready before starting wor
 - Plan: [reference-inspired-runtime-company-evolution.md](plan/reference-inspired-runtime-company-evolution.md).
 - Maintained research set: [agent-orchestration-reference-matrix.md](plan/agent-orchestration-reference-matrix.md).
 - Scope: protocol contract extraction, canonical execution/effect journal, thin Rust runtime composition, Rust decision kernel/provider seam, sandbox-provider seam, trace inspector, durable team mailbox/wake, eval/budget/interoperability follow-ons.
-- Implemented validation tickets: [wip-0031](tasks/wip-0031-nd-protocol-extraction.md) -> [wip-0032](tasks/wip-0032-canonical-execution-effect-journal.md) -> [wip-0033](tasks/wip-0033-nd-runtime-crate-extraction.md) -> [wip-0034](tasks/wip-0034-rust-decision-kernel.md). Code is complete on the branch; local correctness/performance/live-provider evidence remains before merge.
+- Validation-open tickets: [wip-0031](tasks/wip-0031-nd-protocol-extraction.md) -> [wip-0032](tasks/wip-0032-canonical-execution-effect-journal.md) -> [wip-0033](tasks/wip-0033-nd-runtime-crate-extraction.md) -> [wip-0034](tasks/wip-0034-rust-decision-kernel.md). Implementation merged to `main` via PR #36; local correctness/performance/live-provider evidence remains before promotion/default or release claims.
 - Reference set now includes earlier QM/AWS/Orca/Paperclip/Gajae/LazyCodex/JCode work plus LoopX, Bamboo-agent, Aex Brain, Pioneer, Moltis, OpenAI Codex, Goose, kern, Capsule, and PocketPaw.
 
 This is **not** a broad Rust rewrite. The first slice is implemented: `nd-protocol` -> durable effect journal -> `nd-runtime` extraction -> Rust decision kernel. Sandbox/trace/mailbox/eval follow-ons remain separate work after local evidence validates these contracts. Organization/business truth remains ND-owned and TypeScript-owned until a separately approved migration proves value.
@@ -165,8 +165,8 @@ browser action policy remains a follow-up requirement before enterprise claims.
 
 - Plan: [unified-browser-platform.md](plan/unified-browser-platform.md)
 - PRD: [0005-unified-browser-platform.md](prd/0005-unified-browser-platform.md) — **implementation complete; local validation/evidence pending**.
-- Planning branch: `feat/unified-browser-platform-plan`.
-- Implementation branch: `feat/unified-browser-platform`.
+- Historical planning branch: `feat/unified-browser-platform-plan`.
+- Historical implementation branch: `feat/unified-browser-platform`; merged to `main` via PR #41 (`b558eddad12b`).
 - External-browser foundation: Browser Companion merged via PR #32 (`main@9e0fcc5`).
 - Task set: 0020-0030 — implementation complete; task 0030 local evidence handoff pending.
 
