@@ -15,6 +15,8 @@ import { TaskIntegrationConflictError, TaskWorktreeManager, type TaskWorktree } 
 import { formatVerificationEvidence, runArtifactVerification, runVerification, type VerificationProcessRuntime } from './verification-evidence.js'
 import { RuntimeCapacityError, type ExecutionCoordinator, type RuntimeAvailability } from './execution-coordinator.js'
 import { executePreparedFastPath, ND_FAST_PATH_ENGINE_ID, prepareFastPath, type FastPathAuditRecorder, type PreparedFastPath } from './fast-path.js'
+import { formatDecisionSupportForReviewer, formatDecisionSupportReceipt, type DecisionSupportReceipt } from './decision-support-contract.js'
+import type { DecisionSupportService } from './decision-support.js'
 
 interface ReviewVerdict {
   verdict: 'pass' | 'fail'
@@ -91,6 +93,7 @@ export class OrganizationOrchestrator {
   private fastPathAuditRecorder: FastPathAuditRecorder | undefined
   private readonly capacityWaiting = new Set<string>()
   private readonly structuredErrors = new Map<string, string>()
+  private readonly decisionSupportReceipts = new Map<string, DecisionSupportReceipt>()
   private readonly taskWorktrees: TaskWorktreeManager
 
   constructor(
@@ -105,6 +108,7 @@ export class OrganizationOrchestrator {
     taskWorktrees?: TaskWorktreeManager,
     private readonly core?: Pick<CoreClient, 'request'>,
     private readonly verificationRuntime?: VerificationProcessRuntime,
+    private readonly decisionSupport?: DecisionSupportService,
   ) {
     this.taskWorktrees = taskWorktrees ?? new TaskWorktreeManager()
   }
@@ -369,8 +373,21 @@ export class OrganizationOrchestrator {
     if (taskWorktree && reviewHead) this.reviewWorktrees.set(sessionId, { worktree: taskWorktree, head: reviewHead })
     this.lastProgressAt.set(sessionId, run.startedAt)
     await this.store.markReviewStarted(taskId, sessionId, reviewerAgent?.id)
+    const decisionSupport = await this.decisionSupport?.reviewAssist({
+      company: context.company.name,
+      project: context.project.name,
+      task: {
+        id: context.task.id,
+        title: context.task.title,
+        description: context.task.description,
+        acceptanceCriteria: context.task.acceptanceCriteria,
+        workScopes: context.task.workScopes,
+        resultSummary: context.task.resultSummary,
+      },
+    })
+    if (decisionSupport) this.decisionSupportReceipts.set(sessionId, decisionSupport)
     try {
-      await this.harness.run(reviewPrompt(context.task, context, taskWorktree), { sessionId, ...modelOpts })
+      await this.harness.run(reviewPrompt(context.task, context, taskWorktree, formatDecisionSupportForReviewer(decisionSupport)), { sessionId, ...modelOpts })
     } catch (cause) {
       const active = await this.store.runBySession(sessionId)
       if (active) {
@@ -679,7 +696,7 @@ export class OrganizationOrchestrator {
     this.structuredInFlight.add(sessionId)
     try {
       const issueText = review.issues?.length ? `\nIssues: ${review.issues.join('; ')}` : ''
-      let summary = `${review.summary}${issueText}`
+      let summary = `${review.summary}${issueText}${formatDecisionSupportReceipt(this.decisionSupportReceipts.get(sessionId))}`
       const context = await this.store.taskContext(taskId)
       let passed = review.verdict === 'pass'
       let integrationConflict = false
@@ -994,6 +1011,7 @@ export class OrganizationOrchestrator {
     this.executionRoutes.delete(sessionId)
     this.canceledSessions.delete(sessionId)
     this.lastProgressAt.delete(sessionId)
+    this.decisionSupportReceipts.delete(sessionId)
   }
 
   private assertPolicy(effect: 'allow' | 'ask' | 'deny', explicit: boolean, label: string): void {
