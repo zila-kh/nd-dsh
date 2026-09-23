@@ -170,6 +170,11 @@ impl EffectJournalStore {
             ..JournalState::default()
         };
         load_records(&path, &mut next)?;
+        if next.bytes > MAX_JOURNAL_BYTES {
+            bail!(
+                "effect journal already exceeds its {MAX_JOURNAL_BYTES} byte retention bound; archive or rotate it before startup"
+            );
+        }
         mark_recovered_uncertain(&mut next);
         let mut state = self
             .state
@@ -302,14 +307,17 @@ impl EffectJournalStore {
             });
         };
         let record = state.records[index].clone();
-        let recovery = if state.recovered_uncertain_keys.contains(&params.idempotency_key) {
+        let recovery = if state
+            .recovered_uncertain_keys
+            .contains(&params.idempotency_key)
+        {
             RecoveryState::OutcomeUncertain
         } else {
             match record.state {
-            EffectState::Intent => RecoveryState::InProgress,
-            EffectState::Complete => RecoveryState::KnownComplete,
-            EffectState::Failed => RecoveryState::KnownFailed,
-            EffectState::Uncertain => RecoveryState::OutcomeUncertain,
+                EffectState::Intent => RecoveryState::InProgress,
+                EffectState::Complete => RecoveryState::KnownComplete,
+                EffectState::Failed => RecoveryState::KnownFailed,
+                EffectState::Uncertain => RecoveryState::OutcomeUncertain,
             }
         };
         Ok(EffectJournalStateResult {
