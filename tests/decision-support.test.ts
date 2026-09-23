@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { DecisionSupportService } from '../src/main/organization/decision-support.js'
+import { DecisionSupportService, HttpDecisionProvider } from '../src/main/organization/decision-support.js'
 import { formatDecisionSupportForReviewer, type DecisionProvider, type DecisionProviderResult } from '../src/main/organization/decision-support-contract.js'
 
 function provider(id: string, confidence: number): DecisionProvider {
@@ -70,6 +70,7 @@ describe('decision support cascade', () => {
 
     expect(receipt?.selectedProvider).toBeUndefined()
     expect(receipt?.attempts).toHaveLength(2)
+    expect(receipt?.escalated).toBe(true)
     expect(formatDecisionSupportForReviewer(receipt)).toBe('')
   })
 
@@ -83,6 +84,43 @@ describe('decision support cascade', () => {
     expect(receipt?.selectedProvider).toBeUndefined()
     expect(receipt?.attempts).toHaveLength(2)
     expect(formatDecisionSupportForReviewer(receipt)).toBe('')
+  })
+
+  it('omits model for Laya-style provider-default routing', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body))
+      expect(body).not.toHaveProperty('model')
+      expect(body).toHaveProperty('state')
+      expect(body).toHaveProperty('questions')
+      return new Response(JSON.stringify({
+        model: 'english',
+        answers: {
+          review_route: {
+            type: 'choice',
+            choice: 'standard_review',
+            probabilities: { standard_review: 0.9, deep_review: 0.1 },
+            confidence: 0.9,
+          },
+        },
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    const laya = new HttpDecisionProvider({
+      id: 'laya',
+      endpoint: 'http://127.0.0.1:8765',
+      fetchImpl: fetchImpl as typeof fetch,
+    })
+
+    const result = await laya.decide(input, {
+      review_route: {
+        type: 'choice',
+        instructions: 'Pick review depth',
+        criteria: { standard_review: 'normal', deep_review: 'deep' },
+      },
+    })
+
+    expect(result.model).toBe('english')
+    expect(result.minimumConfidence).toBe(0.9)
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
 
   it('contains provider failures and continues the cascade', async () => {
