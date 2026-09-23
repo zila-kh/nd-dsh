@@ -40,6 +40,21 @@ describe('CoreSessionJournalStore', () => {
     expect(core.calls.filter((call) => call.method === 'sessionJournal.append')).toHaveLength(1)
   })
 
+  it('forwards tighter owner retention limits on append', async () => {
+    const core = new FakeCore()
+    const store = new CoreSessionJournalStore(core as never, {
+      maxEvents: 500,
+      maxBytes: 2 * 1024 * 1024,
+    })
+    await store.append('direct-1', [{ type: 'assistant/message', seq: 1, time: 1 }])
+
+    expect(core.calls.find((call) => call.method === 'sessionJournal.append')?.params).toMatchObject({
+      sessionId: 'direct-1',
+      maxEvents: 500,
+      maxBytes: 2 * 1024 * 1024,
+    })
+  })
+
   it('clears only sessions owned by that adapter instance', async () => {
     const core = new FakeCore()
     const harness = new CoreSessionJournalStore(core as never)
