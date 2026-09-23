@@ -1,0 +1,186 @@
+[
+  {
+    "name": "assist-high-laya",
+    "mode": "assist",
+    "threshold": 0.78,
+    "providerCount": 2,
+    "attempts": [
+      {
+        "provider": "laya",
+        "ok": true,
+        "result": {
+          "provider": "laya",
+          "model": "english",
+          "answers": {
+            "route": {
+              "type": "choice",
+              "choice": "standard_review",
+              "confidence": 0.92
+            }
+          },
+          "latencyMs": 1,
+          "minimumConfidence": 0.92
+        }
+      }
+    ],
+    "expected": {
+      "selectedProvider": "laya",
+      "shouldContinue": false,
+      "escalated": false
+    }
+  },
+  {
+    "name": "assist-low-laya",
+    "mode": "assist",
+    "threshold": 0.78,
+    "providerCount": 2,
+    "attempts": [
+      {
+        "provider": "laya",
+        "ok": true,
+        "result": {
+          "provider": "laya",
+          "model": "english",
+          "answers": {
+            "route": {
+              "type": "choice",
+              "choice": "standard_review",
+              "confidence": 0.51
+            }
+          },
+          "latencyMs": 1,
+          "minimumConfidence": 0.51
+        }
+      }
+    ],
+    "expected": {
+      "selectedProvider": null,
+      "shouldContinue": true,
+      "escalated": true
+    }
+  },
+  {
+    "name": "assist-laya-to-jev",
+    "mode": "assist",
+    "threshold": 0.78,
+    "providerCount": 2,
+    "attempts": [
+      {
+        "provider": "laya",
+        "ok": true,
+        "result": {
+          "provider": "laya",
+          "model": "english",
+          "answers": {
+            "route": {
+              "type": "choice",
+              "choice": "standard_review",
+              "confidence": 0.51
+            }
+          },
+          "latencyMs": 1,
+          "minimumConfidence": 0.51
+        }
+      },
+      {
+        "provider": "jev",
+        "ok": true,
+        "result": {
+          "provider": "jev",
+          "model": "jev-latest",
+          "answers": {
+            "route": {
+              "type": "choice",
+              "choice": "deep_review",
+              "confidence": 0.91
+            }
+          },
+          "latencyMs": 2,
+          "minimumConfidence": 0.91
+        }
+      }
+    ],
+    "expected": {
+      "selectedProvider": "jev",
+      "shouldContinue": false,
+      "escalated": true
+    }
+  },
+  {
+    "name": "assist-all-low",
+    "mode": "assist",
+    "threshold": 0.78,
+    "providerCount": 2,
+    "attempts": [
+      {
+        "provider": "laya",
+        "ok": true,
+        "result": {
+          "provider": "laya",
+          "model": "english",
+          "answers": {
+            "route": {
+              "type": "choice",
+              "choice": "standard_review",
+              "confidence": 0.51
+            }
+          },
+          "latencyMs": 1,
+          "minimumConfidence": 0.51
+        }
+      },
+      {
+        "provider": "jev",
+        "ok": true,
+        "result": {
+          "provider": "jev",
+          "model": "jev-latest",
+          "answers": {
+            "route": {
+              "type": "choice",
+              "choice": "standard_review",
+              "confidence": 0.62
+            }
+          },
+          "latencyMs": 2,
+          "minimumConfidence": 0.62
+        }
+      }
+    ],
+    "expected": {
+      "selectedProvider": null,
+      "shouldContinue": false,
+      "escalated": true
+    }
+  },
+  {
+    "name": "shadow-first-provider",
+    "mode": "shadow",
+    "threshold": 0.78,
+    "providerCount": 2,
+    "attempts": [
+      {
+        "provider": "laya",
+        "ok": true,
+        "result": {
+          "provider": "laya",
+          "model": "english",
+          "answers": {
+            "route": {
+              "type": "choice",
+              "choice": "standard_review",
+              "confidence": 0.95
+            }
+          },
+          "latencyMs": 1,
+          "minimumConfidence": 0.95
+        }
+      }
+    ],
+    "expected": {
+      "selectedProvider": null,
+      "shouldContinue": true,
+      "escalated": false
+    }
+  }
+]
