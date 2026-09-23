@@ -1,5 +1,6 @@
 packages:
   - .
+  - extensions/browser-companion
 allowBuilds:
   agent-browser: true
   esbuild: true
