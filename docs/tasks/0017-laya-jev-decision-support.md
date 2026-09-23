@@ -92,4 +92,4 @@ Verify a high-confidence Laya response avoids the Jev request; a low-confidence 
 
 Do not promote System One providers from review-assist into controlling task lifecycle routes until ND has recorded enough real-task samples to measure calibration, false-allow rate, false-rework rate, rework count, verified completion rate, latency, cost, and human corrections.
 
-The TypeScript implementation is the behavioral prototype. The reference architecture moves the provider-neutral decision kernel into Rust via [TODO 0034](wip-0034-rust-decision-kernel.md) after `nd-protocol`/`nd-runtime` extraction proves the boundary.
+The TypeScript provider transport remains the secure network/credential gateway. The reference architecture now has an opt-in Rust policy kernel via [WIP 0034](wip-0034-rust-decision-kernel.md); shared fixtures enforce parity while local live-provider validation remains the promotion gate.
