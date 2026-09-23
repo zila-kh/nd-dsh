@@ -18,6 +18,10 @@ extraResources:
     to: release-manifest.json
   - from: .release/nd-core
     to: nd-core
+  - from: .release/nd-browser-host
+    to: nd-browser-host
+  - from: extensions/browser-companion
+    to: browser-companion
   - from: .release/harness
     to: vendor/deepseek-harness
   - from: configs/dsh
@@ -29,6 +33,8 @@ extraResources:
       - install-harness-runtime.mjs
       - nd-extension-mcp.mjs
       - nd-extension-runtime.mjs
+      - nd-browser-companion-runtime.mjs
+      - register-browser-native-host.mjs
   - from: node_modules/agent-browser
     to: node_modules/agent-browser
   - from: resources/nd-pencil
