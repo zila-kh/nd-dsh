@@ -249,6 +249,7 @@ export class BrowserPlatformService {
   ): Promise<{ ok: true; credentialId: string; username: string }> {
     if (targetId !== BUILTIN_BROWSER_TARGET_ID) throw new Error('ND saved credentials are available only to the built-in browser')
     const activeTabId = tabId ?? this.browser.activeTabId()
+    this.leases.releaseTab(targetId, activeTabId)
     const leaseId = this.manualLease(targetId, activeTabId)
     const result = await this.router.call('browser.autofill', {
       targetId,
