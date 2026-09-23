@@ -188,13 +188,25 @@ impl EffectJournalStore {
             .clone()
             .ok_or_else(|| anyhow::anyhow!("effect journal is not configured"))?;
 
-        if let Some(key) = params.idempotency_key.as_deref()
-            && let Some(index) = state.completed_by_key.get(key).copied()
-        {
-            return Ok(EffectJournalAppendResult {
-                record: state.records[index].clone(),
-                duplicate: true,
-            });
+        if let Some(key) = params.idempotency_key.as_deref() {
+            if let Some(index) = state.completed_by_key.get(key).copied() {
+                return Ok(EffectJournalAppendResult {
+                    record: state.records[index].clone(),
+                    duplicate: true,
+                });
+            }
+            if let Some(index) = state.latest_by_key.get(key).copied() {
+                let latest = &state.records[index];
+                if latest.state == EffectState::Uncertain && params.state == EffectState::Intent {
+                    bail!("effect outcome is uncertain; reconcile the existing idempotency key before retry");
+                }
+                if latest.state == EffectState::Intent && params.state == EffectState::Intent {
+                    return Ok(EffectJournalAppendResult {
+                        record: latest.clone(),
+                        duplicate: true,
+                    });
+                }
+            }
         }
 
         let seq = state.records.last().map(|record| record.seq + 1).unwrap_or(1);
@@ -438,6 +450,27 @@ mod tests {
         assert!(duplicate.duplicate);
         assert_eq!(duplicate.record.seq, written.record.seq);
         assert_eq!(second.stats().record_count, 1);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn uncertain_outcome_blocks_blind_retry_until_reconciled() {
+        let path = journal_path("uncertain-retry");
+        let store = EffectJournalStore::new();
+        store
+            .configure(EffectJournalConfigureParams {
+                path: path.to_string_lossy().into_owned(),
+            })
+            .unwrap();
+        store.append(params("effect-3", EffectState::Uncertain)).unwrap();
+        let error = store
+            .append(params("effect-3", EffectState::Intent))
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("reconcile"));
+        let reconciled = store
+            .append(params("effect-3", EffectState::Failed))
+            .unwrap();
+        assert_eq!(reconciled.record.state, EffectState::Failed);
         let _ = fs::remove_file(path);
     }
 
