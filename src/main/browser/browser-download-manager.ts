@@ -56,6 +56,10 @@ export class BrowserDownloadManager {
       .map((item) => structuredClone(item))
   }
 
+  path(id: string): string | undefined {
+    return this.records.get(id)?.path
+  }
+
   cancel(id: string): boolean {
     const item = this.items.get(id)
     if (!item) return false
