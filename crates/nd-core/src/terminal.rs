@@ -688,7 +688,11 @@ impl TerminalManager {
                 .terminals
                 .lock()
                 .ok()
-                .and_then(|terminals| terminals.get(&wait_id).map(|current| Arc::ptr_eq(current, &wait_runtime)))
+                .and_then(|terminals| {
+                    terminals
+                        .get(&wait_id)
+                        .map(|current| Arc::ptr_eq(current, &wait_runtime))
+                })
                 .unwrap_or(false);
             if !is_current {
                 return;
