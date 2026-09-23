@@ -248,6 +248,107 @@ async function benchmarkDeadlineExpiry(client) {
   return { deadlineMs: 800, elapsedMs, failure: settled.error, activeAfterStop: after.dispatcher.active }
 }
 
+async function benchmarkEffectJournal(client) {
+  const dir = await tempDir('nd-dsh-effect-journal-')
+  const path = join(dir, 'effects.jsonl')
+  await client.request('effectJournal.configure', { path })
+
+  const append = await measure(async (index) => await client.request('effectJournal.append', {
+    kind: 'benchmark.effect',
+    state: 'complete',
+    companyId: 'bench-company',
+    projectId: 'bench-project',
+    taskId: 'bench-task',
+    runId: 'bench-run',
+    idempotencyKey: 'bench-effect-' + index,
+    data: { index },
+  }))
+  const beforeDuplicate = await client.request('effectJournal.stats', {})
+  const duplicate = await client.request('effectJournal.append', {
+    kind: 'benchmark.effect',
+    state: 'intent',
+    idempotencyKey: 'bench-effect-0',
+  })
+  const afterDuplicate = await client.request('effectJournal.stats', {})
+  check(duplicate.duplicate === true, 'known-complete effect was not deduplicated')
+  check(afterDuplicate.recordCount === beforeDuplicate.recordCount, 'duplicate known-complete effect grew the journal')
+
+  await client.request('effectJournal.append', {
+    kind: 'benchmark.uncertain',
+    state: 'uncertain',
+    idempotencyKey: 'bench-uncertain',
+  })
+  const uncertain = await client.request('effectJournal.state', { idempotencyKey: 'bench-uncertain' })
+  check(uncertain.state === 'outcomeUncertain', 'uncertain effect lost recovery state')
+
+  const replay = await measure(async () => await client.request('effectJournal.replay', {
+    afterSeq: 0,
+    limit: 1000,
+  }))
+  return {
+    appendMs: append.summary,
+    replayMs: replay.summary,
+    recordCount: afterDuplicate.recordCount + 1,
+    bytes: afterDuplicate.bytes,
+    duplicateSuppressed: duplicate.duplicate === true,
+    uncertainState: uncertain.state,
+    replayed: replay.last.records.length,
+  }
+}
+
+async function benchmarkDecisionKernel(client) {
+  const low = {
+    provider: 'laya',
+    ok: true,
+    result: {
+      provider: 'laya',
+      model: 'english',
+      answers: {
+        route: { type: 'choice', choice: 'standard', confidence: 0.51 },
+      },
+      latencyMs: 1,
+      minimumConfidence: 0.51,
+    },
+  }
+  const high = {
+    provider: 'jev',
+    ok: true,
+    result: {
+      provider: 'jev',
+      model: 'jev-latest',
+      answers: {
+        route: { type: 'choice', choice: 'deep', confidence: 0.91 },
+      },
+      latencyMs: 2,
+      minimumConfidence: 0.91,
+    },
+  }
+  const first = await client.request('decision.evaluate', {
+    purpose: 'review-assist',
+    mode: 'assist',
+    threshold: 0.78,
+    providerCount: 2,
+    attempts: [low],
+  })
+  check(first.shouldContinue === true, 'low-confidence Laya did not request escalation')
+  check(first.receipt.escalated === true, 'decision receipt did not record escalation')
+
+  const measured = await measure(async () => await client.request('decision.evaluate', {
+    purpose: 'review-assist',
+    mode: 'assist',
+    threshold: 0.78,
+    providerCount: 2,
+    attempts: [low, high],
+  }))
+  check(measured.last.shouldContinue === false, 'high-confidence Jev did not stop cascade')
+  check(measured.last.receipt.selectedProvider === 'jev', 'Rust kernel selected the wrong provider')
+  return {
+    evaluateMs: measured.summary,
+    selectedProvider: measured.last.receipt.selectedProvider,
+    escalated: measured.last.receipt.escalated,
+  }
+}
+
 try {
   const fixture = await makeFixture()
   const client = await CoreRpc.launch()
@@ -258,6 +359,8 @@ try {
     results.push(await writeResult(outputDir, 'contract-search', await benchmarkSearch(client, fixture)))
     results.push(await writeResult(outputDir, 'contract-stop-latency', await benchmarkStopLatency(client)))
     results.push(await writeResult(outputDir, 'contract-deadline-expiry', await benchmarkDeadlineExpiry(client)))
+    results.push(await writeResult(outputDir, 'contract-effect-journal', await benchmarkEffectJournal(client)))
+    results.push(await writeResult(outputDir, 'contract-decision-kernel', await benchmarkDecisionKernel(client)))
     const metrics = await client.request('metrics.snapshot', {})
     check(metrics.cache.hits >= 1, 'the cache reported no hits after cached reads')
     check(metrics.cache.entries >= 1, 'the cache reported no entries after cached reads')
