@@ -2,7 +2,7 @@
 
 > Priority: P1
 > Owner: ND QA/runtime
-> Status: todo
+> Status: implementation complete — local correctness/performance evidence handoff pending
 > Depends on: 0022-0029
 
 ## Objective
@@ -49,3 +49,23 @@ Record 1/2/4/8-tab evidence including:
 Evidence is reproducible, secrets never appear in collected artifacts, the
 required built-in extension baseline is demonstrated, and no README/product
 performance or compatibility claim exceeds what the evidence proves.
+
+
+## Implemented validation surface
+
+- `benchmarks/unified-browser-platform.mjs`
+- `src/main/perf/browser-platform-benchmark.ts`
+- focused tests:
+  - `tests/browser-access-tokens.test.ts`
+  - `tests/browser-history-store.test.ts`
+  - `tests/browser-policy-classification.test.ts`
+  - `tests/unified-browser-leases.test.ts`
+- benchmark correctness checks include stale semantic refs and password redaction.
+- the benchmark records 1/2/4/8-tab process/memory observations plus snapshot,
+  click, navigation, screenshot and site-tool latency summaries.
+- companion measurements remain correctly classified as manual evidence because
+  they require the installed Chrome extension/native host.
+
+Implementation is complete. This task becomes fully done only when the local
+handoff records correctness gates, real Chrome/extension smoke and reproducible
+performance artifacts.
