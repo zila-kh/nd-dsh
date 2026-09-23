@@ -27,7 +27,7 @@ The current product is coding-first: an AI PM plans work, assigned workers opera
 - DeepSeek is a **model-provider compatibility route**, not product identity.
 - DeepSeek Harness is an **upstream-tracking runtime submodule/adapter** (tracks latest `master`; synced at bootstrap or via `dsh:update`). Never copy or patch its core into this repository.
 - Codex and future coding products are **replaceable engine adapters**. No engine-specific fields or branching may leak into the organization-domain state machines (Company, Project, Task, Role, Skill, Workflow).
-- The embedded `WebContentsView` is the **canonical browser**. Never launch a hidden automation browser for agent tasks; browser tools must share `ND_DSH_AGENT_BROWSER_CONFIG` and `ND_DSH_AGENT_BROWSER_SESSION`.
+- The embedded `WebContentsView` is the **canonical built-in browser target**. Browser Companion is the explicit second target for the user's existing Chrome profile. Never launch a hidden replacement automation browser for built-in-browser tasks; embedded browser tools must share `ND_DSH_AGENT_BROWSER_CONFIG` and `ND_DSH_AGENT_BROWSER_SESSION`.
 - Token saving is an **ND product capability**, not permission to scrape provider credentials or install a machine-wide HTTPS interception proxy. Built-in saving and external-app integration are independent scopes.
 
 ### 1.2 What ND-DSH is not
@@ -202,11 +202,15 @@ Token Saver is built into ND and is **not API-key-only**. Built-in ND saving wor
 
 ### 4.9 Browser pane, UI inspection, annotation, app capture
 
-The invariant: **the browser the user sees is the browser the agent drives.**
+The current embedded-browser invariant is: **the built-in browser tab the user sees is the built-in browser tab the agent drives.**
 
-- ✅ One sandboxed `WebContentsView` (partition `persist:nd-dsh-browser`): permissions auto-denied, window-open navigates in place, URL allowlist http/https/about:blank, will-navigate guard; starts at `about:blank` (never a dev-server page). Toolbar: back/forward/reload (history-aware), address bar with https security dot, open-in-system-browser.
+PRD 0005 extends the product to two explicit browser targets without weakening that invariant: ND's built-in browser and the user's existing Chrome profile via Browser Companion.
+
+- ✅ Current implementation: one sandboxed `WebContentsView` (partition `persist:nd-dsh-browser`): permissions auto-denied, window-open navigates in place, URL allowlist http/https/about:blank, will-navigate guard; starts at `about:blank` (never a dev-server page). Toolbar: back/forward/reload (history-aware), address bar with https security dot, open-in-system-browser.
+- 🧭 PRD 0005 target: evolve this into a persistent multi-tab ND browser with history, downloads, secure password/autofill mediation, first-class built-in extension support, WebMCP/site tools, browser-data controls, and exact-visible-tab agent control.
 - ✅ **CDP binding**: the app runs with `--remote-debugging-port` (env `ND_DSH_CDP_PORT` honored only if bindable on 127.0.0.1, otherwise a free port); the controller reads the pane's exact CDP `targetId` via `webContents.debugger` and rebinds on navigation/renderer-gone. Loopback only.
 - ✅ **Agent-browser integration**: the vendored `agent-browser` CLI is bound to that exact target (`tab <targetId>`), sharing one generated config (`userData/agent-browser.visible.json`, pinned session `nd-dsh-visible-browser`, screenshot dir `userData/browser-artifacts`, 30-minute idle timeout) and session env (`ND_DSH_AGENT_BROWSER_BIN/_CONFIG/_ENTRY/_SESSION`, `AGENT_BROWSER_CONFIG`, `AGENT_BROWSER_SESSION`) so the agent's MCP browser tool reaches the same visible tab — a second hidden browser is impossible by construction.
+- 🧭 **Unified browser target**: PRD 0005 introduces a semantic BrowserTarget/router above the current embedded path and the merged Browser Companion. Agents use one browser vocabulary; users choose `@Browser`, `@Chrome`, `@Tab`, or safe Auto routing. Implementation details such as CDP target ids and Native Messaging ports stay below that boundary.
 - ✅ **Interactive snapshot** button: semantic snapshot of the live page for the agent.
 - ✅ **UI inspect mode**: in-page capture of tag/text/selector, bounded outerHTML (6k), ≤48 attributes, ~45 computed styles, ≤18 matched CSS rules with `file:line` source confidence (`exact/mapped/framework/inferred`) and React component hierarchy; selections ride the prompt as a hardened `[ND-DSH LIVE UI CONTEXT]` JSON block and are stripped from renderer-visible history.
 - ✅ **Annotation mode**: frozen-frame overlay for freehand/rectangle/point marks; finishing produces a JPEG (≤1600px, ≤3.2MB) that rides the prompt as an image block.
@@ -345,7 +349,7 @@ Everything in §4 — the coding-first vertical slice running on real desktop/ru
 
 - **Editor & code intelligence**: Monaco with controlled write IPC + optimistic conflict detection; per-workspace LSP supervisor (diagnostics, symbols, definitions, references, rename, code actions); Problems/Output panels linked to agent runs; Git status/diff/staging/commit with policy gates for remote mutations.
 - **Terminal**: PTY terminal with process-group cleanup; explicit terminal permission mode + action tagging; attach running jobs/test output to task/run receipts.
-- **Browser engineering surface**: multi-tab on known CDP target ids; console/network drawers; device/viewport presets; screenshot history; element highlight/inspect overlays; action timeline tying browser state to agent tool calls; per-origin privacy controls and data reset/private mode.
+- **Unified browser platform (PRD 0005)**: built-in multi-tab persistent browser profile; first-class built-in extensions with an evidence-based compatibility matrix; downloads/history/browser-data controls; secure password/autofill mediation; WebMCP/site tools; console/network drawers; device/viewport presets; screenshot history; element highlight/inspect overlays; action timeline; Chrome Companion integration; `@Browser`/`@Chrome`/`@Tab` target selection; trusted leases and policy across both targets.
 - **ND Skills & MCP control plane**: durable MCP registry (transport, credentials, health, scope, allowlists); ND skill schema (scope, instructions, required capabilities, allowed tools, engine hints); Harness compiler (+ Codex compiler when the direct adapter supports it); capability inspector showing the exact resolved skills/tools/MCP/policies per run. Changing engines must not rebuild company skills config.
 - **Provider/model routing**: provider templates without vendor conditionals; live model discovery; route inheritance (company/project/role/agent/task); capability metadata (context, reasoning, vision, tool calling); cost/token/latency budgets; health, circuit breakers, fallback routes, routing audit; credential-source metadata (`secure-store / environment / ambient`). Token Saver telemetry may join this routing view only when provider/Harness measurements are exact enough to avoid fabricated savings.
 
@@ -365,7 +369,7 @@ Everything in §4 — the coding-first vertical slice running on real desktop/ru
 
 ## 9. Explicit non-goals (for now)
 
-- No hidden automation browser, ever — the visible `WebContentsView` is canonical.
+- No hidden automation browser for the built-in path — the selected visible ND tab is canonical. The Chrome Companion is a separate explicit target for the user's real Chrome profile, not a hidden replacement for the built-in browser.
 - No fork or patch of the Harness agent loop; composition happens at the gateway/runtime boundary.
 - No vendor-locked organization domain.
 - No mock companies/fake sessions/demo workspaces in production paths.

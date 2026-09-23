@@ -9,6 +9,17 @@ import {
   type BrowserCompanionState,
   type BrowserTabLease,
 } from '../shared/browser-companion.js'
+import {
+  BROWSER_PLATFORM_IPC,
+  type BrowserCredentialSummary,
+  type BrowserExtensionRecord,
+  type BrowserHistoryEntry,
+  type BrowserPlatformState,
+  type BrowserSelection,
+  type BrowserSitePermission,
+  type BrowserSiteToolDescriptor,
+  type BrowserTabDescriptor,
+} from '../shared/browser-platform.js'
 import { IPC, type DesktopApi, type ModelProvider } from '../shared/contracts.js'
 import { EXTENSIONS_IPC, type AgentExtensionManifest, type ExtensionsDesktopApi } from '../shared/extensions.js'
 import { USAGE_IPC, type UsageDesktopApi, type UsageScope, type UsageSummary } from '../shared/usage.js'
@@ -146,6 +157,36 @@ const api: DesktopApi = {
       const handler = (_event: Electron.IpcRendererEvent, state: BrowserCompanionState) => listener(state)
       ipcRenderer.on(BROWSER_COMPANION_IPC.changedEvent, handler)
       return () => ipcRenderer.removeListener(BROWSER_COMPANION_IPC.changedEvent, handler)
+    },
+  },
+  browserPlatform: {
+    state: () => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.state) as Promise<BrowserPlatformState>,
+    select: (selection: BrowserSelection) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.select, selection) as Promise<BrowserPlatformState>,
+    createTab: (targetId?: string, url?: string) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.createTab, targetId, url) as Promise<BrowserTabDescriptor>,
+    activateTab: (targetId: string, tabId: string) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.activateTab, targetId, tabId) as Promise<BrowserTabDescriptor>,
+    closeTab: (targetId: string, tabId: string) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.closeTab, targetId, tabId) as Promise<boolean>,
+    history: (targetId?: string) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.history, targetId) as Promise<BrowserHistoryEntry[]>,
+    clearBrowserData: (input: { targetId?: string; origin?: string; history?: boolean }) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.clearData, input) as Promise<void>,
+    cancelDownload: (downloadId: string) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.cancelDownload, downloadId) as Promise<boolean>,
+    openDownload: (downloadId: string) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.openDownload, downloadId) as Promise<boolean>,
+    revealDownload: (downloadId: string) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.revealDownload, downloadId) as Promise<boolean>,
+    installExtension: () => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.installExtension) as Promise<BrowserExtensionRecord | null>,
+    setExtensionEnabled: (extensionId: string, enabled: boolean) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.extensionEnabled, extensionId, enabled) as Promise<BrowserExtensionRecord[]>,
+    removeExtension: (extensionId: string) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.removeExtension, extensionId) as Promise<BrowserExtensionRecord[]>,
+    saveCredential: (input: { origin: string; username: string; password: string; label?: string }) =>
+      ipcRenderer.invoke(BROWSER_PLATFORM_IPC.saveCredential, input) as Promise<BrowserCredentialSummary>,
+    removeCredential: (credentialId: string) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.removeCredential, credentialId) as Promise<boolean>,
+    autofillCredential: (credentialId: string, targetId?: string, tabId?: string) =>
+      ipcRenderer.invoke(BROWSER_PLATFORM_IPC.autofillCredential, credentialId, targetId, tabId) as Promise<{ ok: true; credentialId: string; username: string }>,
+    siteTools: (targetId?: string, tabId?: string) =>
+      ipcRenderer.invoke(BROWSER_PLATFORM_IPC.siteTools, targetId, tabId) as Promise<BrowserSiteToolDescriptor[]>,
+    setSitePermission: (origin: string, permission: string, effect: 'allow' | 'deny') =>
+      ipcRenderer.invoke(BROWSER_PLATFORM_IPC.setSitePermission, origin, permission, effect) as Promise<BrowserSitePermission>,
+    resolveApproval: (approvalId: string, allowed: boolean) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.resolveApproval, approvalId, allowed) as Promise<boolean>,
+    onChanged: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: BrowserPlatformState) => listener(state)
+      ipcRenderer.on(BROWSER_PLATFORM_IPC.changedEvent, handler)
+      return () => ipcRenderer.removeListener(BROWSER_PLATFORM_IPC.changedEvent, handler)
     },
   },
   browser: {

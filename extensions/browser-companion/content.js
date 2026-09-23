@@ -84,6 +84,12 @@
       window.scrollBy({ left: deltaX, top: deltaY, behavior: 'instant' })
       return { ok: true, revision, scrollX, scrollY }
     },
+    pageState() {
+      return {
+        url: location.href,
+        text: (document.body?.innerText ?? '').slice(0, 200000),
+      }
+    },
   }
 
   globalThis.__ND_BROWSER_COMPANION__ = api

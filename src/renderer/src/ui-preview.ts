@@ -11,6 +11,7 @@ import type {
 } from '../../shared/contracts'
 import { buildCodingEngineCatalog } from '../../shared/coding-engines'
 import type { BrowserCompanionState, BrowserTabLease } from '../../shared/browser-companion'
+import type { BrowserPlatformState, BrowserTabDescriptor } from '../../shared/browser-platform'
 import type {
   CapabilityAssignmentSnapshot,
   CapabilityDescriptor,
@@ -50,6 +51,7 @@ const now = Date.now()
 const workspaceEvents = signal<WorkspaceState>()
 const browserEvents = signal<BrowserState>()
 const browserCompanionEvents = signal<BrowserCompanionState>()
+const browserPlatformEvents = signal<BrowserPlatformState>()
 const harnessEvents = signal<HarnessStatus>()
 const dshEvents = signal<DshEventFrame>()
 const themeEvents = signal<ThemeState>()
@@ -69,6 +71,20 @@ let workspace: WorkspaceState = {
   projectWorkspacePath: 'C:/workspace/nd-product',
 }
 
+let previewBuiltinTabs: BrowserTabDescriptor[] = [{
+  id: 'preview-builtin-tab',
+  targetId: 'builtin',
+  profileId: 'builtin:default',
+  title: 'Agent Console',
+  url: 'http://localhost:3000/',
+  origin: 'http://localhost:3000',
+  active: true,
+  visible: false,
+  loading: false,
+  canGoBack: true,
+  canGoForward: false,
+}]
+
 let browser: BrowserState = {
   url: 'http://localhost:3000/',
   title: 'Agent Console',
@@ -77,6 +93,10 @@ let browser: BrowserState = {
   canGoForward: false,
   visible: false,
   cdpPort: 0,
+  profileId: 'builtin:default',
+  activeTabId: 'preview-builtin-tab',
+  tabs: previewBuiltinTabs,
+  downloads: [],
   agentBrowser: 'ready',
 }
 
@@ -105,6 +125,75 @@ let browserCompanion: BrowserCompanionState = {
   ],
   leases: [],
   discoveryPath: 'C:/Users/preview/.nd-dsh/browser-companion.json',
+}
+
+let browserPlatform: BrowserPlatformState = {
+  targets: [
+    {
+      id: 'builtin',
+      kind: 'builtin',
+      label: 'ND Browser',
+      profileId: 'builtin:default',
+      profileLabel: 'ND Browser',
+      connected: true,
+      visible: false,
+      capabilities: {
+        tabs: true,
+        semanticDom: true,
+        screenshots: true,
+        downloads: true,
+        uploads: false,
+        history: true,
+        credentials: true,
+        extensions: true,
+        siteTools: true,
+        backgroundControl: true,
+      },
+    },
+    {
+      id: 'companion:preview-connection',
+      kind: 'companion',
+      label: 'Default profile',
+      profileId: 'companion-profile:preview-connection',
+      profileLabel: 'Default profile',
+      connected: true,
+      visible: false,
+      capabilities: {
+        tabs: true,
+        semanticDom: true,
+        screenshots: true,
+        downloads: false,
+        uploads: false,
+        history: false,
+        credentials: false,
+        extensions: false,
+        siteTools: false,
+        backgroundControl: true,
+      },
+    },
+  ],
+  tabs: [
+    ...previewBuiltinTabs,
+    {
+      id: '77',
+      nativeTabId: 77,
+      targetId: 'companion:preview-connection',
+      profileId: 'companion-profile:preview-connection',
+      title: 'GitHub',
+      url: 'https://github.com/',
+      origin: 'https://github.com',
+      active: true,
+      visible: true,
+    },
+  ],
+  selection: { mode: 'auto' },
+  leases: [],
+  downloads: [],
+  extensions: [],
+  credentials: [],
+  sitePermissions: [],
+  approvals: [],
+  receipts: [],
 }
 
 let theme: ThemeState = { mode: 'system', effective: matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark' }
@@ -503,6 +592,103 @@ const desktopApi: DesktopApi = {
       return released
     },
     onChanged: browserCompanionEvents.on,
+  },
+  browserPlatform: {
+    state: async () => browserPlatform,
+    select: async (selection) => {
+      browserPlatform = { ...browserPlatform, selection }
+      browserPlatformEvents.emit(browserPlatform)
+      return browserPlatform
+    },
+    createTab: async (targetId = 'builtin', url = 'about:blank') => {
+      const tab: BrowserTabDescriptor = {
+        id: `preview-tab-${Date.now()}`,
+        targetId,
+        profileId: targetId === 'builtin' ? 'builtin:default' : 'companion-profile:preview-connection',
+        title: 'Browser',
+        url,
+        active: true,
+        visible: targetId === 'builtin' ? browser.visible : true,
+      }
+      if (targetId === 'builtin') {
+        previewBuiltinTabs = previewBuiltinTabs.map((item) => ({ ...item, active: false, visible: false })).concat(tab)
+        browser = { ...browser, activeTabId: tab.id, tabs: previewBuiltinTabs, url, title: 'Browser' }
+        browserEvents.emit(browser)
+      }
+      browserPlatform = { ...browserPlatform, tabs: [...browserPlatform.tabs.filter((item) => item.targetId !== targetId || targetId !== 'builtin'), ...(targetId === 'builtin' ? previewBuiltinTabs : [tab])] }
+      browserPlatformEvents.emit(browserPlatform)
+      return tab
+    },
+    activateTab: async (targetId, tabId) => {
+      const tab = browserPlatform.tabs.find((item) => item.targetId === targetId && item.id === tabId)
+      if (!tab) throw new Error('Preview browser tab not found')
+      if (targetId === 'builtin') {
+        previewBuiltinTabs = previewBuiltinTabs.map((item) => ({ ...item, active: item.id === tabId, visible: item.id === tabId && browser.visible }))
+        const active = previewBuiltinTabs.find((item) => item.id === tabId)!
+        browser = { ...browser, activeTabId: tabId, tabs: previewBuiltinTabs, url: active.url, title: active.title }
+        browserEvents.emit(browser)
+      }
+      browserPlatform = { ...browserPlatform, selection: { mode: 'tab', targetId, tabId }, tabs: browserPlatform.tabs.map((item) => item.targetId === targetId ? { ...item, active: item.id === tabId } : item) }
+      browserPlatformEvents.emit(browserPlatform)
+      return { ...tab, active: true }
+    },
+    closeTab: async (targetId, tabId) => {
+      browserPlatform = { ...browserPlatform, tabs: browserPlatform.tabs.filter((item) => !(item.targetId === targetId && item.id === tabId)) }
+      if (targetId === 'builtin') {
+        previewBuiltinTabs = previewBuiltinTabs.filter((item) => item.id !== tabId)
+        if (!previewBuiltinTabs.length) {
+          previewBuiltinTabs = [{ id: `preview-tab-${Date.now()}`, targetId: 'builtin', profileId: 'builtin:default', title: 'Browser', url: 'about:blank', active: true, visible: browser.visible }]
+        }
+        const active = previewBuiltinTabs.find((item) => item.active) ?? previewBuiltinTabs[0]!
+        previewBuiltinTabs = previewBuiltinTabs.map((item) => ({ ...item, active: item.id === active.id }))
+        browser = { ...browser, activeTabId: active.id, tabs: previewBuiltinTabs, url: active.url, title: active.title }
+        browserEvents.emit(browser)
+      }
+      browserPlatformEvents.emit(browserPlatform)
+      return true
+    },
+    history: async () => [],
+    clearBrowserData: async () => undefined,
+    cancelDownload: async () => false,
+    openDownload: async () => false,
+    revealDownload: async () => false,
+    installExtension: async () => null,
+    setExtensionEnabled: async () => browserPlatform.extensions,
+    removeExtension: async () => browserPlatform.extensions,
+    saveCredential: async (input) => {
+      const record = { id: `preview-credential-${Date.now()}`, origin: new URL(input.origin).origin, username: input.username, ...(input.label ? { label: input.label } : {}), createdAt: Date.now(), updatedAt: Date.now() }
+      browserPlatform = { ...browserPlatform, credentials: [record, ...browserPlatform.credentials] }
+      browserPlatformEvents.emit(browserPlatform)
+      return record
+    },
+    removeCredential: async (credentialId) => {
+      const next = browserPlatform.credentials.filter((item) => item.id !== credentialId)
+      const removed = next.length !== browserPlatform.credentials.length
+      browserPlatform = { ...browserPlatform, credentials: next }
+      browserPlatformEvents.emit(browserPlatform)
+      return removed
+    },
+    autofillCredential: async (credentialId) => {
+      const credential = browserPlatform.credentials.find((item) => item.id === credentialId)
+      if (!credential) throw new Error('Preview credential not found')
+      return { ok: true, credentialId, username: credential.username }
+    },
+    siteTools: async () => [{
+      name: 'preview.echo',
+      title: 'Preview echo',
+      description: 'UI-preview WebMCP fixture.',
+      inputSchema: { type: 'object' },
+      origin: 'http://localhost:3000',
+      annotations: { readOnlyHint: true, consequentialHint: false, untrustedContentHint: true },
+    }],
+    setSitePermission: async (origin, permission, effect) => {
+      const record = { origin: new URL(origin).origin, permission, effect, updatedAt: Date.now() }
+      browserPlatform = { ...browserPlatform, sitePermissions: [record, ...browserPlatform.sitePermissions.filter((item) => item.origin !== record.origin || item.permission !== permission)] }
+      browserPlatformEvents.emit(browserPlatform)
+      return record
+    },
+    resolveApproval: async () => true,
+    onChanged: browserPlatformEvents.on,
   },
   workspace: {
     state: async () => workspace,
