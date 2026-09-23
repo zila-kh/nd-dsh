@@ -3,6 +3,8 @@ import {
   answerConfidence,
   reviewAssistState,
   type DecisionKernel,
+  type DecisionKernelEvaluation,
+  type DecisionKernelInput,
   type DecisionProvider,
   type DecisionProviderAttempt,
   type DecisionProviderResult,
@@ -84,52 +86,44 @@ export class DecisionSupportService {
     questions: Record<string, DecisionQuestion>,
   ): Promise<DecisionSupportReceipt> {
     const attempts: DecisionProviderAttempt[] = []
-    let selectedProvider: string | undefined
-    let escalated = false
-    let kernelReceipt: DecisionSupportReceipt | undefined
+    let evaluation: DecisionKernelEvaluation | undefined
 
-    for (let index = 0; index < this.providers.length; index++) {
-      const provider = this.providers[index]!
-      const attempt = await attemptProvider(provider, state, questions)
-      attempts.push(attempt)
-
-      if (this.kernel) {
-        const evaluation = await this.kernel.evaluate({
+    for (const provider of this.providers) {
+      attempts.push(await attemptProvider(provider, state, questions))
+      const input: DecisionKernelInput = {
+        purpose,
+        mode: this.mode,
+        threshold: this.threshold,
+        providerCount: this.providers.length,
+        attempts,
+      }
+      try {
+        evaluation = this.kernel
+          ? await this.kernel.evaluate(input)
+          : evaluateDecisionAttempts(input)
+      } catch (error) {
+        // Decision support can focus a reviewer, but failure of the assist kernel
+        // may never block the existing independent reviewer.
+        return {
           purpose,
           mode: this.mode,
           threshold: this.threshold,
-          providerCount: this.providers.length,
           attempts,
-        })
-        kernelReceipt = evaluation.receipt
-        if (!evaluation.shouldContinue) return evaluation.receipt
-        continue
+          escalated: attempts.length > 1,
+          createdAt: Date.now(),
+          kernelError: error instanceof Error ? error.message : String(error),
+        }
       }
-
-      if (this.mode === 'shadow') continue
-      if (!attempt.ok || !attempt.result) {
-        escalated ||= index < this.providers.length - 1
-        continue
-      }
-
-      if (attempt.result.minimumConfidence >= this.threshold) {
-        selectedProvider = provider.id
-        break
-      }
-
-      escalated ||= index < this.providers.length - 1
+      if (!evaluation.shouldContinue) return evaluation.receipt
     }
 
-    if (kernelReceipt) return kernelReceipt
-    return {
+    return evaluation?.receipt ?? evaluateDecisionAttempts({
       purpose,
       mode: this.mode,
       threshold: this.threshold,
+      providerCount: this.providers.length,
       attempts,
-      ...(selectedProvider ? { selectedProvider } : {}),
-      escalated,
-      createdAt: Date.now(),
-    }
+    }).receipt
   }
 }
 
@@ -205,4 +199,38 @@ function normalizeEndpoint(value: string): string {
   const endpoint = value.trim().replace(/\/+$/, '')
   if (!endpoint) throw new Error('Decision provider endpoint is empty')
   return endpoint.endsWith('/v1/systemone') ? endpoint : `${endpoint}/v1/systemone`
+}
+
+
+export function evaluateDecisionAttempts(input: DecisionKernelInput): DecisionKernelEvaluation {
+  let selectedProvider: string | undefined
+  if (input.mode === 'assist') {
+    for (const attempt of input.attempts) {
+      if (!attempt.ok || !attempt.result) continue
+      if (attempt.result.minimumConfidence >= input.threshold) {
+        selectedProvider = attempt.provider
+        break
+      }
+    }
+  }
+  const shouldContinue = input.mode === 'shadow'
+    ? input.attempts.length < input.providerCount
+    : input.mode === 'assist'
+      ? !selectedProvider && input.attempts.length < input.providerCount
+      : false
+  const escalated = input.mode === 'assist'
+    && (input.attempts.length > 1
+      || (input.attempts.length === 1 && !selectedProvider && input.providerCount > 1))
+  return {
+    receipt: {
+      purpose: input.purpose,
+      mode: input.mode,
+      threshold: input.threshold,
+      attempts: input.attempts,
+      ...(selectedProvider ? { selectedProvider } : {}),
+      escalated,
+      createdAt: Date.now(),
+    },
+    shouldContinue,
+  }
 }
