@@ -81,6 +81,10 @@ export async function runVerification(command: string | undefined, cwd: string |
     child.stderr?.on('data', (chunk) => { stderr = capture(stderr, chunk) })
 
     let timer: NodeJS.Timeout
+    // Teardown of a timed-out process produces its own exit event, which would
+    // otherwise win the race against the timeout branch and report the kill's
+    // exit code as the reason the check failed.
+    let timedOut = false
     const done = async (value: Omit<VerificationEvidence, 'completedAt' | 'durationMs'>): Promise<void> => {
       if (settled) return
       settled = true
@@ -105,13 +109,14 @@ export async function runVerification(command: string | undefined, cwd: string |
       ...outputFields(), reason: error.message,
     }) })
     child.once('exit', (code, signal) => { void done({
-      status: code === 0 ? 'passed' : 'failed', command: cleaned, cwd, startedAt,
+      status: code === 0 && !timedOut ? 'passed' : 'failed', command: cleaned, cwd, startedAt,
       ...(typeof code === 'number' ? { exitCode: code } : {}),
       ...outputFields(),
-      ...(code === 0 ? {} : { reason: `Verification command exited ${signal ?? String(code ?? 'without a code')}.` }),
+      ...(code === 0 && !timedOut ? {} : { reason: timedOut ? `Verification timed out after ${timeoutMs}ms.` : `Verification command exited ${signal ?? String(code ?? 'without a code')}.` }),
     }) })
 
     timer = setTimeout(() => {
+      timedOut = true
       void stopProcess(child)
         .catch(() => undefined)
         .then(() => done({
