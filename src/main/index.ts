@@ -22,6 +22,7 @@ import { ExternalElementStage, RecentPickStore } from './capture/external-inspec
 import { CoreClient } from './core/core-client.js'
 import { createCoreSpawn, stopCoreManagedChildProcess } from './core/core-child-process.js'
 import { createCorePtySpawner } from './core/core-pty.js'
+import { CoreSessionJournalStore } from './core/core-session-journal.js'
 import { createCoreWorkspaceFileSystem } from './core/core-workspace.js'
 import { createCoreWorktreeGit } from './core/core-worktree-git.js'
 import { DesignService } from './design/design-service.js'
@@ -231,7 +232,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   // not engine children: keep them Rust-owned without inheriting a worker permit.
   const unscopedCoreSpawn = createCoreSpawn(core)
   const git = new GitService(workspace, { core })
-  const harness = new HarnessService(workspace, browser, providers, externalElements, sessionArchive, usageLedger)
+  const harness = new HarnessService(workspace, browser, providers, externalElements, sessionArchive, usageLedger, new CoreSessionJournalStore(core))
   const codexEngine = new CodexCliEngine({ log: (line) => console.log(line), spawnProcess: engineSpawn })
   activeCodexEngine = codexEngine
   const antigravityEngine = new AntigravityEngine({ log: (line) => console.log(line), spawnProcess: engineSpawn })
