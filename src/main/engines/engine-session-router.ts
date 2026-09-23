@@ -20,7 +20,13 @@ import {
   PI_CODING_ENGINE_ID,
   ZCODE_CLI_ENGINE_ID,
 } from '../../shared/coding-engines.js'
-import { MINIMAX_CLI_ENGINE_ID } from '../../shared/extra-coding-engines.js'
+import {
+  GOOSE_CLI_ENGINE_ID,
+  HERMES_CLI_ENGINE_ID,
+  JCODE_CLI_ENGINE_ID,
+  MINIMAX_CLI_ENGINE_ID,
+  OPENCODE_CLI_ENGINE_ID,
+} from '../../shared/extra-coding-engines.js'
 import type { BrowserController } from '../browser/browser-controller.js'
 import { appendWorkspaceContext } from '../../shared/workspace-context.js'
 import type { ExtensionRouter } from '../extensions/extension-router.js'
@@ -40,6 +46,13 @@ import { createExtraCliEngines } from './agent-cli/extra-cli-engines.js'
 import { TRANSCRIPT_EVENT_TYPES } from './agent-cli/agent-cli-support.js'
 import type { PiCodingEngine } from './pi/pi-coding-engine.js'
 import type { ZcodeCliEngine } from './zcode/zcode-cli-engine.js'
+
+const STRUCTURED_TRANSCRIPT_ENGINE_IDS = new Set([
+  OPENCODE_CLI_ENGINE_ID,
+  GOOSE_CLI_ENGINE_ID,
+  JCODE_CLI_ENGINE_ID,
+  HERMES_CLI_ENGINE_ID,
+])
 
 export interface ChatGptWebRuntime {
   browser: BrowserController
@@ -387,7 +400,9 @@ export class EngineSessionRouter {
 
   private captureDirectTranscript(frame: DshEventFrame): void {
     if (!this.sessionJournal || frame.kind !== 'session-event' || !frame.sessionId || !frame.event) return
-    if (!TRANSCRIPT_EVENT_TYPES.has(frame.event.type)) return
+    const engineId = this.engineForSession(frame.sessionId)
+    const structuredChunk = STRUCTURED_TRANSCRIPT_ENGINE_IDS.has(engineId) && frame.event.type === 'assistant/chunk'
+    if (!TRANSCRIPT_EVENT_TYPES.has(frame.event.type) && !structuredChunk) return
     void this.sessionJournal.append(frame.sessionId, [{
       type: frame.event.type,
       seq: frame.event.seq,
