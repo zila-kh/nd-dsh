@@ -53,6 +53,8 @@ The decision may narrow **compatibility breadth**, but it may not remove built-i
 extension support from PRD 0005.
 
 
+Runtime protocol: [browser-runtime-capability-spike.md](../plan/browser-runtime-capability-spike.md).
+
 ## Implemented spike
 
 The branch now includes a runnable Electron capability probe:
