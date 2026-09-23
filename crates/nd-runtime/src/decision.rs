@@ -264,6 +264,58 @@ mod tests {
         }
     }
 
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ParityCase {
+        name: String,
+        mode: DecisionSupportMode,
+        threshold: f64,
+        provider_count: usize,
+        attempts: Vec<DecisionProviderAttempt>,
+        expected: ParityExpected,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ParityExpected {
+        selected_provider: Option<String>,
+        should_continue: bool,
+        escalated: bool,
+    }
+
+    #[test]
+    fn shared_fixture_corpus_matches_rust_kernel() {
+        let cases: Vec<ParityCase> = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/decision-kernel-parity.json"
+        ))
+        .unwrap();
+        for case in cases {
+            let result = evaluate(DecisionEvaluateParams {
+                purpose: "review-assist".into(),
+                mode: case.mode,
+                threshold: case.threshold,
+                provider_count: case.provider_count,
+                attempts: case.attempts,
+            })
+            .unwrap_or_else(|error| panic!("{}: {error:#}", case.name));
+            assert_eq!(
+                result.receipt.selected_provider, case.expected.selected_provider,
+                "{} selected provider",
+                case.name
+            );
+            assert_eq!(
+                result.should_continue, case.expected.should_continue,
+                "{} continuation",
+                case.name
+            );
+            assert_eq!(
+                result.receipt.escalated, case.expected.escalated,
+                "{} escalation",
+                case.name
+            );
+        }
+    }
+
     #[test]
     fn high_confidence_first_provider_stops_assist_cascade() {
         let result = evaluate(DecisionEvaluateParams {
