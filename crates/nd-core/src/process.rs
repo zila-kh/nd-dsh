@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
@@ -210,12 +210,10 @@ impl ProcessManager {
             );
         }
 
-        if let Some(stdout) = stdout {
-            spawn_reader(Arc::clone(&self.writer), id.clone(), "stdout", stdout);
-        }
-        if let Some(stderr) = stderr {
-            spawn_reader(Arc::clone(&self.writer), id.clone(), "stderr", stderr);
-        }
+        let stdout_done = stdout
+            .map(|stdout| spawn_reader(Arc::clone(&self.writer), id.clone(), "stdout", stdout));
+        let stderr_done = stderr
+            .map(|stderr| spawn_reader(Arc::clone(&self.writer), id.clone(), "stderr", stderr));
 
         let manager = Arc::clone(self);
         let wait_id = id.clone();
@@ -234,6 +232,18 @@ impl ProcessManager {
                     }
                 };
                 if let Some(status) = status {
+                    // stdout/stderr pipes usually reach EOF immediately when the
+                    // child exits. Give both reader threads one bounded window to
+                    // enqueue their final output before process.exit; never join
+                    // indefinitely because a descendant may have inherited a pipe.
+                    let drain_deadline = Instant::now() + Duration::from_millis(250);
+                    for done in [&stdout_done, &stderr_done].into_iter().flatten() {
+                        let remaining = drain_deadline.saturating_duration_since(Instant::now());
+                        if remaining.is_zero() {
+                            break;
+                        }
+                        let _ = done.recv_timeout(remaining);
+                    }
                     let record = {
                         let Ok(mut processes) = manager.processes.lock() else {
                             return;
@@ -401,7 +411,8 @@ fn spawn_reader<R: Read + Send + 'static>(
     process_id: String,
     stream: &'static str,
     mut reader: R,
-) {
+) -> mpsc::Receiver<()> {
+    let (done_tx, done_rx) = mpsc::sync_channel(1);
     thread::spawn(move || {
         let mut buffer = vec![0u8; 16 * 1024];
         loop {
@@ -426,7 +437,9 @@ fn spawn_reader<R: Read + Send + 'static>(
                 }
             }
         }
+        let _ = done_tx.send(());
     });
+    done_rx
 }
 
 pub fn filtered_environment() -> impl Iterator<Item = (String, String)> {
