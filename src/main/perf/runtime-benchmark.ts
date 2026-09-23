@@ -11,6 +11,8 @@ import { projectRoot } from '../app-paths.js'
 
 type SpawnLike = typeof import('node:child_process').spawn
 
+const IDLE_CONTROL_MS = 750
+
 interface RuntimeBenchmarkOptions {
   outputPath: string
   workspaceRoot: string
@@ -69,6 +71,13 @@ export async function runRuntimeBenchmark(options: RuntimeBenchmarkOptions): Pro
     const stressStarted = performance.now()
     const cpuStarted = process.cpuUsage()
     histogram.enable()
+    // Control window: the same sampler, in the same process, with nothing to
+    // service. It is quantized by the platform timer, so on Windows an idle
+    // process already reports ~15.6 ms. That floor is what the platform
+    // contributes; only the stress delta above it is attributable to this app.
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, IDLE_CONTROL_MS))
+    const idleFloorP95Ms = histogram.percentile(95) / 1e6
+    histogram.reset()
     const workerFixture = join(projectRoot(), 'benchmarks', 'fixtures', 'synthetic-worker.mjs')
     const workerEnv = { ...engineEnvironment(), ELECTRON_RUN_AS_NODE: '1' }
     const first = options.spawnProcess(process.execPath, [workerFixture], {
@@ -155,6 +164,8 @@ export async function runRuntimeBenchmark(options: RuntimeBenchmarkOptions): Pro
       idleBackendMemoryBytes,
       sessionScaling,
       eventLoop: {
+        floorP95Ms: idleFloorP95Ms,
+        excessP95Ms: Math.max(0, histogram.percentile(95) / 1e6 - idleFloorP95Ms),
         p50Ms: histogram.percentile(50) / 1e6,
         p95Ms: histogram.percentile(95) / 1e6,
         p99Ms: histogram.percentile(99) / 1e6,

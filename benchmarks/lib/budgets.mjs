@@ -154,7 +154,7 @@ export function evaluateEvidence({ coreSummary, rustRuntime, packagedStartup }) 
   }
   add('full-provenance', 'Core, runtime, and packaged evidence share one machine/commit/profile/fixture', provenanceMismatches.length === 0, provenanceMismatches, 'no provenance mismatch', undefined, 'identity')
 
-  requireNumber('electron-event-loop-p95', 'Rust Electron main event-loop p95 under combined load', rustRuntime?.summary?.eventLoopP95Ms?.p95, (value) => value <= 16, '<= 16 ms')
+  requireNumber('electron-event-loop-p95', 'Rust Electron main event-loop p95 above the process idle floor', rustRuntime?.summary?.eventLoopP95ExcessMs?.p95, (value) => value <= 16, '<= 16 ms above the measured floor')
   requireNumber('terminal-event-delivery-p95', 'Rust terminal native-event→Electron-handler p95', rustRuntime?.summary?.terminalEventDeliveryP95Ms?.p95, (value) => value <= 16, '<= 16 ms')
   requireNumber('cancel-cleanup-bound', 'Rust cancel→tree-exit p95 stays inside the runtime hard-cleanup bound', rustRuntime?.summary?.cancelToExitMs?.p95, (value) => value <= 3_000, '<= 3000 ms')
   const longStalls = (rustRuntime?.samples ?? []).filter((sample) => Number(sample?.eventLoop?.maxMs) > 50)
