@@ -107,7 +107,7 @@ fn main() -> Result<()> {
     )?;
     outbound.flush()?;
 
-    let writer = thread::spawn(move || -> Result<()> {
+    let _writer = thread::spawn(move || -> Result<()> {
         let stdout = io::stdout();
         let mut stdout = stdout.lock();
         let reader = BufReader::new(inbound);
@@ -131,11 +131,11 @@ fn main() -> Result<()> {
         outbound.flush()?;
     }
 
-    drop(outbound);
-    match writer.join() {
-        Ok(result) => result,
-        Err(_) => bail!("ND browser native host writer thread panicked"),
-    }
+    // Chrome closes stdin when it disconnects the native host. Do not join the
+    // desktop->Chrome reader here: that reader owns a clone of the same local
+    // socket/pipe, so waiting for it would create a shutdown deadlock while the
+    // desktop waits for this process to disconnect.
+    Ok(())
 }
 
 fn read_discovery() -> Result<Discovery> {
