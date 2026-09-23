@@ -16,11 +16,19 @@ interface CoreTailResult {
   events?: SessionJournalEnvelope[]
 }
 
+export interface CoreSessionJournalOptions {
+  maxEvents?: number
+  maxBytes?: number
+}
+
 export class CoreSessionJournalStore implements SessionJournalStore {
   private readonly pending = new Map<string, PendingBatch>()
   private readonly knownSessions = new Set<string>()
 
-  constructor(private readonly core: Pick<CoreClient, 'request'>) {}
+  constructor(
+    private readonly core: Pick<CoreClient, 'request'>,
+    private readonly options: CoreSessionJournalOptions = {},
+  ) {}
 
   append(sessionId: string, events: SessionJournalEnvelope[]): Promise<void> {
     if (!events.length) return Promise.resolve()
@@ -85,6 +93,8 @@ export class CoreSessionJournalStore implements SessionJournalStore {
           await this.core.request('sessionJournal.append', {
             sessionId,
             events: events.slice(index, index + MAX_BATCH_EVENTS),
+            ...(this.options.maxEvents === undefined ? {} : { maxEvents: this.options.maxEvents }),
+            ...(this.options.maxBytes === undefined ? {} : { maxBytes: this.options.maxBytes }),
           }, 5_000)
         }
         for (const waiter of waiters) waiter.resolve()
