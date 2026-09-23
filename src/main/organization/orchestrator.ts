@@ -478,7 +478,35 @@ export class OrganizationOrchestrator {
         ...(context.task.resultSummary ? { resultSummary: context.task.resultSummary } : {}),
       },
     })
-    if (decisionSupport) this.decisionSupportReceipts.set(sessionId, decisionSupport)
+    if (decisionSupport) {
+      this.decisionSupportReceipts.set(sessionId, decisionSupport)
+      await this.journalEffect({
+        kind: 'decision.review-assist',
+        state: 'complete',
+        companyId: context.company.id,
+        projectId: context.project.id,
+        taskId: context.task.id,
+        runId: run.id,
+        idempotencyKey: `decision.review-assist:${run.id}`,
+        data: {
+          mode: decisionSupport.mode,
+          threshold: decisionSupport.threshold,
+          selectedProvider: decisionSupport.selectedProvider,
+          escalated: decisionSupport.escalated,
+          ...(decisionSupport.kernelError ? { kernelError: decisionSupport.kernelError } : {}),
+          attempts: decisionSupport.attempts.map((attempt) => ({
+            provider: attempt.provider,
+            ok: attempt.ok,
+            ...(attempt.result ? {
+              model: attempt.result.model,
+              minimumConfidence: attempt.result.minimumConfidence,
+              latencyMs: attempt.result.latencyMs,
+            } : {}),
+            ...(attempt.error ? { error: attempt.error } : {}),
+          })),
+        },
+      })
+    }
     try {
       await this.harness.run(reviewPrompt(context.task, context, taskWorktree, formatDecisionSupportForReviewer(decisionSupport)), { sessionId, ...modelOpts })
     } catch (cause) {
