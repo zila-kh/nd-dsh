@@ -141,6 +141,12 @@ pub struct EffectJournalStore {
     state: Mutex<JournalState>,
 }
 
+impl Default for EffectJournalStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EffectJournalStore {
     pub fn new() -> Self {
         Self {
@@ -197,7 +203,9 @@ impl EffectJournalStore {
 
         if let Some(key) = params.idempotency_key.as_deref() {
             if state.recovered_uncertain_keys.contains(key) && params.state == EffectState::Intent {
-                bail!("effect outcome is uncertain after restart; reconcile the existing idempotency key before retry");
+                bail!(
+                    "effect outcome is uncertain after restart; reconcile the existing idempotency key before retry"
+                );
             }
             if let Some(index) = state.completed_by_key.get(key).copied() {
                 return Ok(EffectJournalAppendResult {
@@ -208,7 +216,9 @@ impl EffectJournalStore {
             if let Some(index) = state.latest_by_key.get(key).copied() {
                 let latest = &state.records[index];
                 if latest.state == EffectState::Uncertain && params.state == EffectState::Intent {
-                    bail!("effect outcome is uncertain; reconcile the existing idempotency key before retry");
+                    bail!(
+                        "effect outcome is uncertain; reconcile the existing idempotency key before retry"
+                    );
                 }
                 if latest.state == EffectState::Intent && params.state == EffectState::Intent {
                     return Ok(EffectJournalAppendResult {
@@ -240,7 +250,10 @@ impl EffectJournalStore {
         }
         encoded.push(b'\n');
         if state.bytes.saturating_add(encoded.len() as u64) > MAX_JOURNAL_BYTES {
-            bail!("effect journal reached its {} byte retention bound; archive/reset policy is required before more effects can run", MAX_JOURNAL_BYTES);
+            bail!(
+                "effect journal reached its {} byte retention bound; archive/reset policy is required before more effects can run",
+                MAX_JOURNAL_BYTES
+            );
         }
 
         let mut file = OpenOptions::new()
@@ -294,7 +307,10 @@ impl EffectJournalStore {
         })
     }
 
-    pub fn effect_state(&self, params: EffectJournalStateParams) -> Result<EffectJournalStateResult> {
+    pub fn effect_state(
+        &self,
+        params: EffectJournalStateParams,
+    ) -> Result<EffectJournalStateResult> {
         validate_id("idempotencyKey", &params.idempotency_key)?;
         let state = self
             .state
