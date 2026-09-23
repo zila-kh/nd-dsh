@@ -295,6 +295,28 @@ fn init_repository(root: &Path) {
 // Section 2: core-side deadlines and per-request cancellation
 // ---------------------------------------------------------------------------------
 
+/// Read the core's accounting once it has stopped moving.
+///
+/// A response is written from inside the dispatch job, and that job's registry entry and
+/// dispatcher slot are released only when the closure returns — after the response is
+/// already on the wire. A client that has just received a response can therefore still
+/// see its own request counted as in flight. That is an ordering fact, not a leak, and
+/// sampling it once turns the assertion below into a flake on a slow runner. Polling
+/// keeps the assertion honest: a slot that really leaked never settles, so it still
+/// fails the bound.
+fn settled_metrics(core: &mut Core, within: Duration) -> Value {
+    let started = Instant::now();
+    loop {
+        let metrics: Value = core.call("metrics.snapshot", json!({})).expect("metrics");
+        let alone = metrics["inFlightRequestCount"] == json!(1)
+            && metrics["dispatcher"]["active"] == json!(1);
+        if alone || started.elapsed() >= within {
+            return metrics;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
 #[test]
 fn deadline_expiry_stops_git_work_reports_its_code_and_leaves_no_orphan() {
     let fixture = temp_dir("deadline");
@@ -304,7 +326,13 @@ fn deadline_expiry_stops_git_work_reports_its_code_and_leaves_no_orphan() {
 
     // The child needs time to start and prove it is alive before the deadline lands,
     // so the assertion below is about killing a running process, not a late start.
-    let deadline_ms = 4_000;
+    // That child is PowerShell, and its cold start on a Windows CI runner (image load,
+    // AMSI/Defender scan, JIT, plus parallel test load) does not fit in 4 s: a warm
+    // start measures ~0.5 s here, and run 35773266896 killed the child before its first
+    // heartbeat and failed the precondition below, on the same tree that passed in run
+    // 35768282861. The orphan check is what this test is about, and it does not weaken
+    // as the deadline grows.
+    let deadline_ms = 15_000;
     let id = core.send_with_deadline(
         "git.exec",
         json!({
@@ -315,7 +343,7 @@ fn deadline_expiry_stops_git_work_reports_its_code_and_leaves_no_orphan() {
         deadline_ms,
     );
     let started = Instant::now();
-    let result = core.await_response::<Value>(&id, Duration::from_secs(20));
+    let result = core.await_response::<Value>(&id, Duration::from_secs(45));
     let elapsed = started.elapsed();
 
     let error = result.expect_err("an expired deadline must not report success");
@@ -344,7 +372,7 @@ fn deadline_expiry_stops_git_work_reports_its_code_and_leaves_no_orphan() {
 
     // The metrics request is itself in flight while it is counted, so one active
     // slot is this observer; anything above that is a leaked slot.
-    let metrics: Value = core.call("metrics.snapshot", json!({})).expect("metrics");
+    let metrics = settled_metrics(&mut core, Duration::from_secs(5));
     assert_eq!(
         metrics["inFlightRequestCount"],
         json!(1),
@@ -403,7 +431,7 @@ fn cancelling_one_request_leaves_its_peer_running_and_releases_only_its_own_slot
     assert_eq!(peer_result["exitCode"], json!(0));
 
     // Only this observer is in flight by the time it is counted.
-    let metrics: Value = core.call("metrics.snapshot", json!({})).expect("metrics");
+    let metrics = settled_metrics(&mut core, Duration::from_secs(5));
     assert_eq!(metrics["inFlightRequestCount"], json!(1), "{metrics}");
     assert_eq!(metrics["dispatcher"]["active"], json!(1), "{metrics}");
     let _ = fs::remove_dir_all(&fixture);
@@ -1049,7 +1077,11 @@ fn workspace_snapshot_composes_reads_search_and_git_and_detects_stale_revisions(
     }
     let fixture = temp_dir("workspace-snapshot");
     fs::create_dir_all(fixture.join("src")).expect("create src");
-    fs::write(fixture.join("src").join("app.ts"), "export const needle = 1\n").expect("write app");
+    fs::write(
+        fixture.join("src").join("app.ts"),
+        "export const needle = 1\n",
+    )
+    .expect("write app");
     git(&fixture, &["init"]);
     git(&fixture, &["config", "user.email", "snapshot@nd.local"]);
     git(&fixture, &["config", "user.name", "ND Snapshot"]);
@@ -1058,34 +1090,65 @@ fn workspace_snapshot_composes_reads_search_and_git_and_detects_stale_revisions(
 
     let mut core = Core::launch();
     let root = fixture.to_string_lossy().to_string();
-    let first: Value = core.call("workspace.snapshot", json!({
-        "root": root,
-        "reads": [{ "path": "src/app.ts", "maxBytes": 4096 }],
-        "searches": [{ "query": "needle", "path": "src", "maxResults": 20 }],
-        "includeGitStatus": true,
-    })).expect("workspace.snapshot");
+    let first: Value = core
+        .call(
+            "workspace.snapshot",
+            json!({
+                "root": root,
+                "reads": [{ "path": "src/app.ts", "maxBytes": 4096 }],
+                "searches": [{ "query": "needle", "path": "src", "maxResults": 20 }],
+                "includeGitStatus": true,
+            }),
+        )
+        .expect("workspace.snapshot");
     assert_eq!(first["stale"], json!(false));
     assert_eq!(first["truncated"], json!(false));
-    assert!(first["reads"][0]["data"].as_str().unwrap_or_default().contains("needle"));
-    assert_eq!(first["searches"][0]["matches"][0]["path"], json!("src/app.ts"));
+    assert!(
+        first["reads"][0]["data"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("needle")
+    );
+    assert_eq!(
+        first["searches"][0]["matches"][0]["path"],
+        json!("src/app.ts")
+    );
     assert!(first["gitStatus"]["entries"].as_array().is_some());
-    let revision = first["revision"]["value"].as_str().expect("revision").to_owned();
+    let revision = first["revision"]["value"]
+        .as_str()
+        .expect("revision")
+        .to_owned();
 
-    fs::write(fixture.join("src").join("app.ts"), "export const needle = 12345\nexport const changed = true\n").expect("mutate app");
-    let stale: Value = core.call("workspace.snapshot", json!({
-        "root": root,
-        "expectedRevision": revision,
-        "reads": [{ "path": "src/app.ts" }],
-        "searches": [{ "query": "needle" }],
-        "includeGitStatus": true,
-    })).expect("stale workspace.snapshot");
+    fs::write(
+        fixture.join("src").join("app.ts"),
+        "export const needle = 12345\nexport const changed = true\n",
+    )
+    .expect("mutate app");
+    let stale: Value = core
+        .call(
+            "workspace.snapshot",
+            json!({
+                "root": root,
+                "expectedRevision": revision,
+                "reads": [{ "path": "src/app.ts" }],
+                "searches": [{ "query": "needle" }],
+                "includeGitStatus": true,
+            }),
+        )
+        .expect("stale workspace.snapshot");
     assert_eq!(stale["stale"], json!(true));
     assert!(stale["reads"].as_array().expect("reads").is_empty());
     assert!(stale["searches"].as_array().expect("searches").is_empty());
     assert_eq!(stale["gitStatus"], Value::Null);
 
-    let too_many = (0..13).map(|_| json!({ "path": "src/app.ts" })).collect::<Vec<_>>();
-    let oversized = core.call::<Value>("workspace.snapshot", json!({ "root": root, "reads": too_many }))
+    let too_many = (0..13)
+        .map(|_| json!({ "path": "src/app.ts" }))
+        .collect::<Vec<_>>();
+    let oversized = core
+        .call::<Value>(
+            "workspace.snapshot",
+            json!({ "root": root, "reads": too_many }),
+        )
         .expect_err("oversized snapshot request must fail predictably");
     assert_eq!(oversized.code, "invalid_params");
     let _ = fs::remove_dir_all(&fixture);

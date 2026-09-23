@@ -39,9 +39,11 @@ These are blockers for a downloadable public beta, not optional polish.
 
 This approved MVP is the active implementation vehicle for the runtime-distribution, PTY/process, Git/worktree, parallel-worker capacity, packaged Windows smoke, and reproducible performance-proof portions of the roadmap. Organization/business truth remains TypeScript-owned; nd-core owns shared runtime permits, native process/resource lifecycle, and system-heavy services.
 
-**Status:** implementation backlog complete on `feat/complete-active-work`. The production desktop is single-runtime (`nd-core`), the agent fast path and matched measurement are implemented, and stale TODO/WIP records are archived. Fresh Windows release validation remains explicitly blocked in task 0004 because this branch intentionally skips CI.
+**Status:** implementation backlog complete on `feat/complete-active-work`. The production desktop is single-runtime (`nd-core`), the agent fast path and matched measurement are implemented, and stale TODO/WIP records are archived. Fresh Windows release validation remains explicitly blocked in task 0004, and it is now gated behind a `main` CI defect claimed as task 0012.
 
-**CI reality check (2026-09-22):** main workflow run `35719173634` passed the complete Linux `validate` job, including desktop smoke. `windows-package` failed at `Verify ND Core`, so Windows package/smoke and performance evidence remain unproven without a fresh run; see blocked task 0004.
+**CI reality check (2026-09-23):** run `35762360604`, the first run on `main` after PR #29 merged, failed `Verify ND Core` in **both** jobs — `validate` in 59 s and `windows-package` in 1m43s — so every Windows step and the performance-evidence bundle were skipped. The cause is platform-independent: `crates/nd-core` was merged with unformatted, lint-failing source that aborts `pnpm core:test` on Linux too, having arrived via commits carrying a skip-ci directive that no gate ever evaluated. The last green `validate` was run `35719173634` on 2026-09-22, before those commits. Task 0012 repairs the gate, and the Windows job now reaches `cargo test`, where a second defect — a PowerShell cold-start timing flake in the deadline test — is filed as task 0013. blocked task 0004 stays blocked until both are cleared; see it for the per-run evidence.
+
+**CI suspended (2026-09-23, operator direction):** GitHub Actions usage is paused to conserve compute until the product is stable enough to justify the spend. The workflows are unchanged and remain in the repo for that point — nothing is disabled, and no acceptance criterion is waived. Work continues against local verification (`pnpm core:test`, `pnpm verify`, `pnpm typecheck`, `pnpm test`, `pnpm build`), which is now the gate. The Windows release-validation criteria in blocked task 0004 are deferred, not dropped: they need a runner and cannot be satisfied locally.
 
 #### Current direction — four deliverables
 
@@ -56,7 +58,10 @@ Target: **fast native runtime + minimal round trips + structured agent actions +
 
 | Task | Pri | State |
 | --- | --- | --- |
-| [blocked-0004](tasks/blocked-0004-windows-release-validation.md) | P0 | **blocked on fresh Windows release validation** — latest main Windows job failed at `Verify ND Core`; no speculative source work assigned |
+| [wip-0012](tasks/wip-0012-nd-core-format-lint-gate.md) | P0 | **in progress** — fmt/clippy repair done and locally verified; CI confirmation deferred |
+| [wip-0013](tasks/wip-0013-windows-timing-flakes.md) | P0 | **in progress** — timing flakes fixed and locally verified; CI confirmation deferred |
+| [wip-0014](tasks/wip-0014-app-runtime-terminal-marker.md) | P1 | **in progress** — app-runtime terminal marker fixed, before/after reproduced locally; CI confirmation deferred |
+| [blocked-0004](tasks/blocked-0004-windows-release-validation.md) | P0 | **blocked on fresh Windows release validation** — implementation gated behind 0012-0014; needs a runner, deferred while CI is suspended |
 | [done-0005](tasks/done/done-0005-agent-task-measurement.md) | P1 | **done** — task-cost measurement + normal-loop baseline |
 | [done-0006](tasks/done/done-0006-nd-core-runtime-contract.md) | P1 | **done** — workspace/deadline/revision/cache/search/runtime contract |
 | [done-0007](tasks/done/done-0007-retire-legacy-paths-and-dispatch.md) | P1 | **done** — single production runtime, node-pty/legacy path retired, typed dispatch availability |
