@@ -301,6 +301,13 @@ export type OrganizationMutation =
   | { type: 'company.create'; name: string; mission: string }
   | { type: 'company.update'; id: string; patch: Partial<Pick<Company, 'name' | 'mission' | 'autonomyLevel' | 'status'>> }
   | { type: 'company.activate'; id: string }
+  /**
+   * Forget a company inside ND: the company and every record ND owns for it
+   * (projects, goals, milestones, tasks, run receipts, memory, skills,
+   * workflows, roles, teams, agents, policies, coordination) are dropped.
+   * Workspace folders on disk are never touched.
+   */
+  | { type: 'company.remove'; id: string }
   | { type: 'project.create'; companyId: string; name: string; objective: string; workspacePath?: string; repoUrls?: string[]; startCommand?: string; testCommand?: string; targetPort?: number; targetUrl?: string; healthCheckPath?: string }
   | { type: 'project.update'; id: string; patch: Partial<Pick<Project, 'name' | 'objective' | 'status' | 'workspacePath' | 'repoUrls' | 'teamIds' | 'startCommand' | 'testCommand' | 'targetPort' | 'targetUrl' | 'healthCheckPath'>> }
   | { type: 'project.activate'; id: string }

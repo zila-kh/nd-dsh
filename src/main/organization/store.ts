@@ -60,6 +60,7 @@ export class OrganizationStore {
       case 'company.create': this.createCompany(mutation.name, mutation.mission); break
       case 'company.update': this.updateCompany(mutation.id, mutation.patch); break
       case 'company.activate': this.activateCompany(mutation.id); break
+      case 'company.remove': this.removeCompany(mutation.id); break
       case 'project.create': this.createProject(mutation); break
       case 'project.update': this.updateProject(mutation.id, mutation.patch); break
       case 'project.activate': this.activateProject(mutation.id); break
@@ -551,6 +552,49 @@ export class OrganizationStore {
     const company = this.company(id); Object.assign(company, patch); company.name = clean(company.name); company.mission = clean(company.mission); company.updatedAt = Date.now()
   }
   private activateCompany(id: string): void { this.company(id); this.value.activeCompanyId = id; const project = this.value.projects.find((item) => item.companyId === id); if (project) this.value.activeProjectId = project.id; else delete this.value.activeProjectId }
+  /**
+   * Forget a company inside ND. Every record the company owns is dropped:
+   * projects, goals, milestones, tasks, runs, coordination, memory, skills,
+   * workflows, roles, teams, agents, and policies. Workspace folders on disk
+   * are never touched. A running run is refused so a live session can never be
+   * orphaned by removal.
+   */
+  private removeCompany(id: string): void {
+    const company = this.company(id)
+    const live = this.value.runs.find((run) => run.companyId === id && run.status === 'running')
+    if (live) throw new Error(`Cancel the running ${live.kind} before removing this company`)
+    const taskIds = new Set(this.value.tasks.filter((task) => task.companyId === id).map((task) => task.id))
+    this.value.companies = this.value.companies.filter((item) => item.id !== id)
+    this.value.projects = this.value.projects.filter((item) => item.companyId !== id)
+    this.value.goals = this.value.goals.filter((item) => item.companyId !== id)
+    this.value.milestones = this.value.milestones.filter((item) => item.companyId !== id)
+    this.value.tasks = this.value.tasks.filter((item) => item.companyId !== id)
+    this.value.runs = this.value.runs.filter((item) => item.companyId !== id)
+    this.value.coordination = this.value.coordination.filter((item) => item.companyId !== id)
+    this.value.memory = this.value.memory.filter((item) => item.companyId !== id)
+    this.value.skills = this.value.skills.filter((item) => item.companyId !== id)
+    this.value.workflows = this.value.workflows.filter((item) => item.companyId !== id)
+    this.value.roles = this.value.roles.filter((item) => item.companyId !== id)
+    this.value.teams = this.value.teams.filter((item) => item.companyId !== id)
+    this.value.agents = this.value.agents.filter((item) => item.companyId !== id)
+    this.value.policies = this.value.policies.filter((item) => item.companyId !== id)
+    this.value.activity = this.value.activity.filter((item) => item.companyId !== id)
+    for (const agent of this.value.agents) {
+      if (agent.currentTaskId && taskIds.has(agent.currentTaskId)) { agent.status = 'idle'; delete agent.currentTaskId }
+    }
+    if (this.value.activeCompanyId === id) {
+      const next = this.value.companies[0]
+      if (next) {
+        this.value.activeCompanyId = next.id
+        const nextProject = this.value.projects.find((item) => item.companyId === next.id)
+        if (nextProject) this.value.activeProjectId = nextProject.id
+        else delete this.value.activeProjectId
+      } else {
+        delete this.value.activeCompanyId
+        delete this.value.activeProjectId
+      }
+    }
+  }
   private createProject(input: Extract<OrganizationMutation, { type: 'project.create' }>): void {
     this.company(input.companyId); const now = Date.now(); const workspacePath = normalizeWorkspacePath(input.workspacePath); const project: Project = {
       id: randomUUID(), companyId: input.companyId, name: clean(input.name), objective: clean(input.objective), status: 'planning', repoUrls: input.repoUrls?.map(clean).filter(Boolean) ?? [], teamIds: [], progress: 0,

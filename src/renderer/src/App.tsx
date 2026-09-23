@@ -18,7 +18,7 @@ import { DiffView } from './components/DiffView'
 import { DshCodingSurface } from './components/DshCodingSurface'
 import { EditorPane } from './components/EditorPane'
 import { Explorer } from './components/Explorer'
-import { BrowserIcon, CameraIcon, CompanyIcon, CrosshairIcon, ExternalIcon, FileIcon, MonitorIcon, PencilIcon, QualityIcon, SettingsIcon, SidebarToggleIcon, SparkIcon } from './components/Icons'
+import { BrowserIcon, CameraIcon, CompanyIcon, CrosshairIcon, ExternalIcon, FileIcon, MonitorIcon, PencilIcon, QualityIcon, SettingsIcon, SidebarToggleIcon, SparkIcon, TrashIcon } from './components/Icons'
 import { OrganizationDashboard, type CompanyView } from './components/OrganizationDashboard'
 import { QaView } from './components/QaView'
 import { RuntimePrompts } from './components/RuntimePrompts'
@@ -121,6 +121,7 @@ export default function App() {
   const [companyCreateOpen, setCompanyCreateOpen] = useState(false)
   const [companyDraft, setCompanyDraft] = useState({ name: '', mission: '' })
   const [failedCompanyIds, setFailedCompanyIds] = useState<Set<string>>(() => new Set())
+  const [removeCompanyId, setRemoveCompanyId] = useState<string | null>(null)
   const [failedProjectIds, setFailedProjectIds] = useState<Set<string>>(() => new Set())
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(settingsTabFromLocation)
   const [settingsSubTabs, setSettingsSubTabs] = useState<SettingsSubTabs>(settingsSubTabsFromLocation)
@@ -540,6 +541,21 @@ export default function App() {
 
   const company = orgState?.companies.find((item) => item.id === orgState.activeCompanyId) ?? orgState?.companies[0] ?? null
   const companyProjects = orgState && company ? orgState.projects.filter((item) => item.companyId === company.id) : []
+  const companyRemovalTarget = useMemo(() => {
+    if (!removeCompanyId || !orgState) return null
+    const candidate = orgState.companies.find((item) => item.id === removeCompanyId)
+    if (!candidate) return null
+    return {
+      company: candidate,
+      projects: orgState.projects.filter((item) => item.companyId === candidate.id).length,
+      tasks: orgState.tasks.filter((item) => item.companyId === candidate.id).length,
+      goals: orgState.goals.filter((item) => item.companyId === candidate.id).length,
+      milestones: orgState.milestones.filter((item) => item.companyId === candidate.id).length,
+      runs: orgState.runs.filter((item) => item.companyId === candidate.id).length,
+      activeRuns: orgState.runs.filter((item) => item.companyId === candidate.id && item.status === 'running').length,
+      agents: orgState.agents.filter((item) => item.companyId === candidate.id).length,
+    }
+  }, [removeCompanyId, orgState])
   const project = companyProjects.find((item) => item.id === orgState?.activeProjectId) ?? companyProjects[0] ?? null
   // Every organization run records the session it ran in, so the chat sidebar
   // can scope its workspace-wide session list down to the active project.
@@ -747,6 +763,53 @@ export default function App() {
                       <Button type="submit">Create AI company</Button>
                     </DialogFooter>
                   </form>
+                </DialogContent>
+              </Dialog>
+              {company ? (
+                <button
+                  type="button"
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-faint transition-colors hover:bg-destructive/10 hover:text-destructive"
+                  title={`Remove ${company.name} from ND`}
+                  aria-label={`Remove company ${company.name} from ND`}
+                  onClick={() => setRemoveCompanyId(company.id)}
+                >
+                  <TrashIcon className="size-3.5" />
+                </button>
+              ) : null}
+              <Dialog open={companyRemovalTarget !== null} onOpenChange={(open) => { if (!open) setRemoveCompanyId(null) }}>
+                <DialogContent className="sm:max-w-[470px]">
+                  <DialogHeader>
+                    <DialogTitle>Remove company from ND?</DialogTitle>
+                    <DialogDescription>
+                      {companyRemovalTarget
+                        ? `ND will forget "${companyRemovalTarget.company.name}" and every record it owns: ${companyRemovalTarget.projects} project${companyRemovalTarget.projects === 1 ? '' : 's'}, ${companyRemovalTarget.tasks} task${companyRemovalTarget.tasks === 1 ? '' : 's'}, ${companyRemovalTarget.milestones} milestone${companyRemovalTarget.milestones === 1 ? '' : 's'}, ${companyRemovalTarget.goals} goal${companyRemovalTarget.goals === 1 ? '' : 's'}, ${companyRemovalTarget.runs} run receipt${companyRemovalTarget.runs === 1 ? '' : 's'}, ${companyRemovalTarget.agents} agent${companyRemovalTarget.agents === 1 ? '' : 's'}, plus roles, teams, memory, skills, workflows, and policies.`
+                        : ''}
+                    </DialogDescription>
+                  </DialogHeader>
+                  {companyRemovalTarget?.activeRuns ? (
+                    <p className="m-0 text-xs/[1.5] text-muted-foreground">
+                      Stopping first: {companyRemovalTarget.activeRuns} running run{companyRemovalTarget.activeRuns === 1 ? '' : 's'} will be cancelled (sessions stopped, task worktrees rolled back, employees released).
+                    </p>
+                  ) : null}
+                  <p className="m-0 text-xs/[1.5] text-muted-foreground">Workspace folders on disk are not changed. Create a new company any time to start fresh.</p>
+                  <DialogFooter>
+                    <DialogClose asChild>
+                      <Button variant="outline" type="button">Cancel</Button>
+                    </DialogClose>
+                    <Button
+                      variant="destructive"
+                      disabled={!companyRemovalTarget}
+                      onClick={() => {
+                        const id = companyRemovalTarget?.company.id
+                        if (!id) return
+                        void window.ndDshOrganization.mutate({ type: 'company.remove', id })
+                          .then(() => setRemoveCompanyId(null))
+                          .catch((cause) => notify(errorMessage(cause)))
+                      }}
+                    >
+                      Remove company
+                    </Button>
+                  </DialogFooter>
                 </DialogContent>
               </Dialog>
               <label className="flex items-center gap-[5px]">
