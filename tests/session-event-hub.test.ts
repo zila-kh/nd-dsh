@@ -139,6 +139,34 @@ describe('SessionEventHub', () => {
     hub.detach()
   })
 
+  it('rehydrates retained history from a fresh runtime snapshot after core restart', async () => {
+    const { source, entries } = stubSource()
+    const hub = new SessionEventHub(() => {})
+    hub.attach(source)
+
+    const firstRead = hub.read('s1')
+    entries.get('s1')!.onFrame(snapshot([
+      { type: 'user/message', seq: 1, data: { message: { text: 'before restart' } } },
+      { type: 'assistant/message', seq: 2 },
+    ]))
+    await firstRead
+
+    const rebuilding = hub.rehydrate()
+    await Promise.resolve()
+    const reopened = entries.get('s1')
+    expect(reopened).toBeDefined()
+    reopened!.onFrame(snapshot([
+      { type: 'user/message', seq: 1, data: { message: { text: 'before restart' } } },
+      { type: 'assistant/message', seq: 2 },
+      { type: 'assistant/message', seq: 3, data: { message: { text: 'runtime snapshot' } } },
+    ], 3))
+    await rebuilding
+
+    const result = await hub.read('s1')
+    expect((result.value as { events: Array<{ event: { seq: number } }> }).events.map((item) => item.event.seq)).toEqual([1, 2, 3])
+    hub.detach()
+  })
+
   it('closes the follow handle on a terminal stream error and surfaces the failure to readers', async () => {
     const { source, entries } = stubSource()
     const hub = new SessionEventHub(() => {})
