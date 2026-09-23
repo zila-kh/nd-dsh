@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import type { AppInfo, BrowserState, HarnessStatus, SavedWorkspace, ThemeMode, ThemeState, WorkspaceRegistryView, WorkspaceState } from '../../../shared/contracts'
 import type { BrowserCompanionState } from '../../../shared/browser-companion'
+import type { BrowserPlatformState } from '../../../shared/browser-platform'
 import { MonitorIcon, MoonIcon, SunIcon } from './Icons'
 import { BridgePill } from './bridge-pill'
 import { CapabilitySettings } from './CapabilitySettings'
@@ -91,6 +92,10 @@ export function SettingsPane({
   const [savedWorkspaces, setSavedWorkspaces] = useState<WorkspaceRegistryView | null>(null)
   const [workspaceToRemove, setWorkspaceToRemove] = useState<SavedWorkspace | null>(null)
   const [browserCompanion, setBrowserCompanion] = useState<BrowserCompanionState | null>(null)
+  const [browserPlatform, setBrowserPlatform] = useState<BrowserPlatformState | null>(null)
+  const [credentialOrigin, setCredentialOrigin] = useState('')
+  const [credentialUsername, setCredentialUsername] = useState('')
+  const [credentialPassword, setCredentialPassword] = useState('')
 
   const activeSubTab = propSubTab ?? internalSubTab
   const handleSelectSubTab = (selected: GeneralSubTab): void => {
@@ -115,6 +120,16 @@ export function SettingsPane({
     let mounted = true
     void window.ndDsh.browserCompanion.state().then((state) => { if (mounted) setBrowserCompanion(state) }).catch(() => undefined)
     const dispose = window.ndDsh.browserCompanion.onChanged((state) => { if (mounted) setBrowserCompanion(state) })
+    return () => {
+      mounted = false
+      dispose()
+    }
+  }, [])
+
+  useEffect(() => {
+    let mounted = true
+    void window.ndDsh.browserPlatform.state().then((state) => { if (mounted) setBrowserPlatform(state) }).catch(() => undefined)
+    const dispose = window.ndDsh.browserPlatform.onChanged((state) => { if (mounted) setBrowserPlatform(state) })
     return () => {
       mounted = false
       dispose()
