@@ -12,7 +12,7 @@ use nd_runtime::effect_journal::{
 use nd_runtime::git::{self, GitExecParams, GitLogParams, GitQueryParams};
 use nd_runtime::metrics::{self, MetricsRegistry};
 use nd_runtime::process::{CancelParams, CloseStdinParams, ProcessManager, SpawnParams, WriteParams};
-use nd_runtime::revision::{self, RevisionScope};
+use nd_runtime::revision;
 use nd_runtime::scheduler::{AcquireParams, BindParams, ReleaseParams, Scheduler};
 use nd_runtime::search;
 use nd_runtime::session_journal::{
