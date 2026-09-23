@@ -1,3 +1,4 @@
+import { shell } from 'electron'
 import { join } from 'node:path'
 import type {
   BrowserCredentialSummary,
@@ -198,6 +199,19 @@ export class BrowserPlatformService {
     return canceled
   }
 
+  async openDownload(downloadId: string): Promise<boolean> {
+    const path = this.browser.downloadPath(downloadId)
+    if (!path) return false
+    return (await shell.openPath(path)) === ''
+  }
+
+  async revealDownload(downloadId: string): Promise<boolean> {
+    const path = this.browser.downloadPath(downloadId)
+    if (!path) return false
+    shell.showItemInFolder(path)
+    return true
+  }
+
   async installExtension(path: string): Promise<BrowserExtensionRecord> {
     const record = await this.extensions.install(path)
     await this.emit()
@@ -226,6 +240,33 @@ export class BrowserPlatformService {
     const removed = await this.credentials.remove(credentialId)
     if (removed) await this.emit()
     return removed
+  }
+
+  async autofillCredential(
+    credentialId: string,
+    targetId = BUILTIN_BROWSER_TARGET_ID,
+    tabId?: string,
+  ): Promise<{ ok: true; credentialId: string; username: string }> {
+    if (targetId !== BUILTIN_BROWSER_TARGET_ID) throw new Error('ND saved credentials are available only to the built-in browser')
+    const activeTabId = tabId ?? this.browser.activeTabId()
+    const leaseId = this.manualLease(targetId, activeTabId)
+    const result = await this.router.call('browser.autofill', {
+      targetId,
+      tabId: activeTabId,
+      leaseId,
+      credentialId,
+    }, 'renderer') as { ok: true; credentialId: string; username: string }
+    this.leases.release(leaseId)
+    await this.emit()
+    return result
+  }
+
+  async siteTools(targetId = BUILTIN_BROWSER_TARGET_ID, tabId?: string) {
+    const activeTabId = tabId ?? (targetId === BUILTIN_BROWSER_TARGET_ID ? this.browser.activeTabId() : undefined)
+    return this.router.call('browser.siteTools', {
+      targetId,
+      ...(activeTabId ? { tabId: activeTabId } : {}),
+    }, 'renderer')
   }
 
   async setSitePermission(origin: string, permission: string, effect: 'allow' | 'deny') {
