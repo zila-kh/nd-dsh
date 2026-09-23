@@ -1,45 +1,35 @@
-mod cache;
-mod deadline;
-mod dispatcher;
-mod errors;
-mod git;
-mod metrics;
-mod process;
-mod protocol;
-mod revision;
-mod scheduler;
-mod search;
-mod session_journal;
-mod snapshot;
-mod terminal;
-#[cfg(windows)]
-mod windows_job;
-mod workspace;
-
 use anyhow::{Context, Result};
-use cache::ResponseCache;
-use deadline::{Deadline, Interrupt, InterruptGuard, InterruptRegistry};
-use dispatcher::{DispatchStats, Dispatcher, priority_for_method};
-use errors::{CODE_INVALID_PARAMS, CODE_METHOD_FAILED, CODE_RUNTIME_BUSY};
-use git::{GitExecParams, GitLogParams, GitQueryParams};
-use metrics::MetricsRegistry;
-use process::{CancelParams, CloseStdinParams, ProcessManager, SpawnParams, WriteParams};
-use protocol::{PROTOCOL_VERSION, ProtocolWriter, read_request};
-use scheduler::{BindParams, ReleaseParams, Scheduler};
-use serde::Serialize;
-use serde::de::DeserializeOwned;
-use serde_json::{Value, json};
-use session_journal::{
+use nd_protocol::errors::{self, CODE_INVALID_PARAMS, CODE_METHOD_FAILED, CODE_RUNTIME_BUSY};
+use nd_protocol::{PROTOCOL_VERSION, ProtocolWriter, read_request};
+use nd_runtime::cache::ResponseCache;
+use nd_runtime::deadline::{Deadline, Interrupt, InterruptGuard, InterruptRegistry};
+use nd_runtime::decision::{self, DecisionEvaluateParams};
+use nd_runtime::dispatcher::{DispatchStats, Dispatcher, priority_for_method};
+use nd_runtime::effect_journal::{
+    EffectJournalAppendParams, EffectJournalConfigureParams, EffectJournalReplayParams,
+    EffectJournalStateParams, EffectJournalStore,
+};
+use nd_runtime::git::{self, GitExecParams, GitLogParams, GitQueryParams};
+use nd_runtime::metrics::{self, MetricsRegistry};
+use nd_runtime::process::{CancelParams, CloseStdinParams, ProcessManager, SpawnParams, WriteParams};
+use nd_runtime::revision::{self, RevisionScope};
+use nd_runtime::scheduler::{AcquireParams, BindParams, ReleaseParams, Scheduler};
+use nd_runtime::search;
+use nd_runtime::session_journal::{
     DEFAULT_MAX_BYTES_PER_SESSION, DEFAULT_MAX_EVENTS_PER_SESSION, SessionJournalAppendParams,
     SessionJournalSessionParams, SessionJournalStore, SessionJournalTailParams,
 };
-use std::io::BufReader;
-use std::sync::Arc;
-use terminal::{
+use nd_runtime::snapshot;
+use nd_runtime::terminal::{
     TerminalCloseParams, TerminalCreateParams, TerminalHistoryAppendParams, TerminalManager,
     TerminalResizeParams, TerminalRestartParams, TerminalStateParams, TerminalWriteParams,
 };
-use workspace::{ListParams, ReadParams};
+use nd_runtime::workspace::{self, ListParams, ReadParams};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use serde_json::{Value, json};
+use std::io::BufReader;
+use std::sync::Arc;
 
 struct AppState {
     writer: Arc<ProtocolWriter>,
@@ -47,6 +37,7 @@ struct AppState {
     processes: Arc<ProcessManager>,
     terminals: Arc<TerminalManager>,
     session_journal: Arc<SessionJournalStore>,
+    effect_journal: Arc<EffectJournalStore>,
     metrics: Arc<MetricsRegistry>,
     cache: Arc<ResponseCache>,
     interrupts: Arc<InterruptRegistry>,
@@ -66,12 +57,14 @@ impl AppState {
             DEFAULT_MAX_EVENTS_PER_SESSION,
             DEFAULT_MAX_BYTES_PER_SESSION,
         ));
+        let effect_journal = Arc::new(EffectJournalStore::new());
         Arc::new(Self {
             writer,
             scheduler,
             processes,
             terminals,
             session_journal,
+            effect_journal,
             metrics: Arc::new(MetricsRegistry::new()),
             cache: Arc::new(ResponseCache::new(
                 cache::DEFAULT_MAX_ENTRIES,
@@ -190,6 +183,8 @@ fn dispatch(
                     "process",
                     "terminal",
                     "session-journal",
+                    "effect-journal",
+                    "decision-kernel",
                     "git",
                     "workspace",
                     "search",
@@ -221,6 +216,7 @@ fn dispatch(
                 .filter(|permit| permit.session_id.is_some())
                 .count();
             let session_journal = state.session_journal.stats();
+            let effect_journal = state.effect_journal.stats();
             Ok(json!({
                 "processMemory": metrics::current_process_memory(),
                 "logicalSessionCount": scheduler.permits.len(),
@@ -235,6 +231,10 @@ fn dispatch(
                 "sessionJournalBytes": session_journal.retained_bytes,
                 "sessionJournalMaxEventsPerSession": session_journal.max_events_per_session,
                 "sessionJournalMaxBytesPerSession": session_journal.max_bytes_per_session,
+                "effectJournalConfigured": effect_journal.configured,
+                "effectJournalRecordCount": effect_journal.record_count,
+                "effectJournalBytes": effect_journal.bytes,
+                "effectJournalLastSeq": effect_journal.last_seq,
                 "inFlightRequestCount": state.interrupts.active_count(),
                 "pendingRpcCount": dispatch.active + dispatch.queued_high + dispatch.queued_normal + dispatch.queued_background,
                 "dispatcher": dispatch,
@@ -244,13 +244,113 @@ fn dispatch(
                 "queuedEventBytes": queued_event_bytes,
             }))
         }
-        "scheduler.acquire" => to_value(state.scheduler.acquire(from_params(params)?)?),
+        "effectJournal.configure" => to_value(
+            state
+                .effect_journal
+                .configure(from_params::<EffectJournalConfigureParams>(params)?)?,
+        ),
+        "effectJournal.append" => to_value(
+            state
+                .effect_journal
+                .append(from_params::<EffectJournalAppendParams>(params)?)?,
+        ),
+        "effectJournal.replay" => to_value(
+            state
+                .effect_journal
+                .replay(from_params::<EffectJournalReplayParams>(params)?)?,
+        ),
+        "effectJournal.state" => to_value(
+            state
+                .effect_journal
+                .effect_state(from_params::<EffectJournalStateParams>(params)?)?,
+        ),
+        "effectJournal.stats" => to_value(state.effect_journal.stats()),
+        "decision.evaluate" => to_value(decision::evaluate(
+            from_params::<DecisionEvaluateParams>(params)?,
+        )?),
+        "scheduler.acquire" => {
+            let acquire = from_params::<AcquireParams>(params)?;
+            let intent_key = format!("lease.acquire:{request_id}");
+            state.effect_journal.append(EffectJournalAppendParams {
+                record_id: None,
+                kind: "lease.acquire".into(),
+                state: nd_runtime::effect_journal::EffectState::Intent,
+                company_id: acquire.company_id.clone(),
+                project_id: acquire.project_id.clone(),
+                task_id: acquire.task_id.clone(),
+                run_id: acquire.run_id.clone(),
+                resource_id: acquire.permit_id.clone(),
+                idempotency_key: Some(intent_key.clone()),
+                data: Some(json!({ "kind": acquire.kind, "pools": acquire.pools })),
+            })?;
+            match state.scheduler.acquire(acquire) {
+                Ok(result) => {
+                    state.effect_journal.append(EffectJournalAppendParams {
+                        record_id: None,
+                        kind: "lease.acquire".into(),
+                        state: if result.granted {
+                            nd_runtime::effect_journal::EffectState::Complete
+                        } else {
+                            nd_runtime::effect_journal::EffectState::Failed
+                        },
+                        company_id: result.permit.as_ref().and_then(|permit| permit.company_id.clone()),
+                        project_id: result.permit.as_ref().and_then(|permit| permit.project_id.clone()),
+                        task_id: result.permit.as_ref().and_then(|permit| permit.task_id.clone()),
+                        run_id: result.permit.as_ref().and_then(|permit| permit.run_id.clone()),
+                        resource_id: result.permit.as_ref().map(|permit| permit.id.clone()),
+                        idempotency_key: Some(intent_key),
+                        data: Some(json!({ "granted": result.granted, "reason": result.reason })),
+                    })?;
+                    to_value(result)
+                }
+                Err(error) => {
+                    let _ = state.effect_journal.append(EffectJournalAppendParams {
+                        record_id: None,
+                        kind: "lease.acquire".into(),
+                        state: nd_runtime::effect_journal::EffectState::Failed,
+                        company_id: None,
+                        project_id: None,
+                        task_id: None,
+                        run_id: None,
+                        resource_id: None,
+                        idempotency_key: Some(intent_key),
+                        data: Some(json!({ "error": format!("{error:#}") })),
+                    });
+                    Err(error)
+                }
+            }
+        },
         "scheduler.bind" => to_value(state.scheduler.bind(from_params::<BindParams>(params)?)?),
         "scheduler.heartbeat" => to_value(state.scheduler.heartbeat(from_params(params)?)?),
         "scheduler.release" => {
             let params = from_params::<ReleaseParams>(params)?;
+            let key = format!("lease.release:{request_id}");
+            state.effect_journal.append(EffectJournalAppendParams {
+                record_id: None,
+                kind: "lease.release".into(),
+                state: nd_runtime::effect_journal::EffectState::Intent,
+                company_id: None,
+                project_id: None,
+                task_id: None,
+                run_id: None,
+                resource_id: Some(params.permit_id.clone()),
+                idempotency_key: Some(key.clone()),
+                data: None,
+            })?;
             state.processes.cancel_permit(&params.permit_id);
             let released = state.scheduler.release(params)?;
+            state.effect_journal.append(EffectJournalAppendParams {
+                record_id: None,
+                kind: "lease.release".into(),
+                state: nd_runtime::effect_journal::EffectState::Complete,
+                company_id: None,
+                project_id: None,
+                task_id: None,
+                run_id: None,
+                resource_id: None,
+                idempotency_key: Some(key),
+                data: Some(json!({ "released": released })),
+            })?;
             Ok(json!({ "released": released }))
         }
         "scheduler.snapshot" => to_value(state.scheduler.snapshot()?),
