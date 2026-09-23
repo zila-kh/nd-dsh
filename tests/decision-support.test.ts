@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { DecisionSupportService, HttpDecisionProvider } from '../src/main/organization/decision-support.js'
+import { createDecisionSupportFromEnv } from '../src/main/organization/decision-support-config.js'
 import { formatDecisionSupportForReviewer, type DecisionProvider, type DecisionProviderResult } from '../src/main/organization/decision-support-contract.js'
 
 function provider(id: string, confidence: number): DecisionProvider {
@@ -120,6 +121,34 @@ describe('decision support cascade', () => {
 
     expect(result.model).toBe('english')
     expect(result.minimumConfidence).toBe(0.9)
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses Jev bearer auth and stable alias by default', async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe('https://api.typesafe.ai/v1/systemone')
+      expect((init?.headers as Record<string, string>)?.authorization).toBe('Bearer secret')
+      expect(JSON.parse(String(init?.body))).toMatchObject({ model: 'jev-latest' })
+      return new Response(JSON.stringify({
+        model: 'jev-1.13.0',
+        answers: {
+          review_route: {
+            type: 'choice',
+            choice: 'standard_review',
+            probabilities: { standard_review: 0.9, deep_review: 0.1 },
+            confidence: 0.9,
+          },
+        },
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    const service = createDecisionSupportFromEnv({
+      ND_DECISION_SUPPORT_MODE: 'assist',
+      TYPESAFE_API_KEY: 'secret',
+    }, fetchImpl as typeof fetch)
+
+    const receipt = await service?.reviewAssist(input)
+
+    expect(receipt?.selectedProvider).toBe('jev')
     expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
 
