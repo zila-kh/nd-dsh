@@ -3,6 +3,7 @@ export interface SessionJournalEnvelope {
   seq: number
   time?: number
   data?: unknown
+  surfaceOp?: unknown
 }
 
 export interface SessionJournalStore {
@@ -49,5 +50,6 @@ function cloneEnvelope(event: SessionJournalEnvelope): SessionJournalEnvelope {
     seq: event.seq,
     ...(event.time === undefined ? {} : { time: event.time }),
     ...(event.data === undefined ? {} : { data: structuredClone(event.data) }),
+    ...(event.surfaceOp === undefined ? {} : { surfaceOp: structuredClone(event.surfaceOp) }),
   }
 }
