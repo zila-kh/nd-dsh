@@ -3,11 +3,11 @@
 > Priority: P1
 > Owner: ND browser/runtime
 > Status: todo
-> Depends on: PR #32, 0021
+> Depends on: Browser Companion merged in `main@9e0fcc5` via PR #32, 0021
 
 ## Objective
 
-Adapt the approved Browser Companion implementation behind BrowserTarget so agents
+Adapt the merged Browser Companion implementation behind BrowserTarget so agents
 use the same API for existing Chrome and the built-in browser.
 
 ## Scope
