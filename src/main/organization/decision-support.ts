@@ -14,7 +14,7 @@ import {
 interface HttpDecisionProviderOptions {
   id: string
   endpoint: string
-  model: string
+  model?: string
   headers?: Record<string, string>
   timeoutMs?: number
   fetchImpl?: typeof fetch
@@ -23,7 +23,7 @@ interface HttpDecisionProviderOptions {
 export class HttpDecisionProvider implements DecisionProvider {
   readonly id: string
   private readonly endpoint: string
-  private readonly model: string
+  private readonly model?: string
   private readonly headers: Record<string, string>
   private readonly timeoutMs: number
   private readonly fetchImpl: typeof fetch
@@ -45,7 +45,7 @@ export class HttpDecisionProvider implements DecisionProvider {
       const response = await this.fetchImpl(this.endpoint, {
         method: 'POST',
         headers: { 'content-type': 'application/json', ...this.headers },
-        body: JSON.stringify({ state, model: this.model, questions }),
+        body: JSON.stringify({ state, ...(this.model ? { model: this.model } : {}), questions }),
         signal: controller.signal,
       })
       if (!response.ok) throw new Error(`${this.id} decision request failed with HTTP ${response.status}`)
@@ -53,7 +53,7 @@ export class HttpDecisionProvider implements DecisionProvider {
       const answers = parseAnswers(payload.answers)
       return {
         provider: this.id,
-        model: typeof payload.model === 'string' && payload.model ? payload.model : this.model,
+        model: typeof payload.model === 'string' && payload.model ? payload.model : this.model ?? 'provider-default',
         answers,
         latencyMs: Date.now() - startedAt,
         minimumConfidence: Math.min(...Object.values(answers).map(answerConfidence)),
@@ -92,7 +92,7 @@ export class DecisionSupportService {
 
       if (this.mode === 'shadow') continue
       if (!attempt.ok || !attempt.result) {
-        escalated = index < this.providers.length - 1
+        escalated ||= index < this.providers.length - 1
         continue
       }
 
@@ -101,7 +101,7 @@ export class DecisionSupportService {
         break
       }
 
-      escalated = index < this.providers.length - 1
+      escalated ||= index < this.providers.length - 1
     }
 
     return {
