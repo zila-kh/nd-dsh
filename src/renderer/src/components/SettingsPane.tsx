@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import type { AppInfo, BrowserState, HarnessStatus, SavedWorkspace, ThemeMode, ThemeState, WorkspaceRegistryView, WorkspaceState } from '../../../shared/contracts'
 import type { BrowserCompanionState } from '../../../shared/browser-companion'
-import type { BrowserPlatformState } from '../../../shared/browser-platform'
+import type { BrowserHistoryEntry, BrowserPlatformState } from '../../../shared/browser-platform'
 import { MonitorIcon, MoonIcon, SunIcon } from './Icons'
 import { BridgePill } from './bridge-pill'
 import { CapabilitySettings } from './CapabilitySettings'
@@ -93,6 +93,7 @@ export function SettingsPane({
   const [workspaceToRemove, setWorkspaceToRemove] = useState<SavedWorkspace | null>(null)
   const [browserCompanion, setBrowserCompanion] = useState<BrowserCompanionState | null>(null)
   const [browserPlatform, setBrowserPlatform] = useState<BrowserPlatformState | null>(null)
+  const [browserHistory, setBrowserHistory] = useState<BrowserHistoryEntry[]>([])
   const [credentialOrigin, setCredentialOrigin] = useState('')
   const [credentialUsername, setCredentialUsername] = useState('')
   const [credentialPassword, setCredentialPassword] = useState('')
@@ -130,8 +131,19 @@ export function SettingsPane({
 
   useEffect(() => {
     let mounted = true
-    void window.ndDsh.browserPlatform.state().then((state) => { if (mounted) setBrowserPlatform(state) }).catch(() => undefined)
-    const dispose = window.ndDsh.browserPlatform.onChanged((state) => { if (mounted) setBrowserPlatform(state) })
+    const refreshHistory = (): void => {
+      void window.ndDsh.browserPlatform.history('builtin')
+        .then((history) => { if (mounted) setBrowserHistory(history) })
+        .catch(() => undefined)
+    }
+    void window.ndDsh.browserPlatform.state().then((state) => {
+      if (mounted) setBrowserPlatform(state)
+      refreshHistory()
+    }).catch(() => undefined)
+    const dispose = window.ndDsh.browserPlatform.onChanged((state) => {
+      if (mounted) setBrowserPlatform(state)
+      refreshHistory()
+    })
     return () => {
       mounted = false
       dispose()
@@ -469,7 +481,39 @@ export function SettingsPane({
                                 void window.ndDsh.browserPlatform.cancelDownload(download.id)
                                   .catch((cause) => onError(errorMessage(cause)))
                               }}>Cancel</SettingsButton>
-                            ) : <StatusChip good={download.state === 'completed'}>{download.state}</StatusChip>}
+                            ) : (
+                              <div className="flex shrink-0 items-center gap-1.5">
+                                <StatusChip good={download.state === 'completed'}>{download.state}</StatusChip>
+                                {download.state === 'completed' ? (
+                                  <>
+                                    <SettingsButton onClick={() => {
+                                      void window.ndDsh.browserPlatform.openDownload(download.id)
+                                        .catch((cause) => onError(errorMessage(cause)))
+                                    }}>Open</SettingsButton>
+                                    <SettingsButton onClick={() => {
+                                      void window.ndDsh.browserPlatform.revealDownload(download.id)
+                                        .catch((cause) => onError(errorMessage(cause)))
+                                    }}>Reveal</SettingsButton>
+                                  </>
+                                ) : null}
+                              </div>
+                            )}
+                          </SettingsRow>
+                        ))}
+                        <SettingsRow>
+                          <div className={rowStack}>
+                            <strong className={rowTitle}>History</strong>
+                            <span className={rowDesc}>Persistent ND browser navigation metadata; page contents and credentials are not copied into history.</span>
+                          </div>
+                          <span className={rowValueText}>{browserHistory.length}</span>
+                        </SettingsRow>
+                        {browserHistory.slice(0, 8).map((entry) => (
+                          <SettingsRow key={entry.id}>
+                            <div className={rowStack}>
+                              <strong className={rowTitle}>{entry.title || entry.url}</strong>
+                              <span className={rowDesc}>{entry.url}</span>
+                            </div>
+                            <span className={rowValueText}>{new Date(entry.visitedAt).toLocaleString()}</span>
                           </SettingsRow>
                         ))}
                         <SettingsRow>
@@ -571,10 +615,16 @@ export function SettingsPane({
                               <strong className={rowTitle}>{credential.username}</strong>
                               <span className={rowDesc}>{credential.origin}</span>
                             </div>
-                            <SettingsButton onClick={() => {
-                              void window.ndDsh.browserPlatform.removeCredential(credential.id)
-                                .catch((cause) => onError(errorMessage(cause)))
-                            }}>Remove</SettingsButton>
+                            <div className="flex shrink-0 items-center gap-1.5">
+                              <SettingsButton onClick={() => {
+                                void window.ndDsh.browserPlatform.autofillCredential(credential.id, 'builtin', browser?.activeTabId)
+                                  .catch((cause) => onError(errorMessage(cause)))
+                              }}>Fill active tab</SettingsButton>
+                              <SettingsButton onClick={() => {
+                                void window.ndDsh.browserPlatform.removeCredential(credential.id)
+                                  .catch((cause) => onError(errorMessage(cause)))
+                              }}>Remove</SettingsButton>
+                            </div>
                           </SettingsRow>
                         ))}
                       </div>
