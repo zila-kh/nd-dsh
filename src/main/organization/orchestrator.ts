@@ -108,6 +108,10 @@ export class OrganizationOrchestrator {
     taskWorktrees?: TaskWorktreeManager,
     private readonly core?: Pick<CoreClient, 'request'>,
     private readonly verificationRuntime?: VerificationProcessRuntime,
+    private readonly browserAccess?: {
+      issueSessionAccess(sessionId: string): string
+      revokeSessionAccess(sessionId: string): void
+    },
     private readonly decisionSupport?: DecisionSupportService,
   ) {
     this.taskWorktrees = taskWorktrees ?? new TaskWorktreeManager()
@@ -153,7 +157,8 @@ export class OrganizationOrchestrator {
     const run = await this.store.beginRun('pm-plan', context.company.id, projectId, sessionId)
     this.lastProgressAt.set(sessionId, run.startedAt)
     try {
-      await this.harness.run(pmPrompt(context), { sessionId, ...modelOpts })
+      const prompt = appendBrowserAccess(pmPrompt(context), sessionId, this.browserAccess)
+      await this.harness.run(prompt, { sessionId, ...modelOpts })
     } catch (cause) {
       const active = await this.store.runBySession(sessionId)
       if (active) await this.store.completeRun(run.id, undefined, errorMessage(cause)).catch(() => undefined)
@@ -290,8 +295,9 @@ export class OrganizationOrchestrator {
 
     try {
       await this.store.markExecution(context.task.id, target.sessionId)
-      if (this.engineRuns) await this.engineRuns.run(prompt, { sessionId: target.sessionId, ...modelOpts })
-      else await this.harness.run(prompt, { sessionId: target.sessionId, ...modelOpts })
+      const browserPrompt = appendBrowserAccess(prompt, target.sessionId, this.browserAccess)
+      if (this.engineRuns) await this.engineRuns.run(browserPrompt, { sessionId: target.sessionId, ...modelOpts })
+      else await this.harness.run(browserPrompt, { sessionId: target.sessionId, ...modelOpts })
     } catch (cause) {
       const message = errorMessage(cause)
       const queued = await this.handleExecutionFailure(run, message)
@@ -522,7 +528,12 @@ export class OrganizationOrchestrator {
       })
     }
     try {
-      await this.harness.run(reviewPrompt(context.task, context, taskWorktree, formatDecisionSupportForReviewer(decisionSupport)), { sessionId, ...modelOpts })
+      const prompt = appendBrowserAccess(
+        reviewPrompt(context.task, context, taskWorktree, formatDecisionSupportForReviewer(decisionSupport)),
+        sessionId,
+        this.browserAccess,
+      )
+      await this.harness.run(prompt, { sessionId, ...modelOpts })
     } catch (cause) {
       const active = await this.store.runBySession(sessionId)
       if (active) {
@@ -901,7 +912,7 @@ export class OrganizationOrchestrator {
       if (passed) {
         const checkpoint = this.reviewWorktrees.get(sessionId)
         if (checkpoint) {
-          const integrationKey = `integration:${taskId}:${sessionId}`
+          const integrationKey = `integration:${taskId}:${reviewRunId}`
           try {
             await this.taskWorktrees.assertUnchanged(checkpoint.worktree, checkpoint.head)
             await this.journalEffect({
@@ -920,7 +931,7 @@ export class OrganizationOrchestrator {
               companyId: context.company.id,
               projectId: context.project.id,
               taskId,
-              runId: sessionId,
+              runId: reviewRunId,
               resourceId: integrated.head,
               idempotencyKey: integrationKey,
             })
@@ -1265,6 +1276,7 @@ export class OrganizationOrchestrator {
   }
 
   private cleanupSession(sessionId: string): void {
+    this.browserAccess?.revokeSessionAccess(sessionId)
     void this.executionCoordinator?.releaseSession(sessionId).catch((error) => {
       console.warn('Runtime permit release failed:', error instanceof Error ? error.message : String(error))
     })
@@ -1350,6 +1362,16 @@ function receipt(run: OrganizationRun): OrganizationRunReceipt {
     ...(run.checkpointCommit ? { checkpointCommit: run.checkpointCommit } : {}),
     ...(run.runtimePermitId ? { runtimePermitId: run.runtimePermitId } : {}),
   }
+}
+
+function appendBrowserAccess(
+  prompt: string,
+  sessionId: string,
+  browserAccess: { issueSessionAccess(sessionId: string): string } | undefined,
+): string {
+  if (!browserAccess) return prompt
+  const token = browserAccess.issueSessionAccess(sessionId)
+  return `${prompt}\n\n<nd-browser-access>\nOpaque browser access token for this ND-owned session: ${token}\nPass this exact token as accessToken on every nd_browser_call for this run. Do not infer or supply company/project/task ids yourself, do not reuse it in another session, and do not expose it in user-facing output.\n</nd-browser-access>`
 }
 
 function providerRouteKey(provider: string, model: string): string {
