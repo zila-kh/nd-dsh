@@ -69,7 +69,7 @@ export class BrowserPolicyService {
 
   async authorize(
     context: BrowserActionContext,
-    input: Omit<BrowserActionEnvelope, 'id' | 'createdAt' | 'scope'> & { action?: BrowserNormalizedAction; detail?: string },
+    input: Omit<BrowserActionEnvelope, 'id' | 'createdAt' | 'scope' | 'action'> & { action?: BrowserNormalizedAction; detail?: string },
   ): Promise<{ envelope: BrowserActionEnvelope; decision: BrowserActionReceipt['decision'] }> {
     const scope = await this.trustedScope(context)
     const action = input.action ?? classifyBrowserAction(input.operation, input.detail)
