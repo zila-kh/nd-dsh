@@ -170,6 +170,42 @@ export class BrowserTargetRouter {
       this.onChanged?.()
       return result
     }
+    if (method === 'browser.downloads') {
+      const targetId = await this.resolveTargetId(params)
+      if (targetId !== 'builtin') throw new Error('Download state is available only for the ND built-in browser')
+      const descriptor = await this.builtin.descriptor()
+      return this.runAction(context, {
+        operation: 'browser.downloads',
+        targetId,
+        profileId: descriptor.profileId,
+      }, async () => this.browser.listDownloads())
+    }
+    if (method === 'browser.cancelDownload') {
+      this.requireAgentSession(context, method)
+      const targetId = await this.resolveTargetId(params)
+      if (targetId !== 'builtin') throw new Error('Download cancellation is available only for the ND built-in browser')
+      const descriptor = await this.builtin.descriptor()
+      const downloadId = requiredString(params.downloadId, 'downloadId')
+      return this.runAction(context, {
+        operation: 'browser.cancelDownload',
+        action: 'file.download',
+        targetId,
+        profileId: descriptor.profileId,
+        detail: downloadId,
+      }, async () => ({ canceled: this.browser.cancelDownload(downloadId) }))
+    }
+    if (method === 'browser.credentials') {
+      this.requireAgentSession(context, method)
+      const targetId = await this.resolveTargetId(params)
+      if (targetId !== 'builtin') throw new Error('ND credential metadata is available only for the built-in browser')
+      const descriptor = await this.builtin.descriptor()
+      return this.runAction(context, {
+        operation: 'browser.credentials',
+        action: 'credential.use',
+        targetId,
+        profileId: descriptor.profileId,
+      }, () => this.credentials.list())
+    }
     if (method === 'browser.history') { 
       this.requireAgentSession(context, method)
       const targetId = await this.resolveTargetId(params)
