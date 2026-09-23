@@ -289,7 +289,9 @@ mod tests {
         store
             .append(SessionJournalAppendParams {
                 session_id: "s1".into(),
-                events: (1..=20).map(|seq| envelope(seq, "0123456789abcdef")).collect(),
+                events: (1..=20)
+                    .map(|seq| envelope(seq, "0123456789abcdef"))
+                    .collect(),
                 max_events: None,
                 max_bytes: None,
             })

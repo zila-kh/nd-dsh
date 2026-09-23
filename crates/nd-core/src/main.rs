@@ -26,13 +26,13 @@ use metrics::MetricsRegistry;
 use process::{CancelParams, CloseStdinParams, ProcessManager, SpawnParams, WriteParams};
 use protocol::{PROTOCOL_VERSION, ProtocolWriter, read_request};
 use scheduler::{BindParams, ReleaseParams, Scheduler};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use serde_json::{Value, json};
 use session_journal::{
     DEFAULT_MAX_BYTES_PER_SESSION, DEFAULT_MAX_EVENTS_PER_SESSION, SessionJournalAppendParams,
     SessionJournalSessionParams, SessionJournalStore, SessionJournalTailParams,
 };
-use serde::Serialize;
-use serde::de::DeserializeOwned;
-use serde_json::{Value, json};
 use std::io::BufReader;
 use std::sync::Arc;
 use terminal::{
