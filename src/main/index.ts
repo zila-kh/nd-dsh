@@ -211,6 +211,9 @@ async function createWindow(cdpPort: number): Promise<void> {
   const externalElements = new ExternalElementStage()
   const recentPicks = new RecentPickStore()
   const organizationStore = new OrganizationStore(join(userData, 'organization.json'))
+  const browserPlatform = new BrowserPlatformService(browser, browserCompanion, organizationStore, userData)
+  await browserPlatform.initialize()
+  activeBrowserPlatform = browserPlatform
   const executionCoordinator = new ExecutionCoordinator(core)
   activeExecutionCoordinator = executionCoordinator
   // Core RPCs are issued deep inside the organization work that owns them, so
@@ -276,6 +279,7 @@ async function createWindow(cdpPort: number): Promise<void> {
     log: (line) => console.warn(line),
   }, zcodeEngine, piEngine, cursorEngine, claudeEngine, engineSpawn, directEngineJournal)
   activeEngineRouter = engineRouter
+  engineRouter.setBrowserAccessProvider(browserPlatform)
   const projectWorkspace = new ProjectWorkspaceCoordinator(
     organizationStore,
     workspace,
@@ -328,14 +332,19 @@ async function createWindow(cdpPort: number): Promise<void> {
   // engine router admits them by the exact roots ND created — never by a path
   // shape a caller could construct.
   engineRouter.setWorktreeGuard((cwd) => taskWorktrees.ownsRoot(cwd))
-  const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter, projectRuntime, capabilities, executionCoordinator, taskWorktrees, core, { spawnProcess: unscopedCoreSpawn, stopProcess: stopCoreManagedChildProcess })
+  const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter, projectRuntime, capabilities, executionCoordinator, taskWorktrees, core, { spawnProcess: unscopedCoreSpawn, stopProcess: stopCoreManagedChildProcess }, browserPlatform)
   const approvalGate = new OrganizationApprovalGate(organizationStore, harness)
   const qa = new QaService()
   qa.setProjectRoot(workspace.state().root)
   const disposeIpc = registerIpc({ window, preloadPath: preload, browser, dshSurface, engines, engineRouter, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, qa, sessionArchive, usageLedger, capabilities, organizationStore })
   const disposeBrowserCompanionIpc = registerBrowserCompanionIpc(window, browserCompanion)
+  const disposeBrowserPlatformIpc = registerBrowserPlatformIpc(window, browserPlatform)
+  browserPlatform.setListener((state) => {
+    if (!window.isDestroyed()) window.webContents.send('browser-platform:changed-event', state)
+  })
   browserCompanion.setListener((state) => {
     if (!window.isDestroyed()) window.webContents.send('browser-companion:changed-event', state)
+    void browserPlatform.notifyCompanionChanged()
   })
   const disposeTerminalIpc = registerTerminalIpc(window, terminalManager)
   const disposeDesignIpc = registerDesignIpc(window, design, ndPencil)
@@ -401,6 +410,7 @@ async function createWindow(cdpPort: number): Promise<void> {
 
   browser.setStateListener((state) => {
     if (!window.isDestroyed()) window.webContents.send(IPC.browserStateEvent, state)
+    browserPlatform.notifyBrowserChanged()
   })
   ndPencil.setStateListener((state) => {
     if (!window.isDestroyed()) window.webContents.send(DESIGN_IPC.freeformChanged, state)
@@ -603,6 +613,8 @@ async function createWindow(cdpPort: number): Promise<void> {
     workspace.setStateListener(undefined)
     ndPencil.setStateListener(undefined)
     disposeOrganizationIpc()
+    disposeBrowserPlatformIpc()
+    browserPlatform.setListener(undefined)
     disposeBrowserCompanionIpc()
     browserCompanion.setListener(undefined)
     disposeDesignIpc()
@@ -616,6 +628,7 @@ async function createWindow(cdpPort: number): Promise<void> {
     if (activeNdPencil === ndPencil) activeNdPencil = undefined
     void ndPencil.destroy()
     if (activeEngineRouter === engineRouter) { activeEngineRouter = undefined; beginEngineRouterClose(engineRouter) }
+    if (activeBrowserPlatform === browserPlatform) { activeBrowserPlatform = undefined; beginBrowserPlatformClose(browserPlatform) }
     if (activeBrowser === browser) { activeBrowser = undefined; beginBrowserClose(browser) }
     if (activeBrowserCompanion === browserCompanion) { activeBrowserCompanion = undefined; beginBrowserCompanionClose(browserCompanion) }
     dshSurface.destroy()
@@ -662,6 +675,11 @@ app.on('before-quit', (event) => {
     const harness = activeHarness
     activeHarness = undefined
     beginHarnessClose(harness)
+  }
+  if (activeBrowserPlatform) {
+    const browserPlatform = activeBrowserPlatform
+    activeBrowserPlatform = undefined
+    beginBrowserPlatformClose(browserPlatform)
   }
   if (activeBrowser) {
     const browser = activeBrowser
@@ -793,6 +811,10 @@ app.on('window-all-closed', () => {
 
 function beginBrowserClose(browser: BrowserController): void {
   trackClose(browser.destroy().catch((error) => console.error('Failed to close the browser integration cleanly:', error)))
+}
+
+function beginBrowserPlatformClose(browserPlatform: BrowserPlatformService): void {
+  trackClose(browserPlatform.close().catch((error) => console.error('Failed to close the unified browser platform cleanly:', error)))
 }
 
 function beginBrowserCompanionClose(browserCompanion: BrowserCompanionService): void {
