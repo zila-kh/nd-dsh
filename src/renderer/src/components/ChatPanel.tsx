@@ -24,6 +24,7 @@ import type { ProjectPlanInput } from '../../../shared/organization'
 import type { AskQuestion, ThreadEntry, TodoItem } from '../lib/types'
 import { FOLDER_ACCENT, SKILL_ACCENT, fileExtensionOf, fileAccent } from '../lib/file-accents'
 import { applyMention, detectMentionTrigger } from '../../../shared/mentions'
+import type { BrowserPlatformState, BrowserSelection } from '../../../shared/browser-platform'
 import { openSkillPicker, parseSkillCatalog, skillSelectionScope, type SkillSuggestion } from '../../../shared/skill-catalog'
 import { isVisionModel, resolveModelSelectionDisplay, type ModelCatalogState } from '../lib/model-selection'
 import { archiveableVisibleSessionIds } from '../../../shared/session-archive-selection'
@@ -108,13 +109,14 @@ const ZCODE_MODEL_CONFIG_MISSING = /Model config is missing|explicit model provi
 
 
 interface MentionItem {
-  kind: 'skill' | 'file'
+  kind: 'skill' | 'file' | 'browser'
   insert: string
   label: string
   tag: string
   hover: string
   accent: string
   directory: boolean
+  browserSelection?: BrowserSelection
 }
 
 const MENTION_MENU_LIMIT = 12
@@ -153,6 +155,7 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
   const [skillItems, setSkillItems] = useState<SkillSuggestion[]>([])
   const [skillsState, setSkillsState] = useState<'idle' | 'loading' | 'ready' | 'unavailable'>('idle')
   const [fileItems, setFileItems] = useState<WorkspaceSuggestion[]>([])
+  const [browserPlatform, setBrowserPlatform] = useState<BrowserPlatformState | null>(null)
   const [elementChips, setElementChips] = useState<ExternalElementAttachmentView[]>([])
   // Catalog-driven engine support: non-harness engines (e.g. the direct Codex
   // CLI) appear as extra "New … chat" actions and extra sidebar sections.
@@ -628,6 +631,20 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
     onExternalPromptConsumed?.()
   }, [externalPrompt, onExternalPromptConsumed])
 
+  useEffect(() => {
+    let mounted = true
+    void window.ndDsh.browserPlatform.state()
+      .then((value) => { if (mounted) setBrowserPlatform(value) })
+      .catch(() => undefined)
+    const dispose = window.ndDsh.browserPlatform.onChanged((value) => {
+      if (mounted) setBrowserPlatform(value)
+    })
+    return () => {
+      mounted = false
+      dispose()
+    }
+  }, [])
+
   // Mention triggers: '/' lists ND-owned skills scoped to the active project,
   // '@' lists workspace files. Escape dismisses the current token until it
   // changes, so the menu does not fight the typist.
@@ -696,18 +713,61 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
           directory: false,
         }))
     }
-    return fileItems
-      .slice(0, MENTION_MENU_LIMIT)
-      .map((file) => ({
-        kind: 'file' as const,
-        insert: `@${file.relativePath}`,
-        label: file.relativePath,
-        tag: file.kind === 'directory' ? 'FOLDER' : fileMentionTag(file.relativePath),
-        hover: `@${file.relativePath} · ${file.kind === 'directory' ? 'directory mention' : 'file mention'}`,
-        accent: file.kind === 'directory' ? FOLDER_ACCENT : fileAccent(file.relativePath),
-        directory: file.kind === 'directory',
-      }))
-  }, [mentionTrigger, skillItems, fileItems, onHarnessThread, skillsOwner, skillsScope, skillsState])
+    const needle = mentionTrigger.query.toLowerCase()
+    const browserItems: MentionItem[] = []
+    if ('browser'.includes(needle) || needle === '') {
+      browserItems.push({
+        kind: 'browser',
+        insert: '@Browser',
+        label: 'Browser',
+        tag: 'ND',
+        hover: '@Browser · use the ND built-in persistent browser profile',
+        accent: '#3b82f6',
+        directory: false,
+        browserSelection: { mode: 'target', targetId: 'builtin' },
+      })
+    }
+    for (const target of browserPlatform?.targets ?? []) {
+      if (target.kind !== 'companion') continue
+      const token = `Chrome:${target.profileLabel.replace(/\s+/g, '-')}`
+      if (!token.toLowerCase().includes(needle) && !target.profileLabel.toLowerCase().includes(needle)) continue
+      browserItems.push({
+        kind: 'browser',
+        insert: `@${token}`,
+        label: `Chrome · ${target.profileLabel}`,
+        tag: 'CHROME',
+        hover: `@Chrome · explicit existing-profile browser target ${target.profileLabel}`,
+        accent: '#3b82f6',
+        directory: false,
+        browserSelection: { mode: 'target', targetId: target.id },
+      })
+    }
+    for (const tab of browserPlatform?.tabs ?? []) {
+      const title = tab.title || tab.url || tab.id
+      const token = `Tab:${title.replace(/\s+/g, '-').slice(0, 64)}`
+      if (!token.toLowerCase().includes(needle) && !title.toLowerCase().includes(needle)) continue
+      browserItems.push({
+        kind: 'browser',
+        insert: `@${token}`,
+        label: `Tab · ${title}`,
+        tag: 'TAB',
+        hover: `@Tab · bind browser work to ${title}`,
+        accent: '#3b82f6',
+        directory: false,
+        browserSelection: { mode: 'tab', targetId: tab.targetId, tabId: tab.id },
+      })
+    }
+    const fileMentions = fileItems.map((file) => ({
+      kind: 'file' as const,
+      insert: `@${file.relativePath}`,
+      label: file.relativePath,
+      tag: file.kind === 'directory' ? 'FOLDER' : fileMentionTag(file.relativePath),
+      hover: `@${file.relativePath} · ${file.kind === 'directory' ? 'directory mention' : 'file mention'}`,
+      accent: file.kind === 'directory' ? FOLDER_ACCENT : fileAccent(file.relativePath),
+      directory: file.kind === 'directory',
+    }))
+    return [...browserItems, ...fileMentions].slice(0, MENTION_MENU_LIMIT)
+  }, [mentionTrigger, skillItems, fileItems, browserPlatform, onHarnessThread, skillsOwner, skillsScope, skillsState])
 
   useEffect(() => {
     setMentionIndex(0)
@@ -722,12 +782,15 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
       setComposerSkill(skill)
       selectedSkillScope.current = { owner: skillsScope, scope: skillCatalogScope, ...(skill?.selectionId ? { selectionId: skill.selectionId } : {}) }
     }
+    if (item.kind === 'browser' && item.browserSelection) {
+      void window.ndDsh.browserPlatform.select(item.browserSelection).catch((cause) => onError(cause instanceof Error ? cause.message : String(cause)))
+    }
     const next = applyMention(prompt, trigger, item.insert)
     setPrompt(next.value)
     setMentionCaret(next.caret)
     setMentionDismissed(null)
     requestAnimationFrame(() => textareaRef.current?.setSelectionRange(next.caret, next.caret))
-  }, [prompt, mentionCaret, skillsOwner, skillsScope, skillCatalogScope, skillItems])
+  }, [prompt, mentionCaret, skillsOwner, skillsScope, skillCatalogScope, skillItems, onError])
 
   // Opening a badge flyout must retire the mention popup: two popups over the
   // composer overlap and hide each other.
@@ -1666,7 +1729,7 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
                   void run()
                 }
               }}
-              placeholder="Ask the agent to work in this workspace — use @ for files and / for skills"
+              placeholder="Ask the agent to work here — @ files/browser targets, / skills"
               rows={1}
               className="max-h-[180px] w-full resize-none overflow-y-auto bg-transparent text-xs/[1.5] text-foreground outline-none placeholder:text-faint"
             />

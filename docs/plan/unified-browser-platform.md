@@ -1,10 +1,11 @@
 # Unified browser platform plan
 
-> Status: planning only
-> Branch: `feat/unified-browser-platform-plan`
+> Status: implementation complete — local validation/evidence pending
+> Planning branch: `feat/unified-browser-platform-plan`
+> Implementation branch: `feat/unified-browser-platform`
 > Base: `main@9e0fcc5`
 > Builds on: Browser Companion MVP merged via PR #32 (`main@9e0fcc5`)
-> Updated: 2026-09-23
+> Updated: 2026-09-24
 
 ## Objective
 
@@ -378,3 +379,23 @@ Planning is complete when:
 - no browser-platform implementation has been added to this documentation branch.
 
 Then implementation starts with task 0020 only.
+
+
+## Implementation result
+
+The 0020-0030 implementation scope is complete on
+`feat/unified-browser-platform`.
+
+The chosen runtime decision is **B**: retain Electron for the built-in browser
+with first-class extension support and an explicit compatibility ceiling. ND
+does not claim arbitrary Chrome Web Store parity.
+
+The implementation includes the common target router, real built-in tabs,
+Chrome Companion convergence, history/downloads/browser data, encrypted
+credential mediation, extension management, site tools, trusted leases/policy,
+target UX, focused tests and benchmark harnesses.
+
+The remaining gate is the local validation handoff: run the correctness suites,
+runtime spike, unified browser benchmark, real Chrome/native-host smoke,
+representative extension matrix, credential privacy checks and restart/recovery
+checks before merge/release claims.

@@ -154,10 +154,11 @@ browser action policy remains a follow-up requirement before enterprise claims.
 ## P1 — unified browser platform
 
 - Plan: [unified-browser-platform.md](plan/unified-browser-platform.md)
-- PRD: [0005-unified-browser-platform.md](prd/0005-unified-browser-platform.md) — proposed.
+- PRD: [0005-unified-browser-platform.md](prd/0005-unified-browser-platform.md) — **implementation complete; local validation/evidence pending**.
 - Planning branch: `feat/unified-browser-platform-plan`.
+- Implementation branch: `feat/unified-browser-platform`.
 - External-browser foundation: Browser Companion merged via PR #32 (`main@9e0fcc5`).
-- Task set: 0020-0030.
+- Task set: 0020-0030 — implementation complete; task 0030 local evidence handoff pending.
 
 Target product shape:
 
@@ -172,6 +173,8 @@ Target product shape:
 **Runtime gate:** task 0020 decides whether Electron can satisfy the required built-in browser baseline. Electron may remain only if the representative extension set and the rest of the browser requirements pass. If it cannot, ND will select a more Chromium-compatible embedded runtime behind the same BrowserTarget contract rather than dropping built-in extension support.
 
 ND must not claim "100% Chrome Web Store compatibility" until reproducible evidence proves that breadth. The product requirement is first-class built-in extensions plus an evidence-based compatibility level.
+
+**Implementation result:** Electron is retained under decision B with an explicit compatibility ceiling. The unified BrowserTarget/router, real built-in tabs, companion adapter, browser profile services, credential mediation, extension manager, site tools, trusted leases/policy, target UX, tests and benchmark harness are implemented. Merge/release claims remain blocked on the local correctness, real-Chrome, representative-extension and performance evidence handoff.
 
 ## Public Beta P1 — best-in-class AI development environment
 

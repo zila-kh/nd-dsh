@@ -2,7 +2,7 @@
 
 > Priority: P1
 > Owner: ND browser/tools
-> Status: todo
+> Status: done — implementation complete; runtime/site fixture validation pending
 > Depends on: 0021, 0022
 
 ## Objective
@@ -30,3 +30,13 @@ A site tool cannot grant itself additional ND capabilities or bypass policy.
 
 A fixture site exposing structured tools can be discovered and called from the
 built-in browser through the common BrowserTarget/tool route.
+
+## Implementation evidence
+
+- BrowserTarget exposes `discoverSiteTools` and `callSiteTool`.
+- built-in target discovers the current tab's model-context/site-tool surface.
+- calls remain tab/origin-bound and flow through unified browser policy.
+- site-tool results remain untrusted application data.
+- the unified browser benchmark includes fixture discovery/invocation timing.
+
+Local validation still needs the chosen runtime/site fixture evidence.

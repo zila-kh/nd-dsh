@@ -2,7 +2,7 @@
 
 > Priority: P1
 > Owner: ND browser/runtime
-> Status: todo
+> Status: done — implementation complete; real-Chrome validation pending
 > Depends on: Browser Companion merged in `main@9e0fcc5` via PR #32, 0021
 
 ## Objective
@@ -29,3 +29,15 @@ Do not weaken Chrome optional host permissions.
 
 An engine can switch between built-in and Chrome targets without changing tool
 vocabulary, and unsupported companion features are reported rather than invented.
+
+## Implementation evidence
+
+- `src/main/browser-platform/companion-browser-target.ts` adapts the merged
+  Browser Companion behind BrowserTarget.
+- target/profile/tab ids, semantic snapshots/actions, history navigation,
+  screenshots and capability advertisement are normalized.
+- Native Messaging and per-origin Chrome permission boundaries remain intact.
+- the unified router can switch between `builtin` and connected companion
+  targets without changing tool vocabulary.
+
+Real installed Chrome/native-host smoke remains a local validation gate.

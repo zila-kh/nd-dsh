@@ -30,21 +30,31 @@ const TOOLS = [
   },
   {
     name: 'nd_browser_call',
-    description: 'Call the built-in ND Browser Companion. Read methods include browser.connections, browser.tabs, browser.snapshot, and browser.screenshot. Use browser.attach to acquire a writable tab lease before browser.navigate/click/fill/press/scroll, and browser.detach when finished.',
+    description: 'Call ND unified browser capability across the built-in browser and explicitly connected Chrome profiles. Start with browser.targets/browser.tabs. Acquire browser.attach before mutations and pass its leaseId. Organization runs must pass their opaque accessToken on every call.',
     inputSchema: {
       type: 'object',
+      additionalProperties: true,
       properties: {
         method: { type: 'string' },
+        accessToken: { type: 'string' },
+        targetId: { type: 'string' },
         connectionId: { type: 'string' },
-        tabId: { type: 'number' },
+        mode: { type: 'string', enum: ['auto', 'target', 'tab'] },
+        tabId: { oneOf: [{ type: 'string' }, { type: 'number' }] },
         leaseId: { type: 'string' },
         ref: { type: 'string' },
         revision: { type: 'number' },
         url: { type: 'string' },
         text: { type: 'string' },
+        urlIncludes: { type: 'string' },
+        timeoutMs: { type: 'number' },
         key: { type: 'string' },
         deltaX: { type: 'number' },
-        deltaY: { type: 'number' }
+        deltaY: { type: 'number' },
+        credentialId: { type: 'string' },
+        downloadId: { type: 'string' },
+        name: { type: 'string' },
+        input: { type: 'object' }
       },
       required: ['method']
     },
@@ -116,7 +126,7 @@ async function runEntry(entry, args, label) {
 }
 
 const runProxy = (args) => runEntry(PROXY, args, 'ND extension proxy')
-const runBrowserProxy = (args) => runEntry(BROWSER_PROXY, args, 'ND browser companion')
+const runBrowserProxy = (args) => runEntry(BROWSER_PROXY, args, 'ND unified browser')
 
 async function dispatch(name, args) {
   if (name === 'nd_browser_call') {
