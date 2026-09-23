@@ -61,6 +61,14 @@ export function registerBrowserPlatformIpc(
   })
   handle(BROWSER_PLATFORM_IPC.removeCredential, (credentialId) =>
     service.removeCredential(asString(credentialId, 'Credential id', 512)))
+  handle(BROWSER_PLATFORM_IPC.setSitePermission, (origin, permission, effect) => {
+    if (effect !== 'allow' && effect !== 'deny') throw new Error('Browser permission effect must be allow or deny')
+    return service.setSitePermission(
+      asString(origin, 'Browser permission origin', 4_096),
+      asString(permission, 'Browser permission', 128),
+      effect,
+    )
+  })
   handle(BROWSER_PLATFORM_IPC.resolveApproval, (approvalId, allowed) =>
     service.resolveApproval(asString(approvalId, 'Browser approval id', 512), Boolean(allowed)))
 
