@@ -19,6 +19,8 @@ export interface ProjectRuntimeOptions {
   store: OrganizationStore
   now?: () => number
   spawnProcess?: typeof spawn
+  /** Teardown hook for the process owner. nd-core supplies whole-tree cancellation. */
+  stopProcess?: (child: ChildProcess) => Promise<void>
   fetchFn?: typeof fetch
   /**
    * ND-DSH's own renderer origin (dev server or packaged shell). Automatic
@@ -43,6 +45,7 @@ interface ResolvedTarget {
 export class ProjectRuntimeService {
   private readonly now: () => number
   private readonly spawnProcess: typeof spawn
+  private readonly stopProcess: (child: ChildProcess) => Promise<void>
   private readonly fetchFn: typeof fetch
   private readonly reservedOrigin: (() => string | undefined) | undefined
   private readonly onTargetReady: ((projectId: string, url: string) => void) | undefined
@@ -56,6 +59,7 @@ export class ProjectRuntimeService {
   constructor(private readonly options: ProjectRuntimeOptions) {
     this.now = options.now ?? Date.now
     this.spawnProcess = options.spawnProcess ?? spawn
+    this.stopProcess = options.stopProcess ?? killProcessTree
     this.fetchFn = options.fetchFn ?? fetch
     this.reservedOrigin = options.reservedOrigin
     this.onTargetReady = options.onTargetReady
@@ -138,11 +142,13 @@ export class ProjectRuntimeService {
     const logKey = projectId
     this.logs.set(logKey, '')
     this.appendLog(logKey, `$ ${command}\n`)
-    const child = this.spawnProcess(command, {
+    const shell = projectRuntimeShell(command)
+    const child = this.spawnProcess(shell.command, shell.args, {
       cwd: project.workspacePath,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
-      shell: true,
+      // Raw Node fallback uses a POSIX process group; nd-core ignores this flag
+      // because its supervisor already owns the whole descendant tree.
       detached: process.platform !== 'win32',
       env: runtimeEnvironment(target.port),
     })
@@ -317,7 +323,7 @@ export class ProjectRuntimeService {
       this.states.set(projectId, stopped)
       this.emit(stopped)
     }
-    await killProcessTree(child)
+    await this.stopProcess(child)
   }
 
   private appendLog(projectId: string, text: string): void {
@@ -340,6 +346,23 @@ export class ProjectRuntimeService {
   private emit(status: ProjectRuntimeStatus): void {
     this.listener?.(status)
   }
+}
+
+/**
+ * Resolve the user's configured start command through the platform shell
+ * explicitly. The production spawn path is nd-core, which accepts an executable
+ * plus argv rather than Node's `shell: true` option; spelling the shell out
+ * keeps pipes, redirects and package-manager commands compatible while moving
+ * process ownership out of Electron.
+ */
+function projectRuntimeShell(command: string): { command: string; args: string[] } {
+  if (process.platform === 'win32') {
+    return {
+      command: process.env.COMSPEC?.trim() || 'cmd.exe',
+      args: ['/d', '/s', '/c', command],
+    }
+  }
+  return { command: '/bin/sh', args: ['-c', command] }
 }
 
 function healthCheckPath(project: Project): string {
