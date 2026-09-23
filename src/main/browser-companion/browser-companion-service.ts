@@ -121,6 +121,15 @@ export class BrowserCompanionService {
     }
   }
 
+  async connectedConnections(): Promise<BrowserCompanionState['connections']> {
+    return (await this.connections.list()).filter((item) => item.connected)
+  }
+
+  async command(connectionId: string, method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+    const resolved = await this.resolveConnectionId(connectionId)
+    return this.requestBrowser(resolved, method, params)
+  }
+
   acquireLease(connectionId: string, tabId: number, ownerId: string, scope?: BrowserCompanionLeaseScope): BrowserTabLease {
     const lease = this.leases.acquire(connectionId, tabId, ownerId, scope)
     void this.emit()
