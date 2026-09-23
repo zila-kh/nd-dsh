@@ -650,6 +650,8 @@ const desktopApi: DesktopApi = {
     history: async () => [],
     clearBrowserData: async () => undefined,
     cancelDownload: async () => false,
+    openDownload: async () => false,
+    revealDownload: async () => false,
     installExtension: async () => null,
     setExtensionEnabled: async () => browserPlatform.extensions,
     removeExtension: async () => browserPlatform.extensions,
@@ -666,6 +668,19 @@ const desktopApi: DesktopApi = {
       browserPlatformEvents.emit(browserPlatform)
       return removed
     },
+    autofillCredential: async (credentialId) => {
+      const credential = browserPlatform.credentials.find((item) => item.id === credentialId)
+      if (!credential) throw new Error('Preview credential not found')
+      return { ok: true, credentialId, username: credential.username }
+    },
+    siteTools: async () => [{
+      name: 'preview.echo',
+      title: 'Preview echo',
+      description: 'UI-preview WebMCP fixture.',
+      inputSchema: { type: 'object' },
+      origin: 'http://localhost:3000',
+      annotations: { readOnlyHint: true, consequentialHint: false, untrustedContentHint: true },
+    }],
     setSitePermission: async (origin, permission, effect) => {
       const record = { origin: new URL(origin).origin, permission, effect, updatedAt: Date.now() }
       browserPlatform = { ...browserPlatform, sitePermissions: [record, ...browserPlatform.sitePermissions.filter((item) => item.origin !== record.origin || item.permission !== permission)] }
