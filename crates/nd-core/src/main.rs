@@ -271,40 +271,46 @@ fn dispatch(
         "scheduler.acquire" => {
             let acquire = from_params::<AcquireParams>(params)?;
             let intent_key = format!("lease.acquire:{request_id}");
-            state.effect_journal.append(EffectJournalAppendParams {
-                record_id: None,
-                kind: "lease.acquire".into(),
-                state: nd_runtime::effect_journal::EffectState::Intent,
-                company_id: acquire.company_id.clone(),
-                project_id: acquire.project_id.clone(),
-                task_id: acquire.task_id.clone(),
-                run_id: acquire.run_id.clone(),
-                resource_id: acquire.permit_id.clone(),
-                idempotency_key: Some(intent_key.clone()),
-                data: Some(json!({ "kind": acquire.kind.clone(), "pools": acquire.pools.clone() })),
-            })?;
+            let journal_enabled = state.effect_journal.stats().configured;
+            if journal_enabled {
+                state.effect_journal.append(EffectJournalAppendParams {
+                    record_id: None,
+                    kind: "lease.acquire".into(),
+                    state: nd_runtime::effect_journal::EffectState::Intent,
+                    company_id: acquire.company_id.clone(),
+                    project_id: acquire.project_id.clone(),
+                    task_id: acquire.task_id.clone(),
+                    run_id: acquire.run_id.clone(),
+                    resource_id: acquire.permit_id.clone(),
+                    idempotency_key: Some(intent_key.clone()),
+                    data: Some(json!({ "kind": acquire.kind.clone(), "pools": acquire.pools.clone() })),
+                })?;
+            }
             match state.scheduler.acquire(acquire) {
                 Ok(result) => {
-                    state.effect_journal.append(EffectJournalAppendParams {
-                        record_id: None,
-                        kind: "lease.acquire".into(),
-                        state: if result.granted {
-                            nd_runtime::effect_journal::EffectState::Complete
-                        } else {
-                            nd_runtime::effect_journal::EffectState::Failed
-                        },
-                        company_id: result.permit.as_ref().and_then(|permit| permit.company_id.clone()),
-                        project_id: result.permit.as_ref().and_then(|permit| permit.project_id.clone()),
-                        task_id: result.permit.as_ref().and_then(|permit| permit.task_id.clone()),
-                        run_id: result.permit.as_ref().and_then(|permit| permit.run_id.clone()),
-                        resource_id: result.permit.as_ref().map(|permit| permit.id.clone()),
-                        idempotency_key: Some(intent_key),
-                        data: Some(json!({ "granted": result.granted, "reason": result.reason.clone() })),
-                    })?;
+                    if journal_enabled {
+                        state.effect_journal.append(EffectJournalAppendParams {
+                            record_id: None,
+                            kind: "lease.acquire".into(),
+                            state: if result.granted {
+                                nd_runtime::effect_journal::EffectState::Complete
+                            } else {
+                                nd_runtime::effect_journal::EffectState::Failed
+                            },
+                            company_id: result.permit.as_ref().and_then(|permit| permit.company_id.clone()),
+                            project_id: result.permit.as_ref().and_then(|permit| permit.project_id.clone()),
+                            task_id: result.permit.as_ref().and_then(|permit| permit.task_id.clone()),
+                            run_id: result.permit.as_ref().and_then(|permit| permit.run_id.clone()),
+                            resource_id: result.permit.as_ref().map(|permit| permit.id.clone()),
+                            idempotency_key: Some(intent_key),
+                            data: Some(json!({ "granted": result.granted, "reason": result.reason.clone() })),
+                        })?;
+                    }
                     to_value(result)
                 }
                 Err(error) => {
-                    let _ = state.effect_journal.append(EffectJournalAppendParams {
+                    if journal_enabled {
+                        let _ = state.effect_journal.append(EffectJournalAppendParams {
                         record_id: None,
                         kind: "lease.acquire".into(),
                         state: nd_runtime::effect_journal::EffectState::Failed,
@@ -314,8 +320,9 @@ fn dispatch(
                         run_id: None,
                         resource_id: None,
                         idempotency_key: Some(intent_key),
-                        data: Some(json!({ "error": format!("{error:#}") })),
-                    });
+                            data: Some(json!({ "error": format!("{error:#}") })),
+                        });
+                    }
                     Err(error)
                 }
             }
@@ -325,7 +332,9 @@ fn dispatch(
         "scheduler.release" => {
             let params = from_params::<ReleaseParams>(params)?;
             let key = format!("lease.release:{request_id}");
-            state.effect_journal.append(EffectJournalAppendParams {
+            let journal_enabled = state.effect_journal.stats().configured;
+            if journal_enabled {
+                state.effect_journal.append(EffectJournalAppendParams {
                 record_id: None,
                 kind: "lease.release".into(),
                 state: nd_runtime::effect_journal::EffectState::Intent,
@@ -336,10 +345,12 @@ fn dispatch(
                 resource_id: Some(params.permit_id.clone()),
                 idempotency_key: Some(key.clone()),
                 data: None,
-            })?;
+                })?;
+            }
             state.processes.cancel_permit(&params.permit_id);
             let released = state.scheduler.release(params)?;
-            state.effect_journal.append(EffectJournalAppendParams {
+            if journal_enabled {
+                state.effect_journal.append(EffectJournalAppendParams {
                 record_id: None,
                 kind: "lease.release".into(),
                 state: nd_runtime::effect_journal::EffectState::Complete,
@@ -350,7 +361,8 @@ fn dispatch(
                 resource_id: None,
                 idempotency_key: Some(key),
                 data: Some(json!({ "released": released })),
-            })?;
+                })?;
+            }
             Ok(json!({ "released": released }))
         }
         "scheduler.snapshot" => to_value(state.scheduler.snapshot()?),
