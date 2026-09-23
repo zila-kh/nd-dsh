@@ -399,18 +399,32 @@ export class OrganizationOrchestrator {
           runId: run.id,
           idempotencyKey: integrationKey,
         })
-        const integrated = await this.taskWorktrees.integrate(context.project.workspacePath, context.task.id)
-        await this.journalEffect({
-          kind: 'integration',
-          state: 'complete',
-          companyId: context.company.id,
-          projectId: context.project.id,
-          taskId: context.task.id,
-          runId: run.id,
-          resourceId: integrated.head,
-          idempotencyKey: integrationKey,
-        })
-        await this.store.markIntegrated(context.task.id, integrated.head)
+        try {
+          const integrated = await this.taskWorktrees.integrate(context.project.workspacePath, context.task.id)
+          await this.journalEffect({
+            kind: 'integration',
+            state: 'complete',
+            companyId: context.company.id,
+            projectId: context.project.id,
+            taskId: context.task.id,
+            runId: run.id,
+            resourceId: integrated.head,
+            idempotencyKey: integrationKey,
+          })
+          await this.store.markIntegrated(context.task.id, integrated.head)
+        } catch (cause) {
+          await this.journalEffect({
+            kind: 'integration',
+            state: cause instanceof TaskIntegrationConflictError ? 'failed' : 'uncertain',
+            companyId: context.company.id,
+            projectId: context.project.id,
+            taskId: context.task.id,
+            runId: run.id,
+            idempotencyKey: integrationKey,
+            data: { error: errorMessage(cause) },
+          }).catch(() => undefined)
+          throw cause
+        }
       }
       await this.store.completeRun(run.id, output)
       if (workflow.has('review')) await this.store.markForReview(context.task.id, output)
@@ -753,18 +767,32 @@ export class OrganizationOrchestrator {
             runId: run.id,
             idempotencyKey: integrationKey,
           })
-          const integrated = await this.taskWorktrees.integrate(context.project.workspacePath, run.taskId)
-          await this.journalEffect({
-            kind: 'integration',
-            state: 'complete',
-            companyId: context.company.id,
-            projectId: context.project.id,
-            taskId: run.taskId,
-            runId: run.id,
-            resourceId: integrated.head,
-            idempotencyKey: integrationKey,
-          })
-          await this.store.markIntegrated(run.taskId, integrated.head)
+          try {
+            const integrated = await this.taskWorktrees.integrate(context.project.workspacePath, run.taskId)
+            await this.journalEffect({
+              kind: 'integration',
+              state: 'complete',
+              companyId: context.company.id,
+              projectId: context.project.id,
+              taskId: run.taskId,
+              runId: run.id,
+              resourceId: integrated.head,
+              idempotencyKey: integrationKey,
+            })
+            await this.store.markIntegrated(run.taskId, integrated.head)
+          } catch (cause) {
+            await this.journalEffect({
+              kind: 'integration',
+              state: cause instanceof TaskIntegrationConflictError ? 'failed' : 'uncertain',
+              companyId: context.company.id,
+              projectId: context.project.id,
+              taskId: run.taskId,
+              runId: run.id,
+              idempotencyKey: integrationKey,
+              data: { error: errorMessage(cause) },
+            }).catch(() => undefined)
+            throw cause
+          }
         }
         await this.store.completeRun(run.id, output)
         if (workflow.has('review')) await this.store.markForReview(run.taskId, output)
@@ -866,6 +894,8 @@ export class OrganizationOrchestrator {
       const issueText = review.issues?.length ? `\nIssues: ${review.issues.join('; ')}` : ''
       let summary = `${review.summary}${issueText}${formatDecisionSupportReceipt(this.decisionSupportReceipts.get(sessionId))}`
       const context = await this.store.taskContext(taskId)
+      const reviewRun = await this.store.runBySession(sessionId)
+      const reviewRunId = reviewRun?.id ?? sessionId
       let passed = review.verdict === 'pass'
       let integrationConflict = false
       if (passed) {
@@ -880,7 +910,7 @@ export class OrganizationOrchestrator {
               companyId: context.company.id,
               projectId: context.project.id,
               taskId,
-              runId: sessionId,
+              runId: reviewRunId,
               idempotencyKey: integrationKey,
             })
             const integrated = await this.taskWorktrees.integrate(context.project.workspacePath, taskId)
@@ -902,7 +932,7 @@ export class OrganizationOrchestrator {
               companyId: context.company.id,
               projectId: context.project.id,
               taskId,
-              runId: sessionId,
+              runId: reviewRunId,
               idempotencyKey: integrationKey,
               data: { error: errorMessage(cause) },
             }).catch(() => undefined)
@@ -925,8 +955,8 @@ export class OrganizationOrchestrator {
         companyId: context.company.id,
         projectId: context.project.id,
         taskId,
-        runId: sessionId,
-        idempotencyKey: `review:${taskId}:${sessionId}`,
+        runId: reviewRunId,
+        idempotencyKey: `review:${taskId}:${reviewRunId}`,
         data: {
           verdict: passed ? 'pass' : 'fail',
           issueCount: review.issues?.length ?? 0,
