@@ -1,6 +1,7 @@
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -76,6 +77,7 @@ pub struct DecisionReceipt {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selected_provider: Option<String>,
     pub escalated: bool,
+    pub created_at: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -124,9 +126,19 @@ pub fn evaluate(params: DecisionEvaluateParams) -> Result<DecisionEvaluateResult
             attempts: params.attempts,
             selected_provider,
             escalated,
+            created_at: now_ms(),
         },
         should_continue,
     })
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
 }
 
 fn validate(params: &DecisionEvaluateParams) -> Result<()> {
