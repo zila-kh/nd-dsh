@@ -119,6 +119,67 @@ describe('direct engine workspace context', () => {
   })
 })
 
+describe('native direct transcript retention', () => {
+  it('replays more history than the engine-local safety tail', async () => {
+    const retained = new Map<string, Array<{ type: string; seq: number; time?: number; data?: unknown }>>()
+    const journal = {
+      async append(sessionId: string, events: Array<{ type: string; seq: number; time?: number; data?: unknown }>) {
+        retained.set(sessionId, [...(retained.get(sessionId) ?? []), ...events])
+      },
+      async tail(sessionId: string, maxMessages: number) {
+        return (retained.get(sessionId) ?? []).slice(-maxMessages)
+      },
+      async clear() { retained.clear() },
+    }
+    let engineEmit: ((frame: import('../src/shared/contracts.js').DshEventFrame) => void) | undefined
+    const direct = {
+      run: async () => ({ sessionId: 'session-native' }),
+      stop: async () => {},
+      listModels: async () => [],
+      ownsSession: (id: string) => id === 'session-native',
+      createSession: async () => ({ sessionId: 'session-native' }),
+      listSessions: () => [],
+      transcript: () => ({
+        sessionId: 'session-native',
+        engineId: 'codex-cli',
+        events: [{ type: 'assistant/message', seq: 40, time: 40, data: { text: 'local tail' } }],
+      }),
+      handlesApproval: () => false,
+      respond: async () => {},
+      setEmitter: (emit: (frame: import('../src/shared/contracts.js').DshEventFrame) => void) => { engineEmit = emit },
+    }
+    const harness = { run: vi.fn(), stop: vi.fn(), gatewayRpc: vi.fn(async () => ({ ok: true })), status: () => ({}) }
+    const workspace = { state: () => workspaceState, assertUsable: vi.fn() }
+    const router = new EngineSessionRouter(
+      harness as never,
+      direct as never,
+      workspace as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      journal,
+    )
+    router.setEmitter(() => {})
+
+    for (let seq = 1; seq <= 40; seq += 1) {
+      engineEmit?.({
+        kind: 'session-event',
+        sessionId: 'session-native',
+        event: { type: 'assistant/message', seq, time: seq, data: { text: 'event-' + seq } },
+      })
+    }
+
+    const transcript = await router.transcript('session-native')
+    expect(transcript.events).toHaveLength(40)
+    expect(transcript.events[0]?.seq).toBe(1)
+    expect(transcript.events.at(-1)?.seq).toBe(40)
+  })
+})
+
 describe('ChatGPT Web browser restoration', () => {
   it('does not restore the empty browser state over a completed chat', () => {
     expect(isRestorableBrowserUrl('about:blank')).toBe(false)
