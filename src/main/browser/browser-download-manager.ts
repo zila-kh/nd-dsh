@@ -27,8 +27,8 @@ export class BrowserDownloadManager {
 
   cancel(id: string): boolean {
     const item = this.items.get(id)
-    if (!item || item.isDestroyed()) return false
-    item.cancel()
+    if (!item) return false
+    try { item.cancel() } catch { return false }
     return true
   }
 
