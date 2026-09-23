@@ -122,6 +122,9 @@ chunk.
   snapshot if the previous native tail is no longer available.
 - [x] Failed in-place shell restart materializes the native tail before teardown,
   so restart failure cannot erase newer scrollback.
+- [x] nd-core gives the PTY reader one bounded 250 ms drain window before
+  `terminal.exit`, so final shell output normally lands in replay history
+  before Electron captures the exited terminal.
 - [x] Focused native-tail/live-state and desktop-restart regression tests are
   committed.
 
@@ -190,6 +193,8 @@ On Windows:
 - [ ] Exercise quoting plus `&&` through the explicit `cmd.exe /c` path.
 - [ ] Trigger a task verification timeout/cancel and confirm no verifier
   descendants remain.
+- [ ] Run a verification command that writes a final stdout/stderr line directly
+  before exit and confirm that line is present in the recorded evidence.
 
 On macOS/Linux, repeat start/stop/restart with a shell command containing a pipe
 or `&&`.
@@ -216,6 +221,8 @@ or `&&`.
   terminal.
 - [ ] Restart nd-core unexpectedly and confirm reconciliation marks the old shell
   exited without replacing the last durable scrollback with an empty buffer.
+- [ ] Run a shell command that prints immediately before exit and confirm the
+  final text is present in terminal scrollback after the exit event.
 - [ ] Close terminals and confirm `retainedTerminalCount` does not leak upward.
 
 ## Full performance evidence handoff
