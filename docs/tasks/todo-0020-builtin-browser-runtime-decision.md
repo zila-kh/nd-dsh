@@ -89,7 +89,7 @@ It records:
 - MV3 service-worker extension load/content-script/runtime-messaging behavior;
 - extension unload cleanup;
 - shared-session 1/2/4/8-tab process/memory observations;
-- WebMCP-style `navigator.modelContext` presence.
+- WebMCP-style `document.modelContext` presence.
 
 The spike intentionally records unsupported features as evidence instead of
 patching around them.
