@@ -203,6 +203,11 @@ export class EngineSessionRouter {
     if (workspaceDirect && requestedSessionId) {
       if (!sessionCwd || !this.sessionRootAllowed(sessionCwd)) throw new Error('Session belongs to a different project workspace')
     }
+    if (!options?.sessionId && this.browserAccess) {
+      const defaultCwd = workspaceDirect ? this.workspace.state().root : undefined
+      const created = await this.createSession(requested, defaultCwd)
+      options = { ...options, sessionId: created.sessionId }
+    }
     const skill = await this.skills?.prepare(prompt, options?.skillScope, options?.skillSelectionId)
     if (skill && options?.sessionId && !directTarget && requested !== CHATGPT_WEB_ENGINE_ID) {
       const result = await this.harness.gatewayRpc('session.list')
@@ -342,6 +347,7 @@ export class EngineSessionRouter {
 
   /** Cancel exactly one engine session; unrelated organization workers continue. */
   async stopSession(sessionId: string): Promise<void> {
+    this.browserAccess?.revokeSessionAccess(sessionId)
     const engine = this.engineForSession(sessionId)
     const direct = this.directEngines.get(engine)
     if (direct) {
