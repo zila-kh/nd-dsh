@@ -296,7 +296,7 @@ Rules:
 - decision support never overrides machine verification, policy gates, exact-evidence rules, or independent semantic review;
 - shadow parity must precede any Rust path becoming authoritative for additional lifecycle decisions.
 
-Implementation ticket: [TODO 0023 — Move Decision Support Kernel into Rust](../tasks/todo-0023-rust-decision-kernel.md).
+Implementation ticket: [TODO 0034 — Move Decision Support Kernel into Rust](../tasks/todo-0034-rust-decision-kernel.md).
 
 ## 7. P2 — company quality and interoperability
 
