@@ -1,9 +1,12 @@
+import type { CoreClient } from '../core/core-client.js'
+import { CoreDecisionKernel } from './decision-support-core.js'
 import { DecisionSupportService, HttpDecisionProvider } from './decision-support.js'
 import type { DecisionSupportMode } from './decision-support-contract.js'
 
 export function createDecisionSupportFromEnv(
   env: Record<string, string | undefined> = process.env,
   fetchImpl: typeof fetch = fetch,
+  core?: Pick<CoreClient, 'request'>,
 ): DecisionSupportService | undefined {
   const mode = parseMode(env.ND_DECISION_SUPPORT_MODE)
   if (mode === 'off') return undefined
@@ -36,10 +39,15 @@ export function createDecisionSupportFromEnv(
   }
 
   if (providers.length === 0) return undefined
+  const runtime = parseRuntime(env.ND_DECISION_SUPPORT_RUNTIME)
+  if (runtime === 'rust' && !core) {
+    throw new Error('ND_DECISION_SUPPORT_RUNTIME=rust requires an active ND Core client')
+  }
   return new DecisionSupportService(
     mode,
     providers,
     probability(env.ND_DECISION_SUPPORT_CONFIDENCE, 0.78),
+    runtime === 'rust' ? new CoreDecisionKernel(core!) : undefined,
   )
 }
 
@@ -58,4 +66,12 @@ function positiveNumber(value: string | undefined, fallback: number): number {
 function probability(value: string | undefined, fallback: number): number {
   const parsed = Number(value)
   return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : fallback
+}
+
+
+function parseRuntime(value: string | undefined): 'typescript' | 'rust' {
+  const runtime = value?.trim().toLowerCase()
+  if (!runtime || runtime === 'typescript' || runtime === 'ts') return 'typescript'
+  if (runtime === 'rust') return 'rust'
+  throw new Error('ND_DECISION_SUPPORT_RUNTIME must be typescript or rust')
 }
