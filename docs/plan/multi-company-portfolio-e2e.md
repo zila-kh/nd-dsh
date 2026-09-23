@@ -61,7 +61,7 @@ Required assertions:
 9. The Company Workspace board shows only the active project's task cards.
 10. Close Electron and relaunch with the same `userData`; companies/projects/tasks and active selection remain intact.
 
-This layer does **not** require a model or network. It should stay green even when provider credentials are unavailable.
+This layer does **not** require a model or network. It ignores the live E2E model configuration and should stay green even when provider credentials are unavailable.
 
 ## Layer 2 — shared OpenAI-compatible 3-model matrix
 
@@ -78,13 +78,15 @@ E2E_MODEL_3=model-id-3
 
 The configuration is all-or-none. If any E2E model variable is present, ND requires the base URL, API key and all three model ids. No credential is committed; `.env` is already gitignored.
 
-The shared E2E fixture seeds one provider:
+The live-model path seeds one provider into its throwaway profile:
 
 ```text
 provider: e2e-openai-compatible
 format:   OpenAI compatible (/v1/chat/completions)
 models:   E2E_MODEL_1, E2E_MODEL_2, E2E_MODEL_3
 ```
+
+Ordinary Playwright fixtures do **not** change just because `.env` exists. They keep the existing deterministic OpenCode Go fixture unless a future spec explicitly calls `launchApp({ useConfiguredModels: true })`. This protects the current E2E suite from accidental provider-dependent drift.
 
 The existing full autonomous multi-model driver now consumes these slots:
 
