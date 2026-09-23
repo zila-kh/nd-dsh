@@ -146,6 +146,10 @@ export class BrowserPlatformService {
   }
 
   async closeTab(targetId: string, tabId: string): Promise<boolean> {
+    // A direct user close is authoritative: revoke any agent writer before
+    // closing so an in-flight lane cannot keep ownership of a tab the user
+    // explicitly removed.
+    this.leases.releaseTab(targetId, tabId)
     const result = await this.router.call('browser.closeTab', {
       targetId,
       tabId,
