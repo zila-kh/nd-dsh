@@ -27,6 +27,10 @@ pub struct SessionJournalAppendParams {
     pub session_id: String,
     #[serde(default)]
     pub events: Vec<SessionJournalEnvelope>,
+    #[serde(default)]
+    pub max_events: Option<usize>,
+    #[serde(default)]
+    pub max_bytes: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -98,6 +102,14 @@ impl SessionJournalStore {
             .sessions
             .lock()
             .map_err(|_| anyhow::anyhow!("session journal lock poisoned"))?;
+        let max_events = params
+            .max_events
+            .unwrap_or(self.max_events_per_session)
+            .clamp(1, self.max_events_per_session);
+        let max_bytes = params
+            .max_bytes
+            .unwrap_or(self.max_bytes_per_session)
+            .clamp(1, self.max_bytes_per_session);
         let journal = sessions.entry(params.session_id).or_default();
         for envelope in params.events {
             validate_envelope(&envelope)?;
@@ -109,11 +121,7 @@ impl SessionJournalStore {
                 envelope,
                 bytes: encoded_bytes,
             });
-            trim_journal(
-                journal,
-                self.max_events_per_session,
-                self.max_bytes_per_session,
-            );
+            trim_journal(journal, max_events, max_bytes);
         }
         Ok(tail_result(journal, self.max_events_per_session))
     }
@@ -240,6 +248,8 @@ mod tests {
             .append(SessionJournalAppendParams {
                 session_id: "s1".into(),
                 events: (1..=5).map(|seq| envelope(seq, "x")).collect(),
+                max_events: None,
+                max_bytes: None,
             })
             .unwrap();
         let tail = store
@@ -266,11 +276,35 @@ mod tests {
             .append(SessionJournalAppendParams {
                 session_id: "s1".into(),
                 events: (1..=20).map(|seq| envelope(seq, "0123456789abcdef")).collect(),
+                max_events: None,
+                max_bytes: None,
             })
             .unwrap();
         let stats = store.stats();
         assert!(stats.retained_bytes <= 256);
         assert!(stats.retained_event_count < 20);
+    }
+
+    #[test]
+    fn append_can_apply_a_tighter_owner_retention_policy() {
+        let store = SessionJournalStore::new(10_000, 8 * 1024 * 1024);
+        store
+            .append(SessionJournalAppendParams {
+                session_id: "direct".into(),
+                events: (1..=40).map(|seq| envelope(seq, "x")).collect(),
+                max_events: Some(16),
+                max_bytes: Some(1024 * 1024),
+            })
+            .unwrap();
+        let tail = store
+            .tail(SessionJournalTailParams {
+                session_id: "direct".into(),
+                max_messages: 50,
+            })
+            .unwrap();
+        assert_eq!(tail.events.len(), 16);
+        assert_eq!(tail.first_seq, Some(25));
+        assert_eq!(tail.last_seq, Some(40));
     }
 
     #[test]
@@ -281,6 +315,8 @@ mod tests {
                 .append(SessionJournalAppendParams {
                     session_id: id.into(),
                     events: vec![envelope(1, id)],
+                    max_events: None,
+                    max_bytes: None,
                 })
                 .unwrap();
         }
