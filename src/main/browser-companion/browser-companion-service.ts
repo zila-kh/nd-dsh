@@ -37,6 +37,7 @@ export interface BrowserCompanionServiceOptions {
   dataPath: string
   discoveryPath?: string
   endpoint?: string
+  runtimePath?: string
 }
 
 export class BrowserCompanionService {
@@ -44,6 +45,7 @@ export class BrowserCompanionService {
   private readonly endpoint: string
   private readonly token = randomBytes(32).toString('hex')
   private readonly connections: BrowserConnectionStore
+  private readonly runtimePath: string | undefined
   private readonly leases = new BrowserTabLeaseStore()
   private readonly clients = new Set<ClientState>()
   private readonly nativeByConnection = new Map<string, ClientState>()
@@ -55,6 +57,7 @@ export class BrowserCompanionService {
     const runtimeDir = join(homedir(), '.nd-dsh')
     this.discoveryPath = options.discoveryPath ?? join(runtimeDir, 'browser-companion.json')
     this.endpoint = options.endpoint ?? defaultEndpoint(runtimeDir)
+    this.runtimePath = options.runtimePath
     this.connections = new BrowserConnectionStore(join(options.dataPath, 'browser-companion-connections.json'))
   }
 
@@ -84,6 +87,7 @@ export class BrowserCompanionService {
     }
     await fs.writeFile(this.discoveryPath, `${JSON.stringify(discovery, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
     process.env.ND_BROWSER_COMPANION_DISCOVERY = this.discoveryPath
+    if (this.runtimePath) process.env.ND_BROWSER_COMPANION_RUNTIME = this.runtimePath
     await this.emit()
   }
 
