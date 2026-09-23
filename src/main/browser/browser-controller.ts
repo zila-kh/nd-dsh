@@ -10,6 +10,7 @@ import type { BrowserBounds, BrowserState, UiAnnotation, UiTarget } from '../../
 import { AgentBrowserClient } from './agent-browser-client.js'
 import { BrowserDownloadManager } from './browser-download-manager.js'
 import { BrowserHistoryStore } from './browser-history-store.js'
+import { BrowserPermissionStore } from './browser-permission-store.js'
 import { DEFAULT_BROWSER_URL, isAllowedBrowserUrl, normalizeBrowserUrl, sanitizeBrowserUserAgent } from './browser-url.js'
 import { UiAnnotator, type UiAnnotationImage } from './ui-annotator.js'
 import { UiInspector } from './ui-inspector.js'
@@ -48,6 +49,7 @@ export class BrowserController {
   private readonly tabs = new Map<string, BrowserTabRuntime>()
   private readonly agentBrowser: AgentBrowserClient
   private readonly historyStore: BrowserHistoryStore
+  private readonly permissionStore: BrowserPermissionStore
   private readonly downloads: BrowserDownloadManager
   private readonly reservedOrigin: (() => string | undefined) | undefined
   private activeTabIdValue: string
@@ -68,12 +70,17 @@ export class BrowserController {
   ) {
     this.reservedOrigin = options.reservedOrigin
     this.browserSessionValue = session.fromPartition(BROWSER_PARTITION)
-    this.browserSessionValue.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
-    this.browserSessionValue.setPermissionCheckHandler(() => false)
 
     this.agentBrowser = new AgentBrowserClient(cdpPort, projectRoot)
     const dataPath = options.dataPath ?? app.getPath('userData')
     this.historyStore = new BrowserHistoryStore(join(dataPath, 'browser-history.json'))
+    this.permissionStore = new BrowserPermissionStore(join(dataPath, 'browser-site-permissions.json'))
+    this.browserSessionValue.setPermissionRequestHandler((webContents, permission, callback, details) => {
+      const pageOrigin = permissionOrigin(details.requestingUrl || webContents.getURL())
+      callback(Boolean(pageOrigin && this.permissionStore.effect(pageOrigin, permission) === 'allow'))
+    })
+    this.browserSessionValue.setPermissionCheckHandler((_webContents, permission, requestingOrigin) =>
+      Boolean(requestingOrigin && this.permissionStore.effect(requestingOrigin, permission) === 'allow'))
     this.downloads = new BrowserDownloadManager(
       this.browserSessionValue,
       BUILTIN_BROWSER_TARGET_ID,
@@ -104,6 +111,7 @@ export class BrowserController {
   }
 
   async initialize(initialUrl = DEFAULT_BROWSER_URL): Promise<void> {
+    await this.permissionStore.initialize()
     try {
       await this.navigate(initialUrl)
     } catch {
@@ -278,16 +286,28 @@ export class BrowserController {
     return this.historyStore.list(targetId)
   }
 
+  sitePermissions() {
+    return this.permissionStore.list()
+  }
+
+  async setSitePermission(origin: string, permission: string, effect: 'allow' | 'deny') {
+    const record = await this.permissionStore.set(origin, permission, effect)
+    this.emitState()
+    return record
+  }
+
   async clearBrowserData(origin?: string, clearHistory = true): Promise<void> {
     if (origin) {
       let parsed: URL
       try { parsed = new URL(origin) } catch { throw new Error('Browser data origin must be a valid URL') }
       if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('Browser data clearing supports http/https origins')
       await this.browserSessionValue.clearStorageData({ origin: parsed.origin })
+      await this.permissionStore.clear(parsed.origin)
       if (clearHistory) await this.historyStore.clear({ targetId: BUILTIN_BROWSER_TARGET_ID, origin: parsed.origin })
     } else {
       await this.browserSessionValue.clearStorageData()
       await this.browserSessionValue.clearCache()
+      await this.permissionStore.clear()
       if (clearHistory) await this.historyStore.clear({ targetId: BUILTIN_BROWSER_TARGET_ID })
     }
     this.emitState()
@@ -799,6 +819,16 @@ export class BrowserController {
 function finite(value: number): number {
   if (!Number.isFinite(value) || Math.abs(value) > 1_000_000) throw new Error('Browser numeric argument is invalid')
   return value
+}
+
+function permissionOrigin(value: string): string | undefined {
+  try {
+    const parsed = new URL(value)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return undefined
+    return parsed.origin
+  } catch {
+    return undefined
+  }
 }
 
 function pageOrigin(value: string): string | undefined {
