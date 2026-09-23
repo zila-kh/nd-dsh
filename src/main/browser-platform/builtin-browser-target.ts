@@ -89,4 +89,8 @@ export class BuiltinBrowserTarget implements BrowserTarget {
   async callSiteTool(tabId: string, name: string, input: unknown) {
     return this.browser.callSiteTool(tabId, name, input)
   }
+
+  async autofillCredential(tabId: string, username: string, password: string) {
+    return this.browser.autofillCredential(tabId, username, password)
+  }
 }
