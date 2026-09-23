@@ -12,6 +12,8 @@ import { projectRoot } from '../app-paths.js'
 type SpawnLike = typeof import('node:child_process').spawn
 
 const IDLE_CONTROL_MS = 750
+const RUNTIME_SESSION_SCALE_POINTS = [1, 2, 4, 8, 10, 25, 50, 100] as const
+const SCALE_CONTRACT = 'rust-parallel-runtime-v2'
 
 interface RuntimeBenchmarkOptions {
   outputPath: string
@@ -41,15 +43,16 @@ export async function runRuntimeBenchmark(options: RuntimeBenchmarkOptions): Pro
 
   try {
     const idleCore = options.core ? await options.core.request<Record<string, unknown>>('metrics.snapshot', {}, 5_000) : undefined
-    const idleMainRssBytes = process.memoryUsage().rss
+    const idleMainMemory = process.memoryUsage()
+    const idleMainRssBytes = idleMainMemory.rss
     const idleBackendMemoryBytes = backendMemory(idleMainRssBytes, idleCore)
     const sessionScaling = []
-    for (const count of [1, 2, 4, 8, 10]) {
+    for (const count of RUNTIME_SESSION_SCALE_POINTS) {
       while (sessionPermits.length < count) {
         const index = sessionPermits.length
         const permit = await options.coordinator.acquire({
           kind: 'execution',
-          pools: [{ key: 'benchmark:logical-sessions', limit: 16 }],
+          pools: [{ key: 'benchmark:logical-sessions', limit: 128 }],
         })
         await options.coordinator.bindSession(permit, 'benchmark-session-' + index, 'benchmark-run-' + index)
         sessionPermits.push(permit)
@@ -57,13 +60,25 @@ export async function runRuntimeBenchmark(options: RuntimeBenchmarkOptions): Pro
       if (count === 1) await options.git.refresh()
       await new Promise((resolvePromise) => setTimeout(resolvePromise, 20))
       const coreMetrics = options.core ? await options.core.request<Record<string, unknown>>('metrics.snapshot', {}, 5_000) : undefined
-      const mainRssBytes = process.memoryUsage().rss
+      const mainMemory = process.memoryUsage()
+      const mainRssBytes = mainMemory.rss
       sessionScaling.push({
         count,
         mainRssBytes,
+        mainHeapUsedBytes: mainMemory.heapUsed,
+        mainHeapTotalBytes: mainMemory.heapTotal,
+        mainExternalBytes: mainMemory.external,
+        mainArrayBuffersBytes: mainMemory.arrayBuffers,
         coreMemory: coreProcessMemory(coreMetrics),
         backendMemoryBytes: backendMemory(mainRssBytes, coreMetrics),
         coreWorkspaceCount: numberField(coreMetrics, 'workspaceCount'),
+        coreProcessCount: numberField(coreMetrics, 'processCount'),
+        coreTerminalCount: numberField(coreMetrics, 'terminalCount'),
+        coreRetainedTerminalCount: numberField(coreMetrics, 'retainedTerminalCount'),
+        coreRetainedTerminalBufferBytes: numberField(coreMetrics, 'retainedTerminalBufferBytes'),
+        corePendingRpcCount: numberField(coreMetrics, 'pendingRpcCount'),
+        coreQueuedEventCount: numberField(coreMetrics, 'queuedEventCount'),
+        coreQueuedEventBytes: numberField(coreMetrics, 'queuedEventBytes'),
       })
     }
     for (const permit of sessionPermits.splice(0)) await options.coordinator.release(permit)
@@ -154,12 +169,18 @@ export async function runRuntimeBenchmark(options: RuntimeBenchmarkOptions): Pro
       benchmark: 'electron-responsiveness',
       timestamp: new Date().toISOString(),
       backend,
+      scaleContract: SCALE_CONTRACT,
+      scalePoints: RUNTIME_SESSION_SCALE_POINTS,
       platform: process.platform,
       arch: process.arch,
       durationMs: performance.now() - stressStarted,
       mainCpuMs: (cpu.user + cpu.system) / 1_000,
       mainRssBytes: process.memoryUsage().rss,
       idleMainRssBytes,
+      idleMainHeapUsedBytes: idleMainMemory.heapUsed,
+      idleMainHeapTotalBytes: idleMainMemory.heapTotal,
+      idleMainExternalBytes: idleMainMemory.external,
+      idleMainArrayBuffersBytes: idleMainMemory.arrayBuffers,
       idleCoreMemory: coreProcessMemory(idleCore),
       idleBackendMemoryBytes,
       sessionScaling,
