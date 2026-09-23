@@ -111,6 +111,23 @@ async function dispatch(method, params) {
       const tabs = await chrome.tabs.query({})
       return tabs.filter((tab) => typeof tab.id === 'number').map(normalizeTab)
     }
+    case 'tabs.create': {
+      const url = typeof params.url === 'string' && params.url ? params.url : 'about:blank'
+      if (url !== 'about:blank' && !/^https?:\/\//i.test(url)) throw new Error('Only http/https/about:blank tabs are allowed')
+      const tab = await chrome.tabs.create({ url, active: params.active !== false })
+      return normalizeTab(tab)
+    }
+    case 'tabs.activate': {
+      const tabId = tabIdOf(params)
+      const tab = await chrome.tabs.get(tabId)
+      await chrome.windows.update(tab.windowId, { focused: true }).catch(() => undefined)
+      return normalizeTab(await chrome.tabs.update(tabId, { active: true }))
+    }
+    case 'tabs.close': {
+      const tabId = tabIdOf(params)
+      await chrome.tabs.remove(tabId)
+      return { closed: true, tabId }
+    }
     case 'page.navigate': {
       const tabId = tabIdOf(params)
       const url = String(params.url ?? '')
@@ -129,6 +146,8 @@ async function dispatch(method, params) {
       return callContent(tabIdOf(params), { kind: 'press', ref: params.ref, revision: params.revision, key: String(params.key ?? '') })
     case 'page.scroll':
       return callContent(tabIdOf(params), { kind: 'scroll', deltaX: Number(params.deltaX ?? 0), deltaY: Number(params.deltaY ?? 0) })
+    case 'page.waitFor':
+      return waitForPage(tabIdOf(params), params)
     case 'page.screenshot': {
       const tabId = tabIdOf(params)
       const tab = await chrome.tabs.get(tabId)
@@ -139,6 +158,19 @@ async function dispatch(method, params) {
     default:
       throw new Error(`Unknown browser companion command: ${method}`)
   }
+}
+
+async function waitForPage(tabId, params) {
+  const timeoutMs = Math.max(100, Math.min(30_000, Number(params.timeoutMs ?? 10_000)))
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const result = await callContent(tabId, { kind: 'pageState' })
+    const textOk = params.text === undefined || String(result?.text ?? '').includes(String(params.text))
+    const urlOk = params.urlIncludes === undefined || String(result?.url ?? '').includes(String(params.urlIncludes))
+    if (textOk && urlOk) return { ok: true, url: result?.url ?? '' }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  throw new Error('Browser wait condition timed out')
 }
 
 async function callContent(tabId, message) {
