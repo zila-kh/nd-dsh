@@ -1,9 +1,9 @@
-# TODO 0034 — Move Decision Support Kernel into Rust
+# WIP 0034 — Move Decision Support Kernel into Rust
 
 > Plan: [Reference-Inspired Runtime and Company Evolution](../plan/reference-inspired-runtime-company-evolution.md)  
 > Priority: P1  
 > Status: **implementation complete; local parity/live-provider validation pending**  
-> Depends on: TODO 0031 and TODO 0033  
+> Depends on: WIP 0031 and WIP 0033  
 > Prototype: `src/main/organization/decision-support*.ts`  
 > Owner: unassigned
 
