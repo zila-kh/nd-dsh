@@ -1,6 +1,5 @@
 import 'dotenv/config'
 import { app, BrowserWindow, crashReporter, dialog, Menu, type MenuItemConstructorOptions } from 'electron'
-import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
 import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
