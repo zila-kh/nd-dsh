@@ -112,7 +112,7 @@ export class TerminalManager {
     await this.ensureReady()
     const session = this.getSession(id)
     await this.restoreRunning(session)
-    return cloneSession(session)
+    return await this.snapshotSession(session)
   }
 
   async create(input: TerminalCreateInput): Promise<TerminalSessionState> {
@@ -140,7 +140,7 @@ export class TerminalManager {
     await this.spawn(terminal, input.shell, false)
     this.normalize(session)
     this.changed(sessionId)
-    return cloneSession(session)
+    return await this.snapshotSession(session)
   }
 
   async write(sessionId: string, terminalId: string, data: string): Promise<void> {
@@ -170,7 +170,7 @@ export class TerminalManager {
     this.normalize(session)
     await this.persist()
     this.emit(session.sessionId)
-    return cloneSession(session)
+    return await this.snapshotSession(session)
   }
 
   async restart(sessionId: string, terminalId: string): Promise<TerminalSessionState> {
@@ -189,7 +189,7 @@ export class TerminalManager {
         const pid = await runtime.process.restart(terminal.cols, terminal.rows)
         terminal.status = 'running'; terminal.pid = pid; delete terminal.recovered
         this.changed(terminal.sessionId)
-        return cloneSession(this.sessions.get(terminal.sessionId)!)
+        return await this.snapshotSession(this.sessions.get(terminal.sessionId)!)
       } catch (error) {
         this.detach(terminal.sessionId, terminal.id, true)
         terminal.status = 'error'
@@ -203,7 +203,7 @@ export class TerminalManager {
     delete terminal.pid
     await this.spawn(terminal, terminal.shell || undefined, false)
     this.changed(terminal.sessionId)
-    return cloneSession(this.sessions.get(terminal.sessionId)!)
+    return await this.snapshotSession(this.sessions.get(terminal.sessionId)!)
   }
 
   /**
@@ -250,7 +250,7 @@ export class TerminalManager {
     if (!next) throw new Error('Terminal title cannot be empty')
     terminal.title = next; terminal.updatedAt = Date.now()
     this.changed(terminal.sessionId)
-    return cloneSession(this.sessions.get(terminal.sessionId)!)
+    return await this.snapshotSession(this.sessions.get(terminal.sessionId)!)
   }
 
   async setLayout(sessionId: string, layout: TerminalPaneLayout | null, activePaneId: string | null, activeTerminalId: string | null): Promise<TerminalSessionState> {
@@ -265,7 +265,7 @@ export class TerminalManager {
     if (activeTerminalId !== null && !terminalIds.has(activeTerminalId)) throw new Error('Active terminal does not belong to this session')
     session.layout = cloneLayout(layout); session.activePaneId = activePaneId; session.activeTerminalId = activeTerminalId
     this.normalize(session); this.changed(id)
-    return cloneSession(session)
+    return await this.snapshotSession(session)
   }
 
   async shutdown(): Promise<void> {
