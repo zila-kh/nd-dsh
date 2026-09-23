@@ -44,7 +44,9 @@
     "browser:host:test": "cargo fmt --check && cargo clippy -p nd-browser-host --all-targets -- -D warnings && cargo test -p nd-browser-host",
     "browser:register": "node scripts/register-browser-native-host.mjs",
     "browser:verify": "corepack pnpm browser:host:test && corepack pnpm typecheck && corepack pnpm test -- browser-companion",
-    "bench:browser-runtime": "node benchmarks/browser-runtime-spike.mjs"
+    "bench:browser-runtime": "node benchmarks/browser-runtime-spike.mjs",
+    "bench:browser-platform": "corepack pnpm core:build:dev && corepack pnpm build && node benchmarks/unified-browser-platform.mjs",
+    "browser:platform:test": "corepack pnpm typecheck && corepack pnpm vitest run tests/unified-browser-leases.test.ts tests/browser-policy-classification.test.ts tests/browser-history-store.test.ts tests/browser-access-tokens.test.ts"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",

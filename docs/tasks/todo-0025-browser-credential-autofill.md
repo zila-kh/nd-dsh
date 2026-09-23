@@ -2,7 +2,7 @@
 
 > Priority: P1
 > Owner: ND security/browser
-> Status: todo
+> Status: done — implementation complete; OS secure-storage/autofill validation pending
 > Depends on: 0020, 0022
 
 ## Objective
@@ -24,3 +24,16 @@ stored secrets to models, page snapshots, logs, or ordinary renderer state.
 
 A saved test credential can fill a login form while the raw password is absent
 from model-visible output, logs, IPC snapshots and run receipts.
+
+## Implementation evidence
+
+- `src/main/browser/browser-credential-vault.ts` stores passwords encrypted with
+  Electron `safeStorage`; renderer state exposes summaries only.
+- origin binding prevents filling a credential on a different origin.
+- `browser.autofill` is policy-classified as `credential.use`.
+- built-in autofill happens inside the browser target without returning the raw
+  password through model-visible results.
+- Settings exposes save/remove controls using trusted IPC.
+
+Local validation must confirm the target OS secure-storage backend and test that
+no password appears in snapshots, logs, receipts or returned tool payloads.

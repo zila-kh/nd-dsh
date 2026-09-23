@@ -13,11 +13,14 @@ node <harness>/apps/cli/lib/bin.js --profile web --patch configs/dsh/nd-dsh.patc
 ```
 
 - **`nd-dsh.patch.yml`** pins the sandbox to the workspace the desktop selected,
-  enables full-text session search, makes `nd-dsh` the default agent preset, and
-  mounts the `browser-mcp` row: `agent-browser mcp` runs with the config and
-  session written by Electron. Electron first selects the `WebContentsView` CDP
-  target and then enables strict tab pinning, so MCP calls operate on the
-  visible pane rather than a second Chromium process.
+  enables full-text session search, makes `nd-dsh` the default agent preset,
+  and mounts the stable `nd-extensions` MCP bridge. Its `nd_browser_call`
+  tool is ND's single model-facing browser API: it routes the built-in browser
+  and explicit Chrome companions through `BrowserTargetRouter`, session-bound
+  tab leases, organization policy, and audit receipts. Electron still binds
+  agent-browser internally to the exact active built-in `WebContentsView`
+  target for host-side inspection, but raw agent-browser MCP tools are not
+  exposed to the model because that would bypass the unified policy boundary.
 - **`agent-presets/nd-dsh/`** is the ND-DSH agent preset (the standard coding
   toolset plus the ND-DSH persona and the bundled `live-browser` skill). The
   desktop installs it into the harness-home user preset root at launch; the

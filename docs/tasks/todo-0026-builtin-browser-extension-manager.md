@@ -2,7 +2,7 @@
 
 > Priority: P1
 > Owner: ND browser
-> Status: todo
+> Status: done — implementation complete with limited compatibility model; representative-extension validation pending
 > Depends on: 0020, 0022
 
 ## Objective
@@ -47,3 +47,16 @@ proves it for the chosen runtime.
 
 If the selected runtime cannot meet these points, reopen task 0020's runtime
 decision rather than deleting the requirement.
+
+## Implementation evidence
+
+- `src/main/browser/browser-extension-manager.ts` implements unpacked extension
+  install/load, enable/disable, remove, restart persistence and permission display.
+- extension records expose `compatible/limited/unsupported/error` style status
+  without claiming Chrome Web Store parity.
+- Settings exposes built-in extension management.
+- task 0020's MV2/MV3 fixtures cover content scripts and runtime/background
+  messaging mechanisms.
+
+The product intentionally stays on the Electron compatibility ceiling until the
+local representative-extension matrix is recorded.

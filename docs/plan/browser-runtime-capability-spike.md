@@ -103,7 +103,7 @@ They only answer whether the selected runtime exposes the minimum mechanisms.
 ### WebMCP presence check
 
 The probe records whether the current renderer exposes
-`navigator.modelContext`.
+`document.modelContext`.
 
 Absence is not treated as proof that WebMCP is impossible: the feature may be
 experimental, flag-gated, origin-trial-gated, or require a different integration
