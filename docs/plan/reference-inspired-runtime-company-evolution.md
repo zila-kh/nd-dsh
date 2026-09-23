@@ -298,22 +298,6 @@ Rules:
 
 Implementation ticket: [TODO 0023 — Move Decision Support Kernel into Rust](../tasks/todo-0023-rust-decision-kernel.md).
 
-### P1.5 Durable agent/team mailbox and targeted wake
-
-ND teams currently share coordination events; make the transport more explicit for long-running peer work.
-
-Requirements:
-
-- durable sender/recipient/task/run identity;
-- message type such as handoff, blocker, evidence, request, answer, wake;
-- delivery/consumption cursor;
-- targeted wake without polling every worker;
-- bounded mailbox size/retention;
-- restart-safe delivery semantics;
-- team communication never grants filesystem write authority by itself.
-
-Primary references: LoopX, QM, LazyCodex.
-
 ## 7. P2 — company quality and interoperability
 
 ### P2.1 Employee evaluation and routing evidence
