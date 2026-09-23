@@ -227,9 +227,9 @@ async function createWindow(cdpPort: number): Promise<void> {
       })
   })
   const engineSpawn = createCoreSpawn(core, executionCoordinator)
-  // Project dev servers are long-lived project resources, not task resources:
-  // keep them Rust-owned without binding them to the current worker permit.
-  const projectRuntimeSpawn = createCoreSpawn(core)
+  // Project dev servers and machine verification are ND-owned system work,
+  // not engine children: keep them Rust-owned without inheriting a worker permit.
+  const unscopedCoreSpawn = createCoreSpawn(core)
   const git = new GitService(workspace, { core })
   const harness = new HarnessService(workspace, browser, providers, externalElements, sessionArchive, usageLedger)
   const codexEngine = new CodexCliEngine({ log: (line) => console.log(line), spawnProcess: engineSpawn })
@@ -286,7 +286,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   // never load ND-DSH's own preview recursively inside the browser pane.
   const projectRuntime = new ProjectRuntimeService({
     store: organizationStore,
-    spawnProcess: projectRuntimeSpawn,
+    spawnProcess: unscopedCoreSpawn,
     stopProcess: stopCoreManagedChildProcess,
     reservedOrigin,
     onTargetReady: (_projectId, url) => {
@@ -303,7 +303,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   // engine router admits them by the exact roots ND created — never by a path
   // shape a caller could construct.
   engineRouter.setWorktreeGuard((cwd) => taskWorktrees.ownsRoot(cwd))
-  const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter, projectRuntime, capabilities, executionCoordinator, taskWorktrees, core)
+  const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter, projectRuntime, capabilities, executionCoordinator, taskWorktrees, core, { spawnProcess: unscopedCoreSpawn, stopProcess: stopCoreManagedChildProcess })
   const approvalGate = new OrganizationApprovalGate(organizationStore, harness)
   const qa = new QaService()
   qa.setProjectRoot(workspace.state().root)
