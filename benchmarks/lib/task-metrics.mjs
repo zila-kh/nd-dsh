@@ -87,6 +87,67 @@ export function summarizeTaskSamples(samples, options = {}) {
 }
 
 /**
+ * What a set of tasks achieved when they were dispatched together, derived from
+ * the recorded run intervals rather than from anything the driver claims. Every
+ * field below is recomputable offline from `samples`, which is what lets
+ * `--verify` re-check a concurrency claim on a stored result.
+ *
+ * `speedup` is the number that answers "did running these together actually
+ * finish sooner": it compares the summed per-task wall time against the span the
+ * tasks occupied. A fully serialized arm has span ~= sum, so speedup ~= 1 no
+ * matter how many tasks it dispatched; N tasks that perfectly overlap reach N.
+ * That makes it self-normalizing across machines and fixtures, so it can be a
+ * budget without being a wall-clock threshold.
+ *
+ * `peakConcurrency` is reported alongside it because a speedup can be reached by
+ * fewer workers than were dispatched, and the difference is the finding: the
+ * execution pool, not the dispatch, decided the overlap.
+ */
+export function summarizeParallelism(samples) {
+  const tasks = taskSamples(samples).filter((sample) => sample.finished === true)
+  if (!tasks.length) {
+    return { tasks: 0, spanMs: 0, sumTaskWallMs: 0, meanTaskWallMs: 0, speedup: 0, peakConcurrency: 0 }
+  }
+  const startedAt = Math.min(...tasks.map((sample) => Number(sample.startedAt)))
+  const finishedAt = Math.max(...tasks.map((sample) => Number(sample.finishedAt)))
+  const spanMs = Math.max(0, finishedAt - startedAt)
+  const sumTaskWallMs = tasks.reduce((sum, sample) => sum + Number(sample.totalWallMs ?? 0), 0)
+  return {
+    tasks: tasks.length,
+    spanMs,
+    sumTaskWallMs,
+    meanTaskWallMs: sumTaskWallMs / tasks.length,
+    // A zero-length span means every task shared one instant, which no interval
+    // arithmetic can turn into a ratio; report it as unmeasured rather than
+    // infinite, so the budget fails on a missing measurement instead of passing
+    // on a division artifact.
+    speedup: spanMs > 0 ? sumTaskWallMs / spanMs : 0,
+    peakConcurrency: peakOverlap(tasks),
+  }
+}
+
+/**
+ * The most tasks that were in flight at the same instant, by sweeping the run
+ * intervals. An end is applied before a start at the same timestamp, so a task
+ * that finishes exactly as another begins is not counted as overlapping it.
+ */
+function peakOverlap(tasks) {
+  const events = []
+  for (const task of tasks) {
+    events.push({ at: Number(task.startedAt), delta: 1 })
+    events.push({ at: Number(task.finishedAt), delta: -1 })
+  }
+  events.sort((left, right) => left.at - right.at || left.delta - right.delta)
+  let current = 0
+  let peak = 0
+  for (const event of events) {
+    current += event.delta
+    if (current > peak) peak = current
+  }
+  return peak
+}
+
+/**
  * The fixture declares what it did; the recorded counters must agree. This is
  * what makes an offline result deterministic in the way that matters: not "the
  * wall clock was identical", but "the product counted exactly the model calls

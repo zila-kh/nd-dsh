@@ -125,6 +125,51 @@ describe('ExecutionCoordinator', () => {
     await coordinator.close()
   })
 
+  it('waits out a full pool instead of refusing an explicit dispatch', async () => {
+    const coordinator = new ExecutionCoordinator()
+    const pools = [{ key: 'project:p:execution', limit: 1 }]
+    const holding = await coordinator.acquire({ kind: 'execution', projectId: 'p', pools })
+
+    const waiting = coordinator.acquireWhenAvailable({ kind: 'execution', projectId: 'p', taskId: 'task-2', pools }, 5_000)
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    // The waiter must not have reserved the slot it is waiting for.
+    expect(coordinator.snapshot().activePermits).toBe(1)
+
+    await coordinator.release(holding)
+    const queued = await waiting
+    expect(queued.input.taskId).toBe('task-2')
+    expect(coordinator.snapshot().activePermits).toBe(1)
+
+    await coordinator.release(queued)
+    await coordinator.close()
+  })
+
+  it('reports the pool as full once the wait deadline passes', async () => {
+    const coordinator = new ExecutionCoordinator()
+    const pools = [{ key: 'project:p:execution', limit: 1 }]
+    const holding = await coordinator.acquire({ kind: 'execution', projectId: 'p', pools })
+
+    await expect(coordinator.acquireWhenAvailable({ kind: 'execution', projectId: 'p', pools }, 300))
+      .rejects.toBeInstanceOf(RuntimeCapacityError)
+    // Giving up must not have disturbed the permit that is legitimately running.
+    expect(coordinator.snapshot().activePermits).toBe(1)
+
+    await coordinator.release(holding)
+    await coordinator.close()
+  })
+
+  it('does not spend the deadline waiting on a state that waiting cannot fix', async () => {
+    const coordinator = new ExecutionCoordinator()
+    // A blocked coordinator needs durable-run reconciliation. Retrying the same
+    // acquire until the deadline would only delay an error the caller must see.
+    coordinator.invalidateForCoreRestart('ND Core restarted while organization work was active. Durable runs must be reconciled before new dispatch.')
+    const started = Date.now()
+    await expect(coordinator.acquireWhenAvailable({ kind: 'execution', pools: [{ key: 'project:p:execution', limit: 1 }] }, 5_000))
+      .rejects.toThrow(/must be reconciled/i)
+    expect(Date.now() - started).toBeLessThan(1_000)
+    await coordinator.close()
+  })
+
   it('announces capacity releases for resume, and stays silent while closing', async () => {
     const coordinator = new ExecutionCoordinator()
     const events: CapacityReleaseEvent[] = []

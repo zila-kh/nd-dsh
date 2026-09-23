@@ -212,6 +212,57 @@ describe('OrganizationStore', () => {
     expect(second.agent?.id).not.toBe(first.agent?.id)
   })
 
+  it('releases one reviewer that settled two concurrent reviews out of order', async () => {
+    const store = await storeFixture()
+    let state = await store.mutate({ type: 'company.create', name: 'Concurrent Review Co', mission: 'Review several tasks at once' })
+    const company = state.companies[0]!
+    const reviewerRole = state.roles.find((item) => item.companyId === company.id && item.name === 'Reviewer')!
+    const reviewer = state.agents.find((item) => item.companyId === company.id && item.roleId === reviewerRole.id)!
+    state = await store.mutate({ type: 'project.create', companyId: company.id, name: 'Concurrent app', objective: 'Review in parallel' })
+    const project = state.projects[0]!
+    await store.mutate({ type: 'task.create', companyId: company.id, projectId: project.id, title: 'Task A', description: 'First' })
+    await store.mutate({ type: 'task.create', companyId: company.id, projectId: project.id, title: 'Task B', description: 'Second' })
+    state = await store.state()
+    const [taskA, taskB] = state.tasks
+
+    // A company with one Reviewer agent reaches this as soon as two tasks are in
+    // review together: the same reviewer owns both runs at once.
+    await store.markReviewStarted(taskA!.id, 'review-a', reviewer.id)
+    await store.markReviewStarted(taskB!.id, 'review-b', reviewer.id)
+
+    await store.completeReview(taskA!.id, true, 'passed')
+    await store.completeReview(taskB!.id, true, 'passed')
+
+    state = await store.state()
+    // A reviewer left 'reviewing' is permanently deprioritised by pickReviewer,
+    // so with one reviewer agent the company stops reviewing altogether.
+    expect(state.agents.find((item) => item.id === reviewer.id)?.status).toBe('idle')
+  })
+
+  it('clears the review session of the reviewer that actually owns the task', async () => {
+    const store = await storeFixture()
+    let state = await store.mutate({ type: 'company.create', name: 'Retry Review Co', mission: 'Let a failed review retry' })
+    const company = state.companies[0]!
+    const reviewerRole = state.roles.find((item) => item.companyId === company.id && item.name === 'Reviewer')!
+    const reviewer = state.agents.find((item) => item.companyId === company.id && item.roleId === reviewerRole.id)!
+    state = await store.mutate({ type: 'project.create', companyId: company.id, name: 'Retry app', objective: 'Retry reviews' })
+    const project = state.projects[0]!
+    await store.mutate({ type: 'task.create', companyId: company.id, projectId: project.id, title: 'Task A', description: 'First' })
+    await store.mutate({ type: 'task.create', companyId: company.id, projectId: project.id, title: 'Task B', description: 'Second' })
+    state = await store.state()
+    const [taskA, taskB] = state.tasks
+
+    await store.markReviewStarted(taskA!.id, 'review-a', reviewer.id)
+    await store.markReviewStarted(taskB!.id, 'review-b', reviewer.id)
+
+    // Task A's review run failed; clearing it must free the reviewer so the
+    // Review action can retry, even though the agent now points at task B.
+    await store.clearReviewSession(taskA!.id)
+    state = await store.state()
+    expect(state.tasks.find((item) => item.id === taskA!.id)?.reviewSessionId).toBeUndefined()
+    expect(state.agents.find((item) => item.id === reviewer.id)?.status).toBe('idle')
+  })
+
   it('prefers a healthy reviewer route different from the worker route', async () => {
     const store = await storeFixture()
     let state = await store.mutate({ type: 'company.create', name: 'Route Co', mission: 'Keep review independent' })
