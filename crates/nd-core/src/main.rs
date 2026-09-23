@@ -271,7 +271,8 @@ fn dispatch(
         )?),
         "scheduler.acquire" => {
             let acquire = from_params::<AcquireParams>(params)?;
-            let intent_key = format!("lease.acquire:{request_id}");
+            let effect_identity = acquire.permit_id.as_deref().unwrap_or(request_id);
+            let intent_key = format!("lease.acquire:{effect_identity}");
             let journal_enabled = state.effect_journal.stats().configured;
             if journal_enabled {
                 state.effect_journal.append(EffectJournalAppendParams {
@@ -350,7 +351,7 @@ fn dispatch(
         "scheduler.heartbeat" => to_value(state.scheduler.heartbeat(from_params(params)?)?),
         "scheduler.release" => {
             let params = from_params::<ReleaseParams>(params)?;
-            let key = format!("lease.release:{request_id}");
+            let key = format!("lease.release:{}", params.permit_id);
             let journal_enabled = state.effect_journal.stats().configured;
             if journal_enabled {
                 state.effect_journal.append(EffectJournalAppendParams {
