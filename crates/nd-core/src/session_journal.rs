@@ -248,7 +248,13 @@ mod tests {
                 max_messages: 10,
             })
             .unwrap();
-        assert_eq!(tail.events.iter().map(|event| event.seq).collect::<Vec<_>>(), vec![3, 4, 5]);
+        assert_eq!(
+            tail.events
+                .iter()
+                .map(|event| event.seq)
+                .collect::<Vec<_>>(),
+            vec![3, 4, 5]
+        );
         assert_eq!(tail.first_seq, Some(3));
         assert_eq!(tail.last_seq, Some(5));
     }
@@ -278,8 +284,24 @@ mod tests {
                 })
                 .unwrap();
         }
-        assert!(store.reset(SessionJournalSessionParams { session_id: "a".into() }).unwrap());
+        assert!(
+            store
+                .reset(SessionJournalSessionParams {
+                    session_id: "a".into()
+                })
+                .unwrap()
+        );
         assert_eq!(store.stats().session_count, 1);
-        assert_eq!(store.tail(SessionJournalTailParams { session_id: "b".into(), max_messages: 5 }).unwrap().events.len(), 1);
+        assert_eq!(
+            store
+                .tail(SessionJournalTailParams {
+                    session_id: "b".into(),
+                    max_messages: 5,
+                })
+                .unwrap()
+                .events
+                .len(),
+            1
+        );
     }
 }
