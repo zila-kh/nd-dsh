@@ -304,15 +304,26 @@ function guardOrchestrator(
   orchestrator.runTask = async (taskId: string, explicit = true) => {
     const context = await store.taskContext(taskId)
     await control.assertRunnable(context.project.id, 'task.execute', taskId)
+    // An explicit dispatch waits out a full pool instead of refusing the task.
+    // The pool bounds how many tasks run *simultaneously*; it is not a decision
+    // about which of the tasks the user asked for should be dropped.
+    //
+    // Autopilot keeps the immediate refusal: `fillParallelReadyTasks` catches
+    // RuntimeCapacityError to park the project and resume on the next release,
+    // and blocking here would hold its fill guard for the whole wait instead.
+    const claims = await control.runtimeClaims(context.project.id, 'task.execute', taskId)
+    const permitInput = {
+      companyId: context.company.id,
+      projectId: context.project.id,
+      taskId,
+      ...(context.agent?.id ? { agentId: context.agent.id } : {}),
+      kind: 'execution' as const,
+      pools: claims,
+    }
     const permit = executionCoordinator
-      ? await executionCoordinator.acquire({
-          companyId: context.company.id,
-          projectId: context.project.id,
-          taskId,
-          ...(context.agent?.id ? { agentId: context.agent.id } : {}),
-          kind: 'execution',
-          pools: await control.runtimeClaims(context.project.id, 'task.execute', taskId),
-        })
+      ? explicit
+        ? await executionCoordinator.acquireWhenAvailable(permitInput)
+        : await executionCoordinator.acquire(permitInput)
       : undefined
     try {
       const result = executionCoordinator && permit
@@ -330,15 +341,20 @@ function guardOrchestrator(
     const context = await store.taskContext(taskId)
     await control.assertRunnable(context.project.id, 'task.review', taskId)
     const reviewer = await store.reviewerForTask(taskId)
+    const reviewPermitInput = {
+      companyId: context.company.id,
+      projectId: context.project.id,
+      taskId,
+      ...(reviewer.agent?.id ? { agentId: reviewer.agent.id } : {}),
+      kind: 'review' as const,
+      pools: await control.runtimeClaims(context.project.id, 'task.review', taskId),
+    }
+    // Same split as task execution: a user asking for a review waits for a
+    // reviewer slot, an automatic one reports the pool as full and resumes later.
     const permit = executionCoordinator
-      ? await executionCoordinator.acquire({
-          companyId: context.company.id,
-          projectId: context.project.id,
-          taskId,
-          ...(reviewer.agent?.id ? { agentId: reviewer.agent.id } : {}),
-          kind: 'review',
-          pools: await control.runtimeClaims(context.project.id, 'task.review', taskId),
-        })
+      ? explicit
+        ? await executionCoordinator.acquireWhenAvailable(reviewPermitInput)
+        : await executionCoordinator.acquire(reviewPermitInput)
       : undefined
     try {
       const result = executionCoordinator && permit

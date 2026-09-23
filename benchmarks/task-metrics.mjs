@@ -12,6 +12,7 @@ import {
   TASK_METRICS_BENCHMARK,
   assertTaskMetricsResult,
   evaluateTaskExpectations,
+  summarizeParallelism,
   summarizeTaskSamples,
 } from './lib/task-metrics.mjs'
 
@@ -96,7 +97,78 @@ const PASSES = [
       completedTask: false,
     },
   },
+  // The matched concurrency pair. Both arms run the same four read-only tasks
+  // against the same fixture; only the dispatch differs. `stepMs` is non-zero
+  // because a task with no duration cannot overlap anything measurably — the
+  // delay is what makes "did these run at the same time" answerable from the
+  // recorded intervals rather than assumed from the dispatch call.
+  {
+    name: 'sequential-4x',
+    tasks: 4,
+    readOnly: true,
+    fixture: { steps: 3, toolCalls: 3, stepMs: 150, verify: 'pass', failRun: false },
+    expected: {
+      modelRoundTrips: 3,
+      toolCalls: 3,
+      escalations: 0,
+      verification: 'passed',
+      outcome: 'completed',
+      completedTask: true,
+    },
+  },
+  {
+    name: 'parallel-4x',
+    tasks: 4,
+    parallel: true,
+    readOnly: true,
+    fixture: { steps: 3, toolCalls: 3, stepMs: 150, verify: 'pass', failRun: false },
+    expected: {
+      modelRoundTrips: 3,
+      toolCalls: 3,
+      escalations: 0,
+      verification: 'passed',
+      outcome: 'completed',
+      completedTask: true,
+    },
+  },
+  // One more task than the execution pool allows. This is the arm that tests
+  // queueing rather than throughput: before an explicit dispatch waited for a
+  // slot, the fifth task was refused outright with "runtime pool ... is full"
+  // and the pass failed. Passing now means it waited and then ran, and the peak
+  // concurrency check below means it waited *instead of* exceeding the cap.
+  {
+    name: 'overflow-5x',
+    tasks: 5,
+    parallel: true,
+    readOnly: true,
+    fixture: { steps: 3, toolCalls: 3, stepMs: 150, verify: 'pass', failRun: false },
+    expected: {
+      modelRoundTrips: 3,
+      toolCalls: 3,
+      escalations: 0,
+      verification: 'passed',
+      outcome: 'completed',
+      completedTask: true,
+    },
+  },
 ]
+
+/**
+ * Concurrency budgets for the matched pair above.
+ *
+ * Both arms dispatch four tasks, and the product's default execution pool is
+ * also four, so `peakConcurrency` is expected to reach 4: a lower number means
+ * either the pool ceiling or the dispatch path regressed, and both are worth
+ * failing on rather than merely observing.
+ *
+ * The speedup floor sits well under the ~3.8 measured on the reference machine
+ * so a slower or busier machine can still record a baseline, but far above the
+ * ~1.0 a serialized arm produces. It is a ratio computed inside each arm, not a
+ * wall-clock threshold, so it does not drift with the hardware.
+ */
+const PARALLEL_SPEEDUP_FLOOR = 2.5
+const PARALLEL_IPC_GROWTH_BUDGET = 1.2
+const PARALLEL_MIN_PEAK_CONCURRENCY = 4
 
 const BASELINE_PATH = join(benchmarkRoot, 'benchmarks', 'baselines', 'agent-task-normal-loop.json')
 const require = createRequire(import.meta.url)
@@ -192,6 +264,7 @@ async function record() {
       'Tasks run through the production task path: organization records, runtime permits, isolated task worktrees, the real engine router and machine verification.',
       `Windows npm-style shims are resolved to their Node entrypoint before spawn, so multi-line prompts arrive intact (shim: ${shimKind}).`,
       'A task counts as completed only when its machine verification passed. Failed, canceled and interrupted runs are reported, never dropped.',
+      'The sequential/parallel pair dispatches the same four tasks and derives overlap from the recorded run intervals, so how many tasks really ran at once is decided by the product execution pool rather than asserted by the pass.',
     ],
     fixture: {
       engineId: 'opencode-cli',
@@ -206,6 +279,7 @@ async function record() {
     summary: summarizeTaskSamples(samples, { wallTimeScope: 'excludes-model-latency' }),
     expectations: evaluateTaskExpectations(tasks, samples),
     fastPathComparison: compareFastPath(passes, samples),
+    parallelComparison: compareParallel(passes, samples),
   }
   assertTaskMetricsResult(document)
 
@@ -244,13 +318,25 @@ async function verifyResult(target) {
   // before the comparison existed cannot pass as a baseline.
   const fastPathComparison = compareFastPath(document.passes, document.samples)
   const comparisonMatches = JSON.stringify(document.fastPathComparison) === JSON.stringify(fastPathComparison)
+  // The concurrency verdict is re-derived from the stored intervals as well, so
+  // a speedup or peak-concurrency number that was written by hand, or recorded
+  // before these arms existed, cannot pass as a baseline either.
+  const parallelComparison = compareParallel(document.passes, document.samples)
+  const parallelMatches = JSON.stringify(document.parallelComparison) === JSON.stringify(parallelComparison)
   const verdict = {
-    status: stored === actual && !expectations.deviations.length && comparisonMatches && fastPathComparison.status === 'pass' ? 'pass' : 'fail',
+    status: stored === actual
+      && !expectations.deviations.length
+      && comparisonMatches
+      && fastPathComparison.status === 'pass'
+      && parallelMatches
+      && parallelComparison.status === 'pass' ? 'pass' : 'fail',
     file: relativeToRepo(target),
     schema: 'valid',
     summaryRecomputed: stored === actual,
     fastPathComparisonRecomputed: comparisonMatches,
     fastPathComparison,
+    parallelComparisonRecomputed: parallelMatches,
+    parallelComparison,
     completedTasks: recomputed.completedTasks,
     tasks: recomputed.tasks,
     completionRate: recomputed.completionRate,
@@ -270,6 +356,10 @@ function judge(document) {
   if (comparison?.status !== 'pass') {
     failures.push(...(comparison?.failures ?? ['the fast-path comparison (normal-read vs fast-read arms) is missing from this result']))
   }
+  const parallel = document.parallelComparison
+  if (parallel?.status !== 'pass') {
+    failures.push(...(parallel?.failures ?? ['the parallel comparison (sequential-4x vs parallel-4x arms) is missing from this result']))
+  }
   return {
     status: failures.length ? 'fail' : 'pass',
     tasks: summary.tasks,
@@ -278,6 +368,7 @@ function judge(document) {
     counts: summary.counters,
     perCompletedTask: summary.perCompletedTask,
     fastPathComparison: comparison,
+    parallelComparison: parallel,
     fixtureChecks: expectations.checked,
     failures,
   }
@@ -311,6 +402,7 @@ function scenarioFor(pass) {
     testCommand: pass.readOnly ? AGENT_TASK_READ_ONLY_TEST_COMMAND : AGENT_TASK_TEST_COMMAND,
     expected: pass.expected,
     ...(pass.fastPath ? { fastPath: true } : {}),
+    ...(pass.parallel ? { parallel: true } : {}),
     ...(pass.cancelAfterRoundTrips === undefined ? {} : { cancelAfterRoundTrips: pass.cancelAfterRoundTrips }),
   }
 }
@@ -417,6 +509,99 @@ function compareFastPath(passes, samples) {
   if (fast.completionRate < normal.completionRate) failures.push('fast path completion rate regressed')
   if (fast.escalations > 0.1) failures.push('fast path escalation rate exceeded the deterministic fixture budget')
   return { status: failures.length ? 'fail' : 'pass', normal, fast, failures }
+}
+
+/**
+ * The concurrency budgets, derived from the recorded run intervals of the
+ * matched `sequential-4x` and `parallel-4x` arms.
+ *
+ * The claim being tested is the one a user actually makes: "I handed ND several
+ * tasks at once and they finished sooner than one after another." So the gate is
+ * not a wall-clock threshold — those drift with the machine — but a ratio
+ * computed inside each arm, plus the overlap observed between the recorded
+ * intervals.
+ *
+ * `peakConcurrency` is a budget and not merely an observation because it reports
+ * the ceiling the product imposed, which is what a user actually experiences:
+ * four dispatched tasks that only ever overlap two is a regression in the
+ * execution pool even when the wall time still looks better than sequential.
+ */
+function compareParallel(passes, samples) {
+  const arm = (name) => {
+    const pass = passes.find((entry) => entry.name === name)
+    if (pass === undefined) return []
+    const ids = new Set((pass.tasks ?? []).map((task) => task.runId))
+    return samples.filter((sample) => ids.has(sample.runId))
+  }
+  const mean = (values) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0
+  const metrics = (items) => {
+    const completed = items.filter((sample) => sample.completedTask === true)
+    return {
+      ...summarizeParallelism(items),
+      samples: items.length,
+      completed: completed.length,
+      completionRate: items.length ? completed.length / items.length : 0,
+      modelRoundTrips: mean(completed.map((sample) => sample.modelRoundTrips)),
+      toolCalls: mean(completed.map((sample) => sample.toolCalls)),
+      ipcCrossings: mean(completed.map((sample) => sample.ipcCrossings)),
+    }
+  }
+  const sequential = metrics(arm('sequential-4x'))
+  const parallel = metrics(arm('parallel-4x'))
+  const overflow = metrics(arm('overflow-5x'))
+  const budgets = {
+    speedupFloor: PARALLEL_SPEEDUP_FLOOR,
+    ipcGrowthBudget: PARALLEL_IPC_GROWTH_BUDGET,
+    minPeakConcurrency: PARALLEL_MIN_PEAK_CONCURRENCY,
+  }
+  if (sequential.completed === 0 || parallel.completed === 0 || overflow.completed === 0) {
+    return {
+      status: 'not-run',
+      sequential,
+      parallel,
+      overflow,
+      budgets,
+      failures: ['the sequential-4x, parallel-4x and overflow-5x arms did not all record a verified completion, so the concurrency budgets were not measured'],
+    }
+  }
+  const failures = []
+  if (!(parallel.peakConcurrency >= budgets.minPeakConcurrency)) {
+    failures.push(`the parallel arm peaked at ${parallel.peakConcurrency} concurrent tasks, below the required ${budgets.minPeakConcurrency}`)
+  }
+  if (!(parallel.speedup >= PARALLEL_SPEEDUP_FLOOR)) {
+    failures.push(`parallel speedup ${round(parallel.speedup)} is below the ${PARALLEL_SPEEDUP_FLOOR} floor (sequential arm measured ${round(sequential.speedup)})`)
+  }
+  if (!(parallel.spanMs < sequential.spanMs)) {
+    failures.push(`dispatching four tasks together took ${Math.round(parallel.spanMs)}ms against ${Math.round(sequential.spanMs)}ms one after another`)
+  }
+  if (parallel.completionRate < sequential.completionRate) {
+    failures.push('parallel dispatch regressed the completion rate, so the overlap was bought with unfinished work')
+  }
+  // Per-task boundary cost must not explode just because tasks share the process.
+  // The ratio is only meaningful against a non-zero sequential denominator.
+  if (sequential.ipcCrossings > 0 && parallel.ipcCrossings > sequential.ipcCrossings * PARALLEL_IPC_GROWTH_BUDGET) {
+    failures.push(`per-task nd-core IPC crossings grew from ${round(sequential.ipcCrossings)} to ${round(parallel.ipcCrossings)}, beyond the ${PARALLEL_IPC_GROWTH_BUDGET}x concurrency budget`)
+  }
+  // The overflow arm dispatches one task more than the pool allows, so it tests
+  // queueing rather than throughput. Three things must hold: every dispatched
+  // task produced a sample, every one of those completed, and concurrency never
+  // rose above what the in-cap arm reached. The last is what separates "the
+  // excess waited for a slot" from "the ceiling was simply ignored".
+  const dispatched = (passes.find((entry) => entry.name === 'overflow-5x')?.tasks ?? []).length
+  if (overflow.samples !== dispatched) {
+    failures.push(`the overflow arm recorded ${overflow.samples} sample(s) for ${dispatched} dispatched task(s), so a task was dropped instead of queued`)
+  }
+  if (overflow.completed !== overflow.samples) {
+    failures.push(`the overflow arm completed ${overflow.completed} of ${overflow.samples} tasks, so the pool refused the excess instead of queueing it`)
+  }
+  if (overflow.peakConcurrency > parallel.peakConcurrency) {
+    failures.push(`the overflow arm ran ${overflow.peakConcurrency} tasks at once against ${parallel.peakConcurrency} for the in-cap arm, so queueing exceeded the ceiling instead of waiting for it`)
+  }
+  return { status: failures.length ? 'fail' : 'pass', sequential, parallel, overflow, budgets, failures }
+}
+
+function round(value) {
+  return Math.round(value * 100) / 100
 }
 
 async function rm(path) {

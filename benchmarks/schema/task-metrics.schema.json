@@ -19,7 +19,8 @@
     "samples",
     "summary",
     "expectations",
-    "fastPathComparison"
+    "fastPathComparison",
+    "parallelComparison"
   ],
   "properties": {
     "schemaVersion": { "const": 1 },
@@ -252,6 +253,103 @@
             "toolCalls": { "type": "number", "minimum": 0 },
             "ipcCrossings": { "type": "number", "minimum": 0 },
             "escalations": { "type": "number", "minimum": 0 }
+          }
+        },
+        "failures": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "parallelComparison": {
+      "type": "object",
+      "description": "The concurrency budgets. The matched sequential-4x and parallel-4x arms dispatch the same tasks with the same fixture, so the difference between them is attributable to dispatch order alone. Overlap is derived from the recorded run intervals, never asserted by the driver, so how many tasks really ran at once reflects the product's execution pool.",
+      "required": ["status", "sequential", "parallel", "overflow", "budgets", "failures"],
+      "properties": {
+        "status": { "enum": ["pass", "fail", "not-run"] },
+        "sequential": {
+          "type": "object",
+          "required": [
+            "tasks", "spanMs", "sumTaskWallMs", "meanTaskWallMs", "speedup",
+            "peakConcurrency", "samples", "completed", "completionRate",
+            "modelRoundTrips", "toolCalls", "ipcCrossings"
+          ],
+          "properties": {
+            "tasks": { "type": "integer", "minimum": 0 },
+            "spanMs": { "type": "number", "minimum": 0 },
+            "sumTaskWallMs": { "type": "number", "minimum": 0 },
+            "meanTaskWallMs": { "type": "number", "minimum": 0 },
+            "speedup": { "type": "number", "minimum": 0 },
+            "peakConcurrency": { "type": "integer", "minimum": 0 },
+            "samples": { "type": "integer", "minimum": 0 },
+            "completed": { "type": "integer", "minimum": 0 },
+            "completionRate": { "type": "number", "minimum": 0, "maximum": 1 },
+            "modelRoundTrips": { "type": "number", "minimum": 0 },
+            "toolCalls": { "type": "number", "minimum": 0 },
+            "ipcCrossings": { "type": "number", "minimum": 0 }
+          }
+        },
+        "parallel": {
+          "type": "object",
+          "required": [
+            "tasks", "spanMs", "sumTaskWallMs", "meanTaskWallMs", "speedup",
+            "peakConcurrency", "samples", "completed", "completionRate",
+            "modelRoundTrips", "toolCalls", "ipcCrossings"
+          ],
+          "properties": {
+            "tasks": { "type": "integer", "minimum": 0 },
+            "spanMs": {
+              "type": "number",
+              "minimum": 0,
+              "description": "First task start to last task finish. Compared against sumTaskWallMs to derive speedup."
+            },
+            "sumTaskWallMs": { "type": "number", "minimum": 0 },
+            "meanTaskWallMs": { "type": "number", "minimum": 0 },
+            "speedup": {
+              "type": "number",
+              "minimum": 0,
+              "description": "sumTaskWallMs / spanMs. ~1 means the product serialized the tasks; N means N tasks fully overlapped. 0 means the span was not measurable."
+            },
+            "peakConcurrency": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "The most tasks in flight at one instant, swept from the recorded intervals. Reports the ceiling the product imposed, which may be lower than the number dispatched."
+            },
+            "samples": { "type": "integer", "minimum": 0 },
+            "completed": { "type": "integer", "minimum": 0 },
+            "completionRate": { "type": "number", "minimum": 0, "maximum": 1 },
+            "modelRoundTrips": { "type": "number", "minimum": 0 },
+            "toolCalls": { "type": "number", "minimum": 0 },
+            "ipcCrossings": { "type": "number", "minimum": 0 }
+          }
+        },
+        "overflow": {
+          "type": "object",
+          "description": "An arm that dispatches more tasks than the execution pool allows. It must complete every task while never exceeding the concurrency the in-cap arm reached, which is what distinguishes queueing from ignoring the ceiling.",
+          "required": [
+            "tasks", "spanMs", "sumTaskWallMs", "meanTaskWallMs", "speedup",
+            "peakConcurrency", "samples", "completed", "completionRate",
+            "modelRoundTrips", "toolCalls", "ipcCrossings"
+          ],
+          "properties": {
+            "tasks": { "type": "integer", "minimum": 0 },
+            "spanMs": { "type": "number", "minimum": 0 },
+            "sumTaskWallMs": { "type": "number", "minimum": 0 },
+            "meanTaskWallMs": { "type": "number", "minimum": 0 },
+            "speedup": { "type": "number", "minimum": 0 },
+            "peakConcurrency": { "type": "integer", "minimum": 0 },
+            "samples": { "type": "integer", "minimum": 0 },
+            "completed": { "type": "integer", "minimum": 0 },
+            "completionRate": { "type": "number", "minimum": 0, "maximum": 1 },
+            "modelRoundTrips": { "type": "number", "minimum": 0 },
+            "toolCalls": { "type": "number", "minimum": 0 },
+            "ipcCrossings": { "type": "number", "minimum": 0 }
+          }
+        },
+        "budgets": {
+          "type": "object",
+          "required": ["speedupFloor", "ipcGrowthBudget", "minPeakConcurrency"],
+          "properties": {
+            "speedupFloor": { "type": "number", "minimum": 1 },
+            "ipcGrowthBudget": { "type": "number", "minimum": 1 },
+            "minPeakConcurrency": { "type": "integer", "minimum": 2 }
           }
         },
         "failures": { "type": "array", "items": { "type": "string" } }

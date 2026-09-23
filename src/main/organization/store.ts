@@ -293,9 +293,9 @@ export class OrganizationStore {
             task.reviewSummary = [task.reviewSummary, interruption].filter(Boolean).join('\n\n').slice(0, 20_000)
           }
           task.updatedAt = now
-          for (const agent of this.value.agents.filter((item) => item.currentTaskId === task.id && (item.status === 'working' || item.status === 'reviewing'))) {
-            this.setAgent(agent.id, 'idle')
-          }
+          // Settle by the owner this run actually belonged to: an interrupted
+          // review releases the reviewer, an interrupted execution the worker.
+          this.releaseTaskAgent(run.kind === 'task-review' ? task.reviewerAgentId : task.assignedAgentId, task.id)
         }
       }
 
@@ -323,7 +323,7 @@ export class OrganizationStore {
     await this.load()
     const task = this.task(taskId)
     task.status = 'review'; task.resultSummary = summary.slice(0, 20_000); task.updatedAt = Date.now()
-    this.setAgent(task.assignedAgentId, 'idle')
+    this.releaseTaskAgent(task.assignedAgentId, task.id)
     this.activity(task.companyId, task.projectId, 'task.review-ready', `“${task.title}” is ready for independent review.`)
     this.teamEvent(task, 'review-request', `“${task.title}” is checkpointed and ready for independent review.`)
     this.refreshProject(task.projectId)
@@ -361,9 +361,7 @@ export class OrganizationStore {
     const task = this.task(taskId)
     delete task.reviewSessionId
     task.updatedAt = Date.now()
-    for (const agent of this.value.agents.filter((item) => item.status === 'reviewing' && item.currentTaskId === taskId)) {
-      this.setAgent(agent.id, 'idle')
-    }
+    this.releaseTaskAgent(task.reviewerAgentId, taskId)
     await this.save()
   }
 
@@ -371,8 +369,7 @@ export class OrganizationStore {
     await this.load()
     const task = this.task(taskId)
     task.status = passed ? 'completed' : 'blocked'; task.reviewSummary = summary.slice(0, 20_000); task.updatedAt = Date.now()
-    const reviewer = this.value.agents.find((agent) => agent.status === 'reviewing' && agent.currentTaskId === task.id)
-    this.setAgent(reviewer?.id, 'idle')
+    this.releaseTaskAgent(task.reviewerAgentId, task.id)
     this.addMemory({
       companyId: task.companyId,
       projectId: task.projectId,
@@ -410,7 +407,7 @@ export class OrganizationStore {
     task.integrationSummary = clean(summary).slice(0, 20_000)
     delete task.integratedHead
     task.updatedAt = Date.now()
-    this.setAgent(task.assignedAgentId, 'idle')
+    this.releaseTaskAgent(task.assignedAgentId, task.id)
     this.activity(task.companyId, task.projectId, 'task.integration-conflict', `Integration conflict for “${task.title}”.`)
     this.teamEvent(task, 'blocker', `Integration conflict for “${task.title}”: ${task.integrationSummary.slice(0, 500)}`)
     this.refreshProject(task.projectId)
@@ -436,7 +433,7 @@ export class OrganizationStore {
     task.resultSummary = summary.slice(0, 20_000)
     task.reviewSummary = 'Completed by workflow without an independent review step.'
     task.updatedAt = Date.now()
-    this.setAgent(task.assignedAgentId, 'idle')
+    this.releaseTaskAgent(task.assignedAgentId, task.id)
     this.addMemory({
       companyId: task.companyId,
       projectId: task.projectId,
@@ -720,6 +717,34 @@ export class OrganizationStore {
       .sort((a, b) => a.busy - b.busy || Number(a.sameRoute) - Number(b.sameRoute) || a.reviews - b.reviews || a.index - b.index)[0]?.agent
   }
   private setAgent(agentId: string | undefined, status: AgentStatus, taskId?: string, sessionId?: string): void { if (!agentId) return; const agent = this.value.agents.find((item) => item.id === agentId); if (!agent) return; agent.status = status; if (taskId) agent.currentTaskId = taskId; else delete agent.currentTaskId; if (sessionId) agent.lastSessionId = sessionId }
+
+  /**
+   * Settle the agent that owns a task once that task stops being in flight.
+   *
+   * The owner is read from the task, never from the agent's `currentTaskId`: an
+   * agent holds one such slot but can own several concurrent tasks, so a second
+   * task starting overwrites it and settling the first would silently find
+   * nobody. That left a reviewer stuck in `reviewing`, which `pickReviewer`
+   * then deprioritises forever.
+   *
+   * The agent is reported idle only when no other task of its work is still
+   * running or in review; otherwise the slot is re-pointed at that work so the
+   * single status field stays truthful instead of advertising a busy agent as
+   * available for the next dispatch.
+   */
+  private releaseTaskAgent(agentId: string | undefined, settledTaskId: string): void {
+    if (!agentId) return
+    const agent = this.value.agents.find((item) => item.id === agentId)
+    if (!agent) return
+    const remaining = this.value.tasks.find((task) => task.id !== settledTaskId
+      && (task.assignedAgentId === agentId || task.reviewerAgentId === agentId)
+      && (task.status === 'in_progress' || task.status === 'review'))
+    if (remaining) {
+      this.setAgent(agentId, remaining.status === 'review' ? 'reviewing' : 'working', remaining.id)
+      return
+    }
+    this.setAgent(agentId, 'idle')
+  }
   private assertRoleCompany(roleId: string, companyId: string): void { if (!this.value.roles.some((item) => item.id === roleId && item.companyId === companyId)) throw new Error('Role crosses company boundary') }
   private assertTeamCompany(teamId: string, companyId: string): void { if (!this.value.teams.some((item) => item.id === teamId && item.companyId === companyId)) throw new Error('Team crosses company boundary') }
   private company(id: string): Company { return must(this.value.companies.find((item) => item.id === id), 'Company') }

@@ -59,6 +59,16 @@ export interface AgentTaskBenchmarkScenario {
   cancelAfterRoundTrips?: number
   /** Use the production deterministic fast path instead of starting a coding engine. */
   fastPath?: boolean
+  /**
+   * Dispatch every task concurrently instead of one after another. A matched
+   * sequential/parallel pair shares its fixture and task count, so the only
+   * difference between the two arms is whether the product overlapped them.
+   *
+   * How many actually overlap is the product's decision, not this pass's: the
+   * execution pool defaults to two workers per project, so an arm that dispatches
+   * more tasks than that measures the real ceiling a user hits.
+   */
+  parallel?: boolean
 }
 
 export interface AgentTaskBenchmarkOptions {
@@ -102,6 +112,16 @@ export function agentTaskBenchmarkScenarioFromEnv(value: string | undefined): Ag
   for (const key of ['modelRoundTrips', 'toolCalls', 'escalations'] as const) {
     const value = expected[key]
     if (value !== undefined && !Number.isInteger(value)) throw new Error(`Agent-task benchmark expectation ${key} must be an integer.`)
+  }
+  // A concurrency claim needs at least two tasks, and a cancellation pass waits
+  // for one named task to reach a round-trip count before cancelling it. With
+  // every task in flight at once there is no single "the task" to cancel, so the
+  // two modes are alternatives rather than a combination.
+  if (scenario.parallel && (scenario.tasks ?? 0) < 2) {
+    throw new Error('Agent-task benchmark scenario needs at least two tasks to measure parallel dispatch.')
+  }
+  if (scenario.parallel && scenario.cancelAfterRoundTrips !== undefined) {
+    throw new Error('Agent-task benchmark scenario cannot combine parallel dispatch with cancelAfterRoundTrips.')
   }
   return scenario as AgentTaskBenchmarkScenario
 }
@@ -153,9 +173,12 @@ export async function runAgentTaskBenchmark(options: AgentTaskBenchmarkOptions):
   }
   log(`[agent-task] pass ${scenario.name}: engine ${engine.id} in ${options.workspaceRoot}`)
 
-  const tasks: AgentTaskBenchmarkTask[] = []
+  // Every task is created before any of them is dispatched, so a matched
+  // sequential/parallel pair differs in dispatch order alone rather than in how
+  // much organization setup each arm happened to overlap with.
+  const created: Array<{ taskId: string; title: string }> = []
   for (let index = 0; index < scenario.tasks; index += 1) {
-    const created = await options.store.mutate({
+    const withTask = await options.store.mutate({
       type: 'task.create',
       companyId,
       projectId,
@@ -163,15 +186,25 @@ export async function runAgentTaskBenchmark(options: AgentTaskBenchmarkOptions):
       description: scenario.taskDescription,
       acceptanceCriteria: scenario.acceptanceCriteria,
     })
-    const task = created.tasks.filter((item) => item.projectId === projectId).at(-1)
+    const task = withTask.tasks.filter((item) => item.projectId === projectId).at(-1)
     if (!task) throw new Error('Agent-task benchmark could not create its task.')
-    const runId = await dispatchTask(options, task.id, log)
-    const sample = options.recorder.samples().find((item) => item.runId === runId)
+    created.push({ taskId: task.id, title: task.title })
+  }
+
+  const dispatched = scenario.parallel
+    ? await dispatchConcurrently(options, created, log)
+    : await dispatchSequentially(options, created, log)
+
+  const recorded = options.recorder.samples()
+  const tasks: AgentTaskBenchmarkTask[] = created.map((item, index) => {
+    const runId = dispatched[index]
+    if (runId === undefined) throw new Error(`Agent-task benchmark recorded no run for task ${item.taskId}.`)
+    const sample = recorded.find((entry) => entry.runId === runId)
     if (!sample) throw new Error(`Agent-task benchmark recorded no sample for run ${runId}.`)
-    tasks.push({
-      taskId: task.id,
+    return {
+      taskId: item.taskId,
       runId,
-      title: task.title,
+      title: item.title,
       expected: scenario.expected,
       observed: {
         modelRoundTrips: sample.modelRoundTrips,
@@ -184,11 +217,11 @@ export async function runAgentTaskBenchmark(options: AgentTaskBenchmarkOptions):
         outcome: sample.outcome,
         completedTask: sample.completedTask,
       },
-    })
-  }
+    }
+  })
 
   const runIds = new Set(tasks.map((item) => item.runId))
-  const samples = options.recorder.samples().filter((item) => runIds.has(item.runId))
+  const samples = recorded.filter((item) => runIds.has(item.runId))
   await writeJson(options.outputPath, {
     schemaVersion: 1,
     kind: 'nd-agent-task-raw',
@@ -226,6 +259,56 @@ export interface AgentTaskBenchmarkTask {
     outcome: string
     completedTask: boolean
   }
+}
+
+/**
+ * The sequential arm: one task settles before the next is dispatched, so the
+ * pass measures a single task's cost with nothing else competing for the
+ * scheduler, the journal or the main-process event loop.
+ */
+async function dispatchSequentially(
+  options: AgentTaskBenchmarkOptions,
+  created: ReadonlyArray<{ taskId: string; title: string }>,
+  log: (line: string) => void,
+): Promise<string[]> {
+  const runIds: string[] = []
+  for (const item of created) runIds.push(await dispatchTask(options, item.taskId, log))
+  return runIds
+}
+
+type ConcurrentDispatch =
+  | { ok: true; taskId: string; runId: string }
+  | { ok: false; taskId: string; error: string }
+
+/**
+ * The parallel arm: every task is handed to the product at once, and the arm
+ * reports what the product did with them. How many actually overlap is decided
+ * by the execution pool rather than here, so a pass that dispatched four tasks
+ * but only ever ran two is reporting the real ceiling a user hits instead of a
+ * number this file chose.
+ *
+ * Each dispatch is settled independently, so one refused or failed task is
+ * reported as the measured outcome it is rather than aborting the arm and
+ * discarding the runs that did complete.
+ */
+async function dispatchConcurrently(
+  options: AgentTaskBenchmarkOptions,
+  created: ReadonlyArray<{ taskId: string; title: string }>,
+  log: (line: string) => void,
+): Promise<string[]> {
+  log(`[agent-task] pass ${options.scenario.name}: dispatching ${created.length} task(s) concurrently`)
+  const settled: ConcurrentDispatch[] = await Promise.all(created.map(async (item): Promise<ConcurrentDispatch> => {
+    try {
+      return { ok: true, taskId: item.taskId, runId: await dispatchTask(options, item.taskId, log) }
+    } catch (error) {
+      return { ok: false, taskId: item.taskId, error: errorMessage(error) }
+    }
+  }))
+  const failures = settled.flatMap((entry) => entry.ok ? [] : [`${entry.taskId}: ${entry.error}`])
+  if (failures.length) {
+    throw new Error(`Agent-task benchmark parallel pass could not settle ${failures.length} task(s): ${failures.join('; ')}`)
+  }
+  return settled.flatMap((entry) => entry.ok ? [entry.runId] : [])
 }
 
 /**

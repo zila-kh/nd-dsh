@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   evaluateTaskExpectations,
+  summarizeParallelism,
   summarizeTaskSamples,
   validateTaskMetricsResult,
 } from '../benchmarks/lib/task-metrics.mjs'
@@ -165,6 +166,14 @@ describe('agent-task result kind', () => {
         fast: { samples: 1, completed: 1, completionRate: 1, modelRoundTrips: 0, toolCalls: 0, ipcCrossings: 9, escalations: 0 },
         failures: [],
       },
+      parallelComparison: {
+        status: 'pass',
+        sequential: { tasks: 4, spanMs: 4_000, sumTaskWallMs: 3_600, meanTaskWallMs: 900, speedup: 0.9, peakConcurrency: 1, samples: 4, completed: 4, completionRate: 1, modelRoundTrips: 3, toolCalls: 3, ipcCrossings: 12 },
+        parallel: { tasks: 4, spanMs: 1_000, sumTaskWallMs: 3_600, meanTaskWallMs: 900, speedup: 3.6, peakConcurrency: 4, samples: 4, completed: 4, completionRate: 1, modelRoundTrips: 3, toolCalls: 3, ipcCrossings: 13 },
+        overflow: { tasks: 5, spanMs: 2_000, sumTaskWallMs: 4_500, meanTaskWallMs: 900, speedup: 2.25, peakConcurrency: 4, samples: 5, completed: 5, completionRate: 1, modelRoundTrips: 3, toolCalls: 3, ipcCrossings: 13 },
+        budgets: { speedupFloor: 2.5, ipcGrowthBudget: 1.2, minPeakConcurrency: 4 },
+        failures: [],
+      },
     }
     expect(validateTaskMetricsResult(document)).toEqual([])
 
@@ -175,11 +184,110 @@ describe('agent-task result kind', () => {
     expect(validateTaskMetricsResult(missingComparison))
       .toContainEqual(expect.stringContaining('fastPathComparison'))
 
+    // Same rule for the concurrency budgets: a baseline recorded before the
+    // sequential/parallel arms existed carries no overlap evidence at all.
+    const missingParallel = { ...document }
+    delete missingParallel.parallelComparison
+    expect(validateTaskMetricsResult(missingParallel))
+      .toContainEqual(expect.stringContaining('parallelComparison'))
+
+    // The overflow arm is part of the same required evidence: a baseline that
+    // never dispatched more tasks than the pool allows says nothing about whether
+    // the excess queues or is refused.
+    const missingOverflow = { ...document, parallelComparison: { ...document.parallelComparison } }
+    delete missingOverflow.parallelComparison.overflow
+    expect(validateTaskMetricsResult(missingOverflow))
+      .toContainEqual(expect.stringContaining('overflow'))
+
     const broken = { ...document, summary: { ...document.summary, completionRate: 4 } }
     expect(validateTaskMetricsResult(broken)).toContainEqual(expect.stringContaining('above maximum 1'))
     expect(validateTaskMetricsResult({ ...document, samples: [{ ...VERIFIED, outcome: 'finished' }] }))
       .toContainEqual(expect.stringContaining('$.samples[0].outcome'))
     expect(validateTaskMetricsResult({ ...document, benchmark: 'core-startup' }))
       .toContainEqual(expect.stringContaining('$.benchmark'))
+  })
+})
+
+/**
+ * The concurrency claim is derived from recorded intervals, so the arithmetic
+ * behind it is testable offline: serialized work, fully overlapped work, and the
+ * shape the product actually produces when its execution pool caps overlap below
+ * the number of dispatched tasks.
+ */
+function interval(id, startedAt, finishedAt, overrides = {}) {
+  return taskSample({
+    runId: `run-${id}`,
+    taskId: `task-${id}`,
+    startedAt,
+    finishedAt,
+    totalWallMs: finishedAt - startedAt,
+    ...overrides,
+  })
+}
+
+describe('parallelism summary', () => {
+  it('reads a serialized pair as no speedup and no overlap', () => {
+    const summary = summarizeParallelism([interval('a', 1_000, 1_500), interval('b', 1_500, 2_000)])
+    expect(summary.tasks).toBe(2)
+    expect(summary.spanMs).toBe(1_000)
+    expect(summary.sumTaskWallMs).toBe(1_000)
+    expect(summary.speedup).toBeCloseTo(1)
+    // A task ending exactly as the next begins is a handoff, not an overlap.
+    expect(summary.peakConcurrency).toBe(1)
+  })
+
+  it('reads fully overlapped work as proportional speedup', () => {
+    const summary = summarizeParallelism([interval('a', 1_000, 2_000), interval('b', 1_000, 2_000)])
+    expect(summary.spanMs).toBe(1_000)
+    expect(summary.sumTaskWallMs).toBe(2_000)
+    expect(summary.speedup).toBeCloseTo(2)
+    expect(summary.peakConcurrency).toBe(2)
+    expect(summary.meanTaskWallMs).toBeCloseTo(1_000)
+  })
+
+  it('reports the ceiling a capped execution pool imposed, not the tasks dispatched', () => {
+    // Four tasks, two at a time: the shape ND produces with its default pool of
+    // two workers per project. Span is two batches, so speedup lands at the cap.
+    const summary = summarizeParallelism([
+      interval('a', 0, 100),
+      interval('b', 0, 100),
+      interval('c', 100, 200),
+      interval('d', 100, 200),
+    ])
+    expect(summary.tasks).toBe(4)
+    expect(summary.spanMs).toBe(200)
+    expect(summary.sumTaskWallMs).toBe(400)
+    expect(summary.speedup).toBeCloseTo(2)
+    expect(summary.peakConcurrency).toBe(2)
+  })
+
+  it('counts the widest instant when overlap is uneven', () => {
+    const summary = summarizeParallelism([
+      interval('a', 0, 300),
+      interval('b', 50, 150),
+      interval('c', 100, 200),
+    ])
+    expect(summary.peakConcurrency).toBe(3)
+    expect(summary.spanMs).toBe(300)
+    expect(summary.sumTaskWallMs).toBe(500)
+  })
+
+  it('excludes unfinished runs and runs that are not task executions', () => {
+    const summary = summarizeParallelism([
+      interval('a', 0, 100),
+      interval('b', 0, 100, { finished: false }),
+      interval('c', 0, 100, { kind: 'pm-plan', taskId: undefined }),
+    ])
+    expect(summary.tasks).toBe(1)
+    expect(summary.peakConcurrency).toBe(1)
+  })
+
+  it('reports an unmeasurable span as zero rather than a division artifact', () => {
+    expect(summarizeParallelism([])).toEqual({
+      tasks: 0, spanMs: 0, sumTaskWallMs: 0, meanTaskWallMs: 0, speedup: 0, peakConcurrency: 0,
+    })
+    // Every task sharing one instant has a zero-length span; an infinite speedup
+    // would pass any floor, so it is reported as unmeasured instead.
+    expect(summarizeParallelism([interval('a', 500, 500), interval('b', 500, 500)]).speedup).toBe(0)
   })
 })

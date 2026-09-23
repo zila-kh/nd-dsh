@@ -60,6 +60,16 @@ interface LocalPermit {
   pools: RuntimePoolClaim[]
 }
 
+/** How long an explicit dispatch waits for a free slot before reporting the pool as full. */
+const DEFAULT_ACQUIRE_WAIT_MS = 30_000
+
+/**
+ * Upper bound on one wait before retrying. A release can land between a refused
+ * acquire and the listener that would report it, so the wait always re-checks on
+ * a short interval instead of relying on the event alone.
+ */
+const CAPACITY_POLL_MS = 250
+
 export class ExecutionCoordinator {
   private readonly permits = new Map<string, RuntimePermit>()
   private readonly sessionPermits = new Map<string, string>()
@@ -110,6 +120,37 @@ export class ExecutionCoordinator {
     const permit: RuntimePermit = { id, input }
     this.permits.set(id, permit)
     return permit
+  }
+
+  /**
+   * Acquire a permit, waiting out a full pool instead of refusing the work.
+   *
+   * A user who starts several tasks at once is asking for them all to run, and
+   * the project pool exists to bound how many run *simultaneously* — not to
+   * decide which of the user's tasks are dropped. Refusing the overflow turned
+   * a scheduling limit into a user-visible failure, so an explicit dispatch waits
+   * for a slot and only gives up on the deadline.
+   *
+   * Only a full pool is worth waiting out. A blocked coordinator (ND Core
+   * restarted, durable runs need reconciling) or a malformed claim will not be
+   * fixed by waiting, so those propagate immediately rather than burning the
+   * whole deadline.
+   *
+   * The task stays `ready` throughout: no run record exists yet, so the UI shows
+   * work that has not started rather than work that appears to be running.
+   */
+  async acquireWhenAvailable(input: RuntimePermitInput, timeoutMs = DEFAULT_ACQUIRE_WAIT_MS): Promise<RuntimePermit> {
+    const deadline = Date.now() + timeoutMs
+    for (;;) {
+      try {
+        return await this.acquire(input)
+      } catch (error) {
+        if (!(error instanceof RuntimeCapacityError) || this.blockedReason || this.closing) throw error
+        const remaining = deadline - Date.now()
+        if (remaining <= 0) throw error
+        await this.waitForCapacityRelease(input, remaining)
+      }
+    }
   }
 
   /**
@@ -264,6 +305,28 @@ export class ExecutionCoordinator {
         console.warn('Runtime capacity release listener failed:', error instanceof Error ? error.message : String(error))
       }
     }
+  }
+
+  /**
+   * Resolves when a permit for the same kind of work is released, or after one
+   * poll interval, whichever comes first. Waking on the interval as well as the
+   * event is what makes a release missed during listener registration harmless:
+   * the caller re-attempts the acquire either way.
+   */
+  private waitForCapacityRelease(input: RuntimePermitInput, timeoutMs: number): Promise<void> {
+    return new Promise((resolve) => {
+      const dispose = this.onCapacityReleased((event) => {
+        if (event.kind !== input.kind) return
+        if (input.projectId && event.projectId && event.projectId !== input.projectId) return
+        settle()
+      })
+      const timer = setTimeout(settle, Math.min(timeoutMs, CAPACITY_POLL_MS))
+      function settle(): void {
+        clearTimeout(timer)
+        dispose()
+        resolve()
+      }
+    })
   }
 
   private async heartbeat(): Promise<void> {

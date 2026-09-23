@@ -2,39 +2,40 @@
   "schemaVersion": 1,
   "benchmark": "agent-task-metrics",
   "taskKind": "agent-task",
-  "timestamp": "2026-09-23T06:05:53.303Z",
+  "timestamp": "2026-09-23T18:47:11.027Z",
   "backend": "rust-core",
-  "commit": "029725fa53916685e2250ffec6a7eda93ab614ce",
+  "commit": "e78cd7ec0325b7494ec08862d2268b095ec05455",
   "buildProfile": "debug",
   "fixtureRevision": "agent-task-v1",
   "ndCore": {
-    "sha256": "1059b7593d6487b333a8d0ac57000dbc83e88e7e0bfadf087377fa4cd31f49a5",
+    "sha256": "caca704bc9ac549ef4876fa47356628dea3bfa9219121999efc1f8f4f83afd4e",
     "source": "binary",
-    "path": "C:\\Users\\MT-Staff\\Documents\\GitHub\\nd-dsh\\target\\debug\\nd-core.exe",
-    "sizeBytes": 6919680
+    "path": "C:\\Users\\dila\\Documents\\GitHub\\nd-dsh\\target\\debug\\nd-core.exe",
+    "sizeBytes": 7166464
   },
   "environment": {
     "os": "win32",
-    "osVersion": "10.0.26200",
+    "osVersion": "10.0.26100",
     "arch": "x64",
-    "cpuModel": "Intel(R) Core(TM) i7-10700 CPU @ 2.90GHz",
-    "logicalCpuCount": 16,
-    "physicalMemoryBytes": 34093830144,
-    "nodeVersion": "v24.19.0"
+    "cpuModel": "Intel(R) Xeon(R) CPU E5-2686 v4 @ 2.30GHz",
+    "logicalCpuCount": 36,
+    "physicalMemoryBytes": 68541308928,
+    "nodeVersion": "v24.16.0"
   },
   "wallTimeScope": "excludes-model-latency",
   "runMode": "offline-fixture",
   "notes": [
     "Tasks run through the production task path: organization records, runtime permits, isolated task worktrees, the real engine router and machine verification.",
     "Windows npm-style shims are resolved to their Node entrypoint before spawn, so multi-line prompts arrive intact (shim: cmd-exe).",
-    "A task counts as completed only when its machine verification passed. Failed, canceled and interrupted runs are reported, never dropped."
+    "A task counts as completed only when its machine verification passed. Failed, canceled and interrupted runs are reported, never dropped.",
+    "The sequential/parallel pair dispatches the same four tasks and derives overlap from the recorded run intervals, so how many tasks really ran at once is decided by the product execution pool rather than asserted by the pass."
   ],
   "fixture": {
     "engineId": "opencode-cli",
     "cliPath": "benchmarks/fixtures/agent-task-cli.mjs",
-    "cliSha256": "239285fd5b7f54fef8d271a11b8f2b2b458b8a4afa2b5e65aeca6060a91efeb4",
+    "cliSha256": "cd7d45c0a2812ab3fb63e3ce22f3bfe3eb3d79f0bee2f1f4611cad8963ff638a",
     "shim": "cmd-exe",
-    "runtimePath": "C:\\nvm4w\\nodejs\\node.exe",
+    "runtimePath": "C:\\Program Files\\nodejs\\node.exe",
     "passes": [
       {
         "name": "normal-read",
@@ -89,6 +90,33 @@
         "stepMs": 200,
         "verify": "pass",
         "failRun": false
+      },
+      {
+        "name": "sequential-4x",
+        "tasks": 4,
+        "steps": 3,
+        "toolCalls": 3,
+        "stepMs": 150,
+        "verify": "pass",
+        "failRun": false
+      },
+      {
+        "name": "parallel-4x",
+        "tasks": 4,
+        "steps": 3,
+        "toolCalls": 3,
+        "stepMs": 150,
+        "verify": "pass",
+        "failRun": false
+      },
+      {
+        "name": "overflow-5x",
+        "tasks": 5,
+        "steps": 3,
+        "toolCalls": 3,
+        "stepMs": 150,
+        "verify": "pass",
+        "failRun": false
       }
     ]
   },
@@ -97,8 +125,8 @@
       "name": "normal-read",
       "tasks": [
         {
-          "taskId": "d5a4df1d-180c-4809-afe6-8667ff9f0f31",
-          "runId": "03f56e09-6fcd-49b5-80d8-8e41f42c636a",
+          "taskId": "1d42dc36-3f24-476a-94b7-f07b2f285104",
+          "runId": "30a5c099-9426-48ae-9682-f41b9dca78e4",
           "title": "Fixture task (normal-read) 1",
           "expected": {
             "modelRoundTrips": 2,
@@ -113,17 +141,17 @@
             "modelRoundTrips": 2,
             "toolCalls": 3,
             "escalations": 0,
-            "bytesToModel": 3294,
+            "bytesToModel": 4589,
             "tokensToModel": 2000,
-            "ipcCrossings": 12,
+            "ipcCrossings": 15,
             "verification": "passed",
             "outcome": "completed",
             "completedTask": true
           }
         },
         {
-          "taskId": "9e21b92e-a906-4116-9363-4ff6436d987e",
-          "runId": "5474ac52-dc5d-41d4-9630-a86ddeffce71",
+          "taskId": "fcb75718-26df-40a6-ac2d-164b7dfeb013",
+          "runId": "e16ce956-f343-4a5b-9d33-24a1b6a5a90d",
           "title": "Fixture task (normal-read) 2",
           "expected": {
             "modelRoundTrips": 2,
@@ -138,9 +166,9 @@
             "modelRoundTrips": 2,
             "toolCalls": 3,
             "escalations": 0,
-            "bytesToModel": 3877,
+            "bytesToModel": 5168,
             "tokensToModel": 2000,
-            "ipcCrossings": 12,
+            "ipcCrossings": 15,
             "verification": "passed",
             "outcome": "completed",
             "completedTask": true
@@ -148,15 +176,15 @@
         }
       ],
       "samples": 2,
-      "workspaceRoot": "C:\\Users\\MT-Staff\\Documents\\GitHub\\nd-dsh\\benchmark-results\\2026-09-23T06-03-30-272Z-win32-x64\\raw\\workspace-normal-read",
+      "workspaceRoot": "C:\\Users\\dila\\Documents\\GitHub\\nd-dsh\\benchmark-results\\2026-09-23T18-44-06-388Z-win32-x64\\raw\\workspace-normal-read",
       "droppedSamples": 0
     },
     {
       "name": "fast-read",
       "tasks": [
         {
-          "taskId": "d06af0ed-cc5a-4d98-93a8-ee8009309008",
-          "runId": "2dc3a55a-e5ba-4395-b353-96a1c70c0f58",
+          "taskId": "2349910d-f967-42ae-8276-74d8006c2419",
+          "runId": "31a3881f-9b81-4daf-a364-4cdae6fd400a",
           "title": "Fixture task (fast-read) 1",
           "expected": {
             "modelRoundTrips": 0,
@@ -173,15 +201,15 @@
             "escalations": 0,
             "bytesToModel": 0,
             "tokensToModel": 0,
-            "ipcCrossings": 9,
+            "ipcCrossings": 10,
             "verification": "passed",
             "outcome": "completed",
             "completedTask": true
           }
         },
         {
-          "taskId": "00ccbd15-bc08-4da8-9edc-e16f06152e74",
-          "runId": "b3865640-5981-48d2-be58-504f5cbc46d3",
+          "taskId": "5c1ee61e-4e20-4e27-882a-c8c31f6d8125",
+          "runId": "510db4c7-365a-4871-a194-89e5a51580bf",
           "title": "Fixture task (fast-read) 2",
           "expected": {
             "modelRoundTrips": 0,
@@ -198,7 +226,7 @@
             "escalations": 0,
             "bytesToModel": 0,
             "tokensToModel": 0,
-            "ipcCrossings": 9,
+            "ipcCrossings": 10,
             "verification": "passed",
             "outcome": "completed",
             "completedTask": true
@@ -206,15 +234,15 @@
         }
       ],
       "samples": 2,
-      "workspaceRoot": "C:\\Users\\MT-Staff\\Documents\\GitHub\\nd-dsh\\benchmark-results\\2026-09-23T06-03-30-272Z-win32-x64\\raw\\workspace-fast-read",
+      "workspaceRoot": "C:\\Users\\dila\\Documents\\GitHub\\nd-dsh\\benchmark-results\\2026-09-23T18-44-06-388Z-win32-x64\\raw\\workspace-fast-read",
       "droppedSamples": 0
     },
     {
       "name": "verified",
       "tasks": [
         {
-          "taskId": "54d25961-4fa8-462e-92df-c4aa1a4562ca",
-          "runId": "a0d1eb1a-47a7-420c-bb96-7822ce997511",
+          "taskId": "9788a29b-f831-4c63-a10b-15fc766d2394",
+          "runId": "36cbdb51-0c6b-4690-8ffd-57bd458d9a23",
           "title": "Fixture task (verified) 1",
           "expected": {
             "modelRoundTrips": 3,
@@ -229,17 +257,17 @@
             "modelRoundTrips": 3,
             "toolCalls": 4,
             "escalations": 0,
-            "bytesToModel": 3289,
+            "bytesToModel": 4584,
             "tokensToModel": 3000,
-            "ipcCrossings": 18,
+            "ipcCrossings": 20,
             "verification": "passed",
             "outcome": "completed",
             "completedTask": true
           }
         },
         {
-          "taskId": "dc750962-9bac-4789-8542-81ed9e7a96f6",
-          "runId": "bae0e493-43d5-4271-8b6f-ae3086e877fd",
+          "taskId": "143e9155-bbb0-4b75-b3cf-7be83b70a56d",
+          "runId": "0f1032a8-4e66-4692-b2e3-bc58f24571ec",
           "title": "Fixture task (verified) 2",
           "expected": {
             "modelRoundTrips": 3,
@@ -254,9 +282,9 @@
             "modelRoundTrips": 3,
             "toolCalls": 4,
             "escalations": 0,
-            "bytesToModel": 3886,
+            "bytesToModel": 5177,
             "tokensToModel": 3000,
-            "ipcCrossings": 13,
+            "ipcCrossings": 18,
             "verification": "passed",
             "outcome": "completed",
             "completedTask": true
@@ -264,15 +292,15 @@
         }
       ],
       "samples": 2,
-      "workspaceRoot": "C:\\Users\\MT-Staff\\Documents\\GitHub\\nd-dsh\\benchmark-results\\2026-09-23T06-03-30-272Z-win32-x64\\raw\\workspace-verified",
+      "workspaceRoot": "C:\\Users\\dila\\Documents\\GitHub\\nd-dsh\\benchmark-results\\2026-09-23T18-44-06-388Z-win32-x64\\raw\\workspace-verified",
       "droppedSamples": 0
     },
     {
       "name": "verification-failed",
       "tasks": [
         {
-          "taskId": "c475f690-3e71-4064-a6f3-48deec32f500",
-          "runId": "cd5d1d10-b4bf-4d0d-9d0a-c0b6f1351aaa",
+          "taskId": "1a93a40c-2b11-41a9-a078-af677a7284d1",
+          "runId": "d2850bde-02a8-4165-9ff4-9e042bfd0476",
           "title": "Fixture task (verification-failed) 1",
           "expected": {
             "modelRoundTrips": 2,
@@ -286,9 +314,9 @@
             "modelRoundTrips": 2,
             "toolCalls": 2,
             "escalations": 0,
-            "bytesToModel": 3333,
+            "bytesToModel": 4628,
             "tokensToModel": 2000,
-            "ipcCrossings": 10,
+            "ipcCrossings": 12,
             "verification": "failed",
             "outcome": "failed",
             "completedTask": false
@@ -296,15 +324,15 @@
         }
       ],
       "samples": 1,
-      "workspaceRoot": "C:\\Users\\MT-Staff\\Documents\\GitHub\\nd-dsh\\benchmark-results\\2026-09-23T06-03-30-272Z-win32-x64\\raw\\workspace-verification-failed",
+      "workspaceRoot": "C:\\Users\\dila\\Documents\\GitHub\\nd-dsh\\benchmark-results\\2026-09-23T18-44-06-388Z-win32-x64\\raw\\workspace-verification-failed",
       "droppedSamples": 0
     },
     {
       "name": "engine-failed",
       "tasks": [
         {
-          "taskId": "63c1ae45-7422-4685-8f36-46c7b9c6898b",
-          "runId": "6827c938-6c51-4375-8a4f-043fe0219bdd",
+          "taskId": "fe6cdfef-e9ca-4126-b12e-963b41cfe186",
+          "runId": "f7f095fc-8201-467b-b6f3-d75c49fbe0d2",
           "title": "Fixture task (engine-failed) 1",
           "expected": {
             "modelRoundTrips": 2,
@@ -318,9 +346,9 @@
             "modelRoundTrips": 2,
             "toolCalls": 2,
             "escalations": 0,
-            "bytesToModel": 3309,
+            "bytesToModel": 4604,
             "tokensToModel": 2000,
-            "ipcCrossings": 6,
+            "ipcCrossings": 15,
             "verification": "not-run",
             "outcome": "failed",
             "completedTask": false
@@ -328,15 +356,15 @@
         }
       ],
       "samples": 1,
-      "workspaceRoot": "C:\\Users\\MT-Staff\\Documents\\GitHub\\nd-dsh\\benchmark-results\\2026-09-23T06-03-30-272Z-win32-x64\\raw\\workspace-engine-failed",
+      "workspaceRoot": "C:\\Users\\dila\\Documents\\GitHub\\nd-dsh\\benchmark-results\\2026-09-23T18-44-06-388Z-win32-x64\\raw\\workspace-engine-failed",
       "droppedSamples": 0
     },
     {
       "name": "canceled",
       "tasks": [
         {
-          "taskId": "d5670086-630b-435d-a819-3cab86953393",
-          "runId": "12d0379a-3120-4362-aee6-2a1b6aa6636b",
+          "taskId": "c99e756a-dc07-4854-9095-ad0f70726129",
+          "runId": "4aa99d79-3896-4d22-9825-7c8576cc10dc",
           "title": "Fixture task (canceled) 1",
           "expected": {
             "escalations": 0,
@@ -348,9 +376,9 @@
             "modelRoundTrips": 2,
             "toolCalls": 2,
             "escalations": 0,
-            "bytesToModel": 3291,
+            "bytesToModel": 4586,
             "tokensToModel": 2000,
-            "ipcCrossings": 4,
+            "ipcCrossings": 5,
             "verification": "not-run",
             "outcome": "canceled",
             "completedTask": false
@@ -358,24 +386,360 @@
         }
       ],
       "samples": 1,
-      "workspaceRoot": "C:\\Users\\MT-Staff\\Documents\\GitHub\\nd-dsh\\benchmark-results\\2026-09-23T06-03-30-272Z-win32-x64\\raw\\workspace-canceled",
+      "workspaceRoot": "C:\\Users\\dila\\Documents\\GitHub\\nd-dsh\\benchmark-results\\2026-09-23T18-44-06-388Z-win32-x64\\raw\\workspace-canceled",
+      "droppedSamples": 0
+    },
+    {
+      "name": "sequential-4x",
+      "tasks": [
+        {
+          "taskId": "2598b0c3-4b86-473f-ad8a-03f327586aeb",
+          "runId": "154f9c40-3fdb-4447-bb3e-683fd1f8966a",
+          "title": "Fixture task (sequential-4x) 1",
+          "expected": {
+            "modelRoundTrips": 3,
+            "toolCalls": 3,
+            "escalations": 0,
+            "verification": "passed",
+            "outcome": "completed",
+            "completedTask": true
+          },
+          "observed": {
+            "modelRoundTrips": 3,
+            "toolCalls": 3,
+            "escalations": 0,
+            "bytesToModel": 4597,
+            "tokensToModel": 3000,
+            "ipcCrossings": 15,
+            "verification": "passed",
+            "outcome": "completed",
+            "completedTask": true
+          }
+        },
+        {
+          "taskId": "d082fa7c-6d8c-4da6-a130-228acf78fd59",
+          "runId": "9f5bd98f-1ddf-4d38-80d1-3a22b013dedc",
+          "title": "Fixture task (sequential-4x) 2",
+          "expected": {
+            "modelRoundTrips": 3,
+            "toolCalls": 3,
+            "escalations": 0,
+            "verification": "passed",
+            "outcome": "completed",
+            "completedTask": true
+          },
+          "observed": {
+            "modelRoundTrips": 3,
+            "toolCalls": 3,
+            "escalations": 0,
+            "bytesToModel": 5195,
+            "tokensToModel": 3000,
+            "ipcCrossings": 15,
+            "verification": "passed",
+            "outcome": "completed",
+            "completedTask": true
+          }
+        },
+        {
+          "taskId": "d8fdc34c-7b47-4464-8407-12a7960ce194",
+          "runId": "e075e87c-b213-4d2d-956a-57fb1bb589b5",
+          "title": "Fixture task (sequential-4x) 3",
+          "expected": {
+            "modelRoundTrips": 3,
+            "toolCalls": 3,
+            "escalations": 0,
+            "verification": "passed",
+            "outcome": "completed",
+            "completedTask": true
+          },
+          "observed": {
+            "modelRoundTrips": 3,
+            "toolCalls": 3,
+            "escalations": 0,
+            "bytesToModel": 5800,
+            "tokensToModel": 3000,
+            "ipcCrossings": 15,
+            "verification": "passed",
+            "outcome": "completed",
+            "completedTask": true
+          }
+        },
+        {
+          "taskId": "3f90db80-b47c-4407-a037-f97abe78088b",
+          "runId": "d87ec8c0-2ea5-4cf2-ae3b-e1b6c1f8aa27",
+          "title": "Fixture task (sequential-4x) 4",
+          "expected": {
+            "modelRoundTrips": 3,
+            "toolCalls": 3,
+            "escalations": 0,
+            "verification": "passed",
+            "outcome": "completed",
+            "completedTask": true
+          },
+          "observed": {
+            "modelRoundTrips": 3,
+            "toolCalls": 3,
+            "escalations": 0,
+            "bytesToModel": 6405,
+            "tokensToModel": 3000,
+            "ipcCrossings": 15,
+            "verification": "passed",
+            "outcome": "completed",
+            "completedTask": true
+          }
+        }
+      ],
+      "samples": 4,
+      "workspaceRoot": "C:\\Users\\dila\\Documents\\GitHub\\nd-dsh\\benchmark-results\\2026-09-23T18-44-06-388Z-win32-x64\\raw\\workspace-sequential-4x",
+      "droppedSamples": 0
+    },
+    {
+      "name": "parallel-4x",
+      "tasks": [
+        {
+          "taskId": "f2338882-0afa-45e0-bbfd-41f1f4030597",
+          "runId": "056d47b1-92c8-4f77-b25f-193a43206f76",
+          "title": "Fixture task (parallel-4x) 1",
+          "expected": {
+            "modelRoundTrips": 3,
+            "toolCalls": 3,
+            "escalations": 0,
+            "verification": "passed",
+            "outcome": "completed",
+            "completedTask": true
+          },
+          "observed": {
+            "modelRoundTrips": 3,
+            "toolCalls": 3,
+            "escalations": 0,
+            "bytesToModel": 4589,
+            "tokensToModel": 3000,
+            "ipcCrossings": 15,
+            "verification": "passed",
+            "outcome": "completed",
+            "completedTask": true
+          }
+        },
+        {
+          "taskId": "a878a232-4572-4d61-942f-2d77e53ef505",
+          "runId": "127c45a1-a96d-497b-90d3-37ab1d4e9301",
+          "title": "Fixture task (parallel-4x) 2",
+          "expected": {
+            "modelRoundTrips": 3,
+            "toolCalls": 3,
+            "escalations": 0,
+            "verification": "passed",
+            "outcome": "completed",
+            "completedTask": true
+          },
+          "observed": {
+            "modelRoundTrips": 3,
+            "toolCalls": 3,
+            "escalations": 0,
+            "bytesToModel": 4589,
+            "tokensToModel": 3000,
+            "ipcCrossings": 15,
+            "verification": "passed",
+            "outcome": "completed",
+            "completedTask": true
+          }
+        },
+        {
+          "taskId": "59e229d2-6610-436c-91a2-ddbfadb2581e",
+          "runId": "82733c93-edd6-4e1d-a74b-c4280014ed36",
+          "title": "Fixture task (parallel-4x) 3",
+          "expected": {
+            "modelRoundTrips": 3,
+            "toolCalls": 3,
+            "escalations": 0,
+            "verification": "passed",
+            "outcome": "completed",
+            "completedTask": true
+          },
+          "observed": {
+            "modelRoundTrips": 3,
+            "toolCalls": 3,
+            "escalations": 0,
+            "bytesToModel": 4589,
+            "tokensToModel": 3000,
+            "ipcCrossings": 15,
+            "verification": "passed",
+            "outcome": "completed",
+            "completedTask": true
+          }
+        },
+        {
+          "taskId": "542e9981-cc19-4e1a-920c-186a16e254da",
+          "runId": "3bd600d1-d728-4fe3-ae0e-9294e8628a19",
+          "title": "Fixture task (parallel-4x) 4",
+          "expected": {
+            "modelRoundTrips": 3,
+            "toolCalls": 3,
+            "escalations": 0,
+            "verification": "passed",
+            "outcome": "completed",
+            "completedTask": true
+          },
+          "observed": {
+            "modelRoundTrips": 3,
+            "toolCalls": 3,
+            "escalations": 0,
+            "bytesToModel": 4589,
+            "tokensToModel": 3000,
+            "ipcCrossings": 15,
+            "verification": "passed",
+            "outcome": "completed",
+            "completedTask": true
+          }
+        }
+      ],
+      "samples": 4,
+      "workspaceRoot": "C:\\Users\\dila\\Documents\\GitHub\\nd-dsh\\benchmark-results\\2026-09-23T18-44-06-388Z-win32-x64\\raw\\workspace-parallel-4x",
+      "droppedSamples": 0
+    },
+    {
+      "name": "overflow-5x",
+      "tasks": [
+        {
+          "taskId": "a1b7217a-e72e-46cf-8d54-e9d48f9a4556",
+          "runId": "a0d9a8aa-fb5c-428b-aa0c-3a5470440622",
+          "title": "Fixture task (overflow-5x) 1",
+          "expected": {
+            "modelRoundTrips": 3,
+            "toolCalls": 3,
+            "escalations": 0,
+            "verification": "passed",
+            "outcome": "completed",
+            "completedTask": true
+          },
+          "observed": {
+            "modelRoundTrips": 3,
+            "toolCalls": 3,
+            "escalations": 0,
+            "bytesToModel": 4589,
+            "tokensToModel": 3000,
+            "ipcCrossings": 15,
+            "verification": "passed",
+            "outcome": "completed",
+            "completedTask": true
+          }
+        },
+        {
+          "taskId": "70f992ab-b219-4b91-9b89-8b63712de90f",
+          "runId": "2efda6d9-157f-41fa-bbc0-468fa7783e06",
+          "title": "Fixture task (overflow-5x) 2",
+          "expected": {
+            "modelRoundTrips": 3,
+            "toolCalls": 3,
+            "escalations": 0,
+            "verification": "passed",
+            "outcome": "completed",
+            "completedTask": true
+          },
+          "observed": {
+            "modelRoundTrips": 3,
+            "toolCalls": 3,
+            "escalations": 0,
+            "bytesToModel": 4589,
+            "tokensToModel": 3000,
+            "ipcCrossings": 15,
+            "verification": "passed",
+            "outcome": "completed",
+            "completedTask": true
+          }
+        },
+        {
+          "taskId": "85df1f5b-0f98-4d33-ade7-3e5e385cb444",
+          "runId": "95e5f8b7-1fc6-4314-ad9a-0353765bbce6",
+          "title": "Fixture task (overflow-5x) 3",
+          "expected": {
+            "modelRoundTrips": 3,
+            "toolCalls": 3,
+            "escalations": 0,
+            "verification": "passed",
+            "outcome": "completed",
+            "completedTask": true
+          },
+          "observed": {
+            "modelRoundTrips": 3,
+            "toolCalls": 3,
+            "escalations": 0,
+            "bytesToModel": 4589,
+            "tokensToModel": 3000,
+            "ipcCrossings": 15,
+            "verification": "passed",
+            "outcome": "completed",
+            "completedTask": true
+          }
+        },
+        {
+          "taskId": "f78bc6af-1075-40a6-8241-9b90f5f2205b",
+          "runId": "12492d8d-0c91-445d-a5e3-716a4a0dd897",
+          "title": "Fixture task (overflow-5x) 4",
+          "expected": {
+            "modelRoundTrips": 3,
+            "toolCalls": 3,
+            "escalations": 0,
+            "verification": "passed",
+            "outcome": "completed",
+            "completedTask": true
+          },
+          "observed": {
+            "modelRoundTrips": 3,
+            "toolCalls": 3,
+            "escalations": 0,
+            "bytesToModel": 4589,
+            "tokensToModel": 3000,
+            "ipcCrossings": 15,
+            "verification": "passed",
+            "outcome": "completed",
+            "completedTask": true
+          }
+        },
+        {
+          "taskId": "baca4016-798b-458b-9f73-afe66ce0c126",
+          "runId": "ee0cf382-aff3-4052-8162-5f4f80b337a5",
+          "title": "Fixture task (overflow-5x) 5",
+          "expected": {
+            "modelRoundTrips": 3,
+            "toolCalls": 3,
+            "escalations": 0,
+            "verification": "passed",
+            "outcome": "completed",
+            "completedTask": true
+          },
+          "observed": {
+            "modelRoundTrips": 3,
+            "toolCalls": 3,
+            "escalations": 0,
+            "bytesToModel": 5185,
+            "tokensToModel": 3000,
+            "ipcCrossings": 15,
+            "verification": "passed",
+            "outcome": "completed",
+            "completedTask": true
+          }
+        }
+      ],
+      "samples": 5,
+      "workspaceRoot": "C:\\Users\\dila\\Documents\\GitHub\\nd-dsh\\benchmark-results\\2026-09-23T18-44-06-388Z-win32-x64\\raw\\workspace-overflow-5x",
       "droppedSamples": 0
     }
   ],
   "samples": [
     {
-      "runId": "03f56e09-6fcd-49b5-80d8-8e41f42c636a",
-      "sessionId": "opencode-c6b5b658-d839-4a95-b9e2-44bf5cd41bf1",
-      "taskId": "d5a4df1d-180c-4809-afe6-8667ff9f0f31",
+      "runId": "30a5c099-9426-48ae-9682-f41b9dca78e4",
+      "sessionId": "opencode-c733ae11-6243-4f57-a47b-ffc5d4631924",
+      "taskId": "1d42dc36-3f24-476a-94b7-f07b2f285104",
       "kind": "task-execution",
-      "startedAt": 1790143429817,
-      "finishedAt": 1790143431152,
-      "totalWallMs": 1335,
+      "startedAt": 1790189062065,
+      "finishedAt": 1790189063299,
+      "totalWallMs": 1234,
       "modelRoundTrips": 2,
       "roundTripSource": "cli-steps",
       "toolCalls": 3,
-      "ipcCrossings": 13,
-      "bytesToModel": 3294,
+      "ipcCrossings": 15,
+      "bytesToModel": 4589,
       "tokensToModel": 2000,
       "outputTokens": 100,
       "escalations": 0,
@@ -384,21 +748,21 @@
       "completedTask": true,
       "finished": true,
       "engineId": "opencode-cli",
-      "verificationDurationMs": 551
+      "verificationDurationMs": 602
     },
     {
-      "runId": "5474ac52-dc5d-41d4-9630-a86ddeffce71",
-      "sessionId": "opencode-08f944c5-91a7-41b3-8a5a-bb0a9f31e0ef",
-      "taskId": "9e21b92e-a906-4116-9363-4ff6436d987e",
+      "runId": "e16ce956-f343-4a5b-9d33-24a1b6a5a90d",
+      "sessionId": "opencode-e5f8112b-6914-4472-bf95-0a1b26d546f7",
+      "taskId": "fcb75718-26df-40a6-ac2d-164b7dfeb013",
       "kind": "task-execution",
-      "startedAt": 1790143431887,
-      "finishedAt": 1790143433143,
-      "totalWallMs": 1256,
+      "startedAt": 1790189063780,
+      "finishedAt": 1790189064995,
+      "totalWallMs": 1215,
       "modelRoundTrips": 2,
       "roundTripSource": "cli-steps",
       "toolCalls": 3,
-      "ipcCrossings": 12,
-      "bytesToModel": 3877,
+      "ipcCrossings": 15,
+      "bytesToModel": 5168,
       "tokensToModel": 2000,
       "outputTokens": 100,
       "escalations": 0,
@@ -407,20 +771,20 @@
       "completedTask": true,
       "finished": true,
       "engineId": "opencode-cli",
-      "verificationDurationMs": 488
+      "verificationDurationMs": 568
     },
     {
-      "runId": "2dc3a55a-e5ba-4395-b353-96a1c70c0f58",
-      "sessionId": "fast-f98698a1-15cd-4bb4-8e41-c098f75d29b6",
-      "taskId": "d06af0ed-cc5a-4d98-93a8-ee8009309008",
+      "runId": "31a3881f-9b81-4daf-a364-4cdae6fd400a",
+      "sessionId": "fast-dbc258b5-d3f8-43cf-80f5-86c346644185",
+      "taskId": "2349910d-f967-42ae-8276-74d8006c2419",
       "kind": "task-execution",
-      "startedAt": 1790143452768,
-      "finishedAt": 1790143453905,
-      "totalWallMs": 1137,
+      "startedAt": 1790189082510,
+      "finishedAt": 1790189083631,
+      "totalWallMs": 1121,
       "modelRoundTrips": 0,
       "roundTripSource": "none",
       "toolCalls": 0,
-      "ipcCrossings": 9,
+      "ipcCrossings": 10,
       "bytesToModel": 0,
       "tokensToModel": 0,
       "outputTokens": 0,
@@ -430,20 +794,20 @@
       "completedTask": true,
       "finished": true,
       "engineId": "nd-fast-path",
-      "verificationDurationMs": 533
+      "verificationDurationMs": 599
     },
     {
-      "runId": "b3865640-5981-48d2-be58-504f5cbc46d3",
-      "sessionId": "fast-1e404236-39fb-4338-9bf0-3da218229b33",
-      "taskId": "00ccbd15-bc08-4da8-9edc-e16f06152e74",
+      "runId": "510db4c7-365a-4871-a194-89e5a51580bf",
+      "sessionId": "fast-72577a8d-9b66-49da-8750-2df8404694e3",
+      "taskId": "5c1ee61e-4e20-4e27-882a-c8c31f6d8125",
       "kind": "task-execution",
-      "startedAt": 1790143454438,
-      "finishedAt": 1790143455440,
-      "totalWallMs": 1002,
+      "startedAt": 1790189084179,
+      "finishedAt": 1790189085386,
+      "totalWallMs": 1207,
       "modelRoundTrips": 0,
       "roundTripSource": "none",
       "toolCalls": 0,
-      "ipcCrossings": 9,
+      "ipcCrossings": 10,
       "bytesToModel": 0,
       "tokensToModel": 0,
       "outputTokens": 0,
@@ -453,21 +817,276 @@
       "completedTask": true,
       "finished": true,
       "engineId": "nd-fast-path",
-      "verificationDurationMs": 504
+      "verificationDurationMs": 644
     },
     {
-      "runId": "a0d1eb1a-47a7-420c-bb96-7822ce997511",
-      "sessionId": "opencode-d2ca9106-b2bd-4177-843e-1f74f37e17de",
-      "taskId": "54d25961-4fa8-462e-92df-c4aa1a4562ca",
+      "runId": "36cbdb51-0c6b-4690-8ffd-57bd458d9a23",
+      "sessionId": "opencode-ad7258b3-3aa4-4797-bd98-bebde2c4cda1",
+      "taskId": "9788a29b-f831-4c63-a10b-15fc766d2394",
       "kind": "task-execution",
-      "startedAt": 1790143475449,
-      "finishedAt": 1790143478764,
-      "totalWallMs": 3315,
+      "startedAt": 1790189102843,
+      "finishedAt": 1790189104612,
+      "totalWallMs": 1769,
+      "modelRoundTrips": 3,
+      "roundTripSource": "cli-steps",
+      "toolCalls": 4,
+      "ipcCrossings": 20,
+      "bytesToModel": 4584,
+      "tokensToModel": 3000,
+      "outputTokens": 150,
+      "escalations": 0,
+      "outcome": "completed",
+      "verification": "passed",
+      "completedTask": true,
+      "finished": true,
+      "engineId": "opencode-cli",
+      "verificationDurationMs": 629
+    },
+    {
+      "runId": "0f1032a8-4e66-4692-b2e3-bc58f24571ec",
+      "sessionId": "opencode-65bdc275-902d-4335-8e70-aceea71bb929",
+      "taskId": "143e9155-bbb0-4b75-b3cf-7be83b70a56d",
+      "kind": "task-execution",
+      "startedAt": 1790189105110,
+      "finishedAt": 1790189106654,
+      "totalWallMs": 1544,
       "modelRoundTrips": 3,
       "roundTripSource": "cli-steps",
       "toolCalls": 4,
       "ipcCrossings": 18,
-      "bytesToModel": 3289,
+      "bytesToModel": 5177,
+      "tokensToModel": 3000,
+      "outputTokens": 150,
+      "escalations": 0,
+      "outcome": "completed",
+      "verification": "passed",
+      "completedTask": true,
+      "finished": true,
+      "engineId": "opencode-cli",
+      "verificationDurationMs": 652
+    },
+    {
+      "runId": "d2850bde-02a8-4165-9ff4-9e042bfd0476",
+      "sessionId": "opencode-9bb862b9-07d6-422c-8204-0eb7fa08f47f",
+      "taskId": "1a93a40c-2b11-41a9-a078-af677a7284d1",
+      "kind": "task-execution",
+      "startedAt": 1790189124243,
+      "finishedAt": 1790189126468,
+      "totalWallMs": 2225,
+      "modelRoundTrips": 2,
+      "roundTripSource": "cli-steps",
+      "toolCalls": 2,
+      "ipcCrossings": 12,
+      "bytesToModel": 4628,
+      "tokensToModel": 2000,
+      "outputTokens": 100,
+      "escalations": 0,
+      "outcome": "failed",
+      "verification": "failed",
+      "completedTask": false,
+      "finished": true,
+      "engineId": "opencode-cli",
+      "verificationDurationMs": 1095,
+      "error": "Machine verification failed: Verification command exited 1."
+    },
+    {
+      "runId": "f7f095fc-8201-467b-b6f3-d75c49fbe0d2",
+      "sessionId": "opencode-e47b2867-731a-4243-9f78-8e018613d897",
+      "taskId": "fe6cdfef-e9ca-4126-b12e-963b41cfe186",
+      "kind": "task-execution",
+      "startedAt": 1790189144046,
+      "finishedAt": 1790189144432,
+      "totalWallMs": 386,
+      "modelRoundTrips": 2,
+      "roundTripSource": "cli-steps",
+      "toolCalls": 2,
+      "ipcCrossings": 15,
+      "bytesToModel": 4604,
+      "tokensToModel": 2000,
+      "outputTokens": 100,
+      "escalations": 0,
+      "outcome": "failed",
+      "verification": "not-run",
+      "completedTask": false,
+      "finished": true,
+      "engineId": "opencode-cli",
+      "error": "fixture engine reported a deterministic task failure"
+    },
+    {
+      "runId": "4aa99d79-3896-4d22-9825-7c8576cc10dc",
+      "sessionId": "opencode-fa6143ca-8369-4f20-a249-34b63ebfb172",
+      "taskId": "c99e756a-dc07-4854-9095-ad0f70726129",
+      "kind": "task-execution",
+      "startedAt": 1790189161787,
+      "finishedAt": 1790189162262,
+      "totalWallMs": 475,
+      "modelRoundTrips": 2,
+      "roundTripSource": "cli-steps",
+      "toolCalls": 2,
+      "ipcCrossings": 5,
+      "bytesToModel": 4586,
+      "tokensToModel": 2000,
+      "outputTokens": 100,
+      "escalations": 0,
+      "outcome": "canceled",
+      "verification": "not-run",
+      "completedTask": false,
+      "finished": true,
+      "engineId": "opencode-cli",
+      "explicitOutcome": "canceled",
+      "error": "Canceled by user before the run completed."
+    },
+    {
+      "runId": "154f9c40-3fdb-4447-bb3e-683fd1f8966a",
+      "sessionId": "opencode-7a55e91d-b817-481f-8445-375e25cfd8fa",
+      "taskId": "2598b0c3-4b86-473f-ad8a-03f327586aeb",
+      "kind": "task-execution",
+      "startedAt": 1790189179938,
+      "finishedAt": 1790189181733,
+      "totalWallMs": 1795,
+      "modelRoundTrips": 3,
+      "roundTripSource": "cli-steps",
+      "toolCalls": 3,
+      "ipcCrossings": 15,
+      "bytesToModel": 4597,
+      "tokensToModel": 3000,
+      "outputTokens": 150,
+      "escalations": 0,
+      "outcome": "completed",
+      "verification": "passed",
+      "completedTask": true,
+      "finished": true,
+      "engineId": "opencode-cli",
+      "verificationDurationMs": 654
+    },
+    {
+      "runId": "9f5bd98f-1ddf-4d38-80d1-3a22b013dedc",
+      "sessionId": "opencode-78bd67d4-b04a-4894-abd2-e86ba6c5f2d5",
+      "taskId": "d082fa7c-6d8c-4da6-a130-228acf78fd59",
+      "kind": "task-execution",
+      "startedAt": 1790189182277,
+      "finishedAt": 1790189184073,
+      "totalWallMs": 1796,
+      "modelRoundTrips": 3,
+      "roundTripSource": "cli-steps",
+      "toolCalls": 3,
+      "ipcCrossings": 15,
+      "bytesToModel": 5195,
+      "tokensToModel": 3000,
+      "outputTokens": 150,
+      "escalations": 0,
+      "outcome": "completed",
+      "verification": "passed",
+      "completedTask": true,
+      "finished": true,
+      "engineId": "opencode-cli",
+      "verificationDurationMs": 615
+    },
+    {
+      "runId": "e075e87c-b213-4d2d-956a-57fb1bb589b5",
+      "sessionId": "opencode-306416c7-ddf9-461a-b347-b5d3a2831147",
+      "taskId": "d8fdc34c-7b47-4464-8407-12a7960ce194",
+      "kind": "task-execution",
+      "startedAt": 1790189184667,
+      "finishedAt": 1790189186446,
+      "totalWallMs": 1779,
+      "modelRoundTrips": 3,
+      "roundTripSource": "cli-steps",
+      "toolCalls": 3,
+      "ipcCrossings": 15,
+      "bytesToModel": 5800,
+      "tokensToModel": 3000,
+      "outputTokens": 150,
+      "escalations": 0,
+      "outcome": "completed",
+      "verification": "passed",
+      "completedTask": true,
+      "finished": true,
+      "engineId": "opencode-cli",
+      "verificationDurationMs": 618
+    },
+    {
+      "runId": "d87ec8c0-2ea5-4cf2-ae3b-e1b6c1f8aa27",
+      "sessionId": "opencode-2de030db-97b3-40a4-8a7a-3bd68be67e76",
+      "taskId": "3f90db80-b47c-4407-a037-f97abe78088b",
+      "kind": "task-execution",
+      "startedAt": 1790189186987,
+      "finishedAt": 1790189188846,
+      "totalWallMs": 1859,
+      "modelRoundTrips": 3,
+      "roundTripSource": "cli-steps",
+      "toolCalls": 3,
+      "ipcCrossings": 15,
+      "bytesToModel": 6405,
+      "tokensToModel": 3000,
+      "outputTokens": 150,
+      "escalations": 0,
+      "outcome": "completed",
+      "verification": "passed",
+      "completedTask": true,
+      "finished": true,
+      "engineId": "opencode-cli",
+      "verificationDurationMs": 627
+    },
+    {
+      "runId": "127c45a1-a96d-497b-90d3-37ab1d4e9301",
+      "sessionId": "opencode-6de39078-a339-4f9b-9576-fdc7c01fad46",
+      "taskId": "a878a232-4572-4d61-942f-2d77e53ef505",
+      "kind": "task-execution",
+      "startedAt": 1790189206144,
+      "finishedAt": 1790189207940,
+      "totalWallMs": 1796,
+      "modelRoundTrips": 3,
+      "roundTripSource": "cli-steps",
+      "toolCalls": 3,
+      "ipcCrossings": 15,
+      "bytesToModel": 4589,
+      "tokensToModel": 3000,
+      "outputTokens": 150,
+      "escalations": 0,
+      "outcome": "completed",
+      "verification": "passed",
+      "completedTask": true,
+      "finished": true,
+      "engineId": "opencode-cli",
+      "verificationDurationMs": 605
+    },
+    {
+      "runId": "056d47b1-92c8-4f77-b25f-193a43206f76",
+      "sessionId": "opencode-bd7b4787-69fd-43d8-913b-e0fb42f72c22",
+      "taskId": "f2338882-0afa-45e0-bbfd-41f1f4030597",
+      "kind": "task-execution",
+      "startedAt": 1790189206161,
+      "finishedAt": 1790189207970,
+      "totalWallMs": 1809,
+      "modelRoundTrips": 3,
+      "roundTripSource": "cli-steps",
+      "toolCalls": 3,
+      "ipcCrossings": 15,
+      "bytesToModel": 4589,
+      "tokensToModel": 3000,
+      "outputTokens": 150,
+      "escalations": 0,
+      "outcome": "completed",
+      "verification": "passed",
+      "completedTask": true,
+      "finished": true,
+      "engineId": "opencode-cli",
+      "verificationDurationMs": 580
+    },
+    {
+      "runId": "82733c93-edd6-4e1d-a74b-c4280014ed36",
+      "sessionId": "opencode-723eeec5-6975-4361-9c1d-f2cd13b237c3",
+      "taskId": "59e229d2-6610-436c-91a2-ddbfadb2581e",
+      "kind": "task-execution",
+      "startedAt": 1790189206176,
+      "finishedAt": 1790189208025,
+      "totalWallMs": 1849,
+      "modelRoundTrips": 3,
+      "roundTripSource": "cli-steps",
+      "toolCalls": 3,
+      "ipcCrossings": 15,
+      "bytesToModel": 4589,
       "tokensToModel": 3000,
       "outputTokens": 150,
       "escalations": 0,
@@ -479,18 +1098,18 @@
       "verificationDurationMs": 559
     },
     {
-      "runId": "bae0e493-43d5-4271-8b6f-ae3086e877fd",
-      "sessionId": "opencode-7d3da158-034f-4af9-a933-261269777ef2",
-      "taskId": "dc750962-9bac-4789-8542-81ed9e7a96f6",
+      "runId": "3bd600d1-d728-4fe3-ae0e-9294e8628a19",
+      "sessionId": "opencode-634886f4-73ea-4854-9639-50fa7e10aab6",
+      "taskId": "542e9981-cc19-4e1a-920c-186a16e254da",
       "kind": "task-execution",
-      "startedAt": 1790143479283,
-      "finishedAt": 1790143480399,
-      "totalWallMs": 1116,
+      "startedAt": 1790189206194,
+      "finishedAt": 1790189208000,
+      "totalWallMs": 1806,
       "modelRoundTrips": 3,
       "roundTripSource": "cli-steps",
-      "toolCalls": 4,
-      "ipcCrossings": 13,
-      "bytesToModel": 3886,
+      "toolCalls": 3,
+      "ipcCrossings": 15,
+      "bytesToModel": 4589,
       "tokensToModel": 3000,
       "outputTokens": 150,
       "escalations": 0,
@@ -499,146 +1118,190 @@
       "completedTask": true,
       "finished": true,
       "engineId": "opencode-cli",
-      "verificationDurationMs": 489
+      "verificationDurationMs": 568
     },
     {
-      "runId": "cd5d1d10-b4bf-4d0d-9d0a-c0b6f1351aaa",
-      "sessionId": "opencode-a50c3652-4c48-4547-985b-99f1ff6bdf3a",
-      "taskId": "c475f690-3e71-4064-a6f3-48deec32f500",
+      "runId": "a0d9a8aa-fb5c-428b-aa0c-3a5470440622",
+      "sessionId": "opencode-0c9e3bec-2a1e-4407-83d5-91b5f591a74f",
+      "taskId": "a1b7217a-e72e-46cf-8d54-e9d48f9a4556",
       "kind": "task-execution",
-      "startedAt": 1790143501178,
-      "finishedAt": 1790143504012,
-      "totalWallMs": 2834,
-      "modelRoundTrips": 2,
+      "startedAt": 1790189225289,
+      "finishedAt": 1790189227112,
+      "totalWallMs": 1823,
+      "modelRoundTrips": 3,
       "roundTripSource": "cli-steps",
-      "toolCalls": 2,
-      "ipcCrossings": 10,
-      "bytesToModel": 3333,
-      "tokensToModel": 2000,
-      "outputTokens": 100,
+      "toolCalls": 3,
+      "ipcCrossings": 15,
+      "bytesToModel": 4589,
+      "tokensToModel": 3000,
+      "outputTokens": 150,
       "escalations": 0,
-      "outcome": "failed",
-      "verification": "failed",
-      "completedTask": false,
+      "outcome": "completed",
+      "verification": "passed",
+      "completedTask": true,
       "finished": true,
       "engineId": "opencode-cli",
-      "verificationDurationMs": 1137,
-      "error": "Machine verification failed: Verification command exited 1."
+      "verificationDurationMs": 574
     },
     {
-      "runId": "6827c938-6c51-4375-8a4f-043fe0219bdd",
-      "sessionId": "opencode-10db87c0-eb7f-4171-82c1-0de696e002ae",
-      "taskId": "63c1ae45-7422-4685-8f36-46c7b9c6898b",
+      "runId": "2efda6d9-157f-41fa-bbc0-468fa7783e06",
+      "sessionId": "opencode-d08829b5-141b-499c-8bf0-6c2c1ed804c6",
+      "taskId": "70f992ab-b219-4b91-9b89-8b63712de90f",
       "kind": "task-execution",
-      "startedAt": 1790143525253,
-      "finishedAt": 1790143525511,
-      "totalWallMs": 258,
-      "modelRoundTrips": 2,
+      "startedAt": 1790189225313,
+      "finishedAt": 1790189227098,
+      "totalWallMs": 1785,
+      "modelRoundTrips": 3,
       "roundTripSource": "cli-steps",
-      "toolCalls": 2,
-      "ipcCrossings": 6,
-      "bytesToModel": 3309,
-      "tokensToModel": 2000,
-      "outputTokens": 100,
+      "toolCalls": 3,
+      "ipcCrossings": 15,
+      "bytesToModel": 4589,
+      "tokensToModel": 3000,
+      "outputTokens": 150,
       "escalations": 0,
-      "outcome": "failed",
-      "verification": "not-run",
-      "completedTask": false,
+      "outcome": "completed",
+      "verification": "passed",
+      "completedTask": true,
       "finished": true,
       "engineId": "opencode-cli",
-      "error": "fixture engine reported a deterministic task failure\nRollback failed; automatic retry disabled."
+      "verificationDurationMs": 602
     },
     {
-      "runId": "12d0379a-3120-4362-aee6-2a1b6aa6636b",
-      "sessionId": "opencode-8ce99777-1824-433c-89a3-77140d8a20e8",
-      "taskId": "d5670086-630b-435d-a819-3cab86953393",
+      "runId": "12492d8d-0c91-445d-a5e3-716a4a0dd897",
+      "sessionId": "opencode-17fa30fe-fe3e-4ac5-9e58-3076f8a8c90d",
+      "taskId": "f78bc6af-1075-40a6-8241-9b90f5f2205b",
       "kind": "task-execution",
-      "startedAt": 1790143547380,
-      "finishedAt": 1790143547947,
-      "totalWallMs": 567,
-      "modelRoundTrips": 2,
+      "startedAt": 1790189225329,
+      "finishedAt": 1790189227145,
+      "totalWallMs": 1816,
+      "modelRoundTrips": 3,
       "roundTripSource": "cli-steps",
-      "toolCalls": 2,
-      "ipcCrossings": 4,
-      "bytesToModel": 3291,
-      "tokensToModel": 2000,
-      "outputTokens": 100,
+      "toolCalls": 3,
+      "ipcCrossings": 15,
+      "bytesToModel": 4589,
+      "tokensToModel": 3000,
+      "outputTokens": 150,
       "escalations": 0,
-      "outcome": "canceled",
-      "verification": "not-run",
-      "completedTask": false,
+      "outcome": "completed",
+      "verification": "passed",
+      "completedTask": true,
       "finished": true,
       "engineId": "opencode-cli",
-      "explicitOutcome": "canceled",
-      "error": "OpenCode turn was stopped.\nRollback failed; automatic retry disabled."
+      "verificationDurationMs": 519
+    },
+    {
+      "runId": "95e5f8b7-1fc6-4314-ad9a-0353765bbce6",
+      "sessionId": "opencode-ecac275b-93b3-4d96-bc33-36db8e1599fe",
+      "taskId": "85df1f5b-0f98-4d33-ade7-3e5e385cb444",
+      "kind": "task-execution",
+      "startedAt": 1790189225354,
+      "finishedAt": 1790189227167,
+      "totalWallMs": 1813,
+      "modelRoundTrips": 3,
+      "roundTripSource": "cli-steps",
+      "toolCalls": 3,
+      "ipcCrossings": 15,
+      "bytesToModel": 4589,
+      "tokensToModel": 3000,
+      "outputTokens": 150,
+      "escalations": 0,
+      "outcome": "completed",
+      "verification": "passed",
+      "completedTask": true,
+      "finished": true,
+      "engineId": "opencode-cli",
+      "verificationDurationMs": 583
+    },
+    {
+      "runId": "ee0cf382-aff3-4052-8162-5f4f80b337a5",
+      "sessionId": "opencode-bb432f7d-da40-4b5f-b65b-6b7be9b1a704",
+      "taskId": "baca4016-798b-458b-9f73-afe66ce0c126",
+      "kind": "task-execution",
+      "startedAt": 1790189227593,
+      "finishedAt": 1790189229401,
+      "totalWallMs": 1808,
+      "modelRoundTrips": 3,
+      "roundTripSource": "cli-steps",
+      "toolCalls": 3,
+      "ipcCrossings": 15,
+      "bytesToModel": 5185,
+      "tokensToModel": 3000,
+      "outputTokens": 150,
+      "escalations": 0,
+      "outcome": "completed",
+      "verification": "passed",
+      "completedTask": true,
+      "finished": true,
+      "engineId": "opencode-cli",
+      "verificationDurationMs": 647
     }
   ],
   "summary": {
     "wallTimeScope": "excludes-model-latency",
-    "runs": 9,
-    "tasks": 9,
-    "completedTasks": 6,
-    "completionRate": 0.6666666666666666,
+    "runs": 22,
+    "tasks": 22,
+    "completedTasks": 19,
+    "completionRate": 0.8636363636363636,
     "unfinishedTasks": 0,
     "outcomes": {
-      "completed": 6,
+      "completed": 19,
       "failed": 2,
       "canceled": 1,
       "interrupted": 0
     },
     "verifications": {
-      "passed": 6,
+      "passed": 19,
       "failed": 1,
       "skipped": 0,
       "not-run": 2
     },
     "counters": {
       "totalWallMs": {
-        "total": 12820,
-        "min": 258,
-        "max": 3315,
-        "mean": 1424.4444444444443,
-        "p50": 1137,
-        "p95": 3315
+        "total": 34710,
+        "min": 386,
+        "max": 2225,
+        "mean": 1577.7272727272727,
+        "p50": 1795,
+        "p95": 1859
       },
       "modelRoundTrips": {
-        "total": 16,
+        "total": 55,
         "min": 0,
         "max": 3,
-        "mean": 1.7777777777777777,
-        "p50": 2,
+        "mean": 2.5,
+        "p50": 3,
         "p95": 3
       },
       "toolCalls": {
-        "total": 20,
+        "total": 59,
         "min": 0,
         "max": 4,
-        "mean": 2.2222222222222223,
-        "p50": 2,
+        "mean": 2.6818181818181817,
+        "p50": 3,
         "p95": 4
       },
       "ipcCrossings": {
-        "total": 94,
-        "min": 4,
-        "max": 18,
-        "mean": 10.444444444444445,
-        "p50": 10,
+        "total": 315,
+        "min": 5,
+        "max": 20,
+        "mean": 14.318181818181818,
+        "p50": 15,
         "p95": 18
       },
       "bytesToModel": {
-        "total": 24279,
+        "total": 97230,
         "min": 0,
-        "max": 3886,
-        "mean": 2697.6666666666665,
-        "p50": 3294,
-        "p95": 3886
+        "max": 6405,
+        "mean": 4419.545454545455,
+        "p50": 4589,
+        "p95": 5800
       },
       "tokensToModel": {
-        "total": 16000,
+        "total": 55000,
         "min": 0,
         "max": 3000,
-        "mean": 1777.7777777777778,
-        "p50": 2000,
+        "mean": 2500,
+        "p50": 3000,
         "p95": 3000
       },
       "escalations": {
@@ -651,22 +1314,22 @@
       }
     },
     "perCompletedTask": {
-      "modelRoundTrips": 1.6666666666666667,
-      "toolCalls": 2.3333333333333335,
-      "ipcCrossings": 12.333333333333334,
-      "bytesToModel": 2391,
-      "tokensToModel": 1666.6666666666667,
+      "modelRoundTrips": 2.5789473684210527,
+      "toolCalls": 2.789473684210526,
+      "ipcCrossings": 14.894736842105264,
+      "bytesToModel": 4390.105263157895,
+      "tokensToModel": 2578.9473684210525,
       "escalations": 0,
-      "totalWallMs": 1526.8333333333333
+      "totalWallMs": 1664.421052631579
     },
     "roundTripSources": {
       "harness-events": 0,
-      "cli-steps": 7,
+      "cli-steps": 20,
       "none": 2
     }
   },
   "expectations": {
-    "checked": 58,
+    "checked": 136,
     "deviations": []
   },
   "fastPathComparison": {
@@ -677,7 +1340,7 @@
       "completionRate": 1,
       "modelRoundTrips": 2,
       "toolCalls": 3,
-      "ipcCrossings": 12.5,
+      "ipcCrossings": 15,
       "escalations": 0
     },
     "fast": {
@@ -686,15 +1349,60 @@
       "completionRate": 1,
       "modelRoundTrips": 0,
       "toolCalls": 0,
-      "ipcCrossings": 9,
+      "ipcCrossings": 10,
       "escalations": 0
     },
     "failures": []
   },
-  "artifact": {
-    "kind": "local-recording",
-    "bundle": "benchmark-results/2026-09-23T06-03-30-272Z-win32-x64/",
-    "ciRun": null,
-    "retention": "benchmark-results/ is gitignored, so the raw agent-task bundle (agent-task-metrics.json plus raw/ per-pass samples) exists only on the reference machine. GitHub Actions is parked as .github-bk since 2026-09-23, so there is no run URL; refresh this baseline from a runner-produced bundle and record its URL here when the workflows are restored."
+  "parallelComparison": {
+    "status": "pass",
+    "sequential": {
+      "tasks": 4,
+      "spanMs": 8908,
+      "sumTaskWallMs": 7229,
+      "meanTaskWallMs": 1807.25,
+      "speedup": 0.8115177368657387,
+      "peakConcurrency": 1,
+      "samples": 4,
+      "completed": 4,
+      "completionRate": 1,
+      "modelRoundTrips": 3,
+      "toolCalls": 3,
+      "ipcCrossings": 15
+    },
+    "parallel": {
+      "tasks": 4,
+      "spanMs": 1881,
+      "sumTaskWallMs": 7260,
+      "meanTaskWallMs": 1815,
+      "speedup": 3.8596491228070176,
+      "peakConcurrency": 4,
+      "samples": 4,
+      "completed": 4,
+      "completionRate": 1,
+      "modelRoundTrips": 3,
+      "toolCalls": 3,
+      "ipcCrossings": 15
+    },
+    "overflow": {
+      "tasks": 5,
+      "spanMs": 4112,
+      "sumTaskWallMs": 9045,
+      "meanTaskWallMs": 1809,
+      "speedup": 2.19965953307393,
+      "peakConcurrency": 4,
+      "samples": 5,
+      "completed": 5,
+      "completionRate": 1,
+      "modelRoundTrips": 3,
+      "toolCalls": 3,
+      "ipcCrossings": 15
+    },
+    "budgets": {
+      "speedupFloor": 2.5,
+      "ipcGrowthBudget": 1.2,
+      "minPeakConcurrency": 4
+    },
+    "failures": []
   }
 }
