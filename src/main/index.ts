@@ -10,8 +10,10 @@ import { IPC, type DshEventFrame } from '../shared/contracts.js'
 import { DESIGN_IPC } from '../shared/design.js'
 import { ORGANIZATION_IPC } from '../shared/organization.js'
 import { TERMINAL_IPC } from '../shared/terminal.js'
-import { projectRoot } from './app-paths.js'
+import { bundledResourceRoot, projectRoot } from './app-paths.js'
 import { BrowserController } from './browser/browser-controller.js'
+import { BrowserCompanionService } from './browser-companion/browser-companion-service.js'
+import { registerBrowserCompanionIpc } from './browser-companion/ipc.js'
 import { stopAppOwnedBrowserDaemons } from './browser/agent-browser-client.js'
 import { DEFAULT_BROWSER_URL } from './browser/browser-url.js'
 import { CapabilityAssignmentStore } from './capabilities/capability-assignment-store.js'
@@ -79,6 +81,7 @@ app.enableSandbox()
 let mainWindow: BrowserWindow | undefined
 let activeHarness: HarnessService | undefined
 let activeBrowser: BrowserController | undefined
+let activeBrowserCompanion: BrowserCompanionService | undefined
 let activeCodexEngine: CodexCliEngine | undefined
 let activeAntigravityEngine: AntigravityEngine | undefined
 let activeZcodeEngine: ZcodeCliEngine | undefined
@@ -193,6 +196,12 @@ async function createWindow(cdpPort: number): Promise<void> {
 
   const browser = new BrowserController(window, cdpPort, projectRoot(), { reservedOrigin })
   activeBrowser = browser
+  const browserCompanion = new BrowserCompanionService({
+    dataPath: userData,
+    runtimePath: join(bundledResourceRoot(), 'scripts', 'nd-browser-companion-runtime.mjs'),
+  })
+  await browserCompanion.start()
+  activeBrowserCompanion = browserCompanion
   const dshSurface = new DshSurfaceController(window)
   const externalElements = new ExternalElementStage()
   const recentPicks = new RecentPickStore()
@@ -319,6 +328,10 @@ async function createWindow(cdpPort: number): Promise<void> {
   const qa = new QaService()
   qa.setProjectRoot(workspace.state().root)
   const disposeIpc = registerIpc({ window, preloadPath: preload, browser, dshSurface, engines, engineRouter, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, qa, sessionArchive, usageLedger, capabilities, organizationStore })
+  const disposeBrowserCompanionIpc = registerBrowserCompanionIpc(window, browserCompanion)
+  browserCompanion.setListener((state) => {
+    if (!window.isDestroyed()) window.webContents.send('browser-companion:changed-event', state)
+  })
   const disposeTerminalIpc = registerTerminalIpc(window, terminalManager)
   const disposeDesignIpc = registerDesignIpc(window, design, ndPencil)
   const disposeOrganizationIpc = registerOrganizationIpc(window, organizationStore, organization, projectWorkspace, projectRuntime, executionCoordinator)
@@ -585,6 +598,8 @@ async function createWindow(cdpPort: number): Promise<void> {
     workspace.setStateListener(undefined)
     ndPencil.setStateListener(undefined)
     disposeOrganizationIpc()
+    disposeBrowserCompanionIpc()
+    browserCompanion.setListener(undefined)
     disposeDesignIpc()
     disposeTerminalIpc()
     disposeIpc()
@@ -597,6 +612,7 @@ async function createWindow(cdpPort: number): Promise<void> {
     void ndPencil.destroy()
     if (activeEngineRouter === engineRouter) { activeEngineRouter = undefined; beginEngineRouterClose(engineRouter) }
     if (activeBrowser === browser) { activeBrowser = undefined; beginBrowserClose(browser) }
+    if (activeBrowserCompanion === browserCompanion) { activeBrowserCompanion = undefined; beginBrowserCompanionClose(browserCompanion) }
     dshSurface.destroy()
     if (mainWindow === window) mainWindow = undefined
     if (activeHarness === harness) activeHarness = undefined
@@ -646,6 +662,11 @@ app.on('before-quit', (event) => {
     const browser = activeBrowser
     activeBrowser = undefined
     beginBrowserClose(browser)
+  }
+  if (activeBrowserCompanion) {
+    const browserCompanion = activeBrowserCompanion
+    activeBrowserCompanion = undefined
+    beginBrowserCompanionClose(browserCompanion)
   }
   if (activeCodexEngine) {
     const codexEngine = activeCodexEngine
@@ -767,6 +788,10 @@ app.on('window-all-closed', () => {
 
 function beginBrowserClose(browser: BrowserController): void {
   trackClose(browser.destroy().catch((error) => console.error('Failed to close the browser integration cleanly:', error)))
+}
+
+function beginBrowserCompanionClose(browserCompanion: BrowserCompanionService): void {
+  trackClose(browserCompanion.stop().catch((error) => console.error('Failed to close the browser companion cleanly:', error)))
 }
 
 function beginExecutionCoordinatorClose(coordinator: ExecutionCoordinator): void {
