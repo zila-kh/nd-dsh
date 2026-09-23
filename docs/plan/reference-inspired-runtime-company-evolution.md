@@ -1,8 +1,7 @@
 # Reference-Inspired Runtime and Company Evolution Plan
 
 Status: proposed architecture plan  
-Updated: 2026-09-23  
-Branch: `feat/reference-architecture-plan`  
+Updated: 2026-09-24  
 Related: [PRD 0002](../prd/0002-rust-sidecar-mvp-migration.md) · [PRD 0003](../prd/0003-engine-neutral-agent-teams-and-task-workspace-isolation.md) · [Agent orchestration reference matrix](agent-orchestration-reference-matrix.md) · [Performance benchmark suite](performance-benchmark-suite.md) · [Phase 2 company scale](phase-2-agent-company-scale.md)
 
 ## 1. Purpose
