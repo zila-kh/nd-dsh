@@ -69,6 +69,18 @@ export class CompanionBrowserTarget implements BrowserTarget {
     return this.service.command(this.connection.id, 'page.navigate', { tabId: nativeTabId(tabId), url })
   }
 
+  async back(tabId: string): Promise<unknown> {
+    return this.service.command(this.connection.id, 'page.back', { tabId: nativeTabId(tabId) })
+  }
+
+  async forward(tabId: string): Promise<unknown> {
+    return this.service.command(this.connection.id, 'page.forward', { tabId: nativeTabId(tabId) })
+  }
+
+  async reload(tabId: string): Promise<unknown> {
+    return this.service.command(this.connection.id, 'page.reload', { tabId: nativeTabId(tabId) })
+  }
+
   async click(tabId: string, ref: string, revision: number): Promise<unknown> {
     return this.service.command(this.connection.id, 'page.click', { tabId: nativeTabId(tabId), ref, revision })
   }
