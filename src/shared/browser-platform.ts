@@ -213,11 +213,15 @@ export interface BrowserPlatformDesktopApi {
   history(targetId?: string): Promise<BrowserHistoryEntry[]>
   clearBrowserData(input: { targetId?: string; origin?: string; history?: boolean }): Promise<void>
   cancelDownload(downloadId: string): Promise<boolean>
+  openDownload(downloadId: string): Promise<boolean>
+  revealDownload(downloadId: string): Promise<boolean>
   installExtension(): Promise<BrowserExtensionRecord | null>
   setExtensionEnabled(extensionId: string, enabled: boolean): Promise<BrowserExtensionRecord[]>
   removeExtension(extensionId: string): Promise<BrowserExtensionRecord[]>
   saveCredential(input: { origin: string; username: string; password: string; label?: string }): Promise<BrowserCredentialSummary>
   removeCredential(credentialId: string): Promise<boolean>
+  autofillCredential(credentialId: string, targetId?: string, tabId?: string): Promise<{ ok: true; credentialId: string; username: string }>
+  siteTools(targetId?: string, tabId?: string): Promise<BrowserSiteToolDescriptor[]>
   setSitePermission(origin: string, permission: string, effect: 'allow' | 'deny'): Promise<BrowserSitePermission>
   resolveApproval(approvalId: string, allowed: boolean): Promise<boolean>
   onChanged(listener: (state: BrowserPlatformState) => void): () => void
@@ -232,11 +236,15 @@ export const BROWSER_PLATFORM_IPC = {
   history: 'browser-platform:history',
   clearData: 'browser-platform:clear-data',
   cancelDownload: 'browser-platform:cancel-download',
+  openDownload: 'browser-platform:open-download',
+  revealDownload: 'browser-platform:reveal-download',
   installExtension: 'browser-platform:install-extension',
   extensionEnabled: 'browser-platform:extension-enabled',
   removeExtension: 'browser-platform:remove-extension',
   saveCredential: 'browser-platform:save-credential',
   removeCredential: 'browser-platform:remove-credential',
+  autofillCredential: 'browser-platform:autofill-credential',
+  siteTools: 'browser-platform:site-tools',
   setSitePermission: 'browser-platform:set-site-permission',
   resolveApproval: 'browser-platform:resolve-approval',
   changedEvent: 'browser-platform:changed-event',
