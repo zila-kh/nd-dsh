@@ -96,10 +96,15 @@ export class EngineSessionRouter {
 
   private extensions: ExtensionRouter | undefined
   private skills: import('../skills/nd-skill-service.js').NdSkillService | undefined
+  private browserAccess: { issueSessionAccess(sessionId: string): string; revokeSessionAccess(sessionId: string): void } | undefined
   private worktreeGuard: ((cwd: string) => boolean) | undefined
 
   setSkillService(service: import('../skills/nd-skill-service.js').NdSkillService): void {
     this.skills = service
+  }
+
+  setBrowserAccessProvider(provider: { issueSessionAccess(sessionId: string): string; revokeSessionAccess(sessionId: string): void } | undefined): void {
+    this.browserAccess = provider
   }
   /** Logical engine ids for harness-backed sessions such as delegated Codex. */
   private readonly logicalEngineBySession = new Map<string, string>()
@@ -205,9 +210,13 @@ export class EngineSessionRouter {
       const session = items?.find((item) => item.sessionId === options?.sessionId)
       if (!result.ok || !session?.cwd || !sessionInWorkspace(this.workspace.state().root, session.cwd)) throw new Error('Skill session does not belong to the active workspace')
     }
-    const routedPrompt = this.extensions
+    let routedPrompt = this.extensions
       ? await this.extensions.decoratePrompt(skill?.prompt ?? prompt, requested, providerId)
       : skill?.prompt ?? prompt
+    if (options?.sessionId && this.browserAccess) {
+      const token = this.browserAccess.issueSessionAccess(options.sessionId)
+      routedPrompt += `\n\n<nd-browser-access>\nOpaque browser access token for this ND session: ${token}\nPass it unchanged as accessToken on every nd_browser_call. Do not expose it in user-facing output.\n</nd-browser-access>`
+    }
     // Built-in Token Saver is deliberately applied at the common engine
     // boundary, after ND has added trusted extension context and before either
     // the Harness or direct engines receive the turn.
