@@ -5,6 +5,7 @@ import type {
   EngineModelOption,
   EngineSessionSummary,
   EngineSessionTranscript,
+  SessionEventEnvelope,
   HarnessRunOptions,
   HarnessRunResult,
   HarnessStatus,
@@ -25,6 +26,7 @@ import { appendWorkspaceContext } from '../../shared/workspace-context.js'
 import type { ExtensionRouter } from '../extensions/extension-router.js'
 import type { GitService } from '../git/git-service.js'
 import type { HarnessService } from '../harness/harness-service.js'
+import type { SessionJournalStore } from '../harness/session-journal-store.js'
 import { taskMetricsRecorder } from '../metrics/task-metrics.js'
 import { tokenSaverRuntime } from '../token-saver/token-saver-runtime.js'
 import { sessionInWorkspace } from '../workspace/path-utils.js'
@@ -35,6 +37,7 @@ import type { CursorCliEngine } from './cursor/cursor-cli-engine.js'
 import { ChatGptWebEngine } from './chatgpt-web/chatgpt-web-engine.js'
 import type { CodexCliEngine } from './codex/codex-cli-engine.js'
 import { createExtraCliEngines } from './agent-cli/extra-cli-engines.js'
+import { TRANSCRIPT_EVENT_TYPES } from './agent-cli/agent-cli-support.js'
 import type { PiCodingEngine } from './pi/pi-coding-engine.js'
 import type { ZcodeCliEngine } from './zcode/zcode-cli-engine.js'
 
@@ -108,6 +111,7 @@ export class EngineSessionRouter {
     cursor?: CursorCliEngine,
     claude?: ClaudeCodeCliEngine,
     directSpawnProcess: typeof spawn = spawn,
+    private readonly sessionJournal?: SessionJournalStore,
   ) {
     this.directEngines.set(CODEX_CLI_ENGINE_ID, codex)
     if (antigravity) this.directEngines.set(ANTIGRAVITY_ENGINE_ID, antigravity)
@@ -148,8 +152,12 @@ export class EngineSessionRouter {
 
   /** Every direct engine emits through the same ND organization/renderer fan-out. */
   setEmitter(emit: (frame: DshEventFrame) => void): void {
-    this.chatGptWeb?.setEmitter(emit)
-    for (const direct of this.directEngines.values()) direct.setEmitter?.(emit)
+    const routed = (frame: DshEventFrame): void => {
+      this.captureDirectTranscript(frame)
+      emit(frame)
+    }
+    this.chatGptWeb?.setEmitter(routed)
+    for (const direct of this.directEngines.values()) direct.setEmitter?.(routed)
   }
 
   private get zcode(): ZcodeCliEngine | undefined {
@@ -362,12 +370,44 @@ export class EngineSessionRouter {
     return [...workspaceSessions, ...interactiveSessions]
   }
 
-  transcript(sessionId: string): EngineSessionTranscript {
+  async transcript(sessionId: string): Promise<EngineSessionTranscript> {
     for (const direct of this.directEngines.values()) {
-      if (direct.ownsSession(sessionId)) return direct.transcript(sessionId)
+      if (!direct.ownsSession(sessionId)) continue
+      const fallback = direct.transcript(sessionId)
+      const events = await this.nativeTranscript(sessionId, fallback.events)
+      return { ...fallback, events }
     }
-    if (this.chatGptWeb?.ownsSession(sessionId)) return this.chatGptWeb.transcript(sessionId)
+    if (this.chatGptWeb?.ownsSession(sessionId)) {
+      const fallback = this.chatGptWeb.transcript(sessionId)
+      const events = await this.nativeTranscript(sessionId, fallback.events)
+      return { ...fallback, events }
+    }
     throw new Error(`No engine owns session: ${sessionId}`)
+  }
+
+  private captureDirectTranscript(frame: DshEventFrame): void {
+    if (!this.sessionJournal || frame.kind !== 'session-event' || !frame.sessionId || !frame.event) return
+    if (!TRANSCRIPT_EVENT_TYPES.has(frame.event.type)) return
+    void this.sessionJournal.append(frame.sessionId, [{
+      type: frame.event.type,
+      seq: frame.event.seq,
+      time: frame.event.time,
+      ...(frame.event.data === undefined ? {} : { data: frame.event.data }),
+      ...(frame.event.surfaceOp === undefined ? {} : { surfaceOp: frame.event.surfaceOp }),
+    }]).catch(() => undefined)
+  }
+
+  private async nativeTranscript(sessionId: string, fallback: SessionEventEnvelope[]): Promise<SessionEventEnvelope[]> {
+    if (!this.sessionJournal) return fallback
+    const native = await this.sessionJournal.tail(sessionId, 500).catch(() => [])
+    if (native.length === 0 && fallback.length > 0) return fallback
+    return native.map((event) => ({
+      type: event.type,
+      seq: event.seq,
+      time: event.time ?? Date.now(),
+      ...(event.data === undefined ? {} : { data: event.data }),
+      ...(event.surfaceOp === undefined ? {} : { surfaceOp: event.surfaceOp }),
+    }))
   }
 
   /**
