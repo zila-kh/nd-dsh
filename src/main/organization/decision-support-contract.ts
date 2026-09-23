@@ -38,6 +38,7 @@ export interface DecisionSupportReceipt {
   selectedProvider?: string
   escalated: boolean
   createdAt: number
+  kernelError?: string
 }
 
 export interface DecisionKernelInput {
