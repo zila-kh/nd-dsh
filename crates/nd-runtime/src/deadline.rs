@@ -130,6 +130,12 @@ pub struct InterruptRegistry {
     entries: Mutex<HashMap<String, Interrupt>>,
 }
 
+impl Default for InterruptRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InterruptRegistry {
     pub fn new() -> Self {
         Self::default()
