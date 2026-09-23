@@ -12,6 +12,9 @@ import { RECORD_BYTES, classifyTerminalStream, expectedPayload, payloadMismatch 
 
 const execFileAsync = promisify(execFile)
 const smoke = process.argv.includes('--smoke')
+const LOGICAL_SCALE_POINTS = smoke ? [1, 2, 4, 8, 10] : [1, 2, 4, 8, 10, 25, 50, 100]
+const PARALLEL_WORKER_POINTS = smoke ? [1, 2] : LOGICAL_SCALE_POINTS
+const SCALE_CONTRACT = 'rust-parallel-runtime-v2'
 const outputDir = defaultOutputDir()
 const results = []
 const failures = []
@@ -57,7 +60,7 @@ async function benchmarkMemoryAndScheduler() {
     const points = []
     const permitIds = []
     const corePid = client.pid
-    for (const count of [1, 2, 4, 8, 10]) {
+    for (const count of LOGICAL_SCALE_POINTS) {
       while (permitIds.length < count) {
         const id = 'bench-' + permitIds.length
         const started = performance.now()
@@ -65,7 +68,7 @@ async function benchmarkMemoryAndScheduler() {
           permitId: id,
           sessionId: 'session-' + permitIds.length,
           kind: 'execution',
-          pools: [{ key: 'bench:shared-workspace', limit: 32 }],
+          pools: [{ key: 'bench:shared-workspace', limit: 128 }],
           ttlMs: 300_000,
         })
         check(result.granted === true, 'scheduler refused permit ' + id)
@@ -114,7 +117,7 @@ async function benchmarkMemoryAndScheduler() {
     const snapshot = await client.request('scheduler.snapshot')
     check(!snapshot.permits.some((item) => item.id === 'cap-b'), 'scheduler partially acquired a failed multi-pool permit')
     for (const id of [...permitIds, 'cap-a']) await client.request('scheduler.release', { permitId: id })
-    return writeResult(outputDir, 'memory-scheduler-scaling', { corePid, points })
+    return writeResult(outputDir, 'memory-scheduler-scaling', { scaleContract: SCALE_CONTRACT, scalePoints: LOGICAL_SCALE_POINTS, corePid, points })
   } finally { await client.close() }
 }
 
@@ -285,7 +288,7 @@ async function benchmarkParallelAgents() {
   const parent = await tempDir('nd-dsh-bench-worktrees-')
   const client = await CoreRpc.launch()
   const synthetic = join(benchmarkRoot, 'benchmarks', 'fixtures', 'synthetic-worker.mjs')
-  const targetCounts = smoke ? [1, 2] : [1, 2, 4, 8, 10]
+  const targetCounts = PARALLEL_WORKER_POINTS
   const workers = []
   const output = new Map()
   const descendantPids = new Map()
@@ -323,8 +326,8 @@ async function benchmarkParallelAgents() {
           sessionId: 'parallel-session-' + index,
           kind: 'execution',
           pools: [
-            { key: 'bench:parallel:project', limit: 10 },
-            { key: 'bench:parallel:role', limit: 10 },
+            { key: 'bench:parallel:project', limit: 128 },
+            { key: 'bench:parallel:role', limit: 128 },
           ],
           ttlMs: 300_000,
         })
@@ -363,16 +366,19 @@ async function benchmarkParallelAgents() {
         corePid: client.pid,
         coreMemory,
         managedMemory,
+        managedMemoryBytes: sumMemoryBytes(managedMemory),
         externalMemory,
+        externalMemoryBytes: sumMemoryBytes(externalMemory),
         permitLatencySummaryMs: summarize(workers.slice(0, count).map((worker) => worker.permitLatencyMs)),
         processCount: metrics.processCount,
         workspaceCount: metrics.workspaceCount,
         pendingRpcCount: metrics.pendingRpcCount,
         queuedEventCount: metrics.queuedEventCount,
+        queuedEventBytes: metrics.queuedEventBytes,
         worktreeDiskBytes,
       })
     }
-    return writeResult(outputDir, 'scheduler-multi-agent', { points })
+    return writeResult(outputDir, 'scheduler-multi-agent', { scaleContract: SCALE_CONTRACT, scalePoints: targetCounts, points })
   } finally {
     for (const worker of workers) {
       const exit = client.onceEvent('process.exit', (frame) => frame.resourceId === worker.processId, 5_000).catch(() => undefined)
@@ -383,6 +389,17 @@ async function benchmarkParallelAgents() {
     client.off('process.output', listener)
     await client.close()
   }
+}
+
+function sumMemoryBytes(items) {
+  let total = 0
+  let measured = false
+  for (const item of items) {
+    if (!Number.isFinite(item?.bytes)) continue
+    measured = true
+    total += item.bytes
+  }
+  return measured ? total : null
 }
 
 async function benchmarkCancellation() {
