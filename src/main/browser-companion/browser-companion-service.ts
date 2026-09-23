@@ -223,6 +223,9 @@ export class BrowserCompanionService {
     }
 
     if (message.kind === 'event' && client.connectionId) {
+      if (message.event === 'tab.closed' && typeof message.tabId === 'number' && Number.isInteger(message.tabId) && message.tabId >= 0) {
+        this.leases.releaseTab(client.connectionId, message.tabId)
+      }
       await this.connections.touch(client.connectionId)
       await this.emit()
     }
