@@ -2,27 +2,35 @@
 
 > Plan: [Reference-Inspired Runtime and Company Evolution](../plan/reference-inspired-runtime-company-evolution.md)  
 > Priority: P0  
-> Status: todo  
+> Status: **implementation complete; local validation pending**  
 > Owner: unassigned
 
 ## Objective
 
 Extract the Rust-owned ND core wire contract from `nd-core` into a dedicated `nd-protocol` crate and make TypeScript/Rust contract drift machine-detectable.
 
-## Scope
+## Implemented
 
-- request/response/event envelopes;
-- protocol versioning and frame limits;
-- error vocabulary;
-- stable resource/sequence identity;
-- generated or machine-checked TypeScript/schema bindings;
-- compatibility tests for version/field/enum/limit drift;
-- preserve existing MessagePack framing, queue bounds, deadlines and cancellation unless evidence supports a change.
+- added `crates/nd-protocol`;
+- moved MessagePack request/response/event framing and protocol limits into the crate;
+- moved the typed protocol error vocabulary into the crate;
+- kept protocol version and frame limit unchanged;
+- made `nd-core` and `nd-runtime` depend on `nd-protocol`;
+- added Rust-side parity tests against `src/main/core/core-protocol.ts` for version, frame size, required frame fields, and error codes;
+- retained the existing protocol queue/decode tests instead of weakening them;
+- updated `pnpm core:test` so `nd-protocol`, `nd-runtime`, and `nd-core` are all clippy/test gates.
 
-## Acceptance
+## Acceptance status
 
-- Electron client behavior is unchanged.
-- Contract drift fails local validation.
-- Existing protocol correctness tests move or are extended rather than weakened.
-- Existing benchmark suite shows no material protocol regression.
-- No organization/business-domain migration is included.
+Implementation is complete. Local evidence still required:
+
+- `cargo metadata --locked --no-deps`;
+- `pnpm core:test`;
+- `pnpm bench:contract`;
+- confirm the existing Electron client completes its normal core handshake with no protocol semantic change.
+
+No organization/business-domain migration is included.
+
+## Handoff
+
+See [Reference Architecture Local Validation Handoff](../plan/reference-architecture-local-validation-handoff.md).
