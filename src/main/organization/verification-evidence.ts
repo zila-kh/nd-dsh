@@ -62,6 +62,7 @@ export async function runVerification(command: string | undefined, cwd: string |
       stdio: ['ignore', 'pipe', 'pipe'],
       env: process.env,
       windowsHide: true,
+      windowsVerbatimArguments: process.platform === 'win32',
       detached: process.platform !== 'win32',
     })
     let stdout = ''
@@ -126,7 +127,11 @@ function verificationShell(command: string): { command: string; args: string[] }
   if (process.platform === 'win32') {
     return {
       command: process.env.COMSPEC?.trim() || 'cmd.exe',
-      args: ['/d', '/s', '/c', command],
+      // `cmd /d /s /c` strips one outer quote pair and runs the rest as-is, so
+      // the command is pre-wrapped to keep inner quotes, pipes and `&&` chains
+      // intact. Inner quotes must reach cmd.exe unescaped: the caller requests
+      // verbatim argument delivery.
+      args: ['/d', '/s', '/c', `"${command}"`],
     }
   }
   return { command: '/bin/sh', args: ['-c', command] }

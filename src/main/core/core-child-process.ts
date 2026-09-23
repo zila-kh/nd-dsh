@@ -131,6 +131,7 @@ class CoreChildProcess extends EventEmitter {
       cwd: typeof options.cwd === 'string' ? options.cwd : process.cwd(),
       env: environment,
       inheritEnv: false,
+      ...(options.windowsVerbatimArguments === true ? { verbatimArgs: true } : {}),
     }, 30_000)
 
     void this.spawnPromise.then((result) => {

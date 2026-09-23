@@ -190,8 +190,9 @@ describe('ProjectRuntimeService', () => {
     expect(spawned?.cwd).toBe(fixture.workspaceRoot)
     if (process.platform === 'win32') {
       expect(spawned?.command).toMatch(/(?:^|[\\/])cmd\.exe$/i)
-      expect(spawned?.args.slice(0, 3)).toEqual(['/d', '/s', '/c'])
-      expect(spawned?.args[3]).toBe('npm run dev')
+      // The command is wrapped so `cmd /d /s /c` strips one outer quote pair
+      // and runs the configured command with its own quotes intact.
+      expect(spawned?.args).toEqual(['/d', '/s', '/c', '"npm run dev"'])
     } else {
       expect(spawned).toMatchObject({ command: '/bin/sh', args: ['-c', 'npm run dev'] })
     }

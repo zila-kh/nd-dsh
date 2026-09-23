@@ -24,6 +24,8 @@ pub struct SpawnParams {
     #[serde(default)]
     pub env: HashMap<String, String>,
     pub inherit_env: Option<bool>,
+    #[serde(default)]
+    pub verbatim_args: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -133,6 +135,22 @@ impl ProcessManager {
         }
 
         let mut command = Command::new(&params.command);
+        // Shell wrappers (`cmd.exe /d /s /c "..."`) rely on the command line
+        // reaching CreateProcess byte-for-byte. The default escaping rewrites
+        // inner quotes the way cmd.exe cannot parse, so verbatim delivery is
+        // required for that call shape.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            if params.verbatim_args {
+                for arg in &params.args {
+                    command.raw_arg(arg);
+                }
+            } else {
+                command.args(&params.args);
+            }
+        }
+        #[cfg(not(windows))]
         command.args(&params.args);
         command.stdin(Stdio::piped());
         command.stdout(Stdio::piped());
@@ -489,5 +507,52 @@ mod tests {
         assert!(looks_secret("my_private_key"));
         assert!(!looks_secret("PATH"));
         assert!(!looks_secret("TERM"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn verbatim_args_deliver_quoted_shell_commands_intact() {
+        let manager = Arc::new(ProcessManager::new(
+            Arc::new(ProtocolWriter::new()),
+            Arc::new(Scheduler::new()),
+        ));
+        let dir = std::env::temp_dir().join(format!("nd-core-verbatim-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let marker = dir.join("marker.txt");
+        let inner = format!("echo \"quoted ok\" > \"{}\"", marker.display());
+        manager
+            .spawn(SpawnParams {
+                id: None,
+                permit_id: None,
+                command: std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_owned()),
+                args: vec![
+                    "/d".to_owned(),
+                    "/s".to_owned(),
+                    "/c".to_owned(),
+                    format!("\"{inner}\""),
+                ],
+                cwd: Some(dir.display().to_string()),
+                env: HashMap::new(),
+                inherit_env: Some(true),
+                verbatim_args: true,
+            })
+            .expect("spawn verbatim cmd.exe command");
+
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut observed = String::new();
+        while Instant::now() < deadline {
+            if let Ok(text) = std::fs::read_to_string(&marker) {
+                observed = text.trim().to_owned();
+                if observed == "\"quoted ok\"" {
+                    break;
+                }
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        assert_eq!(
+            observed, "\"quoted ok\"",
+            "quoted cmd.exe command was not delivered intact"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
