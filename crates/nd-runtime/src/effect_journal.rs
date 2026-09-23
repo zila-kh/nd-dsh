@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -133,6 +133,7 @@ struct JournalState {
     records: Vec<EffectRecord>,
     latest_by_key: HashMap<String, usize>,
     completed_by_key: HashMap<String, usize>,
+    recovered_uncertain_keys: HashSet<String>,
     bytes: u64,
 }
 
@@ -169,6 +170,7 @@ impl EffectJournalStore {
             ..JournalState::default()
         };
         load_records(&path, &mut next)?;
+        mark_recovered_uncertain(&mut next);
         let mut state = self
             .state
             .lock()
@@ -189,6 +191,9 @@ impl EffectJournalStore {
             .ok_or_else(|| anyhow::anyhow!("effect journal is not configured"))?;
 
         if let Some(key) = params.idempotency_key.as_deref() {
+            if state.recovered_uncertain_keys.contains(key) && params.state == EffectState::Intent {
+                bail!("effect outcome is uncertain after restart; reconcile the existing idempotency key before retry");
+            }
             if let Some(index) = state.completed_by_key.get(key).copied() {
                 return Ok(EffectJournalAppendResult {
                     record: state.records[index].clone(),
@@ -249,6 +254,9 @@ impl EffectJournalStore {
             if record.state == EffectState::Complete {
                 state.completed_by_key.insert(key.clone(), index);
             }
+            if record.state != EffectState::Intent {
+                state.recovered_uncertain_keys.remove(key);
+            }
         }
         state.records.push(record.clone());
         Ok(EffectJournalAppendResult {
@@ -294,11 +302,15 @@ impl EffectJournalStore {
             });
         };
         let record = state.records[index].clone();
-        let recovery = match record.state {
+        let recovery = if state.recovered_uncertain_keys.contains(&params.idempotency_key) {
+            RecoveryState::OutcomeUncertain
+        } else {
+            match record.state {
             EffectState::Intent => RecoveryState::InProgress,
             EffectState::Complete => RecoveryState::KnownComplete,
             EffectState::Failed => RecoveryState::KnownFailed,
             EffectState::Uncertain => RecoveryState::OutcomeUncertain,
+            }
         };
         Ok(EffectJournalStateResult {
             state: recovery,
@@ -340,6 +352,14 @@ fn load_records(path: &Path, state: &mut JournalState) -> Result<()> {
         state.records.push(record);
     }
     Ok(())
+}
+
+fn mark_recovered_uncertain(state: &mut JournalState) {
+    for (key, index) in &state.latest_by_key {
+        if state.records[*index].state == EffectState::Intent {
+            state.recovered_uncertain_keys.insert(key.clone());
+        }
+    }
 }
 
 fn validate_path(value: &str) -> Result<PathBuf> {
@@ -450,6 +470,39 @@ mod tests {
         assert!(duplicate.duplicate);
         assert_eq!(duplicate.record.seq, written.record.seq);
         assert_eq!(second.stats().record_count, 1);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn unmatched_intent_becomes_uncertain_after_restart() {
+        let path = journal_path("intent-restart");
+        let first = EffectJournalStore::new();
+        first
+            .configure(EffectJournalConfigureParams {
+                path: path.to_string_lossy().into_owned(),
+            })
+            .unwrap();
+        first.append(params("effect-intent", EffectState::Intent)).unwrap();
+        drop(first);
+
+        let second = EffectJournalStore::new();
+        second
+            .configure(EffectJournalConfigureParams {
+                path: path.to_string_lossy().into_owned(),
+            })
+            .unwrap();
+        let recovered = second
+            .effect_state(EffectJournalStateParams {
+                idempotency_key: "effect-intent".into(),
+            })
+            .unwrap();
+        assert_eq!(recovered.state, RecoveryState::OutcomeUncertain);
+        let retry = second.append(params("effect-intent", EffectState::Intent));
+        assert!(retry.is_err());
+        let reconciled = second
+            .append(params("effect-intent", EffectState::Failed))
+            .unwrap();
+        assert_eq!(reconciled.record.state, EffectState::Failed);
         let _ = fs::remove_file(path);
     }
 
