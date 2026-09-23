@@ -41,15 +41,15 @@ function git(cwd: string, args: string[]): void {
 /**
  * Pre-seed provider metadata into the throwaway E2E profile.
  *
- * Local live-model runs may supply one shared OpenAI-compatible endpoint plus
- * exactly three model ids through .env. Deterministic E2E remains usable with
- * no .env at all and falls back to the existing OpenCode Go fixture route.
+ * Local live-model specs may explicitly opt into one shared OpenAI-compatible
+ * endpoint plus exactly three model ids through .env. Ordinary deterministic
+ * E2E ignores those variables and retains the existing OpenCode Go fixture route.
  *
  * The apiKey is written only into the throwaway profile. ProviderStore migrates
  * plaintext legacy input into Electron safeStorage on first persist; .env itself
  * is gitignored and must never be committed.
  */
-async function seedProviders(userDataDir: string): Promise<void> {
+async function seedProviders(userDataDir: string, useConfiguredModels = false): Promise<void> {
   const baseUrl = process.env.E2E_MODEL_BASE_URL?.trim() ?? ''
   const apiKey = process.env.E2E_MODEL_API_KEY?.trim() ?? ''
   const modelIds = [
@@ -57,9 +57,9 @@ async function seedProviders(userDataDir: string): Promise<void> {
     process.env.E2E_MODEL_2?.trim() ?? '',
     process.env.E2E_MODEL_3?.trim() ?? '',
   ]
-  const envConfigured = Boolean(baseUrl || apiKey || modelIds.some(Boolean))
+  const envConfigured = useConfiguredModels && Boolean(baseUrl || apiKey || modelIds.some(Boolean))
 
-  if (envConfigured && (!baseUrl || !apiKey || modelIds.some((id) => !id))) {
+  if (useConfiguredModels && (!baseUrl || !apiKey || modelIds.some((id) => !id))) {
     throw new Error(
       'Incomplete E2E model configuration. Set E2E_MODEL_BASE_URL, E2E_MODEL_API_KEY, E2E_MODEL_1, E2E_MODEL_2 and E2E_MODEL_3 together.',
     )
@@ -118,11 +118,13 @@ const appDiagnostics = new WeakMap<ElectronApplication, AppDiagnostics>()
 export interface LaunchAppOptions {
   /** Reuse an existing profile when a spec needs to prove restart persistence. */
   userDataDir?: string
+  /** Opt into the .env OpenAI-compatible E2E_MODEL_1/2/3 provider. */
+  useConfiguredModels?: boolean
 }
 
 export async function launchApp(options: LaunchAppOptions = {}): Promise<LaunchedApp> {
   const userDataDir = options.userDataDir ?? await mkdtemp(join(tmpdir(), 'nd-dsh-e2e-'))
-  await seedProviders(userDataDir)
+  await seedProviders(userDataDir, options.useConfiguredModels ?? false)
   const app = await electron.launch({
     args: ['.', `--user-data-dir=${userDataDir}`],
   })
