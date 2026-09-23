@@ -1,7 +1,8 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
-import { DecisionSupportService, HttpDecisionProvider } from '../src/main/organization/decision-support.js'
+import { DecisionSupportService, HttpDecisionProvider, evaluateDecisionAttempts } from '../src/main/organization/decision-support.js'
 import { createDecisionSupportFromEnv } from '../src/main/organization/decision-support-config.js'
-import { formatDecisionSupportForReviewer, type DecisionProvider, type DecisionProviderResult } from '../src/main/organization/decision-support-contract.js'
+import { formatDecisionSupportForReviewer, type DecisionKernelInput, type DecisionProvider, type DecisionProviderResult } from '../src/main/organization/decision-support-contract.js'
 
 function provider(id: string, confidence: number): DecisionProvider {
   return {
@@ -34,7 +35,28 @@ const input = {
   },
 }
 
+const parityCases = JSON.parse(readFileSync(
+  new URL('./fixtures/decision-kernel-parity.json', import.meta.url),
+  'utf8',
+)) as Array<DecisionKernelInput & {
+  name: string
+  expected: {
+    selectedProvider: string | null
+    shouldContinue: boolean
+    escalated: boolean
+  }
+}>
+
 describe('decision support cascade', () => {
+  it('matches the shared Rust/TypeScript decision fixture corpus', () => {
+    for (const testCase of parityCases) {
+      const evaluation = evaluateDecisionAttempts(testCase)
+      expect(evaluation.receipt.selectedProvider ?? null, testCase.name).toBe(testCase.expected.selectedProvider)
+      expect(evaluation.shouldContinue, testCase.name).toBe(testCase.expected.shouldContinue)
+      expect(evaluation.receipt.escalated, testCase.name).toBe(testCase.expected.escalated)
+    }
+  })
+
   it('uses high-confidence Laya without calling Jev', async () => {
     const laya = provider('laya', 0.92)
     const jev = provider('jev', 0.95)
