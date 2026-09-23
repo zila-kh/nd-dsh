@@ -21,7 +21,7 @@ import { CapabilityStatusStore } from './capabilities/capability-status-store.js
 import { createHarnessSourceSetupAdapters } from './capabilities/harness-runtime-setup.js'
 import { ExternalElementStage, RecentPickStore } from './capture/external-inspect.js'
 import { CoreClient } from './core/core-client.js'
-import { createCoreSpawn } from './core/core-child-process.js'
+import { createCoreSpawn, stopCoreManagedChildProcess } from './core/core-child-process.js'
 import { createCorePtySpawner } from './core/core-pty.js'
 import { createCoreWorkspaceFileSystem } from './core/core-workspace.js'
 import { createCoreWorktreeGit } from './core/core-worktree-git.js'
@@ -228,6 +228,9 @@ async function createWindow(cdpPort: number): Promise<void> {
       })
   })
   const engineSpawn = createCoreSpawn(core, executionCoordinator)
+  // Project dev servers are long-lived project resources, not task resources:
+  // keep them Rust-owned without binding them to the current worker permit.
+  const projectRuntimeSpawn = createCoreSpawn(core)
   const git = new GitService(workspace, { core })
   const harness = new HarnessService(workspace, browser, providers, externalElements, sessionArchive, usageLedger)
   const codexEngine = new CodexCliEngine({ log: (line) => console.log(line), spawnProcess: engineSpawn })
@@ -284,7 +287,8 @@ async function createWindow(cdpPort: number): Promise<void> {
   // never load ND-DSH's own preview recursively inside the browser pane.
   const projectRuntime = new ProjectRuntimeService({
     store: organizationStore,
-    spawnProcess: spawn,
+    spawnProcess: projectRuntimeSpawn,
+    stopProcess: stopCoreManagedChildProcess,
     reservedOrigin,
     onTargetReady: (_projectId, url) => {
       void browser.navigate(url).catch((error) => {
