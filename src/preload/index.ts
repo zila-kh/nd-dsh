@@ -16,6 +16,7 @@ import {
   type BrowserHistoryEntry,
   type BrowserPlatformState,
   type BrowserSelection,
+  type BrowserSitePermission,
   type BrowserTabDescriptor,
 } from '../shared/browser-platform.js'
 import { IPC, type DesktopApi, type ModelProvider } from '../shared/contracts.js'
@@ -172,6 +173,8 @@ const api: DesktopApi = {
     saveCredential: (input: { origin: string; username: string; password: string; label?: string }) =>
       ipcRenderer.invoke(BROWSER_PLATFORM_IPC.saveCredential, input) as Promise<BrowserCredentialSummary>,
     removeCredential: (credentialId: string) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.removeCredential, credentialId) as Promise<boolean>,
+    setSitePermission: (origin: string, permission: string, effect: 'allow' | 'deny') =>
+      ipcRenderer.invoke(BROWSER_PLATFORM_IPC.setSitePermission, origin, permission, effect) as Promise<BrowserSitePermission>,
     resolveApproval: (approvalId: string, allowed: boolean) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.resolveApproval, approvalId, allowed) as Promise<boolean>,
     onChanged: (listener) => {
       const handler = (_event: Electron.IpcRendererEvent, state: BrowserPlatformState) => listener(state)
