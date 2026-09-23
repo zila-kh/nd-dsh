@@ -1,6 +1,6 @@
 # ND Agent Fast Path — typed action space, cheap routing, and bundled core operations
 
-Status: **proposed — not started.** This plan is Phases 2 and 4 of the Rust-sidecar direction, not a separate architecture.
+Status: **implemented as [task 0008](../tasks/done/done-0008-agent-fast-path.md) (2026-09-22); what is open is budget wiring, not architecture.** The typed action space, the deterministic-first router with fail-closed escalation, the revision-aware `workspace.snapshot`, and a matched normal-read/fast-read measurement are in the product path — the task record is the authority on exact scope. What remains is §5 step 3: turning the recorded counters into relative budgets ([performance-benchmark-suite.md](performance-benchmark-suite.md) §12.4), and settling the §9 open questions with that metric in hand. This plan is Phases 2 and 4 of the Rust-sidecar direction, not a separate architecture.
 Updated: 2026-09-21
 Related: [PRD 0002](../prd/0002-rust-sidecar-mvp-migration.md) · [Performance benchmark suite](performance-benchmark-suite.md) · [Phase 1 reliability](phase-1-beta-reliability.md) · [Phase 3 autonomous company](phase-3-autonomous-software-company.md) · [Roadmap](../roadmap.md)
 
@@ -81,7 +81,7 @@ A `revision`/generation marker is required so a caller can tell whether a cached
 
 ### 4.1 Do not build this before resolving the unused primitive layer
 
-**Resolved 2026-09-21 by [task 0006](../tasks/wip-0006-nd-core-runtime-contract.md).** The
+**Resolved 2026-09-21 by [task 0006](../tasks/done/done-0006-nd-core-runtime-contract.md).** The
 decision is recorded in [PRD 0002 §5.0.3](../prd/0002-rust-sidecar-mvp-migration.md#503-decision-record--nd-core-runtime-contract-task-0006-2026-09-21):
 `workspace.list` and `workspace.read` are now called from `src/` by the workspace
 browser, and `realpath`, `stat`, and `atomicWrite` were removed from the protocol. The
@@ -116,6 +116,8 @@ That makes the honest build order:
 4. **Only then** decide whether bundled core operations are needed.
 
 Without step 1, step 3 is unfalsifiable and this plan becomes an unverifiable architecture claim of exactly the kind PRD 0002 §8.17 rules out.
+
+**Status (2026-09-23):** step 1 is done — the agent-task metrics and a committed normal-loop baseline landed with task 0005 — and step 2 is done with task 0008, which built the action space, the router, and the matched `normal-read` / `fast-read` measurement. Step 4's composite (`workspace.snapshot`) landed with it, measured rather than asserted. Step 3 is the open half: the counters are recorded, but the before → after comparison is not yet enforced as a budget.
 
 ## 6. Non-goals
 
