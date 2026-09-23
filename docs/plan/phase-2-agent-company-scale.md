@@ -202,7 +202,7 @@ ND selects routes using:
 
 Record every decision so routing can improve from actual outcomes.
 
-Implementation direction: keep organization intent and policy in TypeScript, but route typed low-cost decisions through the Rust decision kernel after [TODO 0034](../tasks/wip-0034-rust-decision-kernel.md) reaches parity. Deterministic rules remain first; Laya/Jev are replaceable System One providers; strong reasoning models remain the escalation path when confidence is insufficient.
+Implementation status: organization intent/policy and provider credentials/network remain in TypeScript; [WIP 0034](../tasks/wip-0034-rust-decision-kernel.md) now supplies the opt-in Rust threshold/selection/escalation kernel behind the same typed provider observations. Shared fixtures enforce TS/Rust parity; local live-provider evidence is the remaining promotion gate. Deterministic rules remain first, Laya/Jev remain replaceable providers, and strong reasoning review stays the fallback when confidence is insufficient.
 
 Example learned metric:
 
