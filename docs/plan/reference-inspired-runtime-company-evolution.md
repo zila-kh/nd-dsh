@@ -97,13 +97,14 @@ crates/
 │   ├── recovery/reconciliation
 │   └── durable cursors
 │
-├── nd-runtime/         # P0
+├── nd-runtime/         # P0 foundation, P1 decision kernel
 │   ├── scheduler
 │   ├── process
 │   ├── terminal
 │   ├── workspace
 │   ├── git/search/revision
 │   ├── deadline/cancellation
+│   ├── decision/       # typed rules/providers/calibration/receipts
 │   └── runtime metrics/cache
 │
 ├── nd-sandbox/         # P1, provider contract first
@@ -270,6 +271,49 @@ Requirements:
 
 Primary references: LoopX, QM, LazyCodex.
 
+### P1.4 Rust decision kernel and System One providers
+
+The first Laya/Jev implementation in Electron main is the behavioral prototype, not the final runtime boundary. After `nd-protocol` and `nd-runtime` extraction stabilize, move the provider-neutral decision kernel into `nd-runtime`.
+
+Target flow:
+
+```text
+typed ND state
+  -> deterministic rules
+  -> Laya local System One provider
+  -> Jev optional escalation / second opinion
+  -> reasoning-model escalation signal when confidence remains insufficient
+  -> existing ND policy / verification / independent review authority
+```
+
+Rules:
+
+- keep Company/Project/Task business truth TypeScript-owned in this phase;
+- Rust owns the typed decision request/result/receipt, provider ordering, confidence threshold, timeout/failure containment, calibration hooks, and decision metrics;
+- Laya initially stays out-of-process through upstream `laya-serve`; do not port or bundle its model merely to make the architecture look more native;
+- Jev remains an optional HTTPS provider behind the same contract;
+- future ONNX/native inference may replace only the Laya provider implementation after matched quality/performance evidence;
+- decision support never overrides machine verification, policy gates, exact-evidence rules, or independent semantic review;
+- shadow parity must precede any Rust path becoming authoritative for additional lifecycle decisions.
+
+Implementation ticket: [TODO 0023 — Move Decision Support Kernel into Rust](../tasks/todo-0023-rust-decision-kernel.md).
+
+### P1.5 Durable agent/team mailbox and targeted wake
+
+ND teams currently share coordination events; make the transport more explicit for long-running peer work.
+
+Requirements:
+
+- durable sender/recipient/task/run identity;
+- message type such as handoff, blocker, evidence, request, answer, wake;
+- delivery/consumption cursor;
+- targeted wake without polling every worker;
+- bounded mailbox size/retention;
+- restart-safe delivery semantics;
+- team communication never grants filesystem write authority by itself.
+
+Primary references: LoopX, QM, LazyCodex.
+
 ## 7. P2 — company quality and interoperability
 
 ### P2.1 Employee evaluation and routing evidence
@@ -338,11 +382,12 @@ Primary reference: PocketPaw.
 | 1 | `nd-protocol` extraction + generated TS contract | P0 | reduces cross-language drift before Rust expands |
 | 2 | canonical execution/effect journal | P0 | improves autonomous crash/effect correctness |
 | 3 | `nd-runtime` extraction + thin `nd-core` | P0 | creates clean growth seam without product rewrite |
-| 4 | sandbox provider contract | P1 | separates provenance from execution security |
-| 5 | trace inspector | P1 | makes future routing/perf/recovery work measurable |
-| 6 | durable mailbox/wake | P1 | improves long-running team coordination |
-| 7 | employee evals + budget envelopes | P2 | feeds measurable routing/company quality |
-| 8 | portable company packages + A2A/notifications | P2 | interoperability after core authority is stable |
+| 4 | Rust decision kernel + Laya/Jev provider seam | P1 | moves reusable decision routing/receipts into the native control plane after its contracts stabilize |
+| 5 | sandbox provider contract | P1 | separates provenance from execution security |
+| 6 | trace inspector | P1 | makes future routing/perf/recovery work measurable |
+| 7 | durable mailbox/wake | P1 | improves long-running team coordination |
+| 8 | employee evals + budget envelopes | P2 | feeds measurable routing/company quality |
+| 9 | portable company packages + A2A/notifications | P2 | interoperability after core authority is stable |
 
 P0 items should be delivered incrementally. Do not land all three as one giant Rust rewrite.
 
@@ -391,8 +436,9 @@ The plan is substantially complete when:
 1. Rust owns one generated/machine-checked protocol contract shared with TypeScript.
 2. An interrupted company task can reconcile durable effect state without blindly repeating uncertain effects.
 3. `nd-core` is a thin binary over stable protocol/runtime crates with no correctness/performance regression.
-4. Execution sandboxing is a provider choice independent from task worktree provenance.
-5. One trace identity explains a task from route selection through checkpoint/review/integration.
-6. Team handoffs and wakes survive desktop/runtime restart.
-7. Employee/engine quality and budget decisions are backed by stored evidence.
-8. The maintained reference matrix remains pinned and periodically refreshed rather than turning into unversioned competitor prose.
+4. The decision kernel can run in Rust with typed receipts and Laya/Jev as replaceable providers while preserving reviewer/verification authority.
+5. Execution sandboxing is a provider choice independent from task worktree provenance.
+6. One trace identity explains a task from route selection through checkpoint/review/integration.
+7. Team handoffs and wakes survive desktop/runtime restart.
+8. Employee/engine quality and budget decisions are backed by stored evidence.
+9. The maintained reference matrix remains pinned and periodically refreshed rather than turning into unversioned competitor prose.
