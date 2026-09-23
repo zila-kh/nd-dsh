@@ -11,6 +11,16 @@ describe('BrowserTabLeaseStore', () => {
     expect(store.acquire('chrome-a', 12, 'task-b').ownerId).toBe('task-b')
   })
 
+  it('releases a lease when its tab closes without touching other tabs', () => {
+    const store = new BrowserTabLeaseStore()
+    store.acquire('chrome-a', 1, 'task-a')
+    store.acquire('chrome-a', 2, 'task-b')
+    expect(store.releaseTab('chrome-a', 1)).toBe(true)
+    expect(store.releaseTab('chrome-a', 1)).toBe(false)
+    expect(store.list()).toHaveLength(1)
+    expect(store.list()[0]?.tabId).toBe(2)
+  })
+
   it('releases every lease when a browser connection disappears', () => {
     const store = new BrowserTabLeaseStore()
     store.acquire('chrome-a', 1, 'task-a')
