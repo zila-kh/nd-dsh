@@ -63,7 +63,7 @@ Required assertions:
 
 This layer does **not** require a model or network. It ignores the live E2E model configuration and should stay green even when provider credentials are unavailable.
 
-## Layer 2 — shared OpenAI-compatible 3-model matrix
+## Layer 2 — live multi-company 3-model portfolio
 
 Copy `.env.e2e.example` to `.env` and fill:
 
@@ -88,7 +88,38 @@ models:   E2E_MODEL_1, E2E_MODEL_2, E2E_MODEL_3
 
 Ordinary Playwright fixtures do **not** change just because `.env` exists. They keep the existing deterministic OpenCode Go fixture unless a future spec explicitly calls `launchApp({ useConfiguredModels: true })`. This protects the current E2E suite from accidental provider-dependent drift.
 
-The existing full autonomous multi-model driver now consumes these slots:
+The primary live portfolio test is `e2e/organization-portfolio-models.spec.ts`.
+
+It creates:
+
+```text
+SwiftCab Live
+├── Dispatch Live  -> Builder @ E2E_MODEL_1
+└── Driver Live    -> Builder 2 @ E2E_MODEL_2
+
+TinyCart Live
+└── Catalog Live   -> Builder @ E2E_MODEL_3
+```
+
+Each project starts as a separate temporary Git repository and receives one deliberately tiny task. The test activates each project sequentially, runs the real worker, waits for ND's execution receipt/checkpoint/worktree evidence, verifies the recorded execution route, explicitly runs the independent reviewer, and requires successful integration plus 100% project progress.
+
+Reviewer routes remain different from their builders:
+
+- Company A Reviewer -> `E2E_MODEL_3`
+- Company B Reviewer -> `E2E_MODEL_1`
+
+Run:
+
+```sh
+corepack pnpm build
+corepack pnpm e2e:portfolio:models
+```
+
+This is the main local proof for **multiple companies + multiple projects + real model routing**.
+
+## Layer 3 — full autonomous multi-agent stress loop
+
+The existing full autonomous multi-model driver also consumes these same slots:
 
 | ND employee | Route |
 | --- | --- |
@@ -105,7 +136,7 @@ corepack pnpm build
 corepack pnpm e2e:models
 ```
 
-That driver exercises the real autonomous path: PM plan → automatic task distribution → isolated Git worktrees → parallel builders → independent review → integration. It must observe both builder routes rather than manually repairing distribution.
+This stress layer uses one project but exercises more orchestration depth: PM plan → automatic task distribution → isolated Git worktrees → parallel builders → independent review → integration. It must observe both builder routes rather than manually repairing distribution. Keep it separate from the small portfolio test so failures can be attributed cleanly.
 
 ## Why the two layers are separate
 
@@ -115,9 +146,13 @@ The deterministic portfolio suite answers:
 
 > Is ND's company/project/workspace/task isolation correct?
 
-The live matrix answers:
+The live portfolio matrix answers:
 
-> Can real model routes execute ND's autonomous loop with route diversity and worktree/review evidence?
+> Can three real model routes execute isolated work across two companies and three projects with correct worktree/review/integration evidence?
+
+The autonomous stress driver answers:
+
+> Can ND also distribute a larger single-project workload across multiple live model routes in parallel?
 
 Keeping them separate makes a failed API key, rate limit or provider outage unable to hide a company-isolation bug.
 
@@ -133,6 +168,7 @@ corepack pnpm test
 corepack pnpm core:test
 corepack pnpm build
 corepack pnpm e2e:portfolio
+corepack pnpm e2e:portfolio:models
 corepack pnpm e2e:models
 ```
 
@@ -146,6 +182,15 @@ For `e2e:portfolio`:
 - OS + Node + pnpm versions;
 - confirmation that restart used the same temporary profile;
 - any renderer console/page errors.
+
+For `e2e:portfolio:models`:
+
+- all three tiny tasks reach review and then completed;
+- execution route evidence reports the expected provider + model for each project;
+- every execution run records a checkpoint and task workspace;
+- review passes and integration state is `integrated`;
+- all three projects reach 100%;
+- final company/project ownership assertions remain isolated.
 
 For `e2e:models`:
 
@@ -166,6 +211,7 @@ Do not call this portfolio proof complete until:
 - `e2e:portfolio` is green;
 - no cross-company mutation succeeds;
 - project/task visibility remains scoped before and after restart;
+- `e2e:portfolio:models` completes all three real-model project tasks with exact route evidence and integration;
 - `e2e:models` reaches a completed autonomous project using all required live builder routes;
 - no secret appears in logs or committed files.
 
