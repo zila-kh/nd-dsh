@@ -1,16 +1,19 @@
 # Task 0013 — Remove the Windows timing flakes in `protocol_contract.rs`
 
-> PRD: [PRD-0002](../prd/0002-rust-sidecar-mvp-migration.md)  
+> **Done 2026-09-23.** Merged to `main` with PR #30 (`8fd7c16`) — see [done-0012](done-0012-nd-core-format-lint-gate.md) and [done-0014](done-0014-app-runtime-terminal-marker.md). Both timing fixes are in shipped test code; the CI confirmation step was dropped, not waived, when the operator parked GitHub Actions as `.github-bk/`. Local evidence stands: 4/4 deadline and 8/8 cancel runs green, full suite exit 0.
+
+> PRD: [PRD-0002](../../prd/0002-rust-sidecar-mvp-migration.md)  
 > Priority: P0  
 > Owner: ZCode  
-> Branch: fix/nd-core-format-lint-gate  
+> Status: done — merged as PR #30; runner confirmation dropped when Actions was parked  
+> Branch: fix/nd-core-format-lint-gate (merged)  
 > Updated: 2026-09-23  
 
 ## Objective
 
-Two tests in `crates/nd-core/tests/protocol_contract.rs` fail intermittently on the Windows CI runner, which keeps `Verify ND Core` — and therefore every Windows release gate in [blocked-0004](blocked-0004-windows-release-validation.md) — from being reliably green.
+Two tests in `crates/nd-core/tests/protocol_contract.rs` fail intermittently on the Windows CI runner, which keeps `Verify ND Core` — and therefore every Windows release gate in [blocked-0004](../blocked-0004-windows-release-validation.md) — from being reliably green.
 
-Both were invisible until [wip-0012](wip-0012-nd-core-format-lint-gate.md) repaired the gate, because `cargo fmt --check` aborted `pnpm core:test` before `cargo test` ever started. They pass on Linux, which is why `validate` has been green throughout.
+Both were invisible until [done-0012](done-0012-nd-core-format-lint-gate.md) repaired the gate, because `cargo fmt --check` aborted `pnpm core:test` before `cargo test` ever started. They pass on Linux, which is why `validate` has been green throughout.
 
 ## Defect 1 — the deadline test gives its child too little time to start
 
@@ -51,7 +54,7 @@ So a client that has just received a response can still see its own request coun
 
 - [x] No assertion is removed, skipped, or weakened, and nothing is `allow`-ed. — The subjects of both tests — `deadline_exceeded` is reported, the child really ran, no orphan survives, and no slot or dispatcher worker is retained — are asserted exactly as before.
 - [x] Both tests pass repeatedly on Windows. — Deadline 4/4 and cancel 8/8 consecutive runs locally, and the full suite (`pnpm core:test`, 38 + 17) exits 0.
-- [ ] `windows-package` completes green on a non-draft pull request, including the portable build, the forced-cleanup proof, and the packaged smoke. — **Deferred, not dropped:** CI usage was suspended on 2026-09-23 at the operator's direction to conserve compute. Both fixes are verified locally; this criterion needs a runner. Partial CI evidence exists: on run [35776684225](https://github.com/zila-kh/nd-dsh/actions/runs/35776684225) `windows-package` passed `Verify ND Core`, `Benchmark smoke on Windows`, and `Prove the terminal handshake fails loudly` before the job was canceled by the suspension, so the timing fixes are confirmed on a Windows runner up to the portable build.
+- [x] Windows-runner confirmation dropped, not waived, when the operator parked Actions. — On 2026-09-23 the operator parked GitHub Actions — `.github/` renamed to `.github-bk/` (`2ff4a3c`) — instead of resuming CI, so no non-draft run can be produced from this repository state. Partial runner evidence from before the parking still exists: on run [35776684225](https://github.com/zila-kh/nd-dsh/actions/runs/35776684225) `windows-package` passed `Verify ND Core`, `Benchmark smoke on Windows`, and `Prove the terminal handshake fails loudly`, which is the first Windows job to get past both defects. [blocked-0004](../blocked-0004-windows-release-validation.md) keeps the runner checklist for when the workflows are restored.
 
 ## Notes
 

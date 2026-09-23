@@ -1,14 +1,17 @@
 # Task 0014 — The app-runtime benchmark never reads its terminal marker
 
-> PRD: [PRD-0002](../prd/0002-rust-sidecar-mvp-migration.md)  
+> **Done 2026-09-23.** Merged to `main` with PR #30 (`8fd7c16`) — see [done-0012](done-0012-nd-core-format-lint-gate.md) and [done-0013](done-0013-windows-timing-flakes.md). The harness fix is in shipped code; the `performance-evidence` confirmation step was dropped, not waived, when the operator parked GitHub Actions as `.github-bk/`. No evidence bundle exists yet, so the committed runtime baseline stays unrecorded until the workflows are restored.
+
+> PRD: [PRD-0002](../../prd/0002-rust-sidecar-mvp-migration.md)  
 > Priority: P1  
 > Owner: ZCode  
-> Branch: fix/nd-core-format-lint-gate  
+> Status: done — merged as PR #30; `performance-evidence` confirmation dropped when Actions was parked  
+> Branch: fix/nd-core-format-lint-gate (merged)  
 > Updated: 2026-09-23  
 
 ## Objective
 
-`performance-evidence` cannot produce the release evidence bundle in [blocked-0004](blocked-0004-windows-release-validation.md), because the app-runtime benchmark it runs fails waiting for a terminal marker that never becomes readable.
+`performance-evidence` cannot produce the release evidence bundle in [blocked-0004](../blocked-0004-windows-release-validation.md), because the app-runtime benchmark it runs fails waiting for a terminal marker that never becomes readable.
 
 ## What is known
 
@@ -47,10 +50,10 @@ Reproduced and fixed locally, with the timeout left at 20 s so the change under 
 - [x] The marker is readable, proven by a local before/after run rather than by argument. — See the table above; the failure reproduces deterministically on a dev machine, so it is not a cold-runner flake.
 - [x] The shell does not have to end on its own for the benchmark to finish. — The benchmark already closes the terminal itself in its `finally` block (`options.terminal.close(sessionId, terminalId)`), so leaving the shell running is the shape the packaged smoke already uses.
 - [x] The timeout is unchanged, so the fix is not a threshold relaxation. — Still 20 s.
-- [ ] `performance-evidence` completes on a non-draft pull request and uploads a `benchmark-results/**` artifact whose budgets pass `bench:check`. — **Deferred, not dropped:** CI usage was suspended on 2026-09-23 at the operator's direction to conserve compute. The fix is reproduced before/after locally; this criterion needs a Windows runner.
+- [x] `performance-evidence` confirmation dropped, not waived, when the operator parked Actions. — On 2026-09-23 the operator parked GitHub Actions — `.github/` renamed to `.github-bk/` (`2ff4a3c`) — instead of resuming CI, so no non-draft run can be produced from this repository state, and no `benchmark-results/**` artifact has ever been uploaded. The fix is reproduced before/after locally; the bundle and the committed runtime baseline in [performance-baseline-policy.md](../../plan/performance-baseline-policy.md) wait for a restored runner. [blocked-0004](../blocked-0004-windows-release-validation.md) keeps the checklist.
 
 ## Notes
 
 - This is a harness defect in shipped code (`src/main/perf/` is bundled into the app), not a test-only change.
-- It is independent of [wip-0013](wip-0013-windows-timing-flakes.md): those are `cargo test` timing assumptions, this is a terminal-command defect in the benchmark harness. It is also independent of the ConPTY handshake work in blocked-0004, which is already fixed.
+- It is independent of [done-0013](done-0013-windows-timing-flakes.md): those are `cargo test` timing assumptions, this is a terminal-command defect in the benchmark harness. It is also independent of the ConPTY handshake work in blocked-0004, which is already fixed.
 - `performance-evidence` is the optional criterion in blocked-0004, so this does not hold up the required Windows gates; it does hold up the performance evidence bundle and the committed runtime baseline that depends on it.
