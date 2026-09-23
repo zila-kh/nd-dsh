@@ -264,7 +264,7 @@ mod tests {
         }
     }
 
-    #[derive(Deserialize)]
+    #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct ParityCase {
         name: String,
@@ -275,7 +275,7 @@ mod tests {
         expected: ParityExpected,
     }
 
-    #[derive(Deserialize)]
+    #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct ParityExpected {
         selected_provider: Option<String>,
