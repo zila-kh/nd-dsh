@@ -28,12 +28,12 @@ export class OrganizationApprovalGate {
     const journaled = await this.journalDecision({
       companyId: run.companyId,
       projectId: run.projectId,
-      taskId: run.taskId,
+      ...(run.taskId ? { taskId: run.taskId } : {}),
       runId: run.id,
       rpcId: frame.rpcId,
       action,
       effect,
-      toolName: frame.toolName,
+      ...(frame.toolName ? { toolName: frame.toolName } : {}),
     })
 
     if (effect === 'ask') return true
