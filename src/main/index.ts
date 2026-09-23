@@ -232,7 +232,9 @@ async function createWindow(cdpPort: number): Promise<void> {
   // not engine children: keep them Rust-owned without inheriting a worker permit.
   const unscopedCoreSpawn = createCoreSpawn(core)
   const git = new GitService(workspace, { core })
-  const harness = new HarnessService(workspace, browser, providers, externalElements, sessionArchive, usageLedger, new CoreSessionJournalStore(core))
+  const harnessJournal = new CoreSessionJournalStore(core)
+  const directEngineJournal = new CoreSessionJournalStore(core)
+  const harness = new HarnessService(workspace, browser, providers, externalElements, sessionArchive, usageLedger, harnessJournal)
   const codexEngine = new CodexCliEngine({ log: (line) => console.log(line), spawnProcess: engineSpawn })
   activeCodexEngine = codexEngine
   const antigravityEngine = new AntigravityEngine({ log: (line) => console.log(line), spawnProcess: engineSpawn })
@@ -250,7 +252,7 @@ async function createWindow(cdpPort: number): Promise<void> {
     git,
     storePath: join(userData, 'chatgpt-web-sessions.json'),
     log: (line) => console.warn(line),
-  }, zcodeEngine, piEngine, cursorEngine, claudeEngine, engineSpawn)
+  }, zcodeEngine, piEngine, cursorEngine, claudeEngine, engineSpawn, directEngineJournal)
   activeEngineRouter = engineRouter
   const projectWorkspace = new ProjectWorkspaceCoordinator(
     organizationStore,
