@@ -1,3 +1,4 @@
+import 'dotenv/config'
 import { spawn, spawnSync } from 'node:child_process'
 import { readFileSync, readdirSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -38,25 +39,54 @@ function git(cwd: string, args: string[]): void {
 }
 
 /**
- * Pre-seed a providers.json into the throwaway userData dir so the app boots
- * with the opencode-go/mimo-v2.5 route instead of falling back to the default
- * DeepSeek provider. The apiKey is written in plaintext; the ProviderStore
- * re-encrypts it on first persist via Electron safeStorage.
+ * Pre-seed provider metadata into the throwaway E2E profile.
+ *
+ * Local live-model runs may supply one shared OpenAI-compatible endpoint plus
+ * exactly three model ids through .env. Deterministic E2E remains usable with
+ * no .env at all and falls back to the existing OpenCode Go fixture route.
+ *
+ * The apiKey is written only into the throwaway profile. ProviderStore migrates
+ * plaintext legacy input into Electron safeStorage on first persist; .env itself
+ * is gitignored and must never be committed.
  */
 async function seedProviders(userDataDir: string): Promise<void> {
-  const providers = [
-    {
-      id: 'opencode-go',
-      name: 'OpenCode Go',
-      enabled: true,
-      baseUrl: 'https://opencode.ai/zen/go/v1',
-      apiFormat: 'OpenAI compatible (/v1/chat/completions)',
-      apiKey: process.env.OPENCODE_API_KEY || '',
-      models: [
-        { id: 'mimo-v2.5', context: '256000' },
-      ],
-    },
+  const baseUrl = process.env.E2E_MODEL_BASE_URL?.trim() ?? ''
+  const apiKey = process.env.E2E_MODEL_API_KEY?.trim() ?? ''
+  const modelIds = [
+    process.env.E2E_MODEL_1?.trim() ?? '',
+    process.env.E2E_MODEL_2?.trim() ?? '',
+    process.env.E2E_MODEL_3?.trim() ?? '',
   ]
+  const envConfigured = Boolean(baseUrl || apiKey || modelIds.some(Boolean))
+
+  if (envConfigured && (!baseUrl || !apiKey || modelIds.some((id) => !id))) {
+    throw new Error(
+      'Incomplete E2E model configuration. Set E2E_MODEL_BASE_URL, E2E_MODEL_API_KEY, E2E_MODEL_1, E2E_MODEL_2 and E2E_MODEL_3 together.',
+    )
+  }
+
+  const providers = envConfigured
+    ? [{
+        id: 'e2e-openai-compatible',
+        name: 'E2E OpenAI Compatible',
+        enabled: true,
+        baseUrl,
+        apiFormat: 'OpenAI compatible (/v1/chat/completions)',
+        apiKey,
+        models: modelIds.map((id) => ({ id, context: process.env.E2E_MODEL_CONTEXT?.trim() || '256000' })),
+      }]
+    : [{
+        id: 'opencode-go',
+        name: 'OpenCode Go',
+        enabled: true,
+        baseUrl: 'https://opencode.ai/zen/go/v1',
+        apiFormat: 'OpenAI compatible (/v1/chat/completions)',
+        apiKey: process.env.OPENCODE_API_KEY || '',
+        models: [
+          { id: 'mimo-v2.5', context: '256000' },
+        ],
+      }]
+
   await writeFile(join(userDataDir, 'providers.json'), JSON.stringify(providers, null, 2), 'utf8')
 }
 
