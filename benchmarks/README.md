@@ -124,7 +124,7 @@ Runtime baselines follow [the baseline policy](../docs/plan/performance-baseline
 
 GitHub Actions is intentionally parked while runtime v2 is being stabilized.
 Do not treat a missing runner result as waived evidence: run the local handoff in
-[task 0018](../docs/tasks/wip-0018-rust-parallel-runtime-v2.md), including
+[task 0018](../docs/tasks/done/done-0018-rust-parallel-runtime-v2.md), including
 `pnpm bench:smoke` for development and `pnpm bench:record` +
 `pnpm bench:check` on the Windows reference machine when recording reviewed
 performance evidence.
