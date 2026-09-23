@@ -230,7 +230,10 @@ export class TerminalManager {
           state = undefined
         }
         if (state?.running && this.runtime(sessionId, terminalId) === runtime) continue
-        this.detach(sessionId, terminalId, false)
+        const tail = await this.replayTail(terminal, runtime)
+        terminal.buffer = tail.buffer.slice(-MAX_BUFFER)
+        terminal.outputSeq = Math.max(terminal.outputSeq, tail.seq)
+        this.detach(sessionId, terminalId, true)
         terminal.status = 'exited'
         terminal.exitCode = state?.exitCode ?? terminal.exitCode ?? 1
         terminal.updatedAt = Date.now()
