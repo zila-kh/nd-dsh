@@ -10,7 +10,15 @@ const exec = promisify(execFile)
 const temporary: string[] = []
 
 afterEach(async () => {
-  await Promise.all(temporary.splice(0).map((path) => rm(path, { recursive: true, force: true })))
+  // Git/AV handles can be released slightly after child exit on Windows.
+  // Retry only transient recursive-rm failures, matching the repository's other
+  // Windows-heavy test teardowns instead of turning a cleanup race into a red gate.
+  await Promise.all(temporary.splice(0).map((path) => rm(path, {
+    recursive: true,
+    force: true,
+    maxRetries: 20,
+    retryDelay: 100,
+  })))
 })
 
 async function repoFixture(): Promise<string> {
