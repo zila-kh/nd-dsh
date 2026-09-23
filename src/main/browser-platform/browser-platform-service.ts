@@ -182,8 +182,9 @@ export class BrowserPlatformService {
     return result === true
   }
 
-  async history(targetId?: string) {
-    return this.router.call('browser.history', { ...(targetId ? { targetId } : {}) }, 'renderer')
+  async history(targetId = BUILTIN_BROWSER_TARGET_ID) {
+    if (targetId !== BUILTIN_BROWSER_TARGET_ID) throw new Error('History is available only for the ND built-in browser')
+    return this.browser.history(targetId)
   }
 
   async clearBrowserData(input: { targetId?: string; origin?: string; history?: boolean }): Promise<void> {
@@ -263,11 +264,8 @@ export class BrowserPlatformService {
   }
 
   async siteTools(targetId = BUILTIN_BROWSER_TARGET_ID, tabId?: string) {
-    const activeTabId = tabId ?? (targetId === BUILTIN_BROWSER_TARGET_ID ? this.browser.activeTabId() : undefined)
-    return this.router.call('browser.siteTools', {
-      targetId,
-      ...(activeTabId ? { tabId: activeTabId } : {}),
-    }, 'renderer')
+    if (targetId !== BUILTIN_BROWSER_TARGET_ID) return []
+    return this.browser.discoverSiteTools(tabId ?? this.browser.activeTabId())
   }
 
   async setSitePermission(origin: string, permission: string, effect: 'allow' | 'deny') {
