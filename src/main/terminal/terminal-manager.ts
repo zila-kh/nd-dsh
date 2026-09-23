@@ -30,8 +30,21 @@ export interface PtyProcessLike {
    * that is still alive from one whose owner has since restarted.
    */
   shellState?(): Promise<{ running: boolean; generation?: number; restartCount?: number; exitCode?: number } | undefined>
+  /** Bounded replay tail owned by the native runtime. */
+  tailState?(): Promise<{ seq: number; buffer: string } | undefined>
+  /** Add a desktop-only notice to native scrollback without emitting shell output. */
+  appendHistory?(data: string): Promise<void>
 }
-export interface PtySpawnOptions { name: string; cols: number; rows: number; cwd: string; env: Record<string, string> }
+export interface PtySpawnOptions {
+  name: string
+  cols: number
+  rows: number
+  cwd: string
+  env: Record<string, string>
+  terminalId?: string
+  initialBuffer?: string
+  initialOutputSeq?: number
+}
 export type PtySpawner = (file: string, args: string[], options: PtySpawnOptions) => PtyProcessLike | Promise<PtyProcessLike>
 interface Runtime {
   process: PtyProcessLike
@@ -62,6 +75,7 @@ export class TerminalManager {
   private closing = false
   private persistTimer: ReturnType<typeof setTimeout> | undefined
   private persistChain: Promise<void> = Promise.resolve()
+  private stateEventChain: Promise<void> = Promise.resolve()
 
   constructor(private readonly options: TerminalManagerOptions) {
     this.spawnPty = options.spawn
