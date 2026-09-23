@@ -61,7 +61,7 @@ describe('decision support cascade', () => {
     expect(jev.decide).toHaveBeenCalledTimes(1)
   })
 
-  it('keeps shadow mode non-authoritative while recording every provider', async () => {
+  it('falls back to the existing reviewer when every provider is low confidence', async () => {\n    const laya = provider('laya', 0.51)\n    const jev = provider('jev', 0.62)\n    const service = new DecisionSupportService('assist', [laya, jev], 0.78)\n\n    const receipt = await service.reviewAssist(input)\n\n    expect(receipt?.selectedProvider).toBeUndefined()\n    expect(receipt?.attempts).toHaveLength(2)\n    expect(formatDecisionSupportForReviewer(receipt)).toBe('')\n  })\n\n  it('keeps shadow mode non-authoritative while recording every provider', async () => {
     const laya = provider('laya', 0.95)
     const jev = provider('jev', 0.96)
     const service = new DecisionSupportService('shadow', [laya, jev], 0.78)
