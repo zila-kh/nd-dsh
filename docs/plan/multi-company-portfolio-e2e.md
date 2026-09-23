@@ -138,7 +138,7 @@ corepack pnpm e2e:models
 
 This stress layer uses one project but exercises more orchestration depth: PM plan → automatic task distribution → isolated Git worktrees → parallel builders → independent review → integration. It must observe both builder routes rather than manually repairing distribution. Keep it separate from the small portfolio test so failures can be attributed cleanly.
 
-## Why the two layers are separate
+## Why the three layers are separate
 
 A multi-company correctness regression and a provider failure have different owners.
 
