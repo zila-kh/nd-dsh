@@ -54,6 +54,11 @@ export class BrowserTabLeaseStore {
     return true
   }
 
+  releaseTab(connectionId: string, tabId: number): boolean {
+    const leaseId = this.writableByTab.get(tabKey(connectionId, tabId))
+    return leaseId ? this.release(leaseId) : false
+  }
+
   releaseConnection(connectionId: string): number {
     let released = 0
     for (const lease of [...this.byId.values()]) {
