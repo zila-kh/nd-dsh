@@ -136,6 +136,24 @@ async function dispatch(method, params) {
       await waitForComplete(tabId)
       return normalizeTab(await chrome.tabs.get(tabId))
     }
+    case 'page.back': {
+      const tabId = tabIdOf(params)
+      await chrome.tabs.goBack(tabId)
+      await waitForComplete(tabId)
+      return normalizeTab(await chrome.tabs.get(tabId))
+    }
+    case 'page.forward': {
+      const tabId = tabIdOf(params)
+      await chrome.tabs.goForward(tabId)
+      await waitForComplete(tabId)
+      return normalizeTab(await chrome.tabs.get(tabId))
+    }
+    case 'page.reload': {
+      const tabId = tabIdOf(params)
+      await chrome.tabs.reload(tabId)
+      await waitForComplete(tabId)
+      return normalizeTab(await chrome.tabs.get(tabId))
+    }
     case 'page.snapshot':
       return callContent(tabIdOf(params), { kind: 'snapshot' })
     case 'page.click':
