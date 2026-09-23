@@ -1,0 +1,24 @@
+{
+  "manifest_version": 2,
+  "name": "ND Browser Runtime Spike MV2 Baseline",
+  "version": "0.0.1",
+  "permissions": [
+    "storage",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": false
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://127.0.0.1/*",
+        "http://localhost/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

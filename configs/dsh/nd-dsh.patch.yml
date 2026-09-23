@@ -115,6 +115,8 @@
           ND_EXTENSION_PROXY: !!js process.env.ND_EXTENSION_PROXY ?? ''
           ND_EXTENSION_CATALOG: !!js process.env.ND_EXTENSION_CATALOG ?? ''
           ND_EXTENSION_STATE: !!js process.env.ND_EXTENSION_STATE ?? ''
+          ND_BROWSER_COMPANION_RUNTIME: !!js process.env.ND_BROWSER_COMPANION_RUNTIME ?? ''
+          ND_BROWSER_COMPANION_DISCOVERY: !!js process.env.ND_BROWSER_COMPANION_DISCOVERY ?? ''
         toolCallTimeoutMs: 120000
         failOnStartupError: true
         reconnect:
@@ -139,34 +141,14 @@
   config:
     default: nd-dsh
 
-# ── the canonical Electron browser ────────────────────────────────────────────
+# ── unified browser capability ────────────────────────────────────────────────
 
-# Host-plane row on purpose: every preset joins it, so the visible pane stays
-# available to standard, code, and cordis sessions alike. The MCP process
-# attaches to the exact CDP target the desktop pinned, through the same
-# AGENT_BROWSER_* config/session the pane itself uses. This browser is part of
-# the trusted development surface, so a missing MCP is a startup error rather
-# than a silently degraded agent environment.
-- insert:
-    - id: browser-mcp
-      name: '@deepseek-ai/dsh-mcp-client'
-      config:
-        serverName: browser
-        transport: stdio
-        command: !!js process.execPath
-        args:
-          - !!js process.env.ND_DSH_AGENT_BROWSER_ENTRY ?? ''
-          - mcp
-          - --tools
-          - core,network,state,debug,tabs,react
-        env:
-          PATH: !!js process.env.PATH ?? ''
-          AGENT_BROWSER_CONFIG: !!js process.env.ND_DSH_AGENT_BROWSER_CONFIG ?? ''
-          AGENT_BROWSER_SESSION: !!js process.env.ND_DSH_AGENT_BROWSER_SESSION ?? ''
-        toolCallTimeoutMs: 120000
-        failOnStartupError: true
-        reconnect:
-          enabled: true
-          initialDelayMs: 500
-          maxDelayMs: 30000
-          maxAttempts: 10
+# The model-facing browser namespace is intentionally the stable nd-extensions
+# bridge above. It routes both the ND built-in browser and connected Chrome
+# companions through BrowserTargetRouter, trusted tab leases, company policy
+# and durable action receipts.
+#
+# agent-browser is still used internally to bind/inspect the exact active
+# built-in WebContents target, but it is not separately exposed as a model MCP:
+# exposing both paths would let an organization worker bypass BrowserTarget
+# policy by mutating the same page through the raw CDP tool surface.

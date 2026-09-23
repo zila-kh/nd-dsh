@@ -52,6 +52,7 @@ export class BrowserCompanionService {
   private readonly pending = new Map<string, PendingRequest>()
   private server: Server | undefined
   private listener: ((state: BrowserCompanionState) => void) | undefined
+  private agentDispatcher: ((method: string, params: Record<string, unknown>) => Promise<unknown>) | undefined
 
   constructor(options: BrowserCompanionServiceOptions) {
     const runtimeDir = join(homedir(), '.nd-dsh')
@@ -113,12 +114,25 @@ export class BrowserCompanionService {
     if (listener) void this.state().then(listener).catch(() => undefined)
   }
 
+  setAgentDispatcher(dispatcher: ((method: string, params: Record<string, unknown>) => Promise<unknown>) | undefined): void {
+    this.agentDispatcher = dispatcher
+  }
+
   async state(): Promise<BrowserCompanionState> {
     return {
       connections: await this.connections.list(),
       leases: this.leases.list(),
       discoveryPath: this.discoveryPath,
     }
+  }
+
+  async connectedConnections(): Promise<BrowserCompanionState['connections']> {
+    return (await this.connections.list()).filter((item) => item.connected)
+  }
+
+  async command(connectionId: string, method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+    const resolved = await this.resolveConnectionId(connectionId)
+    return this.requestBrowser(resolved, method, params)
   }
 
   acquireLease(connectionId: string, tabId: number, ownerId: string, scope?: BrowserCompanionLeaseScope): BrowserTabLease {
@@ -234,7 +248,10 @@ export class BrowserCompanionService {
   private async handleAgent(client: ClientState, message: Record<string, unknown>): Promise<void> {
     if (message.kind !== 'request' || typeof message.id !== 'string' || typeof message.method !== 'string') return
     try {
-      const result = await this.dispatchAgent(message.method, objectParams(message.params))
+      const params = objectParams(message.params)
+      const result = this.agentDispatcher
+        ? await this.agentDispatcher(message.method, params)
+        : await this.dispatchAgent(message.method, params)
       this.write(client, { version: BROWSER_COMPANION_PROTOCOL_VERSION, kind: 'response', id: message.id, result })
     } catch (cause) {
       this.write(client, {
