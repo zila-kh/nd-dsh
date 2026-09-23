@@ -260,7 +260,12 @@ Run logical-session counts:
 4
 8
 10
+25
+50
+100
 ~~~
+
+`--smoke` stops at 10. Every recorded point carries the `rust-parallel-runtime-v2` scale contract, so a bundle states which grid produced it.
 
 Variants:
 - all sessions sharing one workspace,
@@ -342,7 +347,12 @@ Worker counts:
 4
 8
 10
+25
+50
+100
 ~~~
+
+`--smoke` runs 1 and 2 only. Points carry the `rust-parallel-runtime-v2` scale contract.
 
 Measure:
 - permit acquisition latency,
@@ -353,6 +363,8 @@ Measure:
 - role/team cap behavior,
 - separate review-pool behavior,
 - process count,
+- pending RPC count,
+- queued-event count and bytes,
 - core memory,
 - total child memory,
 - worktree disk growth,

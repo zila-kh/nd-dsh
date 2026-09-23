@@ -372,7 +372,7 @@ Implemented surfaces:
 - Company task/run UI exposes engine, workspace kind, task branch, baseline/checkpoint and integration-conflict provenance;
 - regression coverage proves five writable tasks in one repository remain independently rollbackable;
 - mixed-engine contract coverage proves Codex/ZCode task sessions retain distinct ND worktree roots;
-- the existing `scheduler-multi-agent` benchmark already records 1/2/4/8/10 workers, core/child memory, permit latency, process/workspace counts and worktree disk growth;
+- the existing `scheduler-multi-agent` benchmark already records 1/2/4/8/10/25/50/100 workers under the `rust-parallel-runtime-v2` scale contract, plus core/child memory, permit latency, process/workspace counts, pending-RPC and queued-event counts/bytes and worktree disk growth;
 - the maintained external reference/benchmark set remains in [agent-orchestration-reference-matrix.md](../plan/agent-orchestration-reference-matrix.md).
 
 Verification remains governed by repository CI and the separate full performance-evidence policy; approval of this PRD does not turn an unrun external-engine benchmark into a performance claim.
