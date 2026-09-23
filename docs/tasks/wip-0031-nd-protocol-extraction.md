@@ -1,4 +1,4 @@
-# TODO 0031 — Extract ND Protocol Contract
+# WIP 0031 — Extract ND Protocol Contract
 
 > Plan: [Reference-Inspired Runtime and Company Evolution](../plan/reference-inspired-runtime-company-evolution.md)  
 > Priority: P0  
