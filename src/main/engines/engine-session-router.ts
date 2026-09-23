@@ -391,9 +391,10 @@ export class EngineSessionRouter {
       return { ...fallback, events }
     }
     if (this.chatGptWeb?.ownsSession(sessionId)) {
-      const fallback = this.chatGptWeb.transcript(sessionId)
-      const events = await this.nativeTranscript(sessionId, fallback.events)
-      return { ...fallback, events }
+      // ChatGPT Web already owns durable restart persistence. Keep it out of
+      // the volatile nd-core journal so this migration does not duplicate its
+      // 500-event retained history or change browser-session recovery.
+      return this.chatGptWeb.transcript(sessionId)
     }
     throw new Error(`No engine owns session: ${sessionId}`)
   }
@@ -401,6 +402,7 @@ export class EngineSessionRouter {
   private captureDirectTranscript(frame: DshEventFrame): void {
     if (!this.sessionJournal || frame.kind !== 'session-event' || !frame.sessionId || !frame.event) return
     const engineId = this.engineForSession(frame.sessionId)
+    if (engineId === CHATGPT_WEB_ENGINE_ID) return
     const structuredChunk = STRUCTURED_TRANSCRIPT_ENGINE_IDS.has(engineId) && frame.event.type === 'assistant/chunk'
     if (!TRANSCRIPT_EVENT_TYPES.has(frame.event.type) && !structuredChunk) return
     void this.sessionJournal.append(frame.sessionId, [{
