@@ -131,6 +131,26 @@ const PASSES = [
       completedTask: true,
     },
   },
+  // One more task than the execution pool allows. This is the arm that tests
+  // queueing rather than throughput: before an explicit dispatch waited for a
+  // slot, the fifth task was refused outright with "runtime pool ... is full"
+  // and the pass failed. Passing now means it waited and then ran, and the peak
+  // concurrency check below means it waited *instead of* exceeding the cap.
+  {
+    name: 'overflow-5x',
+    tasks: 5,
+    parallel: true,
+    readOnly: true,
+    fixture: { steps: 3, toolCalls: 3, stepMs: 150, verify: 'pass', failRun: false },
+    expected: {
+      modelRoundTrips: 3,
+      toolCalls: 3,
+      escalations: 0,
+      verification: 'passed',
+      outcome: 'completed',
+      completedTask: true,
+    },
+  },
 ]
 
 /**
@@ -528,23 +548,25 @@ function compareParallel(passes, samples) {
   }
   const sequential = metrics(arm('sequential-4x'))
   const parallel = metrics(arm('parallel-4x'))
+  const overflow = metrics(arm('overflow-5x'))
   const budgets = {
     speedupFloor: PARALLEL_SPEEDUP_FLOOR,
     ipcGrowthBudget: PARALLEL_IPC_GROWTH_BUDGET,
     minPeakConcurrency: PARALLEL_MIN_PEAK_CONCURRENCY,
   }
-  if (sequential.completed === 0 || parallel.completed === 0) {
+  if (sequential.completed === 0 || parallel.completed === 0 || overflow.completed === 0) {
     return {
       status: 'not-run',
       sequential,
       parallel,
+      overflow,
       budgets,
-      failures: ['the matched sequential-4x and parallel-4x arms did not both record a verified completion, so the concurrency budgets were not measured'],
+      failures: ['the sequential-4x, parallel-4x and overflow-5x arms did not all record a verified completion, so the concurrency budgets were not measured'],
     }
   }
   const failures = []
   if (!(parallel.peakConcurrency >= budgets.minPeakConcurrency)) {
-    failures.push(`no two tasks were ever in flight at the same instant (peak concurrency ${parallel.peakConcurrency}), so the parallel arm did not actually run in parallel`)
+    failures.push(`the parallel arm peaked at ${parallel.peakConcurrency} concurrent tasks, below the required ${budgets.minPeakConcurrency}`)
   }
   if (!(parallel.speedup >= PARALLEL_SPEEDUP_FLOOR)) {
     failures.push(`parallel speedup ${round(parallel.speedup)} is below the ${PARALLEL_SPEEDUP_FLOOR} floor (sequential arm measured ${round(sequential.speedup)})`)
@@ -560,7 +582,22 @@ function compareParallel(passes, samples) {
   if (sequential.ipcCrossings > 0 && parallel.ipcCrossings > sequential.ipcCrossings * PARALLEL_IPC_GROWTH_BUDGET) {
     failures.push(`per-task nd-core IPC crossings grew from ${round(sequential.ipcCrossings)} to ${round(parallel.ipcCrossings)}, beyond the ${PARALLEL_IPC_GROWTH_BUDGET}x concurrency budget`)
   }
-  return { status: failures.length ? 'fail' : 'pass', sequential, parallel, budgets, failures }
+  // The overflow arm dispatches one task more than the pool allows, so it tests
+  // queueing rather than throughput. Three things must hold: every dispatched
+  // task produced a sample, every one of those completed, and concurrency never
+  // rose above what the in-cap arm reached. The last is what separates "the
+  // excess waited for a slot" from "the ceiling was simply ignored".
+  const dispatched = (passes.find((entry) => entry.name === 'overflow-5x')?.tasks ?? []).length
+  if (overflow.samples !== dispatched) {
+    failures.push(`the overflow arm recorded ${overflow.samples} sample(s) for ${dispatched} dispatched task(s), so a task was dropped instead of queued`)
+  }
+  if (overflow.completed !== overflow.samples) {
+    failures.push(`the overflow arm completed ${overflow.completed} of ${overflow.samples} tasks, so the pool refused the excess instead of queueing it`)
+  }
+  if (overflow.peakConcurrency > parallel.peakConcurrency) {
+    failures.push(`the overflow arm ran ${overflow.peakConcurrency} tasks at once against ${parallel.peakConcurrency} for the in-cap arm, so queueing exceeded the ceiling instead of waiting for it`)
+  }
+  return { status: failures.length ? 'fail' : 'pass', sequential, parallel, overflow, budgets, failures }
 }
 
 function round(value) {

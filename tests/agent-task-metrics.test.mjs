@@ -170,6 +170,7 @@ describe('agent-task result kind', () => {
         status: 'pass',
         sequential: { tasks: 4, spanMs: 4_000, sumTaskWallMs: 3_600, meanTaskWallMs: 900, speedup: 0.9, peakConcurrency: 1, samples: 4, completed: 4, completionRate: 1, modelRoundTrips: 3, toolCalls: 3, ipcCrossings: 12 },
         parallel: { tasks: 4, spanMs: 1_000, sumTaskWallMs: 3_600, meanTaskWallMs: 900, speedup: 3.6, peakConcurrency: 4, samples: 4, completed: 4, completionRate: 1, modelRoundTrips: 3, toolCalls: 3, ipcCrossings: 13 },
+        overflow: { tasks: 5, spanMs: 2_000, sumTaskWallMs: 4_500, meanTaskWallMs: 900, speedup: 2.25, peakConcurrency: 4, samples: 5, completed: 5, completionRate: 1, modelRoundTrips: 3, toolCalls: 3, ipcCrossings: 13 },
         budgets: { speedupFloor: 2.5, ipcGrowthBudget: 1.2, minPeakConcurrency: 4 },
         failures: [],
       },
@@ -189,6 +190,14 @@ describe('agent-task result kind', () => {
     delete missingParallel.parallelComparison
     expect(validateTaskMetricsResult(missingParallel))
       .toContainEqual(expect.stringContaining('parallelComparison'))
+
+    // The overflow arm is part of the same required evidence: a baseline that
+    // never dispatched more tasks than the pool allows says nothing about whether
+    // the excess queues or is refused.
+    const missingOverflow = { ...document, parallelComparison: { ...document.parallelComparison } }
+    delete missingOverflow.parallelComparison.overflow
+    expect(validateTaskMetricsResult(missingOverflow))
+      .toContainEqual(expect.stringContaining('overflow'))
 
     const broken = { ...document, summary: { ...document.summary, completionRate: 4 } }
     expect(validateTaskMetricsResult(broken)).toContainEqual(expect.stringContaining('above maximum 1'))
