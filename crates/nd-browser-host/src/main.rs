@@ -90,7 +90,10 @@ impl Write for LocalStream {
 fn main() -> Result<()> {
     let discovery = read_discovery()?;
     if discovery.version != PROTOCOL_VERSION {
-        bail!("unsupported browser companion protocol {}", discovery.version);
+        bail!(
+            "unsupported browser companion protocol {}",
+            discovery.version
+        );
     }
 
     let mut outbound = LocalStream::connect(&discovery.endpoint)?;
@@ -116,7 +119,8 @@ fn main() -> Result<()> {
             if line.trim().is_empty() {
                 continue;
             }
-            serde_json::from_str::<serde_json::Value>(&line).context("ND browser host received invalid JSON")?;
+            serde_json::from_str::<serde_json::Value>(&line)
+                .context("ND browser host received invalid JSON")?;
             write_native_message(&mut stdout, line.as_bytes())?;
         }
         Ok(())
@@ -125,7 +129,8 @@ fn main() -> Result<()> {
     let stdin = io::stdin();
     let mut stdin = stdin.lock();
     while let Some(message) = read_native_message(&mut stdin)? {
-        serde_json::from_slice::<serde_json::Value>(&message).context("Chrome sent invalid native-message JSON")?;
+        serde_json::from_slice::<serde_json::Value>(&message)
+            .context("Chrome sent invalid native-message JSON")?;
         outbound.write_all(&message)?;
         outbound.write_all(b"\n")?;
         outbound.flush()?;
@@ -145,10 +150,10 @@ fn read_discovery() -> Result<Discovery> {
 }
 
 fn discovery_path() -> Result<PathBuf> {
-    if let Ok(value) = env::var("ND_BROWSER_COMPANION_DISCOVERY") {
-        if !value.trim().is_empty() {
-            return Ok(PathBuf::from(value));
-        }
+    if let Ok(value) = env::var("ND_BROWSER_COMPANION_DISCOVERY")
+        && !value.trim().is_empty()
+    {
+        return Ok(PathBuf::from(value));
     }
     let home = env::var_os("USERPROFILE")
         .or_else(|| env::var_os("HOME"))
