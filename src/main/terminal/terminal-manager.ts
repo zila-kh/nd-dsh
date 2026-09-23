@@ -313,11 +313,7 @@ export class TerminalManager {
           this.schedulePersist()
         })
         runtime.exit = pty.onExit((event) => {
-          if (this.runtime(terminal.sessionId, terminal.id) !== runtime) return
-          this.detach(terminal.sessionId, terminal.id, false)
-          terminal.status = 'exited'; terminal.exitCode = event.exitCode; terminal.updatedAt = Date.now(); delete terminal.pid
-          this.options.onExit?.({ sessionId: terminal.sessionId, terminalId: terminal.id, exitCode: event.exitCode, ...(event.signal === undefined ? {} : { signal: event.signal }) })
-          this.changed(terminal.sessionId)
+          void this.handleRuntimeExit(terminal, runtime, event)
         })
         let group = this.runtimes.get(terminal.sessionId)
         if (!group) { group = new Map(); this.runtimes.set(terminal.sessionId, group) }
@@ -330,6 +326,37 @@ export class TerminalManager {
     }
     terminal.status = 'error'; terminal.updatedAt = Date.now(); terminal.error = `Failed to start shell: ${lastError instanceof Error ? lastError.message : String(lastError)}`; delete terminal.pid
     this.schedulePersist(); throw new Error(terminal.error)
+  }
+
+  private async handleRuntimeExit(
+    terminal: TerminalSnapshot,
+    runtime: Runtime,
+    event: { exitCode: number; signal?: number },
+  ): Promise<void> {
+    if (this.runtime(terminal.sessionId, terminal.id) !== runtime) return
+    if (runtime.process.tailState) {
+      const tail = await runtime.process.tailState().catch(() => undefined)
+      if (this.runtime(terminal.sessionId, terminal.id) !== runtime) return
+      if (tail) {
+        terminal.buffer = tail.buffer.slice(-MAX_BUFFER)
+        terminal.outputSeq = Math.max(terminal.outputSeq, tail.seq)
+      }
+    }
+    // nd-core retains an exited shell just long enough for this final replay.
+    // Closing the resource here prevents an exited terminal from accumulating
+    // in Rust; its cold persisted copy now lives in the session snapshot.
+    this.detach(terminal.sessionId, terminal.id, Boolean(runtime.process.tailState))
+    terminal.status = 'exited'
+    terminal.exitCode = event.exitCode
+    terminal.updatedAt = Date.now()
+    delete terminal.pid
+    this.options.onExit?.({
+      sessionId: terminal.sessionId,
+      terminalId: terminal.id,
+      exitCode: event.exitCode,
+      ...(event.signal === undefined ? {} : { signal: event.signal }),
+    })
+    this.changed(terminal.sessionId)
   }
 
   private async owned(sessionId: string, terminalId: string): Promise<TerminalSnapshot> {
