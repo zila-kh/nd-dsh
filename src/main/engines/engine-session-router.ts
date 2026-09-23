@@ -417,14 +417,24 @@ export class EngineSessionRouter {
   private async nativeTranscript(sessionId: string, fallback: SessionEventEnvelope[]): Promise<SessionEventEnvelope[]> {
     if (!this.sessionJournal) return fallback
     const native = await this.sessionJournal.tail(sessionId, 500).catch(() => [])
-    if (native.length === 0 && fallback.length > 0) return fallback
-    return native.map((event) => ({
-      type: event.type,
-      seq: event.seq,
-      time: event.time ?? Date.now(),
-      ...(event.data === undefined ? {} : { data: event.data }),
-      ...(event.surfaceOp === undefined ? {} : { surfaceOp: event.surfaceOp }),
-    }))
+    if (native.length === 0) return fallback
+
+    // nd-core journals are intentionally volatile. After a sidecar restart the
+    // first new native event must not hide the adapter's local safety tail from
+    // just before the restart. Merge by the session sequence; in the normal
+    // case the fallback is simply a 32-event subset of native history.
+    const bySeq = new Map<number, SessionEventEnvelope>()
+    for (const event of fallback) bySeq.set(event.seq, event)
+    for (const event of native) {
+      bySeq.set(event.seq, {
+        type: event.type,
+        seq: event.seq,
+        time: event.time ?? Date.now(),
+        ...(event.data === undefined ? {} : { data: event.data }),
+        ...(event.surfaceOp === undefined ? {} : { surfaceOp: event.surfaceOp }),
+      })
+    }
+    return [...bySeq.values()].sort((left, right) => left.seq - right.seq).slice(-500)
   }
 
   /**
