@@ -55,7 +55,7 @@ export interface CoreShellState {
 
 export function createCorePtySpawner(core: CoreClient): PtySpawner {
   return async (file: string, args: string[], options: PtySpawnOptions): Promise<PtyProcessLike> => {
-    const terminalId = randomUUID()
+    const terminalId = options.terminalId ?? options.env.ND_DSH_TERMINAL_ID ?? randomUUID()
     const sessionId = options.env.ND_DSH_SESSION_ID ?? randomUUID()
     const result = await core.request<CoreTerminalCreateResult>('terminal.create', {
       terminalId,
@@ -66,6 +66,8 @@ export function createCorePtySpawner(core: CoreClient): PtySpawner {
       cols: options.cols,
       rows: options.rows,
       env: options.env,
+      initialBytes: new TextEncoder().encode(options.initialBuffer ?? ''),
+      initialSeq: options.initialOutputSeq ?? 0,
     })
     return new CorePtyProcess(core, result)
   }
@@ -106,6 +108,7 @@ class CorePtyProcess implements PtyProcessLike {
   private readonly disposeOutput: () => void
   private readonly disposeExit: () => void
   private closed = false
+  private resourceReleased = false
 
   constructor(
     private readonly core: CoreClient,
@@ -123,7 +126,7 @@ class CorePtyProcess implements PtyProcessLike {
    * listeners registered here stay attached to the same terminal.
    */
   async restart(cols: number, rows: number): Promise<number> {
-    if (this.closed) throw new Error('Terminal is not running')
+    if (this.resourceReleased) throw new Error('Terminal resource is closed')
     const result = await this.core.request<CoreTerminalCreateResult>(
       'terminal.restart',
       { terminalId: this.terminal.terminalId, cols, rows },
@@ -131,12 +134,38 @@ class CorePtyProcess implements PtyProcessLike {
     )
     this.terminal = result
     this.pid = result.pid ?? 0
+    this.closed = false
     return this.pid
   }
 
   /** Whether the shell behind this terminal is still alive, per nd-core. */
   async shellState(): Promise<CoreShellState | undefined> {
     return await readCoreShellState(this.core, this.terminal.terminalId)
+  }
+
+  async tailState(): Promise<{ seq: number; buffer: string } | undefined> {
+    if (this.resourceReleased) return undefined
+    try {
+      const state = await this.core.request<CoreTerminalState>(
+        'terminal.state',
+        { terminalId: this.terminal.terminalId },
+        5_000,
+      )
+      return {
+        seq: state.seq,
+        buffer: new TextDecoder().decode(state.bytes),
+      }
+    } catch {
+      return undefined
+    }
+  }
+
+  async appendHistory(data: string): Promise<void> {
+    if (this.resourceReleased || !data) return
+    await this.core.request('terminal.appendHistory', {
+      terminalId: this.terminal.terminalId,
+      data,
+    }, 5_000)
   }
 
   write(data: string): void {
@@ -152,8 +181,9 @@ class CorePtyProcess implements PtyProcessLike {
   }
 
   kill(): void {
-    if (this.closed) return
+    if (this.resourceReleased) return
     this.closed = true
+    this.resourceReleased = true
     this.disposeOutput()
     this.disposeExit()
     void this.core.request('terminal.close', { terminalId: this.terminal.terminalId })
