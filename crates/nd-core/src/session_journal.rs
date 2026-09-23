@@ -17,6 +17,8 @@ pub struct SessionJournalEnvelope {
     pub time: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub surface_op: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -227,6 +229,7 @@ mod tests {
             seq,
             time: Some(seq),
             data: Some(serde_json::json!({ "text": text })),
+            surface_op: None,
         }
     }
 
