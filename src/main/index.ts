@@ -233,7 +233,10 @@ async function createWindow(cdpPort: number): Promise<void> {
   const unscopedCoreSpawn = createCoreSpawn(core)
   const git = new GitService(workspace, { core })
   const harnessJournal = new CoreSessionJournalStore(core)
-  const directEngineJournal = new CoreSessionJournalStore(core)
+  const directEngineJournal = new CoreSessionJournalStore(core, {
+    maxEvents: 500,
+    maxBytes: 2 * 1024 * 1024,
+  })
   const harness = new HarnessService(workspace, browser, providers, externalElements, sessionArchive, usageLedger, harnessJournal)
   const codexEngine = new CodexCliEngine({ log: (line) => console.log(line), spawnProcess: engineSpawn })
   activeCodexEngine = codexEngine
