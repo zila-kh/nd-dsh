@@ -4,6 +4,7 @@ dist/
 .release/
 coverage/
 test-results/
+.smoke/
 target/
 .DS_Store
 .env
