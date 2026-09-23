@@ -12,6 +12,9 @@ export interface BrowserTarget {
   closeTab(tabId: string): Promise<boolean>
   snapshot(tabId: string): Promise<unknown>
   navigate(tabId: string, url: string): Promise<unknown>
+  back(tabId: string): Promise<unknown>
+  forward(tabId: string): Promise<unknown>
+  reload(tabId: string): Promise<unknown>
   click(tabId: string, ref: string, revision: number): Promise<unknown>
   fill(tabId: string, ref: string, revision: number, text: string): Promise<unknown>
   press(tabId: string, ref: string, revision: number, key: string): Promise<unknown>
