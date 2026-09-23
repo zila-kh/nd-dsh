@@ -200,7 +200,9 @@ async function createWindow(cdpPort: number): Promise<void> {
     dataPath: userData,
     runtimePath: join(bundledResourceRoot(), 'scripts', 'nd-browser-companion-runtime.mjs'),
   })
-  await browserCompanion.start()
+  await browserCompanion.start().catch((error) => {
+    console.warn('Browser companion is unavailable; the embedded browser remains usable:', error instanceof Error ? error.message : String(error))
+  })
   activeBrowserCompanion = browserCompanion
   const dshSurface = new DshSurfaceController(window)
   const externalElements = new ExternalElementStage()
