@@ -2,9 +2,9 @@
 
 > Priority: P1  
 > Owner: ND browser/runtime  
-> Status: implementation complete — local validation and real-Chrome smoke pending  
-> Branch: `feat/browser-companion-mvp`  
-> Base: `main@d1aed436`  
+> Status: merged to main via PR #32 — implementation complete; local validation and real-Chrome smoke pending  
+> Historical branch: `feat/browser-companion-mvp`  
+> Merged via: PR #32 (`main@9e0fcc5`)  
 > Validation mode: manual local only; GitHub Actions remains parked  
 > Updated: 2026-09-23
 
@@ -61,7 +61,7 @@ These are explicit follow-up scope, not hidden MVP claims.
 
 ## Local automated validation
 
-Run from the feature branch:
+Run from an up-to-date `main` checkout:
 
 - [ ] `corepack pnpm install --frozen-lockfile`
 - [ ] `corepack pnpm browser:host:test`
@@ -102,7 +102,4 @@ No performance numbers belong in README until this evidence is reproducible.
 
 ## Exit criteria
 
-The implementation is ready for local validation handoff. It is **not merge-ready**
-until automated gates and the real-Chrome smoke above are recorded. Company-level
-browser action normalization remains a post-MVP GA requirement and must not be
-misrepresented as completed by this task.
+The implementation is already merged to `main`, but it is **not release-evidence complete** until the local automated gates and real-Chrome smoke above are recorded. Company-level browser action normalization remains a post-MVP GA requirement and must not be misrepresented as completed by this task.
