@@ -31,7 +31,7 @@ export class BrowserCredentialVault {
       .sort((a, b) => b.updatedAt - a.updatedAt)
   }
 
-  async save(input: { origin: string; username: string; password: string; label?: string }): Promise<BrowserCredentialSummary> {
+  async save(input: { origin: string; username: string; password: string; label?: string | undefined }): Promise<BrowserCredentialSummary> {
     await this.load()
     if (!this.available()) throw new Error('Secure browser credential storage is unavailable on this machine')
     const origin = normalizeOrigin(input.origin)

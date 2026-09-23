@@ -29,7 +29,7 @@ interface BrowserTabRuntime {
   view: WebContentsView
   inspector: UiInspector
   annotator: UiAnnotator
-  annotationImage?: UiAnnotationImage
+  annotationImage?: UiAnnotationImage | undefined
   state: {
     url: string
     title: string

@@ -187,7 +187,7 @@ export class BrowserPlatformService {
     return this.browser.history(targetId)
   }
 
-  async clearBrowserData(input: { targetId?: string; origin?: string; history?: boolean }): Promise<void> {
+  async clearBrowserData(input: { targetId?: string | undefined; origin?: string | undefined; history?: boolean | undefined }): Promise<void> {
     const targetId = input.targetId ?? BUILTIN_BROWSER_TARGET_ID
     if (targetId !== BUILTIN_BROWSER_TARGET_ID) throw new Error('Browser-data clearing is available only for the ND built-in profile')
     await this.browser.clearBrowserData(input.origin, input.history !== false)
@@ -231,7 +231,7 @@ export class BrowserPlatformService {
     return records
   }
 
-  async saveCredential(input: { origin: string; username: string; password: string; label?: string }): Promise<BrowserCredentialSummary> {
+  async saveCredential(input: { origin: string; username: string; password: string; label?: string | undefined }): Promise<BrowserCredentialSummary> {
     const summary = await this.credentials.save(input)
     await this.emit()
     return summary

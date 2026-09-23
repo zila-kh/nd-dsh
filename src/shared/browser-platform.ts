@@ -29,29 +29,29 @@ export interface BrowserTabDescriptor {
   id: string
   targetId: string
   profileId: string
-  nativeTabId?: number
+  nativeTabId?: number | undefined
   title: string
   url: string
-  origin?: string
+  origin?: string | undefined
   active: boolean
   visible: boolean
-  loading?: boolean
-  canGoBack?: boolean
-  canGoForward?: boolean
+  loading?: boolean | undefined
+  canGoBack?: boolean | undefined
+  canGoForward?: boolean | undefined
 }
 
 export interface BrowserSelection {
   mode: BrowserSelectionMode
-  targetId?: string
-  tabId?: string
+  targetId?: string | undefined
+  tabId?: string | undefined
 }
 
 export interface BrowserExecutionScope {
-  sessionId?: string
-  companyId?: string
-  projectId?: string
-  taskId?: string
-  runId?: string
+  sessionId?: string | undefined
+  companyId?: string | undefined
+  projectId?: string | undefined
+  taskId?: string | undefined
+  runId?: string | undefined
 }
 
 export interface BrowserTabLease {
@@ -60,7 +60,7 @@ export interface BrowserTabLease {
   targetId: string
   profileId: string
   tabId: string
-  scope?: BrowserExecutionScope
+  scope?: BrowserExecutionScope | undefined
   acquiredAt: number
 }
 
@@ -84,11 +84,11 @@ export interface BrowserActionEnvelope {
   operation: string
   targetId: string
   profileId: string
-  tabId?: string
-  origin?: string
-  scope?: BrowserExecutionScope
-  destructive?: boolean
-  externality?: 'internal' | 'external'
+  tabId?: string | undefined
+  origin?: string | undefined
+  scope?: BrowserExecutionScope | undefined
+  destructive?: boolean | undefined
+  externality?: 'internal' | 'external' | undefined
   createdAt: number
 }
 
@@ -97,11 +97,11 @@ export interface BrowserApprovalRequest {
   action: BrowserNormalizedAction
   operation: string
   targetId: string
-  tabId?: string
-  origin?: string
+  tabId?: string | undefined
+  origin?: string | undefined
   companyId: string
   projectId: string
-  taskId?: string
+  taskId?: string | undefined
   runId: string
   sessionId: string
   createdAt: number
@@ -115,12 +115,12 @@ export interface BrowserActionReceipt {
   operation: string
   targetId: string
   profileId: string
-  tabId?: string
-  origin?: string
-  scope?: BrowserExecutionScope
+  tabId?: string | undefined
+  origin?: string | undefined
+  scope?: BrowserExecutionScope | undefined
   decision: 'allow' | 'deny' | 'ask-allowed' | 'ask-rejected' | 'manual'
   success: boolean
-  error?: string
+  error?: string | undefined
   createdAt: number
   completedAt: number
 }
@@ -128,16 +128,16 @@ export interface BrowserActionReceipt {
 export interface BrowserDownloadRecord {
   id: string
   targetId: string
-  tabId?: string
+  tabId?: string | undefined
   url: string
-  origin?: string
+  origin?: string | undefined
   filename: string
-  path?: string
+  path?: string | undefined
   receivedBytes: number
   totalBytes: number
   state: 'starting' | 'progressing' | 'completed' | 'cancelled' | 'interrupted'
   startedAt: number
-  completedAt?: number
+  completedAt?: number | undefined
 }
 
 export interface BrowserHistoryEntry {
@@ -157,8 +157,8 @@ export interface BrowserExtensionRecord {
   enabled: boolean
   status: 'compatible' | 'limited' | 'unsupported' | 'error'
   permissions: string[]
-  manifestVersion?: number
-  error?: string
+  manifestVersion?: number | undefined
+  error?: string | undefined
   installedAt: number
 }
 
@@ -166,7 +166,7 @@ export interface BrowserCredentialSummary {
   id: string
   origin: string
   username: string
-  label?: string
+  label?: string | undefined
   createdAt: number
   updatedAt: number
 }
@@ -180,15 +180,15 @@ export interface BrowserSitePermission {
 
 export interface BrowserSiteToolDescriptor {
   name: string
-  title?: string
+  title?: string | undefined
   description: string
-  inputSchema?: unknown
-  origin?: string
+  inputSchema?: unknown | undefined
+  origin?: string | undefined
   annotations?: {
-    readOnlyHint?: boolean
-    consequentialHint?: boolean
-    untrustedContentHint?: boolean
-  }
+    readOnlyHint?: boolean | undefined
+    consequentialHint?: boolean | undefined
+    untrustedContentHint?: boolean | undefined
+  } | undefined
 }
 
 export interface BrowserPlatformState {
@@ -211,14 +211,14 @@ export interface BrowserPlatformDesktopApi {
   activateTab(targetId: string, tabId: string): Promise<BrowserTabDescriptor>
   closeTab(targetId: string, tabId: string): Promise<boolean>
   history(targetId?: string): Promise<BrowserHistoryEntry[]>
-  clearBrowserData(input: { targetId?: string; origin?: string; history?: boolean }): Promise<void>
+  clearBrowserData(input: { targetId?: string | undefined; origin?: string | undefined; history?: boolean | undefined }): Promise<void>
   cancelDownload(downloadId: string): Promise<boolean>
   openDownload(downloadId: string): Promise<boolean>
   revealDownload(downloadId: string): Promise<boolean>
   installExtension(): Promise<BrowserExtensionRecord | null>
   setExtensionEnabled(extensionId: string, enabled: boolean): Promise<BrowserExtensionRecord[]>
   removeExtension(extensionId: string): Promise<BrowserExtensionRecord[]>
-  saveCredential(input: { origin: string; username: string; password: string; label?: string }): Promise<BrowserCredentialSummary>
+  saveCredential(input: { origin: string; username: string; password: string; label?: string | undefined }): Promise<BrowserCredentialSummary>
   removeCredential(credentialId: string): Promise<boolean>
   autofillCredential(credentialId: string, targetId?: string, tabId?: string): Promise<{ ok: true; credentialId: string; username: string }>
   siteTools(targetId?: string, tabId?: string): Promise<BrowserSiteToolDescriptor[]>

@@ -215,6 +215,7 @@ export class BrowserPolicyService {
 
 export function classifyBrowserAction(operation: string, detail = ''): BrowserNormalizedAction {
   const text = `${operation} ${detail}`.toLowerCase()
+  const op = operation.toLowerCase()
 
   if (/\b(terraform\s+destroy|drop\s+(?:database|schema|table)|truncate\s+table|delete\s+from|delete\s+(?:account|production|prod)|destroy\s+(?:production|prod))\b/.test(text)) {
     return 'data.destructive'
@@ -225,18 +226,18 @@ export function classifyBrowserAction(operation: string, detail = ''): BrowserNo
   }
   if (/\b(?:purchase|buy|checkout|payment|charge|spend|paid)\b/.test(text)) return 'money.spend'
   if (/\b(?:send|publish|post|submit|create\s+pr|git\s+push)\b/.test(text)) return 'external.publish'
-  if (operation.includes('credential') || operation.includes('autofill')) return 'credential.use'
-  if (operation.includes('download')) return 'file.download'
-  if (operation.includes('upload')) return 'file.upload'
-  if (operation.includes('history')) return 'browser.history'
-  if (operation.includes('extension')) return 'browser.extension.manage'
-  if (operation.includes('navigate') || operation.includes('openTab')) return 'browser.navigate'
-  if (operation.includes('snapshot')
-    || operation.includes('screenshot')
-    || operation.includes('tabs')
-    || operation.includes('waitFor')
-    || operation.includes('downloads')
-    || operation.includes('siteTools.list')) {
+  if (op.includes('credential') || op.includes('autofill')) return 'credential.use'
+  if (op.includes('download')) return 'file.download'
+  if (op.includes('upload')) return 'file.upload'
+  if (op.includes('history')) return 'browser.history'
+  if (op.includes('extension')) return 'browser.extension.manage'
+  if (op.includes('navigate') || op.includes('opentab')) return 'browser.navigate'
+  if (op.includes('snapshot')
+    || op.includes('screenshot')
+    || op.includes('tabs')
+    || op.includes('waitfor')
+    || op.includes('downloads')
+    || op.includes('sitetools.list')) {
     return 'browser.read'
   }
   return 'browser.interact'
