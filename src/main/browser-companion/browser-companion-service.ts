@@ -194,6 +194,11 @@ export class BrowserCompanionService {
       if (client.connectionId && client.connectionId !== connection.id) {
         this.nativeByConnection.delete(client.connectionId)
       }
+      const replaced = this.nativeByConnection.get(connection.id)
+      if (replaced && replaced !== client) {
+        this.rejectPending(connection.id, 'Browser companion reconnected during request')
+        replaced.socket.destroy()
+      }
       client.connectionId = connection.id
       this.nativeByConnection.set(connection.id, client)
       this.write(client, { version: BROWSER_COMPANION_PROTOCOL_VERSION, kind: 'browser.hello.ok', connectionId: connection.id })
@@ -308,16 +313,24 @@ export class BrowserCompanionService {
   private async onClose(client: ClientState): Promise<void> {
     this.clients.delete(client)
     if (!client.connectionId) return
-    if (this.nativeByConnection.get(client.connectionId) === client) this.nativeByConnection.delete(client.connectionId)
+    // A fast MV3/native-host reconnect can replace this socket before the old
+    // process finishes closing. Only the currently registered socket is
+    // authoritative for connection/lease teardown.
+    if (this.nativeByConnection.get(client.connectionId) !== client) return
+    this.nativeByConnection.delete(client.connectionId)
     await this.connections.markDisconnected(client.connectionId)
     this.leases.releaseConnection(client.connectionId)
+    this.rejectPending(client.connectionId, 'Browser companion disconnected during request')
+    await this.emit()
+  }
+
+  private rejectPending(connectionId: string, message: string): void {
     for (const [id, pending] of [...this.pending]) {
-      if (pending.connectionId !== client.connectionId) continue
+      if (pending.connectionId !== connectionId) continue
       this.pending.delete(id)
       clearTimeout(pending.timer)
-      pending.reject(new Error('Browser companion disconnected during request'))
+      pending.reject(new Error(message))
     }
-    await this.emit()
   }
 
   private async emit(): Promise<void> {
