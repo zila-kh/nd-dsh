@@ -2,7 +2,7 @@
 
 > Priority: P1
 > Owner: ND browser
-> Status: done — implementation complete; local 8-tab/restart validation pending
+> Status: merged to main via PR #41 — implementation complete; local 8-tab/restart validation pending
 > Depends on: 0021
 
 ## Objective

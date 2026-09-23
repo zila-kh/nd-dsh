@@ -2,8 +2,8 @@
 
 > Priority: P1
 > Owner: ND browser/runtime
-> Status: done — Electron retained with an explicit compatibility ceiling; local evidence handoff pending
-> Branch target: `feat/unified-browser-runtime-spike`
+> Status: merged to main via PR #41 — Electron retained with an explicit compatibility ceiling; local evidence handoff pending
+> Historical branch: `feat/unified-browser-runtime-spike`
 > Depends on: PRD 0005
 > Validation: local only; GitHub Actions remain parked
 

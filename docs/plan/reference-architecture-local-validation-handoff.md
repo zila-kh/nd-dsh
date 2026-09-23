@@ -1,17 +1,19 @@
 # Reference Architecture Local Validation Handoff
 
-Status: **implementation complete; local validation required before PR #36 merges to main**  
-Branch: `feat/reference-architecture-plan`  
+Status: **implementation merged to main via PR #36; local validation/evidence still required**  
+Validation target: current `main` (create a feature branch from `main` for any fixes)  
 Tasks: [WIP 0031](../tasks/wip-0031-nd-protocol-extraction.md) · [WIP 0032](../tasks/wip-0032-canonical-execution-effect-journal.md) · [WIP 0033](../tasks/wip-0033-nd-runtime-crate-extraction.md) · [WIP 0034](../tasks/wip-0034-rust-decision-kernel.md)
 
-## 1. Sync exactly this branch
+## 1. Sync current main without editing it
 
 ```bash
 git fetch origin
-git switch feat/reference-architecture-plan
+git switch main
 git pull --ff-only
 git status --short
 ```
+
+Run validation read-only on `main`. If a defect is found, create a `fix/...` or `feat/...` branch from the failing `main` commit; do not patch `main` directly.
 
 Expected: clean working tree before validation.
 

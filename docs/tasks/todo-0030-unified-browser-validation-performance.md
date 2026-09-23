@@ -2,7 +2,7 @@
 
 > Priority: P1
 > Owner: ND QA/runtime
-> Status: implementation complete — local correctness/performance evidence handoff pending
+> Status: merged to main via PR #41 — implementation complete; local correctness/performance evidence handoff pending
 > Depends on: 0022-0029
 
 ## Objective

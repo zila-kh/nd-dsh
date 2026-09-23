@@ -1,10 +1,10 @@
-# Todo 0017 — `pnpm test` intermittently fails in worktree teardown on Windows
+# WIP 0017 — `pnpm test` intermittently fails in worktree teardown on Windows
 
 > PRD: [PRD-0002](../prd/0002-rust-sidecar-mvp-migration.md)
 > Priority: P2
 > Owner: test infrastructure
-> Status: todo — found while running the local gate on 2026-09-23, not yet reproduced on demand
-> Updated: 2026-09-23
+> Status: implementation complete — local Windows full-suite confirmation pending
+> Updated: 2026-09-24
 
 ## What happens
 
@@ -31,12 +31,25 @@ Local gates are the only validation while GitHub Actions is parked as `.github-b
 
 - Whether the handle belongs to a Git process the product failed to await, or to an anti-malware scanner holding the freshly written files. That distinction decides whether the fix belongs in the product's process handling or only in the test.
 
-## Direction (not decided)
+## Resolution implemented
 
-- Close or await the spawned Git handles before removing a worktree, if the handle turns out to be the product's.
-- A bounded retry on `EBUSY` in the test's teardown helper. Worth stating explicitly: a retry here is not a threshold relaxation, because no budget is being measured — but it does hide the symptom, so it is the fallback rather than the first choice.
-- Serializing the worktree specs if neither of the above is enough.
+The observed failure is in test cleanup after the assertions and awaited Git commands have completed. The repository already uses bounded `fs.rm(..., { maxRetries, retryDelay })` cleanup in Windows-heavy workflow tests because exited children, antivirus, and file indexing can release filesystem handles slightly after process exit.
 
-## How to reproduce
+`tests/task-worktree.test.ts` now uses the same bounded teardown policy:
 
-`corepack pnpm test` (full suite, concurrent files) on Windows; `corepack pnpm vitest run tests/task-worktree.test.ts` passes.
+- recursive + force remain unchanged;
+- `maxRetries: 20`;
+- `retryDelay: 100` ms;
+- no production `TaskWorktreeManager`, Git execution, worktree isolation, rollback, checkpoint, or integration behavior changes.
+
+This is deliberately a teardown-only fix. A focused-spec assertion failure or task-worktree behavior failure remains a real failure and is not retried away.
+
+## Local confirmation
+
+Run on the Windows reference machine:
+
+- [ ] `corepack pnpm vitest run tests/task-worktree.test.ts`
+- [ ] `corepack pnpm test`
+- [ ] repeat the full suite enough times to cover the previous intermittent window and confirm there is no `EBUSY` teardown failure.
+
+If a future failure identifies a live Git descendant rather than a transient filesystem lock, reopen this as a production process-lifecycle defect instead of increasing retry bounds.

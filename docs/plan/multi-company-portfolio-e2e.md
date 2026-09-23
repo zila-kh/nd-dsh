@@ -1,7 +1,7 @@
 # Multi-company portfolio E2E + 3-model local validation
 
-Status: **implementation prepared; local validation/evidence pending**  
-Branch: `feat/e2e-multi-company-portfolio`
+Status: **merged to main via PR #42; local validation/evidence pending**  
+Historical branch: `feat/e2e-multi-company-portfolio`
 
 ## Goal
 
@@ -158,7 +158,7 @@ Keeping them separate makes a failed API key, rate limit or provider outage unab
 
 ## Local validation order
 
-Run from `feat/e2e-multi-company-portfolio`:
+Run from an up-to-date `main` checkout:
 
 ```sh
 corepack pnpm install --frozen-lockfile

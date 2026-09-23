@@ -2,7 +2,7 @@
 
 > Plan: [Reference-Inspired Runtime and Company Evolution](../plan/reference-inspired-runtime-company-evolution.md)  
 > Priority: P0  
-> Status: **implementation complete; local validation pending**  
+> Status: **merged to main via PR #36; implementation complete; local validation pending**  
 > Depends on: WIP 0031 and WIP 0032  
 > Owner: unassigned
 
@@ -41,7 +41,7 @@ The old implementation copies were removed from `nd-core`; this is a real extrac
 
 ## Acceptance status
 
-Implementation is complete. Local clippy/tests plus cold-start/runtime benchmark comparison remain required before merge to `main`.
+Implementation is merged to `main`. Local clippy/tests plus cold-start/runtime benchmark comparison remain required before treating the slice as locally validated or using it for release/performance claims.
 
 ## Handoff
 

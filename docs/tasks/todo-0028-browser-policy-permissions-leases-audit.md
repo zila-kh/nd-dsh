@@ -2,7 +2,7 @@
 
 > Priority: P0
 > Owner: ND control plane/security
-> Status: done — implementation complete; organization-policy smoke pending
+> Status: merged to main via PR #41 — implementation complete; organization-policy smoke pending
 > Depends on: 0021, 0023
 
 ## Objective

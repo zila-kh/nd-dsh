@@ -1,9 +1,10 @@
-# WIP 0018 — Rust parallel runtime v2
+# Done 0018 — Rust parallel runtime v2
 
 > Priority: P1  
 > Owner: ND runtime  
 > Status: done — merged to main after local validation and performance evidence  
-> Branch: `feat/rust-parallel-runtime-v2`  
+> Historical branch: `feat/rust-parallel-runtime-v2`  
+> Archived: 2026-09-24  
 > Base: `main@5bc853d2`  
 > Validation mode: manual local only; GitHub Actions remains parked  
 > Updated: 2026-09-23
@@ -161,22 +162,22 @@ These remain TypeScript by design unless later profiling says otherwise:
   does not multiply the cost;
 - ChatGPT Web's durable transcript store.
 
-## Manual local validation handoff
+## Local validation record
 
-**Do not enable or run GitHub Actions for this task.**
+**GitHub Actions stayed parked for this task.**
 
-From an up-to-date checkout of `feat/rust-parallel-runtime-v2` run:
+The operator completed the local correctness and reference-machine evidence pass on the historical feature head before merge. The checklist below is archived as completed; repeat it from current `main` only when fresh evidence is needed:
 
-- [ ] `corepack pnpm core:test`
-- [ ] `corepack pnpm verify`
-- [ ] `corepack pnpm typecheck`
-- [ ] `corepack pnpm vitest run tests/project-runtime.test.ts tests/beta-reliability.test.ts tests/session-event-hub.test.ts tests/core-session-journal.test.ts tests/terminal-manager.test.ts tests/nd-core-contract.test.ts tests/engine-session-router.test.ts tests/extra-coding-engines.test.ts tests/agent-cli-engines.test.ts`
-- [ ] `corepack pnpm test`
-- [ ] `corepack pnpm build`
-- [ ] `corepack pnpm bench:smoke`
+- [x] `corepack pnpm core:test`
+- [x] `corepack pnpm verify`
+- [x] `corepack pnpm typecheck`
+- [x] `corepack pnpm vitest run tests/project-runtime.test.ts tests/beta-reliability.test.ts tests/session-event-hub.test.ts tests/core-session-journal.test.ts tests/terminal-manager.test.ts tests/nd-core-contract.test.ts tests/engine-session-router.test.ts tests/extra-coding-engines.test.ts tests/agent-cli-engines.test.ts`
+- [x] `corepack pnpm test`
+- [x] `corepack pnpm build`
+- [x] `corepack pnpm bench:smoke`
 
-Known caveat: [todo-0017](todo-0017-windows-worktree-test-ebusy-flake.md)
-records an intermittent Windows `EBUSY` teardown race in
+Known caveat: [WIP 0017](../wip-0017-windows-worktree-test-ebusy-flake.md)
+records the Windows `EBUSY` teardown race and its bounded cleanup fix in
 `tests/task-worktree.test.ts`. If that exact teardown symptom is the only
 full-suite failure, preserve the log and run the focused worktree spec; do not
 silently rerun until green.
@@ -185,17 +186,17 @@ silently rerun until green.
 
 On Windows:
 
-- [ ] Configure a project start command such as `pnpm dev`; start it from ND.
-- [ ] Confirm the target becomes ready and logs stream.
-- [ ] Confirm nd-core process metrics include the managed dev-server/verification
+- [x] Configure a project start command such as `pnpm dev`; start it from ND.
+- [x] Confirm the target becomes ready and logs stream.
+- [x] Confirm nd-core process metrics include the managed dev-server/verification
   processes.
-- [ ] Stop/restart/switch workspaces and confirm descendant trees and ports are
+- [x] Stop/restart/switch workspaces and confirm descendant trees and ports are
   released.
-- [ ] Close ND with a server active and confirm no project child remains.
-- [ ] Exercise quoting plus `&&` through the explicit `cmd.exe /c` path.
-- [ ] Trigger a task verification timeout/cancel and confirm no verifier
+- [x] Close ND with a server active and confirm no project child remains.
+- [x] Exercise quoting plus `&&` through the explicit `cmd.exe /c` path.
+- [x] Trigger a task verification timeout/cancel and confirm no verifier
   descendants remain.
-- [ ] Run a verification command that writes a final stdout/stderr line directly
+- [x] Run a verification command that writes a final stdout/stderr line directly
   before exit and confirm that line is present in the recorded evidence.
 
 On macOS/Linux, repeat start/stop/restart with a shell command containing a pipe
@@ -203,41 +204,41 @@ or `&&`.
 
 ### Manual chat/transcript smoke
 
-- [ ] Run a Harness session long enough to produce history, reload its thread and
+- [x] Run a Harness session long enough to produce history, reload its thread and
   confirm history/live events are not duplicated.
-- [ ] Run a direct coding-engine session with more than 32 normalized events;
+- [x] Run a direct coding-engine session with more than 32 normalized events;
   transcript/history must still show older entries from the native journal.
-- [ ] Exercise OpenCode/Goose/JCode/Hermes streaming and confirm
+- [x] Exercise OpenCode/Goose/JCode/Hermes streaming and confirm
   `assistant/chunk` history is preserved.
-- [ ] Restart nd-core during a direct session and confirm the merged local
+- [x] Restart nd-core during a direct session and confirm the merged local
   safety tail + new native events preserve immediate pre-restart context.
-- [ ] Restart nd-core during an active Harness session and confirm its thread
+- [x] Restart nd-core during an active Harness session and confirm its thread
   history is rebuilt from the runtime snapshot without duplicates.
 
 ### Manual terminal smoke
 
-- [ ] Generate substantial terminal output; live rendering remains continuous.
-- [ ] Re-read terminal state and confirm scrollback is present.
-- [ ] Restart the shell and confirm the ND restart marker plus prior scrollback.
-- [ ] Restart the desktop and confirm persisted scrollback seeds the new native
+- [x] Generate substantial terminal output; live rendering remains continuous.
+- [x] Re-read terminal state and confirm scrollback is present.
+- [x] Restart the shell and confirm the ND restart marker plus prior scrollback.
+- [x] Restart the desktop and confirm persisted scrollback seeds the new native
   terminal.
-- [ ] Restart nd-core unexpectedly and confirm reconciliation marks the old shell
+- [x] Restart nd-core unexpectedly and confirm reconciliation marks the old shell
   exited without replacing the last durable scrollback with an empty buffer.
-- [ ] Run a shell command that prints immediately before exit and confirm the
+- [x] Run a shell command that prints immediately before exit and confirm the
   final text is present in terminal scrollback after the exit event.
-- [ ] Close terminals and confirm `retainedTerminalCount` does not leak upward.
+- [x] Close terminals and confirm `retainedTerminalCount` does not leak upward.
 
 ## Full performance evidence handoff
 
 On the Windows reference machine, after the correctness checklist is clean:
 
-- [ ] `corepack pnpm bench:record`
-- [ ] `corepack pnpm bench:check <generated bundle/summary.json>`
-- [ ] Compare Electron-main RSS/heap and nd-core RSS at 10/25/50/100 against the
+- [x] `corepack pnpm bench:record`
+- [x] `corepack pnpm bench:check <generated bundle/summary.json>`
+- [x] Compare Electron-main RSS/heap and nd-core RSS at 10/25/50/100 against the
   pre-v2 reference bundle.
-- [ ] Inspect `session-journal-scaling.json` for the native retained-byte bound
+- [x] Inspect `session-journal-scaling.json` for the native retained-byte bound
   and tail latency.
-- [ ] Confirm external engine memory is reported separately so vendor-process
+- [x] Confirm external engine memory is reported separately so vendor-process
   RSS does not hide an ND regression.
 
 ## Exit / merge result

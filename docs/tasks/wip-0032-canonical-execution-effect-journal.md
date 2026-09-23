@@ -2,7 +2,7 @@
 
 > Plan: [Reference-Inspired Runtime and Company Evolution](../plan/reference-inspired-runtime-company-evolution.md)  
 > Priority: P0  
-> Status: **implementation complete; local validation pending**  
+> Status: **merged to main via PR #36; implementation complete; local validation pending**  
 > Owner: unassigned
 
 ## Objective

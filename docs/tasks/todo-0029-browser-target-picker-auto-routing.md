@@ -2,7 +2,7 @@
 
 > Priority: P1
 > Owner: ND product/browser
-> Status: done — implementation complete; UX smoke pending
+> Status: merged to main via PR #41 — implementation complete; UX smoke pending
 > Depends on: 0021, 0022, 0023, 0028
 
 ## Objective

@@ -2,7 +2,7 @@
 
 > Priority: P1
 > Owner: ND browser/tools
-> Status: done — implementation complete; runtime/site fixture validation pending
+> Status: merged to main via PR #41 — implementation complete; runtime/site fixture validation pending
 > Depends on: 0021, 0022
 
 ## Objective

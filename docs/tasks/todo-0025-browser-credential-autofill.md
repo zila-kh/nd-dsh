@@ -2,7 +2,7 @@
 
 > Priority: P1
 > Owner: ND security/browser
-> Status: done — implementation complete; OS secure-storage/autofill validation pending
+> Status: merged to main via PR #41 — implementation complete; OS secure-storage/autofill validation pending
 > Depends on: 0020, 0022
 
 ## Objective

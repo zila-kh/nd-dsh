@@ -2,7 +2,7 @@
 
 > Priority: P1
 > Owner: ND browser
-> Status: done — implementation complete with limited compatibility model; representative-extension validation pending
+> Status: merged to main via PR #41 — implementation complete with limited compatibility model; representative-extension validation pending
 > Depends on: 0020, 0022
 
 ## Objective
