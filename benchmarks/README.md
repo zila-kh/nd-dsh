@@ -32,9 +32,11 @@ only for state delivery and durable desktop-restart snapshots instead of keeping
 a second 512 KiB hot string per terminal.
 
 Direct coding-engine transcript events are also mirrored into the native journal.
-Adapters keep only a small local safety tail; ChatGPT Web retains its existing
-durable transcript because that engine already owns restart persistence and is
-not used as an organization workspace worker.
+That owner is capped at 500 events / 2 MiB per session, while adapters keep only
+a 32-event local safety tail used to bridge an nd-core restart. ChatGPT Web is
+excluded from this native mirror and retains its existing durable transcript
+because that engine already owns restart persistence and is not used as an
+organization workspace worker.
 
 ## Agent-task measurement
 
