@@ -23,8 +23,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
+use std::time::Duration;
 use uuid::Uuid;
 
 /// Retained output per terminal. Bounded so terminal output cannot grow without
@@ -660,8 +661,10 @@ impl TerminalManager {
         let output_writer = Arc::clone(&self.writer);
         let output_id = terminal_id.to_owned();
         let output_runtime = Arc::clone(&runtime);
+        let (output_done_tx, output_done_rx) = mpsc::sync_channel(1);
         thread::spawn(move || {
             stream_output(output_writer, output_runtime, output_id, session_id, reader);
+            let _ = output_done_tx.send(());
         });
 
         let manager = Arc::clone(self);
@@ -680,6 +683,10 @@ impl TerminalManager {
             if let Ok(mut exit) = wait_runtime.exit.lock() {
                 *exit = Some((exit_code, signal.clone()));
             }
+            // Give the PTY reader one bounded window to drain final shell output
+            // into the retained tail before terminal.exit. A descendant can keep
+            // the PTY open, so this must never become an unbounded join.
+            let _ = output_done_rx.recv_timeout(Duration::from_millis(250));
 
             // Only the generation that is still the terminal may publish its exit.
             // Keep the current runtime in the registry after exit so its bounded
