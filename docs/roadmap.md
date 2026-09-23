@@ -64,7 +64,7 @@ Target: **fast native runtime + minimal round trips + structured agent actions +
 | [done-0015](tasks/done/done-0015-runtime-evidence-baseline.md) | P1 | **done** — runtime evidence bundle recorded locally, baseline committed (`benchmarks/baselines/win11-x64.json`); runner artifact stays in blocked-0004 |
 | [done-0016](tasks/done/done-0016-agent-task-baseline-fast-path-budgets.md) | P1 | **done** — agent-task baseline re-recorded against the §12.4 comparison; §9.1 router placement settled (main-process TypeScript) |
 | [wip-0017](tasks/wip-0017-windows-worktree-test-ebusy-flake.md) | P2 | **implementation complete; local Windows confirmation pending** — teardown uses the repository's bounded transient-lock retry policy; product Git/worktree behavior is unchanged |
-| [wip-0018](tasks/wip-0018-rust-parallel-runtime-v2.md) | P1 | **done; merged and locally validated** — merged by `d1aed436`; reference bundle `2026-09-23T10-27-15-202Z-win32-x64` passed 24/24 checks at feature commit `ae801def` |
+| [done-0018](tasks/done/done-0018-rust-parallel-runtime-v2.md) | P1 | **done; merged and locally validated** — merged by `d1aed436`; reference bundle `2026-09-23T10-27-15-202Z-win32-x64` passed 24/24 checks at feature commit `ae801def` |
 | [blocked-0004](tasks/blocked-0004-windows-release-validation.md) | P0 | **blocked on fresh Windows release validation** — implementation complete (0012-0014 done) and baseline recorded (0015); needs the workflows restored and a runner |
 | [done-0005](tasks/done/done-0005-agent-task-measurement.md) | P1 | **done** — task-cost measurement + normal-loop baseline |
 | [done-0006](tasks/done/done-0006-nd-core-runtime-contract.md) | P1 | **done** — workspace/deadline/revision/cache/search/runtime contract |
