@@ -420,6 +420,13 @@ export class BrowserTargetRouter {
     operation: () => Promise<T>,
   ): Promise<T> {
     const { envelope, decision } = await this.policy.authorize(context, input)
+    if (context.source === 'agent'
+      && context.sessionId
+      && input.targetId === 'builtin'
+      && input.tabId
+      && canTriggerDownload(input.operation)) {
+      this.browser.armAgentDownload(input.tabId, context.sessionId)
+    }
     try {
       const result = await operation()
       await this.policy.complete(envelope, decision, true)
@@ -512,6 +519,13 @@ export class BrowserTargetRouter {
     if (!tab) throw new Error('Browser tab not found')
     return tab
   }
+}
+
+function canTriggerDownload(operation: string): boolean {
+  return operation === 'browser.navigate'
+    || operation === 'browser.click'
+    || operation === 'browser.press'
+    || operation === 'browser.siteTool'
 }
 
 function selectionFrom(params: Record<string, unknown>): BrowserSelection {
