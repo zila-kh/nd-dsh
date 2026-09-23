@@ -326,7 +326,8 @@ async function createWindow(cdpPort: number): Promise<void> {
   // engine router admits them by the exact roots ND created — never by a path
   // shape a caller could construct.
   engineRouter.setWorktreeGuard((cwd) => taskWorktrees.ownsRoot(cwd))
-  const decisionSupport = createDecisionSupportFromEnv()\n  const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter, projectRuntime, capabilities, executionCoordinator, taskWorktrees, core, { spawnProcess: unscopedCoreSpawn, stopProcess: stopCoreManagedChildProcess }, decisionSupport)
+  const decisionSupport = createDecisionSupportFromEnv()
+  const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter, projectRuntime, capabilities, executionCoordinator, taskWorktrees, core, { spawnProcess: unscopedCoreSpawn, stopProcess: stopCoreManagedChildProcess }, decisionSupport)
   const approvalGate = new OrganizationApprovalGate(organizationStore, harness)
   const qa = new QaService()
   qa.setProjectRoot(workspace.state().root)
