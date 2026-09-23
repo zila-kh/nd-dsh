@@ -331,6 +331,10 @@ export class BrowserController {
     return this.downloads.list()
   }
 
+  downloadPath(downloadId: string): string | undefined {
+    return this.downloads.path(downloadId)
+  }
+
   cancelDownload(downloadId: string): boolean {
     return this.downloads.cancel(downloadId)
   }
