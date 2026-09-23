@@ -8,7 +8,7 @@ import type {
 } from '../../shared/browser-platform.js'
 import type { BrowserBounds, BrowserState, UiAnnotation, UiTarget } from '../../shared/contracts.js'
 import { AgentBrowserClient } from './agent-browser-client.js'
-import { BrowserDownloadManager } from './browser-download-manager.js'
+import { BrowserDownloadManager, type BrowserDownloadAuthorizationRequest } from './browser-download-manager.js'
 import { BrowserHistoryStore } from './browser-history-store.js'
 import { BrowserPermissionStore } from './browser-permission-store.js'
 import { DEFAULT_BROWSER_URL, isAllowedBrowserUrl, normalizeBrowserUrl, sanitizeBrowserUserAgent } from './browser-url.js'
@@ -314,6 +314,17 @@ export class BrowserController {
       if (clearHistory) await this.historyStore.clear({ targetId: BUILTIN_BROWSER_TARGET_ID })
     }
     this.emitState()
+  }
+
+  setDownloadAuthorizationHandler(
+    handler: ((request: BrowserDownloadAuthorizationRequest) => Promise<boolean>) | undefined,
+  ): void {
+    this.downloads.setAuthorizationHandler(handler)
+  }
+
+  armAgentDownload(tabId: string, sessionId: string): void {
+    this.requireTab(tabId)
+    this.downloads.armAgentDownload(tabId, sessionId)
   }
 
   listDownloads(): BrowserDownloadRecord[] {
