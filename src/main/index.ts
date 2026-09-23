@@ -54,6 +54,7 @@ import { OrganizationStore } from './organization/store.js'
 import { TaskWorktreeManager } from './organization/task-worktree.js'
 import { ProviderStore } from './providers.js'
 import { agentTaskBenchmarkScenarioFromEnv, runAgentTaskBenchmark } from './perf/agent-task-benchmark.js'
+import { runBrowserPlatformBenchmark } from './perf/browser-platform-benchmark.js'
 import { runPackagedRuntimeSmoke } from './perf/packaged-runtime-smoke.js'
 import { runRuntimeBenchmark } from './perf/runtime-benchmark.js'
 import { flushStartupBenchmark, markStartup } from './perf/startup-metrics.js'
@@ -523,9 +524,24 @@ async function createWindow(cdpPort: number): Promise<void> {
   const startupCoreMetrics = core ? await core.request('metrics.snapshot', {}, 5_000).catch(() => null) : null
   await flushStartupBenchmark({ core: core?.health ?? null, coreMetrics: startupCoreMetrics })
   const runtimeBenchmarkOutput = process.env.ND_DSH_RUNTIME_BENCH_OUTPUT?.trim()
+  const browserPlatformBenchmarkOutput = process.env.ND_DSH_BROWSER_PLATFORM_BENCH_OUTPUT?.trim()
   const packagedSmokeOutput = process.env.ND_DSH_PACKAGED_SMOKE_OUTPUT?.trim()
   const agentTaskBenchmarkOutput = process.env.ND_DSH_AGENT_TASK_BENCH_OUTPUT?.trim()
-  if (runtimeBenchmarkOutput) {
+  if (browserPlatformBenchmarkOutput) {
+    try {
+      await runBrowserPlatformBenchmark({
+        outputPath: browserPlatformBenchmarkOutput,
+        browser,
+        browserPlatform,
+      })
+      console.log('Unified browser platform benchmark completed.')
+      setTimeout(() => app.quit(), 25)
+    } catch (error) {
+      console.error('Unified browser platform benchmark failed:', error)
+      app.exit(1)
+      return
+    }
+  } else if (runtimeBenchmarkOutput) {
     try {
       await runRuntimeBenchmark({
         outputPath: runtimeBenchmarkOutput,
