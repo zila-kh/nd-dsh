@@ -647,8 +647,12 @@ runtime-contract work rests on, rather than asserting them: revision-marker read
 the revision-keyed cache's effect on `git.status` and `git.log` (cold vs served, plus
 invalidation under an external mutation and an external commit), bounded search latency
 and payload size, explicit truncation reporting, cancel-to-stop latency, and core deadline
-expiry. Its results are written through the same envelope and provenance path as the rest
-of the suite, and it exits non-zero when a claim does not hold on the machine it ran on.
+expiry. The reference-architecture slice extends the same command with
+`contract-effect-journal` (fsync append/replay latency, retained bytes, known-complete
+dedupe and uncertain recovery state) and `contract-decision-kernel` (typed Rust decision
+evaluation latency plus low-Laya/high-Jev escalation semantics). Its results are written
+through the same envelope and provenance path as the rest of the suite, and it exits
+non-zero when a claim does not hold on the machine it ran on.
 
 ### 12.8 Post-PR #21 CI status and orchestration comparison backlog
 
