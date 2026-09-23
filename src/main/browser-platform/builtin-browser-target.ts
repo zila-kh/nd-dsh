@@ -58,6 +58,18 @@ export class BuiltinBrowserTarget implements BrowserTarget {
     return this.browser.navigate(url, tabId)
   }
 
+  async back(tabId: string) {
+    return this.browser.back(tabId)
+  }
+
+  async forward(tabId: string) {
+    return this.browser.forward(tabId)
+  }
+
+  async reload(tabId: string) {
+    return this.browser.reload(tabId)
+  }
+
   async click(tabId: string, ref: string, revision: number) {
     return this.browser.click(tabId, ref, revision)
   }
