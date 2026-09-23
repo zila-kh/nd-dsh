@@ -299,7 +299,10 @@ export function registerIpc(deps: IpcDependencies): () => void {
     if (archivedIds.size === 0) return items
     return items.map((item) => (archivedIds.has(item.sessionId) ? { ...item, archived: true } : item))
   })
-  handle(IPC.enginesTranscript, (_event, value) => deps.engineRouter.restoreMessages(asString(value, 'Session id', 128), deps.engineRouter.transcript(asString(value, 'Session id', 128))))
+  handle(IPC.enginesTranscript, async (_event, value) => {
+    const sessionId = asString(value, 'Session id', 128)
+    return deps.engineRouter.restoreMessages(sessionId, await deps.engineRouter.transcript(sessionId))
+  })
   handle(IPC.enginesModels, (_event, value) => deps.engineRouter.models(asString(value, 'Engine id', 64)))
   // ZCode CLI model-provider config (its own ~/.zcode/cli/config.json). A
   // successful write restarts the ZCode app-server child when idle so the

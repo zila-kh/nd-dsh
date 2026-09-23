@@ -10,6 +10,7 @@ import type {
   WorkspaceState,
 } from '../../shared/contracts'
 import { buildCodingEngineCatalog } from '../../shared/coding-engines'
+import type { BrowserCompanionState, BrowserTabLease } from '../../shared/browser-companion'
 import type {
   CapabilityAssignmentSnapshot,
   CapabilityDescriptor,
@@ -48,6 +49,7 @@ function signal<T>() {
 const now = Date.now()
 const workspaceEvents = signal<WorkspaceState>()
 const browserEvents = signal<BrowserState>()
+const browserCompanionEvents = signal<BrowserCompanionState>()
 const harnessEvents = signal<HarnessStatus>()
 const dshEvents = signal<DshEventFrame>()
 const themeEvents = signal<ThemeState>()
@@ -86,6 +88,23 @@ let harness: HarnessStatus = {
   provider: 'openai-prod',
   model: 'gpt-5.6',
   sessionId: 'preview-session',
+}
+
+let browserCompanion: BrowserCompanionState = {
+  connections: [
+    {
+      id: 'preview-connection',
+      installationId: 'preview-installation',
+      browser: 'chrome',
+      profileLabel: 'Default profile',
+      extensionVersion: '0.1.0',
+      connected: true,
+      connectedAt: now - 3_600_000,
+      lastSeenAt: now,
+    },
+  ],
+  leases: [],
+  discoveryPath: 'C:/Users/preview/.nd-dsh/browser-companion.json',
 }
 
 let theme: ThemeState = { mode: 'system', effective: matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark' }
@@ -467,6 +486,23 @@ const desktopApi: DesktopApi = {
     snapshot: async () => ({ preview: true, url: browser.url }),
     openExternal: async (url) => { window.open(url, '_blank', 'noopener,noreferrer') },
     onState: browserEvents.on,
+  },
+  browserCompanion: {
+    state: async () => browserCompanion,
+    acquireLease: async (connectionId, tabId, ownerId, scope) => {
+      const lease: BrowserTabLease = { id: `preview-lease-${tabId}`, connectionId, tabId, ownerId, ...(scope ? { scope } : {}), acquiredAt: Date.now() }
+      browserCompanion = { ...browserCompanion, leases: [...browserCompanion.leases, lease] }
+      browserCompanionEvents.emit(browserCompanion)
+      return lease
+    },
+    releaseLease: async (leaseId) => {
+      const leases = browserCompanion.leases.filter((lease) => lease.id !== leaseId)
+      const released = leases.length !== browserCompanion.leases.length
+      browserCompanion = { ...browserCompanion, leases }
+      browserCompanionEvents.emit(browserCompanion)
+      return released
+    },
+    onChanged: browserCompanionEvents.on,
   },
   workspace: {
     state: async () => workspace,

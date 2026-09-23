@@ -33,21 +33,23 @@ These are blockers for a downloadable public beta, not optional polish.
 
 - PRD: [0002-rust-sidecar-mvp-migration.md](prd/0002-rust-sidecar-mvp-migration.md) — **MVP merged; reconverging on open deltas** (see §5.0).
 - Task: [done-0002-rust-sidecar-mvp-migration.md](tasks/done/done-0002-rust-sidecar-mvp-migration.md) — P0, merged as PR #20 (`588f3ed`).
-- Benchmark contract: [performance-benchmark-suite.md](plan/performance-benchmark-suite.md) — implemented at runtime level; §12 records what is still unmeasurable.
+- Benchmark contract: [performance-benchmark-suite.md](plan/performance-benchmark-suite.md) — implemented at runtime level; §12 records the agent-task metrics, baseline policy, and fast-path proof, all closed as of 2026-09-23.
 - Parallel-agent scope: [parallel-work-distribution.md](plan/parallel-work-distribution.md) — D1-D3 implemented; see the open-delta list.
-- Agent fast path: [agent-fast-path.md](plan/agent-fast-path.md) — proposed; **gated on measurement, not started**.
+- Agent fast path: [agent-fast-path.md](plan/agent-fast-path.md) — implemented (typed action space, deterministic-first router, composite core executor); the §12.4 budgets are wired and re-derived offline, and §9.1 is settled by the measured IPC-crossing counts — 12.5 → 9 per verified completion while the decision tier itself crosses zero times, so the router stays in main-process TypeScript.
 
 This approved MVP is the active implementation vehicle for the runtime-distribution, PTY/process, Git/worktree, parallel-worker capacity, packaged Windows smoke, and reproducible performance-proof portions of the roadmap. Organization/business truth remains TypeScript-owned; nd-core owns shared runtime permits, native process/resource lifecycle, and system-heavy services.
 
-**Status:** implementation backlog complete on `feat/complete-active-work`. The production desktop is single-runtime (`nd-core`), the agent fast path and matched measurement are implemented, and stale TODO/WIP records are archived. Fresh Windows release validation remains explicitly blocked in task 0004 because this branch intentionally skips CI.
+**Status:** implementation backlog complete on `feat/complete-active-work`. The production desktop is single-runtime (`nd-core`), the agent fast path and matched measurement are implemented, the CI-gate defects 0012-0014 are repaired and merged (PR #30), the runtime evidence baseline is recorded and committed (0015), and stale TODO/WIP records are archived. Fresh Windows release validation remains explicitly blocked in task 0004, now purely on a runner: the implementation side is done, and so is the locally-recordable evidence side.
 
-**CI reality check (2026-09-22):** main workflow run `35719173634` passed the complete Linux `validate` job, including desktop smoke. `windows-package` failed at `Verify ND Core`, so Windows package/smoke and performance evidence remain unproven without a fresh run; see blocked task 0004.
+**CI reality check (2026-09-23):** run `35762360604`, the first run on `main` after PR #29 merged, failed `Verify ND Core` in **both** jobs — `validate` in 59 s and `windows-package` in 1m43s — so every Windows step and the performance-evidence bundle were skipped. The cause was platform-independent: `crates/nd-core` was merged with unformatted, lint-failing source that aborts `pnpm core:test` on Linux too, having arrived via commits carrying a skip-ci directive that no gate ever evaluated. The last green `validate` was run `35719173634` on 2026-09-22, before those commits. All three defects that run exposed are fixed and merged: [done-0012](tasks/done/done-0012-nd-core-format-lint-gate.md) restored the gate, [done-0013](tasks/done/done-0013-windows-timing-flakes.md) removed the Windows timing flakes that the repaired gate then revealed, and [done-0014](tasks/done/done-0014-app-runtime-terminal-marker.md) fixed the app-runtime terminal marker that failed the one `performance-evidence` attempt (run `35771982331`). Each is verified locally and each had its runner confirmation dropped, not waived, when Actions was parked.
+
+**CI parked (2026-09-23, operator direction):** GitHub Actions is no longer in use — the operator renamed `.github/` to `.github-bk/` (`2ff4a3c`, merged as `8fd7c16`) to conserve compute until the product is stable enough to justify it. The workflows are unchanged inside that folder; renaming it back restores them, and no acceptance criterion is waived. Work continues against local verification (`pnpm core:test`, `pnpm verify`, `pnpm typecheck`, `pnpm test`, `pnpm build`), which is now the gate. The Windows release-validation criteria in blocked task 0004 are deferred, not dropped: they need a runner and cannot be satisfied locally.
 
 #### Current direction — four deliverables
 
 1. **`nd-core` Rust sidecar MVP** — finish the open deltas above. The goal is a fast native execution layer, not a TypeScript-to-Rust translation.
 2. **Remaining TODOs + [parallel-work-distribution.md](plan/parallel-work-distribution.md)** — integrated into that MVP rather than cut as a separate project.
-3. **Benchmark/performance suite** — extend the existing runtime-level suite (which is real and shipped) with agent-task metrics, committed baselines, and backend-identity assertions: [performance-benchmark-suite.md §12](plan/performance-benchmark-suite.md#12-remaining-gaps--agent-task-metrics-baselines-and-fast-path-proof). Agent-task metrics and the committed normal-loop baseline landed with task 0005 (`pnpm bench:tasks`, `pnpm bench:tasks:check`); the backend-identity assertions remain in task 0004.
+3. **Benchmark/performance suite** — extend the existing runtime-level suite (which is real and shipped) with agent-task metrics, committed baselines, and backend-identity assertions: [performance-benchmark-suite.md §12](plan/performance-benchmark-suite.md#12-gap-closures--agent-task-metrics-baselines-and-fast-path-proof). Agent-task metrics, the normal-loop baseline and its fast-path budget wiring landed with tasks 0005 and 0008 (`pnpm bench:tasks`, `pnpm bench:tasks:check`); the backend-identity assertions remain in task 0004; and the reviewed runtime evidence baseline is recorded and committed as `benchmarks/baselines/win11-x64.json` ([done-0015](tasks/done/done-0015-runtime-evidence-baseline.md), local recording — the runner-produced bundle is part of blocked-0004).
 4. **Typed fast-agent path + escalation** — [agent-fast-path.md](plan/agent-fast-path.md). Cheap decision tier over a typed action space, composite core operations, escalation to a powerful model only when reasoning is required. Its action vocabulary must reuse the P3.2 normalized action envelope rather than forking a second one.
 
 Target: **fast native runtime + minimal round trips + structured agent actions + a powerful model only when reasoning is actually required.** Benchmark evidence decides what moves next; TypeScript stays where it is not the bottleneck.
@@ -56,7 +58,14 @@ Target: **fast native runtime + minimal round trips + structured agent actions +
 
 | Task | Pri | State |
 | --- | --- | --- |
-| [blocked-0004](tasks/blocked-0004-windows-release-validation.md) | P0 | **blocked on fresh Windows release validation** — latest main Windows job failed at `Verify ND Core`; no speculative source work assigned |
+| [done-0012](tasks/done/done-0012-nd-core-format-lint-gate.md) | P0 | **done** — `Verify ND Core` restored (PR #30); runner confirmation dropped when Actions was parked |
+| [done-0013](tasks/done/done-0013-windows-timing-flakes.md) | P0 | **done** — Windows timing flakes removed (PR #30); runner confirmation dropped when Actions was parked |
+| [done-0014](tasks/done/done-0014-app-runtime-terminal-marker.md) | P1 | **done** — app-runtime terminal marker fixed (PR #30); bundle confirmation dropped when Actions was parked |
+| [done-0015](tasks/done/done-0015-runtime-evidence-baseline.md) | P1 | **done** — runtime evidence bundle recorded locally, baseline committed (`benchmarks/baselines/win11-x64.json`); runner artifact stays in blocked-0004 |
+| [done-0016](tasks/done/done-0016-agent-task-baseline-fast-path-budgets.md) | P1 | **done** — agent-task baseline re-recorded against the §12.4 comparison; §9.1 router placement settled (main-process TypeScript) |
+| [todo-0017](tasks/todo-0017-windows-worktree-test-ebusy-flake.md) | P2 | **todo** — `pnpm test` intermittently fails in worktree teardown (`EBUSY` on `rmdir`) under parallel load; local gates are the only validation |
+| [wip-0018](tasks/wip-0018-rust-parallel-runtime-v2.md) | P1 | **done; merged and locally validated** — merged by `d1aed436`; reference bundle `2026-09-23T10-27-15-202Z-win32-x64` passed 24/24 checks at feature commit `ae801def` |
+| [blocked-0004](tasks/blocked-0004-windows-release-validation.md) | P0 | **blocked on fresh Windows release validation** — implementation complete (0012-0014 done) and baseline recorded (0015); needs the workflows restored and a runner |
 | [done-0005](tasks/done/done-0005-agent-task-measurement.md) | P1 | **done** — task-cost measurement + normal-loop baseline |
 | [done-0006](tasks/done/done-0006-nd-core-runtime-contract.md) | P1 | **done** — workspace/deadline/revision/cache/search/runtime contract |
 | [done-0007](tasks/done/done-0007-retire-legacy-paths-and-dispatch.md) | P1 | **done** — single production runtime, node-pty/legacy path retired, typed dispatch availability |
@@ -130,6 +139,17 @@ Success criterion: users can tell why an engine is not ready before starting wor
 - Reference/benchmark matrix: [agent-orchestration-reference-matrix.md](plan/agent-orchestration-reference-matrix.md).
 
 This work formalizes the existing per-task worktree/checkpoint/review/integration foundation as an engine-neutral company contract. The direct ZCode-assisted PR #21 shared-checkout episode is retained as a regression story, **not** as an ND organization-run failure or a claim about ZCode architecture. Target invariant: teams share knowledge and structured handoffs; independent durable writable tasks keep independent transaction/workspace lineage.
+
+## P1 — Browser Companion MVP
+
+- PRD: [0004-browser-companion-mvp.md](prd/0004-browser-companion-mvp.md) — implementation on `feat/browser-companion-mvp`.
+- Task: [wip-0019-browser-companion-mvp.md](tasks/wip-0019-browser-companion-mvp.md) — implementation complete; local automated validation, real-Chrome smoke, and performance evidence pending.
+
+The MVP keeps the embedded ND browser and adds an explicit Native Messaging path
+for a user's existing Chrome/Chromium profile. It uses optional per-origin
+scripting permissions, semantic stale-safe element refs, single-writer tab
+leases, and the existing engine extension router. Company-level normalized
+browser action policy remains a follow-up requirement before enterprise claims.
 
 ## Public Beta P1 — best-in-class AI development environment
 

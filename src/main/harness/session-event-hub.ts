@@ -1,5 +1,10 @@
 import type { DshEventFrame, GatewayRpcResult } from '../../shared/contracts.js'
 import type { FollowHandle, SessionStreamFrame } from '../dsh/gateway-client.js'
+import {
+  MemorySessionJournalStore,
+  type SessionJournalEnvelope,
+  type SessionJournalStore,
+} from './session-journal-store.js'
 
 /**
  * The minimal remote-capable surface the hub needs from GatewayClient
@@ -11,47 +16,30 @@ export interface FollowSource {
   followSession(sessionId: string, onFrame: (frame: SessionStreamFrame) => void): FollowHandle
 }
 
-interface HistoryEnvelope {
-  type: string
-  seq: number
-  time?: number
-  data?: unknown
-}
-
-/** Journal window served to the renderer; bounded to keep long sessions cheap. */
-// Long tool-driven turns can legitimately exceed 400 envelopes. Keep a larger
-// bounded window so restoring a chat retains its opening prompt and context
-// while still preventing an unbounded in-memory journal.
-const JOURNAL_LIMIT = 10_000
 /** How long a fresh follow may wait for its opening snapshot. */
 const SNAPSHOT_TIMEOUT_MS = 15_000
 
 /**
- * Per-session live event journal backed by the runtime's `session/follow`
- * streams.
+ * Per-session live event bridge backed by the runtime's `session/follow`
+ * streams. The large retained journal is delegated to SessionJournalStore:
+ * production uses nd-core, while tests/degraded callers can use the bounded
+ * in-memory fallback.
  *
- * The 0.1.2 runtime line removed `session.history` and the legacy event
- * downlinks; `session/follow` is its only content face. The hub keeps one
- * follow open per interesting session, folds every frame into a bounded
- * journal, re-emits live appends as `session-event` frames (so the
- * orchestrator and renderer see the exact vocabulary the legacy sockets
- * delivered), and serves the renderer's history reads from that journal in
- * the old `{ events: [{ event }] }` wire shape — callers above the hub never
- * learn the runtime changed.
- *
- * Snapshot frames adopt the session's current log silently (no emission):
- * content that predates the subscription reaches the renderer through the
- * history read, and only appends after it stream live. Sequence baselines
- * keep socket reconnects (which replay a fresh snapshot) from duplicating
- * journal entries or frames.
+ * The hub itself retains only stream handles, sequence baselines, and promises
+ * for writes currently crossing the storage boundary. Live events are still
+ * emitted immediately in the legacy DshEventFrame vocabulary.
  */
 export class SessionEventHub {
   private source: FollowSource | undefined
   private readonly handles = new Map<string, FollowHandle>()
-  private readonly journal = new Map<string, HistoryEnvelope[]>()
   private readonly baselines = new Map<string, number>()
+  private readonly pendingWrites = new Map<string, Set<Promise<void>>>()
+  private resetPromise: Promise<void> = Promise.resolve()
 
-  constructor(private readonly emit: (frame: DshEventFrame) => void) {}
+  constructor(
+    private readonly emit: (frame: DshEventFrame) => void,
+    private readonly store: SessionJournalStore = new MemorySessionJournalStore(),
+  ) {}
 
   /** Whether the hub can serve reads (attached to a remote-face runtime). */
   get active(): boolean {
@@ -64,44 +52,72 @@ export class SessionEventHub {
     this.source = source
   }
 
-  /** Close every follow stream and drop the journals. */
+  /** Close every follow stream and reset the delegated journals. */
   detach(): void {
     for (const handle of this.handles.values()) handle.close()
     this.handles.clear()
-    this.journal.clear()
     this.baselines.clear()
+    this.pendingWrites.clear()
     this.source = undefined
+    this.resetPromise = this.store.clear().catch(() => undefined)
+  }
+
+  /**
+   * Rebuild volatile native retention after nd-core restarts while the Harness
+   * runtime is still alive. Reopening each interesting follow asks the runtime
+   * for a fresh snapshot, so core failure never becomes permanent chat-history
+   * loss in the desktop.
+   */
+  async rehydrate(): Promise<void> {
+    if (!this.active) return
+    const sessionIds = [...this.handles.keys()]
+    for (const handle of this.handles.values()) handle.close()
+    this.handles.clear()
+    this.baselines.clear()
+    this.pendingWrites.clear()
+    this.resetPromise = this.store.clear().catch(() => undefined)
+    await this.resetPromise
+    await Promise.all(sessionIds.map(async (sessionId) => {
+      await this.open(sessionId).catch(() => undefined)
+    }))
   }
 
   /**
    * Adopt a session's live journal before its next prompt, so the turn's
    * events arrive as live appends instead of being swallowed by a later
    * snapshot's silent baseline adoption. Resolves once the opening snapshot
-   * has landed; failures are the caller's to tolerate.
+   * and its journal write have landed.
    */
   async ensure(sessionId: string): Promise<void> {
-    if (!this.active || this.handles.has(sessionId)) return
+    if (!this.active || this.handles.has(sessionId)) {
+      await this.flush(sessionId)
+      return
+    }
     await this.open(sessionId)
   }
 
   /**
-   * Serve one history read from the session's live journal, in the legacy
+   * Serve one history read from the delegated journal, in the legacy
    * `session.history` value shape.
    */
   async read(sessionId: string, maxMessages = 50): Promise<GatewayRpcResult> {
-    const envelopes = await this.open(sessionId)
+    await this.open(sessionId)
+    await this.flush(sessionId)
+    const envelopes = await this.store.tail(sessionId, maxMessages)
     return {
       ok: true,
-      value: { events: envelopes.slice(-maxMessages).map((event) => ({ event })) },
+      value: { events: envelopes.map((event) => ({ event })) },
     }
   }
 
   /** Open (or join) the session's follow stream and wait for its snapshot. */
-  private async open(sessionId: string): Promise<HistoryEnvelope[]> {
+  private async open(sessionId: string): Promise<void> {
+    await this.resetPromise
     const existing = this.handles.get(sessionId)
     if (existing) {
       await existing.ready
-      return this.journal.get(sessionId) ?? []
+      await this.flush(sessionId)
+      return
     }
     const source = this.source
     if (!source) throw new Error('Session event hub is not attached to a runtime')
@@ -109,13 +125,13 @@ export class SessionEventHub {
     this.handles.set(sessionId, handle)
     try {
       await withTimeout(handle.ready, SNAPSHOT_TIMEOUT_MS, 'Session event stream did not open in time')
+      await this.flush(sessionId)
     } catch (cause) {
       // A failed stream keeps no handle: a later read retries cleanly.
       if (this.handles.get(sessionId) === handle) this.handles.delete(sessionId)
       handle.close()
       throw cause
     }
-    return this.journal.get(sessionId) ?? []
   }
 
   private ingest(sessionId: string, frame: SessionStreamFrame): void {
@@ -129,21 +145,24 @@ export class SessionEventHub {
       }
       return
     }
-    const journal = this.journal.get(sessionId) ?? []
+
     let baseline = this.baselines.get(sessionId) ?? 0
     // Snapshot records wrap their event ({ type: 'event'|'chunks', event });
     // live frames carry the envelope directly.
     const events = frame.type === 'snapshot'
       ? (frame.records ?? []).map(asEnvelope)
       : [frame.event]
+    const accepted: SessionJournalEnvelope[] = []
+
     for (const event of events) {
       if (!event || event.seq <= baseline) continue
       baseline = event.seq
-      journal.push({
+      accepted.push({
         type: event.type,
         seq: event.seq,
         ...(event.time === undefined ? {} : { time: event.time }),
         ...(event.data === undefined ? {} : { data: event.data }),
+        ...(event.surfaceOp === undefined ? {} : { surfaceOp: event.surfaceOp }),
       })
       if (frame.type === 'event') {
         this.emit({
@@ -154,18 +173,38 @@ export class SessionEventHub {
             seq: event.seq,
             time: event.time ?? Date.now(),
             ...(event.data === undefined ? {} : { data: event.data }),
+            ...(event.surfaceOp === undefined ? {} : { surfaceOp: event.surfaceOp }),
           },
         })
       }
     }
+
     if (frame.type === 'snapshot' && typeof frame.cursor === 'number') baseline = Math.max(baseline, frame.cursor)
     this.baselines.set(sessionId, baseline)
-    if (journal.length > JOURNAL_LIMIT) journal.splice(0, journal.length - JOURNAL_LIMIT)
-    this.journal.set(sessionId, journal)
+    if (accepted.length > 0) this.trackWrite(sessionId, this.store.append(sessionId, accepted))
+  }
+
+  private trackWrite(sessionId: string, write: Promise<void>): void {
+    let writes = this.pendingWrites.get(sessionId)
+    if (!writes) {
+      writes = new Set()
+      this.pendingWrites.set(sessionId, writes)
+    }
+    writes.add(write)
+    void write.finally(() => {
+      writes?.delete(write)
+      if (writes?.size === 0) this.pendingWrites.delete(sessionId)
+    }).catch(() => undefined)
+  }
+
+  private async flush(sessionId: string): Promise<void> {
+    const writes = this.pendingWrites.get(sessionId)
+    if (!writes?.size) return
+    await Promise.all([...writes])
   }
 }
 
-function asEnvelope(value: unknown): { type: string; seq: number; time?: number; data?: unknown } | undefined {
+function asEnvelope(value: unknown): SessionJournalEnvelope | undefined {
   if (!value || typeof value !== 'object') return undefined
   const event = (value as { event?: unknown }).event
   if (!event || typeof event !== 'object') return undefined
@@ -176,6 +215,7 @@ function asEnvelope(value: unknown): { type: string; seq: number; time?: number;
     seq: envelope.seq,
     ...(typeof envelope.time === 'number' ? { time: envelope.time } : {}),
     ...(envelope.data === undefined ? {} : { data: envelope.data }),
+    ...(envelope.surfaceOp === undefined ? {} : { surfaceOp: envelope.surfaceOp }),
   }
 }
 

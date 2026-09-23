@@ -11,6 +11,10 @@ import { projectRoot } from '../app-paths.js'
 
 type SpawnLike = typeof import('node:child_process').spawn
 
+const IDLE_CONTROL_MS = 750
+const RUNTIME_SESSION_SCALE_POINTS = [1, 2, 4, 8, 10, 25, 50, 100] as const
+const SCALE_CONTRACT = 'rust-parallel-runtime-v2'
+
 interface RuntimeBenchmarkOptions {
   outputPath: string
   workspaceRoot: string
@@ -39,15 +43,16 @@ export async function runRuntimeBenchmark(options: RuntimeBenchmarkOptions): Pro
 
   try {
     const idleCore = options.core ? await options.core.request<Record<string, unknown>>('metrics.snapshot', {}, 5_000) : undefined
-    const idleMainRssBytes = process.memoryUsage().rss
+    const idleMainMemory = process.memoryUsage()
+    const idleMainRssBytes = idleMainMemory.rss
     const idleBackendMemoryBytes = backendMemory(idleMainRssBytes, idleCore)
     const sessionScaling = []
-    for (const count of [1, 2, 4, 8, 10]) {
+    for (const count of RUNTIME_SESSION_SCALE_POINTS) {
       while (sessionPermits.length < count) {
         const index = sessionPermits.length
         const permit = await options.coordinator.acquire({
           kind: 'execution',
-          pools: [{ key: 'benchmark:logical-sessions', limit: 16 }],
+          pools: [{ key: 'benchmark:logical-sessions', limit: 128 }],
         })
         await options.coordinator.bindSession(permit, 'benchmark-session-' + index, 'benchmark-run-' + index)
         sessionPermits.push(permit)
@@ -55,13 +60,25 @@ export async function runRuntimeBenchmark(options: RuntimeBenchmarkOptions): Pro
       if (count === 1) await options.git.refresh()
       await new Promise((resolvePromise) => setTimeout(resolvePromise, 20))
       const coreMetrics = options.core ? await options.core.request<Record<string, unknown>>('metrics.snapshot', {}, 5_000) : undefined
-      const mainRssBytes = process.memoryUsage().rss
+      const mainMemory = process.memoryUsage()
+      const mainRssBytes = mainMemory.rss
       sessionScaling.push({
         count,
         mainRssBytes,
+        mainHeapUsedBytes: mainMemory.heapUsed,
+        mainHeapTotalBytes: mainMemory.heapTotal,
+        mainExternalBytes: mainMemory.external,
+        mainArrayBuffersBytes: mainMemory.arrayBuffers,
         coreMemory: coreProcessMemory(coreMetrics),
         backendMemoryBytes: backendMemory(mainRssBytes, coreMetrics),
         coreWorkspaceCount: numberField(coreMetrics, 'workspaceCount'),
+        coreProcessCount: numberField(coreMetrics, 'processCount'),
+        coreTerminalCount: numberField(coreMetrics, 'terminalCount'),
+        coreRetainedTerminalCount: numberField(coreMetrics, 'retainedTerminalCount'),
+        coreRetainedTerminalBufferBytes: numberField(coreMetrics, 'retainedTerminalBufferBytes'),
+        corePendingRpcCount: numberField(coreMetrics, 'pendingRpcCount'),
+        coreQueuedEventCount: numberField(coreMetrics, 'queuedEventCount'),
+        coreQueuedEventBytes: numberField(coreMetrics, 'queuedEventBytes'),
       })
     }
     for (const permit of sessionPermits.splice(0)) await options.coordinator.release(permit)
@@ -69,6 +86,13 @@ export async function runRuntimeBenchmark(options: RuntimeBenchmarkOptions): Pro
     const stressStarted = performance.now()
     const cpuStarted = process.cpuUsage()
     histogram.enable()
+    // Control window: the same sampler, in the same process, with nothing to
+    // service. It is quantized by the platform timer, so on Windows an idle
+    // process already reports ~15.6 ms. That floor is what the platform
+    // contributes; only the stress delta above it is attributable to this app.
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, IDLE_CONTROL_MS))
+    const idleFloorP95Ms = histogram.percentile(95) / 1e6
+    histogram.reset()
     const workerFixture = join(projectRoot(), 'benchmarks', 'fixtures', 'synthetic-worker.mjs')
     const workerEnv = { ...engineEnvironment(), ELECTRON_RUN_AS_NODE: '1' }
     const first = options.spawnProcess(process.execPath, [workerFixture], {
@@ -145,16 +169,24 @@ export async function runRuntimeBenchmark(options: RuntimeBenchmarkOptions): Pro
       benchmark: 'electron-responsiveness',
       timestamp: new Date().toISOString(),
       backend,
+      scaleContract: SCALE_CONTRACT,
+      scalePoints: RUNTIME_SESSION_SCALE_POINTS,
       platform: process.platform,
       arch: process.arch,
       durationMs: performance.now() - stressStarted,
       mainCpuMs: (cpu.user + cpu.system) / 1_000,
       mainRssBytes: process.memoryUsage().rss,
       idleMainRssBytes,
+      idleMainHeapUsedBytes: idleMainMemory.heapUsed,
+      idleMainHeapTotalBytes: idleMainMemory.heapTotal,
+      idleMainExternalBytes: idleMainMemory.external,
+      idleMainArrayBuffersBytes: idleMainMemory.arrayBuffers,
       idleCoreMemory: coreProcessMemory(idleCore),
       idleBackendMemoryBytes,
       sessionScaling,
       eventLoop: {
+        floorP95Ms: idleFloorP95Ms,
+        excessP95Ms: Math.max(0, histogram.percentile(95) / 1e6 - idleFloorP95Ms),
         p50Ms: histogram.percentile(50) / 1e6,
         p95Ms: histogram.percentile(95) / 1e6,
         p99Ms: histogram.percentile(99) / 1e6,
@@ -237,14 +269,24 @@ async function waitForTerminalMarker(
   throw new Error('Runtime benchmark terminal did not finish within the timeout.')
 }
 
+/**
+ * Run the flood fixture without an `exit` on the same input line.
+ *
+ * A shell that exits on the same input line closes the console host before it has
+ * flushed the output still in flight, so the marker this benchmark waits for is never
+ * readable. That was measured on Windows for the packaged smoke and is recorded in
+ * perf/packaged-runtime-smoke.ts, which drops the same `exit` for the same reason; this
+ * harness kept it and timed out on run 35771982331. The benchmark closes the terminal
+ * itself once it has read the marker, so the shell does not have to end on its own.
+ */
 function terminalCommand(shell: string, fixture: string, bytes: number): string {
   if (process.platform !== 'win32') {
-    return `ELECTRON_RUN_AS_NODE=1 ${shQuote(process.execPath)} ${shQuote(fixture)} ${bytes}; exit\n`
+    return `ELECTRON_RUN_AS_NODE=1 ${shQuote(process.execPath)} ${shQuote(fixture)} ${bytes}\n`
   }
   if (/powershell|pwsh/i.test(shell)) {
-    return `$env:ELECTRON_RUN_AS_NODE='1'; & ${psQuote(process.execPath)} ${psQuote(fixture)} ${bytes}; exit\r\n`
+    return `$env:ELECTRON_RUN_AS_NODE='1'; & ${psQuote(process.execPath)} ${psQuote(fixture)} ${bytes}\r\n`
   }
-  return `set "ELECTRON_RUN_AS_NODE=1" && "${process.execPath}" "${fixture}" ${bytes} && exit\r\n`
+  return `set "ELECTRON_RUN_AS_NODE=1" && "${process.execPath}" "${fixture}" ${bytes}\r\n`
 }
 
 function shQuote(value: string): string {

@@ -9,6 +9,7 @@ mod protocol;
 mod revision;
 mod scheduler;
 mod search;
+mod session_journal;
 mod snapshot;
 mod terminal;
 #[cfg(windows)]
@@ -28,11 +29,15 @@ use scheduler::{BindParams, ReleaseParams, Scheduler};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
+use session_journal::{
+    DEFAULT_MAX_BYTES_PER_SESSION, DEFAULT_MAX_EVENTS_PER_SESSION, SessionJournalAppendParams,
+    SessionJournalSessionParams, SessionJournalStore, SessionJournalTailParams,
+};
 use std::io::BufReader;
 use std::sync::Arc;
 use terminal::{
-    TerminalCloseParams, TerminalCreateParams, TerminalManager, TerminalResizeParams,
-    TerminalRestartParams, TerminalStateParams, TerminalWriteParams,
+    TerminalCloseParams, TerminalCreateParams, TerminalHistoryAppendParams, TerminalManager,
+    TerminalResizeParams, TerminalRestartParams, TerminalStateParams, TerminalWriteParams,
 };
 use workspace::{ListParams, ReadParams};
 
@@ -41,6 +46,7 @@ struct AppState {
     scheduler: Arc<Scheduler>,
     processes: Arc<ProcessManager>,
     terminals: Arc<TerminalManager>,
+    session_journal: Arc<SessionJournalStore>,
     metrics: Arc<MetricsRegistry>,
     cache: Arc<ResponseCache>,
     interrupts: Arc<InterruptRegistry>,
@@ -56,11 +62,16 @@ impl AppState {
             Arc::clone(&scheduler),
         ));
         let terminals = Arc::new(TerminalManager::new(Arc::clone(&writer)));
+        let session_journal = Arc::new(SessionJournalStore::new(
+            DEFAULT_MAX_EVENTS_PER_SESSION,
+            DEFAULT_MAX_BYTES_PER_SESSION,
+        ));
         Arc::new(Self {
             writer,
             scheduler,
             processes,
             terminals,
+            session_journal,
             metrics: Arc::new(MetricsRegistry::new()),
             cache: Arc::new(ResponseCache::new(
                 cache::DEFAULT_MAX_ENTRIES,
@@ -178,6 +189,7 @@ fn dispatch(
                     "scheduler",
                     "process",
                     "terminal",
+                    "session-journal",
                     "git",
                     "workspace",
                     "search",
@@ -208,6 +220,7 @@ fn dispatch(
                 .iter()
                 .filter(|permit| permit.session_id.is_some())
                 .count();
+            let session_journal = state.session_journal.stats();
             Ok(json!({
                 "processMemory": metrics::current_process_memory(),
                 "logicalSessionCount": scheduler.permits.len(),
@@ -217,6 +230,11 @@ fn dispatch(
                 "terminalCount": state.terminals.terminal_count(),
                 "retainedTerminalCount": state.terminals.retained_terminal_count(),
                 "retainedTerminalBufferBytes": state.terminals.retained_buffer_bytes(),
+                "sessionJournalSessionCount": session_journal.session_count,
+                "sessionJournalEventCount": session_journal.retained_event_count,
+                "sessionJournalBytes": session_journal.retained_bytes,
+                "sessionJournalMaxEventsPerSession": session_journal.max_events_per_session,
+                "sessionJournalMaxBytesPerSession": session_journal.max_bytes_per_session,
                 "inFlightRequestCount": state.interrupts.active_count(),
                 "pendingRpcCount": dispatch.active + dispatch.queued_high + dispatch.queued_normal + dispatch.queued_background,
                 "dispatcher": dispatch,
@@ -287,12 +305,44 @@ fn dispatch(
                 .resize(from_params::<TerminalResizeParams>(params)?)?;
             Ok(json!({ "ok": true }))
         }
+        "terminal.appendHistory" => {
+            state
+                .terminals
+                .append_history(from_params::<TerminalHistoryAppendParams>(params)?)?;
+            Ok(json!({ "ok": true }))
+        }
         "terminal.close" => {
             let closed = state
                 .terminals
                 .close(from_params::<TerminalCloseParams>(params)?)?;
             Ok(json!({ "closed": closed }))
         }
+        "sessionJournal.append" => to_value(
+            state
+                .session_journal
+                .append(from_params::<SessionJournalAppendParams>(params)?)?,
+        ),
+        "sessionJournal.reset" => {
+            let removed = state
+                .session_journal
+                .reset(from_params::<SessionJournalSessionParams>(params)?)?;
+            Ok(json!({ "removed": removed }))
+        }
+        "sessionJournal.drop" => {
+            let removed = state
+                .session_journal
+                .drop_session(from_params::<SessionJournalSessionParams>(params)?)?;
+            Ok(json!({ "removed": removed }))
+        }
+        "sessionJournal.clear" => {
+            let cleared = state.session_journal.clear()?;
+            Ok(json!({ "cleared": cleared }))
+        }
+        "sessionJournal.tail" => to_value(
+            state
+                .session_journal
+                .tail(from_params::<SessionJournalTailParams>(params)?)?,
+        ),
         "git.exec" => {
             let params = from_params::<GitExecParams>(params)?;
             state.metrics.observe_workspace(&params.cwd);

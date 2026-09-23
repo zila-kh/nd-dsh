@@ -52,8 +52,20 @@ function snapshot(records: Array<{ type: string; seq: number; data?: unknown }>,
   }
 }
 
-function live(type: string, seq: number, data?: unknown): SessionStreamFrame {
-  return { type: 'event', event: { type, seq, time: seq, data } }
+function live(type: string, seq: number, data?: unknown, surfaceOp?: unknown): SessionStreamFrame {
+  return { type: 'event', event: { type, seq, time: seq, data, ...(surfaceOp === undefined ? {} : { surfaceOp }) } }
+}
+
+/**
+ * A read/ensure opens its follow stream behind the delegated store's reset, so
+ * the stream lands a microtask after the call. Wait for it instead of assuming
+ * the handle exists the moment read() returns.
+ */
+async function untilOpen(entries: Map<string, StubEntry>, sessionId: string): Promise<StubEntry> {
+  for (let index = 0; index < 10 && !entries.has(sessionId); index += 1) await Promise.resolve()
+  const entry = entries.get(sessionId)
+  if (!entry) throw new Error(`follow stream for ${sessionId} did not open`)
+  return entry
 }
 
 describe('SessionEventHub', () => {
@@ -64,7 +76,7 @@ describe('SessionEventHub', () => {
     hub.attach(source)
 
     const pending = hub.read('s1')
-    entries.get('s1')!.onFrame(snapshot([
+    ;(await untilOpen(entries, 's1')).onFrame(snapshot([
       { type: 'user/message', seq: 1, data: { message: { text: 'hello' } } },
       { type: 'assistant/message', seq: 2 },
     ]))
@@ -86,7 +98,7 @@ describe('SessionEventHub', () => {
     const hub = new SessionEventHub(() => {})
     hub.attach(source)
     const pending = hub.read('s1', 2)
-    entries.get('s1')!.onFrame(snapshot([
+    ;(await untilOpen(entries, 's1')).onFrame(snapshot([
       { type: 'a', seq: 1 },
       { type: 'b', seq: 2 },
       { type: 'c', seq: 3 },
@@ -102,7 +114,7 @@ describe('SessionEventHub', () => {
     const hub = new SessionEventHub((frame) => frames.push(frame))
     hub.attach(source)
     const pending = hub.read('s1')
-    const entry = entries.get('s1')!
+    const entry = await untilOpen(entries, 's1')
     entry.onFrame(snapshot([{ type: 'user/message', seq: 1 }]))
     await pending
     entry.onFrame(live('assistant/message', 2, { message: { text: 'hi' } }))
@@ -114,13 +126,32 @@ describe('SessionEventHub', () => {
     hub.detach()
   })
 
+  it('retains a live surface operation in the emitted frame and in the journaled history', async () => {
+    const { source, entries } = stubSource()
+    const frames: DshEventFrame[] = []
+    const hub = new SessionEventHub((frame) => frames.push(frame))
+    hub.attach(source)
+    const pending = hub.read('s1')
+    const entry = await untilOpen(entries, 's1')
+    entry.onFrame(snapshot([{ type: 'user/message', seq: 1 }]))
+    await pending
+    const surfaceOp = { op: 'workbench/open', surface: 'review' }
+    entry.onFrame(live('assistant/message', 2, { message: { text: 'hi' } }, surfaceOp))
+
+    expect(frames[0]?.event?.surfaceOp).toEqual(surfaceOp)
+    const again = await hub.read('s1')
+    const events = (again.value as { events: Array<{ event: { seq: number; surfaceOp?: unknown } }> }).events
+    expect(events.find((item) => item.event.seq === 2)?.event.surfaceOp).toEqual(surfaceOp)
+    hub.detach()
+  })
+
   it('does not duplicate journal entries or frames when a reconnect replays a fresh snapshot', async () => {
     const { source, entries } = stubSource()
     const frames: DshEventFrame[] = []
     const hub = new SessionEventHub((frame) => frames.push(frame))
     hub.attach(source)
     const pending = hub.read('s1')
-    const entry = entries.get('s1')!
+    const entry = await untilOpen(entries, 's1')
     entry.onFrame(snapshot([{ type: 'user/message', seq: 1 }]))
     entry.onFrame(live('assistant/chunk', 2))
     await pending
@@ -139,12 +170,40 @@ describe('SessionEventHub', () => {
     hub.detach()
   })
 
+  it('rehydrates retained history from a fresh runtime snapshot after core restart', async () => {
+    const { source, entries } = stubSource()
+    const hub = new SessionEventHub(() => {})
+    hub.attach(source)
+
+    const firstRead = hub.read('s1')
+    ;(await untilOpen(entries, 's1')).onFrame(snapshot([
+      { type: 'user/message', seq: 1, data: { message: { text: 'before restart' } } },
+      { type: 'assistant/message', seq: 2 },
+    ]))
+    await firstRead
+
+    const rebuilding = hub.rehydrate()
+    for (let index = 0; index < 5 && !entries.has('s1'); index += 1) await Promise.resolve()
+    const reopened = entries.get('s1')
+    expect(reopened).toBeDefined()
+    reopened!.onFrame(snapshot([
+      { type: 'user/message', seq: 1, data: { message: { text: 'before restart' } } },
+      { type: 'assistant/message', seq: 2 },
+      { type: 'assistant/message', seq: 3, data: { message: { text: 'runtime snapshot' } } },
+    ], 3))
+    await rebuilding
+
+    const result = await hub.read('s1')
+    expect((result.value as { events: Array<{ event: { seq: number } }> }).events.map((item) => item.event.seq)).toEqual([1, 2, 3])
+    hub.detach()
+  })
+
   it('closes the follow handle on a terminal stream error and surfaces the failure to readers', async () => {
     const { source, entries } = stubSource()
     const hub = new SessionEventHub(() => {})
     hub.attach(source)
     const pending = hub.read('no-such-session')
-    entries.get('no-such-session')!.rejectReady?.(new Error('session "no-such-session" not found'))
+    ;(await untilOpen(entries, 'no-such-session')).rejectReady?.(new Error('session "no-such-session" not found'))
 
     await expect(pending).rejects.toThrow('not found')
     expect(entries.has('no-such-session')).toBe(false)

@@ -84,6 +84,8 @@ try {
       usableStartupMs: summarize(samples.map((sample) => sample.startup?.marks?.usable)),
       mainCpuMs: summarize(samples.map((sample) => sample.mainCpuMs)),
       eventLoopP95Ms: summarize(samples.map((sample) => sample.eventLoop?.p95Ms)),
+      eventLoopP95ExcessMs: summarize(samples.map((sample) => sample.eventLoop?.excessP95Ms)),
+      eventLoopFloorP95Ms: summarize(samples.map((sample) => sample.eventLoop?.floorP95Ms)),
       eventLoopMaxMs: summarize(samples.map((sample) => sample.eventLoop?.maxMs)),
       terminalEventDeliveryP95Ms: summarize(samples.map((sample) => sample.terminal?.eventDeliveryP95Ms)),
       terminalToMarkerMs: summarize(samples.map((sample) => sample.terminal?.toMarkerMs)),

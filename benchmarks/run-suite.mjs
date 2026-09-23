@@ -12,6 +12,9 @@ import { RECORD_BYTES, classifyTerminalStream, expectedPayload, payloadMismatch 
 
 const execFileAsync = promisify(execFile)
 const smoke = process.argv.includes('--smoke')
+const LOGICAL_SCALE_POINTS = smoke ? [1, 2, 4, 8, 10] : [1, 2, 4, 8, 10, 25, 50, 100]
+const PARALLEL_WORKER_POINTS = smoke ? [1, 2] : LOGICAL_SCALE_POINTS
+const SCALE_CONTRACT = 'rust-parallel-runtime-v2'
 const outputDir = defaultOutputDir()
 const results = []
 const failures = []
@@ -29,6 +32,13 @@ async function benchmarkStartup() {
   const healthRoundTripMs = []
   const readyMemory = []
   const runs = smoke ? 2 : 10
+  // One unmeasured launch. A freshly linked nd-core is cold in the file cache and
+  // gets its first anti-malware scan, which measured 135-190 ms against 20-40 ms
+  // warm; with ten samples the p95 is the maximum, so that artifact alone decided
+  // the release gate. The cold value is recorded rather than discarded.
+  const cold = await CoreRpc.launch()
+  const coldSpawnMs = cold.startupMs
+  await cold.close()
   for (let index = 0; index < runs; index += 1) {
     const client = await CoreRpc.launch()
     samples.push(client.startupMs)
@@ -41,6 +51,7 @@ async function benchmarkStartup() {
   }
   return writeResult(outputDir, 'core-startup', {
     measuredRuns: runs,
+    coldSpawnMs,
     samplesMs: samples,
     summaryMs: summarize(samples),
     healthRoundTripMs,
@@ -57,7 +68,7 @@ async function benchmarkMemoryAndScheduler() {
     const points = []
     const permitIds = []
     const corePid = client.pid
-    for (const count of [1, 2, 4, 8, 10]) {
+    for (const count of LOGICAL_SCALE_POINTS) {
       while (permitIds.length < count) {
         const id = 'bench-' + permitIds.length
         const started = performance.now()
@@ -65,7 +76,7 @@ async function benchmarkMemoryAndScheduler() {
           permitId: id,
           sessionId: 'session-' + permitIds.length,
           kind: 'execution',
-          pools: [{ key: 'bench:shared-workspace', limit: 32 }],
+          pools: [{ key: 'bench:shared-workspace', limit: 128 }],
           ttlMs: 300_000,
         })
         check(result.granted === true, 'scheduler refused permit ' + id)
@@ -114,7 +125,7 @@ async function benchmarkMemoryAndScheduler() {
     const snapshot = await client.request('scheduler.snapshot')
     check(!snapshot.permits.some((item) => item.id === 'cap-b'), 'scheduler partially acquired a failed multi-pool permit')
     for (const id of [...permitIds, 'cap-a']) await client.request('scheduler.release', { permitId: id })
-    return writeResult(outputDir, 'memory-scheduler-scaling', { corePid, points })
+    return writeResult(outputDir, 'memory-scheduler-scaling', { scaleContract: SCALE_CONTRACT, scalePoints: LOGICAL_SCALE_POINTS, corePid, points })
   } finally { await client.close() }
 }
 
@@ -285,7 +296,7 @@ async function benchmarkParallelAgents() {
   const parent = await tempDir('nd-dsh-bench-worktrees-')
   const client = await CoreRpc.launch()
   const synthetic = join(benchmarkRoot, 'benchmarks', 'fixtures', 'synthetic-worker.mjs')
-  const targetCounts = smoke ? [1, 2] : [1, 2, 4, 8, 10]
+  const targetCounts = PARALLEL_WORKER_POINTS
   const workers = []
   const output = new Map()
   const descendantPids = new Map()
@@ -323,8 +334,8 @@ async function benchmarkParallelAgents() {
           sessionId: 'parallel-session-' + index,
           kind: 'execution',
           pools: [
-            { key: 'bench:parallel:project', limit: 10 },
-            { key: 'bench:parallel:role', limit: 10 },
+            { key: 'bench:parallel:project', limit: 128 },
+            { key: 'bench:parallel:role', limit: 128 },
           ],
           ttlMs: 300_000,
         })
@@ -363,16 +374,19 @@ async function benchmarkParallelAgents() {
         corePid: client.pid,
         coreMemory,
         managedMemory,
+        managedMemoryBytes: sumMemoryBytes(managedMemory),
         externalMemory,
+        externalMemoryBytes: sumMemoryBytes(externalMemory),
         permitLatencySummaryMs: summarize(workers.slice(0, count).map((worker) => worker.permitLatencyMs)),
         processCount: metrics.processCount,
         workspaceCount: metrics.workspaceCount,
         pendingRpcCount: metrics.pendingRpcCount,
         queuedEventCount: metrics.queuedEventCount,
+        queuedEventBytes: metrics.queuedEventBytes,
         worktreeDiskBytes,
       })
     }
-    return writeResult(outputDir, 'scheduler-multi-agent', { points })
+    return writeResult(outputDir, 'scheduler-multi-agent', { scaleContract: SCALE_CONTRACT, scalePoints: targetCounts, points })
   } finally {
     for (const worker of workers) {
       const exit = client.onceEvent('process.exit', (frame) => frame.resourceId === worker.processId, 5_000).catch(() => undefined)
@@ -381,6 +395,76 @@ async function benchmarkParallelAgents() {
       await client.request('scheduler.release', { permitId: worker.permitId }).catch(() => undefined)
     }
     client.off('process.output', listener)
+    await client.close()
+  }
+}
+
+function sumMemoryBytes(items) {
+  let total = 0
+  let measured = false
+  for (const item of items) {
+    if (!Number.isFinite(item?.bytes)) continue
+    measured = true
+    total += item.bytes
+  }
+  return measured ? total : null
+}
+
+async function benchmarkSessionJournalScaling() {
+  const client = await CoreRpc.launch()
+  const targetCounts = smoke ? [1, 2] : LOGICAL_SCALE_POINTS
+  const eventsPerSession = smoke ? 20 : 200
+  const payload = 'j'.repeat(smoke ? 64 : 256)
+  const sessions = []
+  try {
+    const points = []
+    for (const count of targetCounts) {
+      while (sessions.length < count) {
+        const index = sessions.length
+        const sessionId = 'journal-session-' + index
+        const events = Array.from({ length: eventsPerSession }, (_, eventIndex) => ({
+          type: eventIndex % 5 === 0 ? 'tool/result' : 'assistant/chunk',
+          seq: eventIndex + 1,
+          time: eventIndex + 1,
+          data: { text: payload, session: index, event: eventIndex },
+        }))
+        await client.request('sessionJournal.append', { sessionId, events })
+        sessions.push(sessionId)
+      }
+      const tailStarted = performance.now()
+      const tail = await client.request('sessionJournal.tail', {
+        sessionId: sessions[count - 1],
+        maxMessages: 50,
+      })
+      const tailLatencyMs = performance.now() - tailStarted
+      const metrics = await client.request('metrics.snapshot')
+      const memory = await processMemory(client.pid)
+      check(metrics.sessionJournalSessionCount === count, 'session journal session count mismatch at ' + count)
+      check(metrics.sessionJournalEventCount === count * eventsPerSession, 'session journal event count mismatch at ' + count)
+      check(Array.isArray(tail.events) && tail.events.length === Math.min(50, eventsPerSession), 'session journal tail length mismatch at ' + count)
+      points.push({
+        count,
+        eventsPerSession,
+        coreMemory: memory,
+        retainedSessions: metrics.sessionJournalSessionCount,
+        retainedEvents: metrics.sessionJournalEventCount,
+        retainedBytes: metrics.sessionJournalBytes,
+        maxEventsPerSession: metrics.sessionJournalMaxEventsPerSession,
+        maxBytesPerSession: metrics.sessionJournalMaxBytesPerSession,
+        tailLatencyMs,
+        pendingRpcCount: metrics.pendingRpcCount,
+        queuedEventCount: metrics.queuedEventCount,
+        queuedEventBytes: metrics.queuedEventBytes,
+      })
+    }
+    return writeResult(outputDir, 'session-journal-scaling', {
+      scaleContract: SCALE_CONTRACT,
+      scalePoints: targetCounts,
+      eventsPerSession,
+      points,
+    })
+  } finally {
+    await client.request('sessionJournal.clear', {}).catch(() => undefined)
     await client.close()
   }
 }
@@ -480,6 +564,7 @@ try {
     benchmarkTerminal,
     benchmarkGit,
     benchmarkParallelAgents,
+    benchmarkSessionJournalScaling,
     benchmarkCancellation,
   ]) {
     results.push(await run())

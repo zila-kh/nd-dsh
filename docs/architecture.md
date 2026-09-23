@@ -16,8 +16,9 @@ ND-DSH is the product and control plane. Model vendors and coding runtimes are r
 | runtime permits / parallel capacity | ND-DSH | ExecutionCoordinator + nd-core scheduler |
 | primary coding runtime | ND-DSH adapter | DeepSeek Harness (tracks upstream latest) |
 | delegated Codex execution | ND-DSH adapter | pinned Harness Codex provider → official Codex app-server |
-| visible browser | ND-DSH / Electron | one `WebContentsView` + exact CDP target |
-| browser automation | ND-DSH integration | agent-browser + Harness MCP client |
+| visible embedded browser | ND-DSH / Electron | one `WebContentsView` + exact CDP target |
+| existing-profile browser companion | ND-DSH integration | MV3 extension + Native Messaging + `nd-browser-host` |
+| browser automation | ND-DSH integration | embedded agent-browser path + companion semantic driver through the extension router |
 | desktop lifecycle / IPC | ND-DSH | Electron main + context-isolated preload |
 | product UI | ND-DSH | React renderer |
 
@@ -40,7 +41,8 @@ Electron main process
   |-- coding-engine registry + employee assignments
   |-- engine-session router with immutable task workspace binding
   |-- company approval policy gate
-  |-- workspace service + visible browser controller
+  |-- workspace service + visible embedded browser controller
+  |-- BrowserCompanionService -> local pipe/socket -> Rust Native Messaging host -> opted-in Chromium profile
   |
   +-- ND Harness adapter
   +-- Codex app-server adapter
@@ -115,11 +117,29 @@ For an approval-bearing organization run:
 
 The pinned Harness approval wire exposes tool name and reason, not arbitrary tool arguments. ND therefore does **not** claim perfect semantic enforcement for every possible command. Non-approval-bearing browser/MCP/external actions still need normalized action metadata before enterprise GA.
 
-## Same-browser invariant
+## Browser-target invariants
 
-The browser visible to the user is the browser controlled by the agent. ND asks the embedded view's debugger for its exact CDP `targetId`, then binds agent-browser to that target. The CLI and MCP integration share the same generated agent-browser config/session so an agent cannot silently create a second hidden browser.
+For the **embedded ND browser**, the browser visible to the user is the browser
+controlled by the agent. ND asks the embedded view's debugger for its exact CDP
+`targetId`, then binds agent-browser to that target. The CLI and MCP integration
+share the same generated agent-browser config/session so an agent cannot silently
+create a second hidden browser.
 
-The product browser starts at `about:blank`; localhost development pages are opened only when explicitly requested.
+The product browser starts at `about:blank`; localhost development pages are
+opened only when explicitly requested.
+
+The **Browser Companion** is a separate, explicit target for an existing
+Chrome/Chromium profile. It does not weaken or replace the embedded same-browser
+invariant. A user installs the MV3 extension, registers the Native Messaging host,
+and grants per-origin site access. The extension controls the selected real tab
+inside that profile through a semantic content driver; no hidden automation
+browser is launched.
+
+The companion's Rust host is transport-only. Electron main owns connection state
+and one-writer tab leases, while engine access reuses the universal extension
+router. Page content is untrusted application data. Password values and cookies
+are not exported. Company-level normalized browser action policy remains required
+before enterprise policy-completeness claims.
 
 ## Renderer trust boundary
 
@@ -163,7 +183,8 @@ Delegated Codex remains a one-shot Harness-backed route. ND does not claim brows
 - Codex auth/trust failure: task remains a visible failure/blocker; ND does not invent completion.
 - Missing provider credential: the active route reports its real model error; provider metadata never substitutes a fake result.
 - Secure credential store unavailable: key remains memory-only instead of being persisted insecurely.
-- Browser bridge unavailable: visible browser remains manual; agent browser capability reports unavailable.
+- Embedded browser bridge unavailable: the visible embedded browser remains manual; agent-browser reports unavailable.
+- Browser Companion unavailable or disconnected: the embedded browser remains usable and companion calls fail closed rather than blocking desktop startup.
 - Approval policy gate failure: request falls back to human `ASK`, never implicit allow.
 - App restart mid-run: stale organization run is reconciled as interrupted/failed.
 

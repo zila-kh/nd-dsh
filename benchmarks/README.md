@@ -6,13 +6,37 @@ These benchmarks are release evidence for PRD 0002. They use deterministic local
 - `node benchmarks/terminal-handshake-proof.mjs` — proves the benchmark client's Windows terminal handshake both ways: a client that stops answering fails loudly inside the grace window, and the same terminal finishes once it answers.
 - `node benchmarks/verify-evidence-identity.mjs` — proves the production evidence identity gates on synthetic bundles: a mislabelled runtime or mismatched nd-core executable is refused by `bench:check` as an `[identity]` failure.
 - `pnpm bench:record` — one-shot Windows reference run. It builds the current portable app, records release-core results, records the Rust Electron runtime and packaged startup, evaluates absolute/correctness budgets, and writes `summary.json` plus generated `summary.md`.
-- `pnpm bench:compare <legacy.json> <rust.json>` — compare two same-machine `electron-responsiveness.json` files. Provenance mismatch exits non-zero.
+- `pnpm bench:compare <baseline.json> <candidate.json>` — compare two same-machine `electron-responsiveness.json` files. Provenance mismatch exits non-zero.
 - `pnpm bench:check <bundle/summary.json>` — reload raw JSON and recompute all PRD budgets; missing or failed evidence exits non-zero.
 - `pnpm bench:app` — packaged Electron startup only; requires `ND_DSH_BENCH_PACKAGED_APP`.
 - `pnpm bench:runtime` — convenience Rust-only same-build Electron stress run for development.
 - `pnpm bench:tasks` — agent-task measurement (see below): what one task costs, not how fast the runtime is.
 - `pnpm bench:tasks:check` — offline check of the committed agent-task baseline; runs on ordinary PRs.
 - `pnpm bench:contract` — runtime-contract measurements: revision-marker cost, the revision-keyed cache's effect on `git.status`/`git.log` and its invalidation under external mutation, bounded search latency and payload size, explicit truncation, cancel-to-stop latency, and core deadline expiry.
+
+## Parallel-runtime v2 retention evidence
+
+The release-core suite now includes the `rust-parallel-runtime-v2` scale contract at
+`1/2/4/8/10/25/50/100` logical sessions/workers.
+
+`session-journal-scaling.json` specifically exercises the native bounded event
+journal added for high-concurrency chat/team workloads. It records retained
+session/event/byte counts, the configured per-session byte ceiling, nd-core
+memory and journal-tail RPC latency at every scale point. `bench:check` requires
+all scale points and verifies that retained journal bytes never exceed the
+configured aggregate bound.
+
+Terminal metrics continue to report retained native terminal count/bytes. In v2,
+active terminal scrollback is owned by nd-core; Electron materializes the tail
+only for state delivery and durable desktop-restart snapshots instead of keeping
+a second 512 KiB hot string per terminal.
+
+Direct coding-engine transcript events are also mirrored into the native journal.
+That owner is capped at 500 events / 2 MiB per session, while adapters keep only
+a 32-event local safety tail used to bridge an nd-core restart. ChatGPT Web is
+excluded from this native mirror and retains its existing durable transcript
+because that engine already owns restart persistence and is not used as an
+organization workspace worker.
 
 ## Agent-task measurement
 
@@ -49,7 +73,9 @@ Rules this measurement keeps:
 
 `benchmarks/baselines/agent-task-normal-loop.json` is the committed, reviewed baseline for the normal agent loop: one recorded bundle from the Windows x64 reference machine, refreshed deliberately by a documented PR (`pnpm bench:tasks:baseline`) rather than by every run. Local run directories under `benchmark-results/` stay ignored by Git.
 
-That follows the discipline the runtime suite already states — local results are ignored, reviewed bundles are copied in intentionally — and it is what makes a `normal loop → fast path` comparison reviewable: same fixture revision, same pass definitions, same counter set, against a record anyone can re-check offline with `pnpm bench:tasks:check`.
+That follows the discipline the runtime suite already states — local results are ignored, reviewed bundles are copied in intentionally — and the same record carries the fast-path proof: `normal-read` and `fast-read` run the same read-only task inside one recording, and `fastPathComparison` must show fewer model round trips, tool calls and nd-core IPC crossings per verified completion, at no completion-rate cost and under the escalation budget. `pnpm bench:tasks:check` re-derives that comparison from the raw samples offline — no Electron, no provider — so a rotted or hand-edited baseline fails, and a run may only replace the baseline when it passes its own verdict.
+
+The committed baseline was re-recorded on 2026-09-23 ([task 0016](../docs/tasks/done/done-0016-agent-task-baseline-fast-path-budgets.md)), and its measured delta per verified completion is model round trips 2 → 0, model-visible tool calls 3 → 0, nd-core IPC crossings 12.5 → 9, completion rate unchanged at 1.0, escalations 0. Its `artifact` field records that the raw bundle is a local recording (`ciRun: null`) because no runner produced it.
 
 ## Full MVP evidence
 
@@ -92,13 +118,16 @@ Production evidence still fails closed on identity:
 
 Historical same-machine legacy-vs-Rust `electron-responsiveness.json` files remain comparable with `pnpm bench:compare`. They are historical migration evidence, not a prerequisite for current release recording.
 
-Runtime baselines follow [the baseline policy](../docs/plan/performance-baseline-policy.md). The full recorder uses at least 10 measured runs for startup and short-latency evidence and reports p50/p95.
+Runtime baselines follow [the baseline policy](../docs/plan/performance-baseline-policy.md): the reviewed summary is committed per reference machine (`benchmarks/baselines/win11-x64.json`, recorded 2026-09-23 by [task 0015](../docs/tasks/done/done-0015-runtime-evidence-baseline.md)), the raw bundle stays gitignored, and the baseline's `artifact` field says where that bundle lives. The full recorder uses at least 10 measured runs for startup and short-latency evidence and reports p50/p95.
 
-## GitHub Actions checkpoint runs
+## Validation while GitHub Actions is parked
 
-Draft PR commits intentionally skip the heavy CI jobs. Use **Actions → ci → Run workflow** for checkpoints:
+GitHub Actions is intentionally parked while runtime v2 is being stabilized.
+Do not treat a missing runner result as waived evidence: run the local handoff in
+[task 0018](../docs/tasks/wip-0018-rust-parallel-runtime-v2.md), including
+`pnpm bench:smoke` for development and `pnpm bench:record` +
+`pnpm bench:check` on the Windows reference machine when recording reviewed
+performance evidence.
 
-- leave `full_benchmark=false` for the normal Linux validation + Windows package/smoke gates;
-- set `full_benchmark=true` for the Windows production performance evidence run only.
-
-The full benchmark job uploads `prd-0002-performance-evidence` containing the generated Markdown summary and raw JSON samples.
+The existing workflow definitions remain parked for later restoration; runtime-v2
+work does not require enabling them.

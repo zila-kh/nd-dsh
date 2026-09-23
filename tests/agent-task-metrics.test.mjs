@@ -159,8 +159,21 @@ describe('agent-task result kind', () => {
       samples: SAMPLES,
       summary: summarizeTaskSamples(SAMPLES, { wallTimeScope: 'excludes-model-latency' }),
       expectations: { checked: 0, deviations: [] },
+      fastPathComparison: {
+        status: 'pass',
+        normal: { samples: 1, completed: 1, completionRate: 1, modelRoundTrips: 3, toolCalls: 4, ipcCrossings: 17, escalations: 0 },
+        fast: { samples: 1, completed: 1, completionRate: 1, modelRoundTrips: 0, toolCalls: 0, ipcCrossings: 9, escalations: 0 },
+        failures: [],
+      },
     }
     expect(validateTaskMetricsResult(document)).toEqual([])
+
+    // The comparison is required, not optional: the schema tightened when the
+    // §12.4 budgets landed, and a document recorded before them must not pass.
+    const missingComparison = { ...document }
+    delete missingComparison.fastPathComparison
+    expect(validateTaskMetricsResult(missingComparison))
+      .toContainEqual(expect.stringContaining('fastPathComparison'))
 
     const broken = { ...document, summary: { ...document.summary, completionRate: 4 } }
     expect(validateTaskMetricsResult(broken)).toContainEqual(expect.stringContaining('above maximum 1'))

@@ -260,7 +260,12 @@ Run logical-session counts:
 4
 8
 10
+25
+50
+100
 ~~~
+
+`--smoke` stops at 10. Every recorded point carries the `rust-parallel-runtime-v2` scale contract, so a bundle states which grid produced it.
 
 Variants:
 - all sessions sharing one workspace,
@@ -342,7 +347,12 @@ Worker counts:
 4
 8
 10
+25
+50
+100
 ~~~
+
+`--smoke` runs 1 and 2 only. Points carry the `rust-parallel-runtime-v2` scale contract.
 
 Measure:
 - permit acquisition latency,
@@ -353,6 +363,8 @@ Measure:
 - role/team cap behavior,
 - separate review-pool behavior,
 - process count,
+- pending RPC count,
+- queued-event count and bytes,
 - core memory,
 - total child memory,
 - worktree disk growth,
@@ -519,11 +531,11 @@ Raw result bundle: <artifact/path>
 
 Numbers are generated from JSON. They are never handwritten into the PR without the matching raw result.
 
-## 12. Remaining gaps — agent-task metrics, baselines, and fast-path proof
+## 12. Gap closures — agent-task metrics, baselines, and fast-path proof
 
 Sections 1-11 describe a suite that measures the **runtime**: startup, memory, terminal, Git, event-loop lag, cancellation, packaging. That is the right layer for proving the Rust migration. It cannot measure the agent, and it cannot prove a fast-agent-path gain, because the fast path's claims are about **how many times we call the model and how many times we cross the boundary**, not how fast Rust is.
 
-Four gaps, in dependency order.
+Four gaps were identified, in dependency order; all four are addressed as of 2026-09-23, with the closure recorded in place. 12.5 and 12.6 record two further findings about coverage and the headless client.
 
 ### 12.1 Agent-task-level metrics — implemented (task 0005)
 
@@ -558,9 +570,9 @@ Decide one of:
 
 Either is defensible. Leaving it undecided is not: it is why the roadmap cannot currently show a `TS path → Rust path` or `normal loop → fast path` progression.
 
-**Decided: committed reviewed baseline** (task 0005), for the agent-task measurement. `benchmarks/baselines/agent-task-normal-loop.json` is tracked, refreshed only by `pnpm bench:tasks:baseline` in a documented PR, and verified on ordinary PRs by `pnpm bench:tasks:check` — which needs neither Electron nor a provider, recomputes the summary from the raw samples instead of trusting the stored one, and re-checks each task against the fixture's declared workload. Local run directories under `benchmark-results/` remain ignored. The runtime evidence bundle (§9) takes the same option under a separate decision and a separate file — see [performance-baseline-policy.md](performance-baseline-policy.md); the two artefacts answer different questions and are refreshed on different cadences.
+**Decided: committed reviewed baseline** (task 0005), for the agent-task measurement. `benchmarks/baselines/agent-task-normal-loop.json` is tracked, refreshed only by `pnpm bench:tasks:baseline` in a documented PR, and verified on ordinary PRs by `pnpm bench:tasks:check` — which needs neither Electron nor a provider, recomputes the summary from the raw samples instead of trusting the stored one, and re-checks each task against the fixture's declared workload. Local run directories under `benchmark-results/` remain ignored. The runtime evidence bundle (§9) takes the same option under a separate decision and a separate file — see [performance-baseline-policy.md](performance-baseline-policy.md); the two artefacts answer different questions and are refreshed on different cadences. **Both are now committed:** `benchmarks/baselines/win11-x64.json` joined the agent-task baseline on 2026-09-23 ([task 0015](../tasks/done/done-0015-runtime-evidence-baseline.md)), recorded locally because Actions is parked, so the paragraphs above describe the state before either decision landed.
 
-### 12.3 Evidence does not assert which backend produced it
+### 12.3 Evidence does not assert which backend produced it — implemented (task 0004)
 
 `benchmarks/lib/budgets.mjs` validates same-machine and full-provenance equality across the four evidence files, but it never asserts that `legacyRuntime.backend === 'legacy'` or `rustRuntime.backend === 'rust-core'`. The `backend` field is written into every result envelope and echoed by the comparator, so the data is present — it is simply never checked.
 
@@ -568,9 +580,11 @@ The only thing preventing a TS/Rust mix-up today is the hardcoded argument order
 
 Add: a backend-identity assertion per evidence file, and — because `commit`/`buildProfile` identify the repository, not the binary — a hash of the actual `nd-core` executable in the Rust evidence. Release staging already records an nd-core sha256 in the release manifest; benchmark evidence should do the same.
 
-### 12.4 There is no fast-path comparison yet, and no agent-level budgets
+**Implemented (task 0004).** `benchmarks/lib/budgets.mjs` now refuses to trust numbers before identity: `EXPECTED_BACKENDS` asserts each evidence document's `backend` label (a mismatch is reported with `kind: 'identity'`, never as a budget violation), and `core-binary-identity` requires every document to name the same `nd-core` sha256 — a missing hash fails the check, so a mix-up between two nd-core builds cannot pass either. `benchmarks/verify-evidence-identity.mjs` proves both gates fail closed by feeding them a deliberately swapped and mislabelled bundle, and it runs as its own CI step. Release evidence is Rust-only since task 0007 removed the legacy switch, so the historical `legacyRuntime.backend === 'legacy'` label is no longer a release prerequisite; legacy-vs-Rust bundles remain usable through `bench:compare`.
 
-A normal-loop baseline now exists (12.2), so the missing half is the fast path itself: nothing distinguishes a normal agent loop run from a fast-path run, because the fast path does not exist yet (see [agent-fast-path.md](agent-fast-path.md)). When it does, §8-style relative budgets apply to the agent metrics as well, measured as counters per *verified completion* so that doing less cannot read as doing better:
+### 12.4 Agent-level fast-path budgets — implemented (task 0008 / wired 2026-09-23)
+
+A normal-loop baseline now exists (12.2), so the missing half was the fast path itself: nothing distinguishes a normal agent loop run from a fast-path run while the fast path does not exist (see [agent-fast-path.md](agent-fast-path.md)). Now that it does, §8-style relative budgets apply to the agent metrics as well, measured as counters per *verified completion* so that doing less cannot read as doing better:
 
 - model round trips per completed task: must decrease, on the same fixture set;
 - IPC crossings per completed task: must decrease, or the composite-operation work is unjustified;
@@ -578,6 +592,10 @@ A normal-loop baseline now exists (12.2), so the missing half is the fast path i
 - escalation rate: must stay under a budget, or the cheap tier is not paying for itself and the fast path should be reconsidered rather than tuned (see [agent-fast-path.md](agent-fast-path.md) §7).
 
 One legitimate exception to §2's "no live-model dependency": a *task-cost* measurement that counts round trips, tool calls, and bytes may include a live-model fixture, because those counters do not depend on model latency. Wall-time claims still may not: the committed baseline is recorded with the offline fixture and is stamped `wallTimeScope: excludes-model-latency`, so its wall times are product overhead and not a user-facing latency claim.
+
+**Status (2026-09-23): the budgets are wired.** [Task 0008](../tasks/done/done-0008-agent-fast-path.md) shipped the typed action space, the deterministic-first router with fail-closed escalation, and the matched `normal-read` / `fast-read` arms; enforcement landed with them in `compareFastPath()` (`benchmarks/task-metrics.mjs`) and is a required part of a recorded result since this reconciliation. A run fails its own verdict when the fast arm's means per *verified completion* do not reduce model round trips, model-visible tool calls or nd-core IPC crossings, when its completion rate drops, or when its escalations per task exceed the 0.1 budget. Both arms are recorded inside one run, so the difference is attributable to the router rather than to drift between recording days; the committed baseline keeps its role as the reviewed record of the normal loop. `pnpm bench:tasks:check` re-derives the comparison from the stored raw samples offline, so a rotted or hand-edited baseline fails without starting Electron, `--baseline` refuses to write when the run's own verdict fails, and the schema requires the comparison so a result recorded before it cannot pass as a baseline.
+
+**Recorded (2026-09-23, [task 0016](../tasks/done/done-0016-agent-task-baseline-fast-path-budgets.md)):** the baseline was re-recorded against this comparison on the reference machine, and the measured delta per verified completion is model round trips 2 → 0, model-visible tool calls 3 → 0, nd-core IPC crossings 12.5 → 9, completion rate unchanged at 1.0, escalations 0. `pnpm bench:tasks:check` re-derives every one of those numbers from the committed raw samples offline, so the claim is reproducible without Electron and without a provider. The same recording settles [agent-fast-path.md](agent-fast-path.md) §9.1: the decision tier makes no core request of its own, so the router stays in main-process TypeScript.
 
 ### 12.5 CI does not enforce budgets on ordinary PRs
 
@@ -619,6 +637,8 @@ Why this matters beyond a red gate:
 Fix direction: give the benchmark client a minimal terminal responder (answer DSR, and any other query the fixture encounters) rather than teaching the PTY to work around a client that does not behave like a terminal. Then add `bench:smoke` to a Windows CI job — the fix alone does not help if the platform that needs it still never runs it.
 
 This is also a caution for §12.1: agent-task metrics must be collected through a client that behaves like a real consumer, or the numbers describe the harness instead of the product. The agent-task measurement takes that caution literally by not going through `benchmarks/lib/core-rpc.mjs` at all: it drives the real desktop app, whose terminal pane, engines, organization records and task worktrees are the production ones. The headless core client stays where it belongs — protocol and throughput measurements — so a client-side handshake gap can never quietly become a task-cost number.
+
+**Implemented (task 0004).** The narrow fix was right and is in: `benchmarks/lib/core-rpc.mjs` answers the ConPTY handshake through `attachTerminalHandshake`. The stronger guarantee is `benchmarks/terminal-handshake-proof.mjs`, which proves both directions against a real nd-core — with the responder the fixture completes, and with `respond: false` the client fails loudly inside the grace window naming the query and the reply counts instead of hanging for the fixture's 30 s — so the silent-timeout shape this section describes cannot return unnoticed. `Benchmark smoke on Windows` and `Prove the terminal handshake fails loudly` now run in the Windows packaging job, which is what makes a Windows terminal claim backable by a Windows artifact.
 
 ### 12.7 Runtime-contract measurements (task 0006) — implemented
 

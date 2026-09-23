@@ -1,6 +1,5 @@
 import 'dotenv/config'
 import { app, BrowserWindow, crashReporter, dialog, Menu, type MenuItemConstructorOptions } from 'electron'
-import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
 import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
@@ -11,8 +10,10 @@ import { IPC, type DshEventFrame } from '../shared/contracts.js'
 import { DESIGN_IPC } from '../shared/design.js'
 import { ORGANIZATION_IPC } from '../shared/organization.js'
 import { TERMINAL_IPC } from '../shared/terminal.js'
-import { projectRoot } from './app-paths.js'
+import { bundledResourceRoot, projectRoot } from './app-paths.js'
 import { BrowserController } from './browser/browser-controller.js'
+import { BrowserCompanionService } from './browser-companion/browser-companion-service.js'
+import { registerBrowserCompanionIpc } from './browser-companion/ipc.js'
 import { stopAppOwnedBrowserDaemons } from './browser/agent-browser-client.js'
 import { DEFAULT_BROWSER_URL } from './browser/browser-url.js'
 import { CapabilityAssignmentStore } from './capabilities/capability-assignment-store.js'
@@ -21,8 +22,9 @@ import { CapabilityStatusStore } from './capabilities/capability-status-store.js
 import { createHarnessSourceSetupAdapters } from './capabilities/harness-runtime-setup.js'
 import { ExternalElementStage, RecentPickStore } from './capture/external-inspect.js'
 import { CoreClient } from './core/core-client.js'
-import { createCoreSpawn } from './core/core-child-process.js'
+import { createCoreSpawn, stopCoreManagedChildProcess } from './core/core-child-process.js'
 import { createCorePtySpawner } from './core/core-pty.js'
+import { CoreSessionJournalStore } from './core/core-session-journal.js'
 import { createCoreWorkspaceFileSystem } from './core/core-workspace.js'
 import { createCoreWorktreeGit } from './core/core-worktree-git.js'
 import { DesignService } from './design/design-service.js'
@@ -79,6 +81,7 @@ app.enableSandbox()
 let mainWindow: BrowserWindow | undefined
 let activeHarness: HarnessService | undefined
 let activeBrowser: BrowserController | undefined
+let activeBrowserCompanion: BrowserCompanionService | undefined
 let activeCodexEngine: CodexCliEngine | undefined
 let activeAntigravityEngine: AntigravityEngine | undefined
 let activeZcodeEngine: ZcodeCliEngine | undefined
@@ -193,6 +196,14 @@ async function createWindow(cdpPort: number): Promise<void> {
 
   const browser = new BrowserController(window, cdpPort, projectRoot(), { reservedOrigin })
   activeBrowser = browser
+  const browserCompanion = new BrowserCompanionService({
+    dataPath: userData,
+    runtimePath: join(bundledResourceRoot(), 'scripts', 'nd-browser-companion-runtime.mjs'),
+  })
+  await browserCompanion.start().catch((error) => {
+    console.warn('Browser companion is unavailable; the embedded browser remains usable:', error instanceof Error ? error.message : String(error))
+  })
+  activeBrowserCompanion = browserCompanion
   const dshSurface = new DshSurfaceController(window)
   const externalElements = new ExternalElementStage()
   const recentPicks = new RecentPickStore()
@@ -228,8 +239,21 @@ async function createWindow(cdpPort: number): Promise<void> {
       })
   })
   const engineSpawn = createCoreSpawn(core, executionCoordinator)
+  // Project dev servers and machine verification are ND-owned system work,
+  // not engine children: keep them Rust-owned without inheriting a worker permit.
+  const unscopedCoreSpawn = createCoreSpawn(core)
   const git = new GitService(workspace, { core })
-  const harness = new HarnessService(workspace, browser, providers, externalElements, sessionArchive, usageLedger)
+  const harnessJournal = new CoreSessionJournalStore(core)
+  const directEngineJournal = new CoreSessionJournalStore(core, {
+    maxEvents: 500,
+    maxBytes: 2 * 1024 * 1024,
+  })
+  const harness = new HarnessService(workspace, browser, providers, externalElements, sessionArchive, usageLedger, harnessJournal)
+  const disposeHarnessJournalRecovery = core.onEvent('core.ready', () => {
+    void harness.rehydrateEventJournal().catch((error) => {
+      console.error('Failed to rebuild Harness history after ND Core restart:', error)
+    })
+  })
   const codexEngine = new CodexCliEngine({ log: (line) => console.log(line), spawnProcess: engineSpawn })
   activeCodexEngine = codexEngine
   const antigravityEngine = new AntigravityEngine({ log: (line) => console.log(line), spawnProcess: engineSpawn })
@@ -247,7 +271,7 @@ async function createWindow(cdpPort: number): Promise<void> {
     git,
     storePath: join(userData, 'chatgpt-web-sessions.json'),
     log: (line) => console.warn(line),
-  }, zcodeEngine, piEngine, cursorEngine, claudeEngine, engineSpawn)
+  }, zcodeEngine, piEngine, cursorEngine, claudeEngine, engineSpawn, directEngineJournal)
   activeEngineRouter = engineRouter
   const projectWorkspace = new ProjectWorkspaceCoordinator(
     organizationStore,
@@ -284,7 +308,8 @@ async function createWindow(cdpPort: number): Promise<void> {
   // never load ND-DSH's own preview recursively inside the browser pane.
   const projectRuntime = new ProjectRuntimeService({
     store: organizationStore,
-    spawnProcess: spawn,
+    spawnProcess: unscopedCoreSpawn,
+    stopProcess: stopCoreManagedChildProcess,
     reservedOrigin,
     onTargetReady: (_projectId, url) => {
       void browser.navigate(url).catch((error) => {
@@ -300,11 +325,15 @@ async function createWindow(cdpPort: number): Promise<void> {
   // engine router admits them by the exact roots ND created — never by a path
   // shape a caller could construct.
   engineRouter.setWorktreeGuard((cwd) => taskWorktrees.ownsRoot(cwd))
-  const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter, projectRuntime, capabilities, executionCoordinator, taskWorktrees, core)
+  const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter, projectRuntime, capabilities, executionCoordinator, taskWorktrees, core, { spawnProcess: unscopedCoreSpawn, stopProcess: stopCoreManagedChildProcess })
   const approvalGate = new OrganizationApprovalGate(organizationStore, harness)
   const qa = new QaService()
   qa.setProjectRoot(workspace.state().root)
   const disposeIpc = registerIpc({ window, preloadPath: preload, browser, dshSurface, engines, engineRouter, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, qa, sessionArchive, usageLedger, capabilities, organizationStore })
+  const disposeBrowserCompanionIpc = registerBrowserCompanionIpc(window, browserCompanion)
+  browserCompanion.setListener((state) => {
+    if (!window.isDestroyed()) window.webContents.send('browser-companion:changed-event', state)
+  })
   const disposeTerminalIpc = registerTerminalIpc(window, terminalManager)
   const disposeDesignIpc = registerDesignIpc(window, design, ndPencil)
   const disposeOrganizationIpc = registerOrganizationIpc(window, organizationStore, organization, projectWorkspace, projectRuntime, executionCoordinator)
@@ -571,9 +600,13 @@ async function createWindow(cdpPort: number): Promise<void> {
     workspace.setStateListener(undefined)
     ndPencil.setStateListener(undefined)
     disposeOrganizationIpc()
+    disposeBrowserCompanionIpc()
+    browserCompanion.setListener(undefined)
     disposeDesignIpc()
     disposeTerminalIpc()
     disposeIpc()
+    disposeCoreReady()
+    disposeHarnessJournalRecovery()
     void qa.dispose()
     void projectRuntime.dispose()
     design.destroy()
@@ -581,6 +614,7 @@ async function createWindow(cdpPort: number): Promise<void> {
     void ndPencil.destroy()
     if (activeEngineRouter === engineRouter) { activeEngineRouter = undefined; beginEngineRouterClose(engineRouter) }
     if (activeBrowser === browser) { activeBrowser = undefined; beginBrowserClose(browser) }
+    if (activeBrowserCompanion === browserCompanion) { activeBrowserCompanion = undefined; beginBrowserCompanionClose(browserCompanion) }
     dshSurface.destroy()
     if (mainWindow === window) mainWindow = undefined
     if (activeHarness === harness) activeHarness = undefined
@@ -630,6 +664,11 @@ app.on('before-quit', (event) => {
     const browser = activeBrowser
     activeBrowser = undefined
     beginBrowserClose(browser)
+  }
+  if (activeBrowserCompanion) {
+    const browserCompanion = activeBrowserCompanion
+    activeBrowserCompanion = undefined
+    beginBrowserCompanionClose(browserCompanion)
   }
   if (activeCodexEngine) {
     const codexEngine = activeCodexEngine
@@ -751,6 +790,10 @@ app.on('window-all-closed', () => {
 
 function beginBrowserClose(browser: BrowserController): void {
   trackClose(browser.destroy().catch((error) => console.error('Failed to close the browser integration cleanly:', error)))
+}
+
+function beginBrowserCompanionClose(browserCompanion: BrowserCompanionService): void {
+  trackClose(browserCompanion.stop().catch((error) => console.error('Failed to close the browser companion cleanly:', error)))
 }
 
 function beginExecutionCoordinatorClose(coordinator: ExecutionCoordinator): void {

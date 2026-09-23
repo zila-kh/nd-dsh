@@ -628,6 +628,7 @@ export interface DesktopApi {
     /** Copy the cropped element screenshot (if captured) to the clipboard. */
     copyElementShot(pickId: string): Promise<boolean>
   }
+  browserCompanion: import('./browser-companion.js').BrowserCompanionDesktopApi
   browser: {
     state(): Promise<BrowserState>
     setBounds(bounds: BrowserBounds): Promise<void>

@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "ND Browser Companion",
+  "version": "0.1.0",
+  "description": "Connect your existing Chromium browser profile and tabs to ND-DSH.",
+  "permissions": [
+    "activeTab",
+    "nativeMessaging",
+    "scripting",
+    "sidePanel",
+    "storage",
+    "tabs"
+  ],
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_title": "ND Browser Companion"
+  }
+}

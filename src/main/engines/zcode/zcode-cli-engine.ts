@@ -33,6 +33,7 @@ const RUN_MODE_ZCODE_MODE: Record<ZcodeRunMode, string> = {
 }
 
 const TRANSCRIPT_EVENT_TYPES = new Set(['user/message', 'assistant/message', 'agent/reasoning', 'tool/call', 'tool/result'])
+const LOCAL_TRANSCRIPT_EVENTS = 32
 const RESULT_SNIPPET_MAX_CHARS = 4_000
 
 interface TurnOutcome {
@@ -713,7 +714,7 @@ export class ZcodeCliEngine {
     }
     if (TRANSCRIPT_EVENT_TYPES.has(envelope.type)) {
       session.transcript.push(envelope)
-      if (session.transcript.length > 500) session.transcript.splice(0, session.transcript.length - 500)
+      if (session.transcript.length > LOCAL_TRANSCRIPT_EVENTS) session.transcript.splice(0, session.transcript.length - LOCAL_TRANSCRIPT_EVENTS)
     }
     this.emitFrame({ kind: 'session-event', sessionId: session.sessionId, event: envelope })
   }

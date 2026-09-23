@@ -425,6 +425,36 @@ mod tests {
     }
 
     #[test]
+    fn rejects_a_byte_string_inside_params_instead_of_guessing() {
+        // Request params decode into a JSON value, which has no byte-string shape:
+        // a MessagePack `bin` inside params fails the whole frame. Senders must
+        // therefore encode retained bytes as text, the way the desktop's
+        // `terminal.create` call sends its base64 tail.
+        #[derive(serde::Serialize)]
+        struct BinParamsFrame<'a> {
+            version: u16,
+            kind: &'a str,
+            id: &'a str,
+            method: &'a str,
+            #[serde(with = "serde_bytes")]
+            params: Vec<u8>,
+        }
+        let payload = rmp_serde::to_vec_named(&BinParamsFrame {
+            version: PROTOCOL_VERSION,
+            kind: "request",
+            id: "request-bin-params",
+            method: "terminal.create",
+            params: vec![0x00, 0x01, 0xff],
+        })
+        .unwrap();
+        let mut bytes = Vec::with_capacity(payload.len() + 4);
+        bytes.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        bytes.extend_from_slice(&payload);
+        let error = read_request(&mut Cursor::new(bytes)).unwrap_err();
+        assert!(format!("{error:#}").contains("decode MessagePack request"));
+    }
+
+    #[test]
     fn rejects_malformed_messagepack_and_wrong_protocol_version() {
         let mut malformed = 1u32.to_be_bytes().to_vec();
         malformed.push(0xc1);

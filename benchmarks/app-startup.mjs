@@ -34,10 +34,14 @@ for (let index = 0; index < runs; index += 1) {
       },
     })
     const status = await new Promise((resolvePromise, reject) => {
+      // The portable target re-extracts its payload into a fresh temp directory on
+      // every launch, so wall clock here is dominated by extraction, not by the app
+      // (measured ~23 s of extraction against ~0.95 s to the `usable` mark). This
+      // timer only kills a hang; the recorded sample is the in-process mark.
       const timer = setTimeout(() => {
         try { child.kill() } catch {}
         reject(new Error('packaged startup benchmark timed out'))
-      }, 30_000)
+      }, 120_000)
       child.once('error', (error) => { clearTimeout(timer); reject(error) })
       child.once('exit', (code) => { clearTimeout(timer); resolvePromise(code) })
     })

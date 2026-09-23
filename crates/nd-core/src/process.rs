@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
@@ -24,6 +24,8 @@ pub struct SpawnParams {
     #[serde(default)]
     pub env: HashMap<String, String>,
     pub inherit_env: Option<bool>,
+    #[serde(default)]
+    pub verbatim_args: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -133,6 +135,22 @@ impl ProcessManager {
         }
 
         let mut command = Command::new(&params.command);
+        // Shell wrappers (`cmd.exe /d /s /c "..."`) rely on the command line
+        // reaching CreateProcess byte-for-byte. The default escaping rewrites
+        // inner quotes the way cmd.exe cannot parse, so verbatim delivery is
+        // required for that call shape.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            if params.verbatim_args {
+                for arg in &params.args {
+                    command.raw_arg(arg);
+                }
+            } else {
+                command.args(&params.args);
+            }
+        }
+        #[cfg(not(windows))]
         command.args(&params.args);
         command.stdin(Stdio::piped());
         command.stdout(Stdio::piped());
@@ -210,12 +228,10 @@ impl ProcessManager {
             );
         }
 
-        if let Some(stdout) = stdout {
-            spawn_reader(Arc::clone(&self.writer), id.clone(), "stdout", stdout);
-        }
-        if let Some(stderr) = stderr {
-            spawn_reader(Arc::clone(&self.writer), id.clone(), "stderr", stderr);
-        }
+        let stdout_done = stdout
+            .map(|stdout| spawn_reader(Arc::clone(&self.writer), id.clone(), "stdout", stdout));
+        let stderr_done = stderr
+            .map(|stderr| spawn_reader(Arc::clone(&self.writer), id.clone(), "stderr", stderr));
 
         let manager = Arc::clone(self);
         let wait_id = id.clone();
@@ -234,6 +250,18 @@ impl ProcessManager {
                     }
                 };
                 if let Some(status) = status {
+                    // stdout/stderr pipes usually reach EOF immediately when the
+                    // child exits. Give both reader threads one bounded window to
+                    // enqueue their final output before process.exit; never join
+                    // indefinitely because a descendant may have inherited a pipe.
+                    let drain_deadline = Instant::now() + Duration::from_millis(250);
+                    for done in [&stdout_done, &stderr_done].into_iter().flatten() {
+                        let remaining = drain_deadline.saturating_duration_since(Instant::now());
+                        if remaining.is_zero() {
+                            break;
+                        }
+                        let _ = done.recv_timeout(remaining);
+                    }
                     let record = {
                         let Ok(mut processes) = manager.processes.lock() else {
                             return;
@@ -401,7 +429,8 @@ fn spawn_reader<R: Read + Send + 'static>(
     process_id: String,
     stream: &'static str,
     mut reader: R,
-) {
+) -> mpsc::Receiver<()> {
+    let (done_tx, done_rx) = mpsc::sync_channel(1);
     thread::spawn(move || {
         let mut buffer = vec![0u8; 16 * 1024];
         loop {
@@ -426,7 +455,9 @@ fn spawn_reader<R: Read + Send + 'static>(
                 }
             }
         }
+        let _ = done_tx.send(());
     });
+    done_rx
 }
 
 pub fn filtered_environment() -> impl Iterator<Item = (String, String)> {
@@ -476,5 +507,52 @@ mod tests {
         assert!(looks_secret("my_private_key"));
         assert!(!looks_secret("PATH"));
         assert!(!looks_secret("TERM"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn verbatim_args_deliver_quoted_shell_commands_intact() {
+        let manager = Arc::new(ProcessManager::new(
+            Arc::new(ProtocolWriter::new()),
+            Arc::new(Scheduler::new()),
+        ));
+        let dir = std::env::temp_dir().join(format!("nd-core-verbatim-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let marker = dir.join("marker.txt");
+        let inner = format!("echo \"quoted ok\" > \"{}\"", marker.display());
+        manager
+            .spawn(SpawnParams {
+                id: None,
+                permit_id: None,
+                command: std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_owned()),
+                args: vec![
+                    "/d".to_owned(),
+                    "/s".to_owned(),
+                    "/c".to_owned(),
+                    format!("\"{inner}\""),
+                ],
+                cwd: Some(dir.display().to_string()),
+                env: HashMap::new(),
+                inherit_env: Some(true),
+                verbatim_args: true,
+            })
+            .expect("spawn verbatim cmd.exe command");
+
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut observed = String::new();
+        while Instant::now() < deadline {
+            if let Ok(text) = std::fs::read_to_string(&marker) {
+                observed = text.trim().to_owned();
+                if observed == "\"quoted ok\"" {
+                    break;
+                }
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        assert_eq!(
+            observed, "\"quoted ok\"",
+            "quoted cmd.exe command was not delivered intact"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

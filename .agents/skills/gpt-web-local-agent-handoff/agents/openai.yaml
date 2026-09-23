@@ -1,0 +1,3 @@
+interface:
+  display_name: "GPT-Web Local Agent Handoff"
+  short_description: "Create a complete repo handoff for any local coding agent"

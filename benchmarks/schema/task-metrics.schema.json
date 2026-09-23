@@ -18,7 +18,8 @@
     "passes",
     "samples",
     "summary",
-    "expectations"
+    "expectations",
+    "fastPathComparison"
   ],
   "properties": {
     "schemaVersion": { "const": 1 },
@@ -220,7 +221,42 @@
         }
       }
     },
-    "notes": { "type": "array", "items": { "type": "string" } }
+    "notes": { "type": "array", "items": { "type": "string" } },
+    "fastPathComparison": {
+      "type": "object",
+      "description": "The §12.4 fast-path budgets. The matched normal-read and fast-read arms are compared as means per verified completion, inside one recording; a result without a passing comparison cannot be a reviewed baseline.",
+      "required": ["status", "normal", "fast", "failures"],
+      "properties": {
+        "status": { "enum": ["pass", "fail", "not-run"] },
+        "normal": {
+          "type": "object",
+          "required": ["samples", "completed", "completionRate", "modelRoundTrips", "toolCalls", "ipcCrossings", "escalations"],
+          "properties": {
+            "samples": { "type": "integer", "minimum": 0 },
+            "completed": { "type": "integer", "minimum": 0 },
+            "completionRate": { "type": "number", "minimum": 0, "maximum": 1 },
+            "modelRoundTrips": { "type": "number", "minimum": 0 },
+            "toolCalls": { "type": "number", "minimum": 0 },
+            "ipcCrossings": { "type": "number", "minimum": 0 },
+            "escalations": { "type": "number", "minimum": 0 }
+          }
+        },
+        "fast": {
+          "type": "object",
+          "required": ["samples", "completed", "completionRate", "modelRoundTrips", "toolCalls", "ipcCrossings", "escalations"],
+          "properties": {
+            "samples": { "type": "integer", "minimum": 0 },
+            "completed": { "type": "integer", "minimum": 0 },
+            "completionRate": { "type": "number", "minimum": 0, "maximum": 1 },
+            "modelRoundTrips": { "type": "number", "minimum": 0 },
+            "toolCalls": { "type": "number", "minimum": 0 },
+            "ipcCrossings": { "type": "number", "minimum": 0 },
+            "escalations": { "type": "number", "minimum": 0 }
+          }
+        },
+        "failures": { "type": "array", "items": { "type": "string" } }
+      }
+    }
   },
   "additionalProperties": true
 }

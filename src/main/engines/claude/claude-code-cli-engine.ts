@@ -32,6 +32,7 @@ import {
  */
 
 const RESULT_MAX_CHARS = 4_000
+const LOCAL_TRANSCRIPT_EVENTS = 32
 
 interface TurnOutcome {
   status: string
@@ -450,7 +451,7 @@ export class ClaudeCodeCliEngine {
     }
     if (TRANSCRIPT_EVENT_TYPES.has(envelope.type)) {
       session.transcript.push(envelope)
-      if (session.transcript.length > 500) session.transcript.splice(0, session.transcript.length - 500)
+      if (session.transcript.length > LOCAL_TRANSCRIPT_EVENTS) session.transcript.splice(0, session.transcript.length - LOCAL_TRANSCRIPT_EVENTS)
     }
     this.emitFrame({ kind: 'session-event', sessionId: session.sessionId, event: envelope })
   }

@@ -11,9 +11,13 @@ const harnessSource = join(root, 'vendor', 'deepseek-harness')
 const stageRoot = join(root, '.release')
 const harnessOutput = join(stageRoot, 'harness')
 const coreOutput = join(stageRoot, 'nd-core')
+const browserHostOutput = join(stageRoot, 'nd-browser-host')
 const coreBinaryName = process.platform === 'win32' ? 'nd-core.exe' : 'nd-core'
+const browserHostBinaryName = process.platform === 'win32' ? 'nd-browser-host.exe' : 'nd-browser-host'
 const coreSourceBinary = join(root, 'target', 'release', coreBinaryName)
+const browserHostSourceBinary = join(root, 'target', 'release', browserHostBinaryName)
 const coreStagedBinary = join(coreOutput, coreBinaryName)
+const browserHostStagedBinary = join(browserHostOutput, browserHostBinaryName)
 const codexOutput = join(harnessOutput, 'node_modules', '@deepseek-ai', 'dsh-subagent-codex')
 const cordisGroupOutput = join(harnessOutput, 'node_modules', '@deepseek-ai', 'cordis-plugin-group')
 const pencilBuildScript = join(root, 'scripts', 'build-nd-pencil.mjs')
@@ -27,13 +31,20 @@ assertInsideRoot(stageRoot)
 await requireFile(join(harnessSource, 'package.json'), 'Harness source manifest')
 await requireFile(join(harnessSource, 'pnpm-lock.yaml'), 'Harness lockfile')
 
-console.log('\nBuilding the ND Core release binary...')
-await run(cargo, ['build', '--release', '-p', 'nd-core'], root, harnessEnv)
+console.log('\nBuilding the ND Core and Browser Companion native host release binaries...')
+await run(cargo, ['build', '--release', '-p', 'nd-core', '-p', 'nd-browser-host'], root, harnessEnv)
 await requireFile(coreSourceBinary, 'ND Core release binary')
+await requireFile(browserHostSourceBinary, 'ND Browser Companion native host')
 await fs.rm(coreOutput, { recursive: true, force: true })
+await fs.rm(browserHostOutput, { recursive: true, force: true })
 await fs.mkdir(coreOutput, { recursive: true })
+await fs.mkdir(browserHostOutput, { recursive: true })
 await fs.copyFile(coreSourceBinary, coreStagedBinary)
-if (process.platform !== 'win32') await fs.chmod(coreStagedBinary, 0o755)
+await fs.copyFile(browserHostSourceBinary, browserHostStagedBinary)
+if (process.platform !== 'win32') {
+  await fs.chmod(coreStagedBinary, 0o755)
+  await fs.chmod(browserHostStagedBinary, 0o755)
+}
 
 // Release staging must work from a clean checkout after only the root install.
 // The Harness is a git submodule rather than a pnpm workspace member, so its
@@ -79,6 +90,11 @@ const required = [
   join(codexOutput, 'node_modules', '@openai', 'codex', 'package.json'),
   join(root, 'node_modules', 'agent-browser', 'bin', 'agent-browser.js'),
   coreStagedBinary,
+  browserHostStagedBinary,
+  join(root, 'extensions', 'browser-companion', 'manifest.json'),
+  join(root, 'extensions', 'browser-companion', 'service-worker.js'),
+  join(root, 'scripts', 'nd-browser-companion-runtime.mjs'),
+  join(root, 'scripts', 'register-browser-native-host.mjs'),
   pencilBinary,
   join(root, 'resources', 'nd-pencil', 'bin', 'web-bundle', 'op_host_web.js'),
   join(root, 'resources', 'nd-pencil', 'bin', 'web-bundle', 'op_host_web_bg.wasm'),
@@ -129,6 +145,11 @@ const manifest = {
   arch: process.arch,
   nodeRuntime: { mode: 'electron-run-as-node', electronVersion: rootManifest.devDependencies?.electron },
   ndCore: { version: rootManifest.version, protocolVersion: 1, sha256: await sha256(coreStagedBinary) },
+  browserCompanion: {
+    version: rootManifest.version,
+    protocolVersion: 1,
+    nativeHostSha256: await sha256(browserHostStagedBinary),
+  },
   harness: { version: harnessManifest.version, commit: harnessCommit },
   ndPencil: { version: pencilPin.release, commit: pencilCommit, sha256: await sha256(pencilBinary) },
   agentBrowser: { version: agentBrowserManifest.version },
@@ -137,6 +158,7 @@ await fs.writeFile(join(stageRoot, 'release-manifest.json'), `${JSON.stringify(m
 
 console.log('\nRelease runtime staged successfully.')
 console.log(`ND Core: ${rootManifest.version} / protocol 1`)
+console.log(`Browser Companion: ${rootManifest.version} / protocol 1`)
 console.log(`Harness: ${harnessManifest.version} @ ${harnessCommit.slice(0, 12)}`)
 console.log(`ND Pencil: ${pencilPin.release} @ ${pencilCommit.slice(0, 12)}`)
 console.log(`Manifest: ${join(stageRoot, 'release-manifest.json')}`)

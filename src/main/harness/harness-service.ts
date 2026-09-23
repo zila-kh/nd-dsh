@@ -25,6 +25,7 @@ import type { UsageLedger } from '../usage/usage-ledger.js'
 import { ensureProfilePluginLinks } from './profile-plugin-links.js'
 import { scopeSessionListPayload } from './session-scope.js'
 import { SessionEventHub } from './session-event-hub.js'
+import type { SessionJournalStore } from './session-journal-store.js'
 import type { WorkspaceService } from '../workspace/workspace-service.js'
 
 const COMPAT_DEFAULT_PROVIDER = 'deepseek-official'
@@ -58,7 +59,7 @@ export class HarnessService {
   private onStatusChanged?: (status: HarnessStatus) => void
   private onEvent?: (frame: DshEventFrame) => void
   private onGatewayReady?: (url: string) => void
-  private readonly eventHub = new SessionEventHub((frame) => this.handleEvent(frame))
+  private readonly eventHub: SessionEventHub
 
   constructor(
     private readonly workspace: WorkspaceService,
@@ -68,7 +69,9 @@ export class HarnessService {
     private readonly sessionArchive: SessionArchiveStore,
     /** ND's durable token accounting, folded from this service's event stream. */
     private readonly usageLedger: UsageLedger,
+    sessionJournal?: SessionJournalStore,
   ) {
+    this.eventHub = new SessionEventHub((frame) => this.handleEvent(frame), sessionJournal)
     this.statusValue = this.computeStatus('stopped')
   }
 
@@ -85,6 +88,11 @@ export class HarnessService {
 
   status(): HarnessStatus {
     return { ...this.statusValue }
+  }
+
+  /** Rebuild the volatile nd-core event journal from live Harness snapshots. */
+  async rehydrateEventJournal(): Promise<void> {
+    await this.eventHub.rehydrate()
   }
 
   /** Consume the user's cancellation intent for one session exactly once. */

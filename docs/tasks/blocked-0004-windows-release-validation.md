@@ -1,10 +1,9 @@
 # Blocked Task 0004 — Windows release validation
 
-> PRD: [PRD-0002](prd/0002-rust-sidecar-mvp-migration.md)
-> Priority: P0
-> Status: **blocked on fresh Windows release validation**
-> Owner: release validation
-> Updated: 2026-09-22
+> PRD: [PRD-0002](../prd/0002-rust-sidecar-mvp-migration.md)  
+> Priority: P0  
+> Owner: release validation  
+> Updated: 2026-09-23  
 
 ## Why this is blocked instead of WIP
 
@@ -12,17 +11,37 @@ All known implementation work owned by the former task 0004 has landed or been s
 
 The same run failed **windows-package → Verify ND Core** before Windows benchmark smoke, packaging, forced-sidecar cleanup, and packaged smoke could execute. `performance-evidence` was skipped. The current convergence branch is intentionally written with `[skip ci]` at the operator's request, so a passing Windows run cannot be manufactured or inferred here.
 
+**Update (2026-09-23):** a fresh run exists and it moved the blocker rather than clearing it. Run `35762360604` — the first run on `main` after PR #29 merged — fails `Verify ND Core` in **both** jobs (`validate` in 59 s, `windows-package` in 1m43s), so every Windows step below was skipped and no Windows evidence was produced. The cause is not Windows-specific: `crates/nd-core` was merged with unformatted, lint-failing source, which aborts `pnpm core:test` on any platform. That is a deterministic source defect, so it is claimed as [done-0012](done/done-0012-nd-core-format-lint-gate.md), exactly as the "Current implementation state" section below directs. This record stays blocked until a run gets past that gate.
+
+**Update 2 (2026-09-23):** the gate is repaired and the Windows job now reaches the steps this record has been waiting on. On run [35773266896](https://github.com/zila-kh/nd-dsh/actions/runs/35773266896) `validate` is fully green (5m19s) and `windows-package` passes `Verify ND Core`'s fmt and clippy stages before failing on a timing flake in `protocol_contract.rs`, filed as [done-0013](done/done-0013-windows-timing-flakes.md). Note that the Windows steps below did execute once, on run [35768282861](https://github.com/zila-kh/nd-dsh/actions/runs/35768282861): `Verify ND Core`, `Benchmark smoke on Windows`, and `Prove the terminal handshake fails loudly` all passed, and the job was then **canceled** by a concurrency collision — a second dispatch on the same ref — not by a failure. The portable build, forced-cleanup proof, and packaged smoke therefore still have no completed run.
+
+**Update 3 (2026-09-23):** the optional `performance-evidence` criterion has now been attempted for the first time, on run [35771982331](https://github.com/zila-kh/nd-dsh/actions/runs/35771982331). It failed at 37m24s inside `pnpm bench:record`, because the app-runtime benchmark waits for a terminal marker that its own `exit` makes unreadable. That is filed and fixed as [done-0014](done/done-0014-app-runtime-terminal-marker.md), with a local before/after reproduction. No budget could be checked because no combined `summary.json` was produced, so the committed runtime baseline described in [performance-baseline-policy.md](../plan/performance-baseline-policy.md) is still unrecorded.
+
+**Update 4 (2026-09-23): CI parked at the operator's direction.** GitHub Actions is no longer in use — the operator renamed `.github/` to `.github-bk/` (`2ff4a3c`, merged as `8fd7c16`) to conserve compute until the product is stable enough to justify it — so this record's exit criteria are deferred rather than pursued. Nothing is waived, and renaming the folder back restores the workflows unchanged. Where the implementation stands, all of it verified locally:
+
+| Criterion | State |
+| --- | --- |
+| Windows run completes `Verify ND Core` | **Passed on a runner** — run [35776684225](https://github.com/zila-kh/nd-dsh/actions/runs/35776684225) `windows-package`, after [done-0012](done/done-0012-nd-core-format-lint-gate.md) and [done-0013](done/done-0013-windows-timing-flakes.md) |
+| Windows benchmark smoke + terminal handshake proof | **Passed on a runner** — same job |
+| Portable build + forced-sidecar cleanup proof | Not completed — the job was canceled when Actions was parked mid-build; `pnpm dist:win:portable` and the cleanup receipt were verified locally on 2026-09-21 |
+| Packaged core / terminal / Git smoke | Not completed — needs the same job to reach it |
+| Optional performance-evidence bundle | **Recorded locally, runner output still open** — the first attempt (run `35771982331`) failed on [done-0014](done/done-0014-app-runtime-terminal-marker.md), that defect was fixed, and the recording then completed on the reference machine as [done-0015](done/done-0015-runtime-evidence-baseline.md) with the committed baseline `benchmarks/baselines/win11-x64.json`. What is still missing is the *runner-produced* bundle and its `artifact` URL |
+
+The last three need a Windows runner and cannot be satisfied on a dev machine, so they are the checklist for the first run after the workflows are restored.
+
+**Update 5 (2026-09-23): the evidence half of this record is now produced locally, and doing it exposed five more defects that no run had reached.** With Actions parked, the committed runtime baseline could not wait for a runner, so it was recorded on the reference machine end to end: bundle `benchmark-results/2026-09-23T05-48-13-222Z-win32-x64/`, `pnpm bench:check` green (21/21 checks), reviewed summary committed as [`benchmarks/baselines/win11-x64.json`](../../benchmarks/baselines/win11-x64.json). Getting there required fixing the VS2019/MSVC toolchain (Skia prebuilts are VS2022-built and would not link), a packaged-startup watchdog that was timing the portable self-extraction, an event-loop budget that Windows timer quantization made unattainable by construction, a cold-start artifact in the first nd-core spawn, and a recorder that hashed the debug sidecar while measuring the release one — all recorded in [done-0015](done/done-0015-runtime-evidence-baseline.md). What this does **not** substitute for is the criterion itself: the baseline's `artifact.ciRun` is `null` because no runner produced it, and `benchmark-results/` is gitignored, so the raw bundle exists only on the reference machine.
+
 ## Exit criteria
 
 - [ ] A Windows run completes `Verify ND Core`.
 - [ ] Windows benchmark smoke + terminal handshake proof complete.
 - [ ] Windows portable build and forced-sidecar cleanup proof complete.
 - [ ] Packaged Rust core / terminal / Git smoke completes.
-- [ ] The optional full performance-evidence workflow is recorded when release evidence is requested.
+- [ ] The optional full performance-evidence workflow is recorded when release evidence is requested. — A complete bundle and committed baseline exist from a **local** recording ([done-0015](done/done-0015-runtime-evidence-baseline.md)); the workflow-produced bundle is what remains.
 
 ## Current implementation state
 
-No source TODO/WIP is assigned to this record. If a fresh Windows run exposes a deterministic source defect, create/claim a new implementation task for that defect and link it here. Until then this record is a release-validation blocker, not an invitation to change code speculatively.
+The implementation side of this record is complete, and the evidence side is now complete locally too. The three defects that the failed runs exposed are closed: [done-0012](done/done-0012-nd-core-format-lint-gate.md) restored `Verify ND Core` (a formatting/lint repair only — `cargo test -p nd-core` already passed 55 tests), [done-0013](done/done-0013-windows-timing-flakes.md) removed the Windows timing assumptions the repaired gate then revealed, and [done-0014](done/done-0014-app-runtime-terminal-marker.md) fixed the app-runtime terminal marker that failed the first `performance-evidence` attempt. All three merged with PR #30 (`8fd7c16`) and are verified locally. [done-0015](done/done-0015-runtime-evidence-baseline.md) then recorded the runtime evidence bundle and the committed baseline on the reference machine, fixing the five defects that local recording exposed. What remains is exactly the runner: this record's exit criteria are testable only on a Windows runner, and Actions is parked, so they wait for the workflows to be restored rather than for more code. A further Windows-only failure at that point would be a new defect and should be filed as its own task.
 
 ## Historical detail
 
@@ -115,9 +134,9 @@ Every earlier step passes — including Benchmark smoke, Migration unit tests, U
 
 ## 4. Evidence integrity — baselines, backend identity, binary hash
 
-Three holes weaken results the suite already produces. All are described in [performance-benchmark-suite.md §12](../plan/performance-benchmark-suite.md#12-remaining-gaps--agent-task-metrics-baselines-and-fast-path-proof).
+Three holes weaken results the suite already produces. All are described in [performance-benchmark-suite.md §12](../plan/performance-benchmark-suite.md#12-gap-closures--agent-task-metrics-baselines-and-fast-path-proof).
 
-1. **No committed baseline.** `benchmark-results/` is gitignored and no baseline JSON is tracked, so "before → after" has nowhere to live and historical claims depend on someone still having the old bundle on disk. — **Decided:** one committed, reviewed summary per reference machine under `benchmarks/baselines/`, raw bundles attached to the run that produced them; reasoning, contents and refresh protocol in [performance-baseline-policy.md](../plan/performance-baseline-policy.md). The first runtime baseline can only be recorded once the `performance-evidence` job completes.
+1. **No committed baseline.** `benchmark-results/` is gitignored and no baseline JSON is tracked, so "before → after" has nowhere to live and historical claims depend on someone still having the old bundle on disk. — **Decided and now recorded:** one committed, reviewed summary per reference machine under `benchmarks/baselines/`, raw bundles attached to the run that produced them; reasoning, contents and refresh protocol in [performance-baseline-policy.md](../plan/performance-baseline-policy.md). `benchmarks/baselines/win11-x64.json` was recorded locally on 2026-09-23 ([done-0015](done/done-0015-runtime-evidence-baseline.md)); the runner-produced bundle that fills in its `artifact` URL still requires the `performance-evidence` job.
 2. **Evidence never asserts which backend produced it.** `benchmarks/lib/budgets.mjs` checks same-machine and full-provenance equality but never asserts `backend === 'legacy'` versus `'rust-core'`. A swapped or mislabelled pair would satisfy every existing gate and could pass the relative budgets. — **Closed:** the `backend-identity` gate requires each document's recorded backend to match the run that produced it.
 3. **The Rust binary is not identified.** Evidence compares `commit` and `buildProfile`, which identify the repository, not the executable that ran. — **Closed:** `results.mjs` records `ndCore.sha256` (hashed from the binary the run measures, or taken from the staged release manifest for the packaged step), and the `core-binary-identity` gate requires one executable across the core suite, the Rust runtime and the packaged evidence.
 
