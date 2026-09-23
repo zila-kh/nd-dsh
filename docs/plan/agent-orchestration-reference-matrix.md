@@ -1,7 +1,7 @@
 # Agent orchestration reference matrix
 
 Status: maintained research/reference document  
-Updated: 2026-09-23
+Updated: 2026-09-24
 
 This file preserves the open-source systems explicitly studied while designing ND's multi-worker/company execution model. It is not a ranking and is not a claim that any project has a fixed architecture forever. Re-check the pinned source before using an observation for implementation or benchmark conclusions.
 
