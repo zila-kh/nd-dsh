@@ -395,29 +395,31 @@ export class OrganizationOrchestrator {
 
       const workflow = await this.workflowKinds(context.project.id)
       if (!workflow.has('review') && taskWorktree) {
-        const integrationKey = `integration:${context.task.id}:${run.id}`
-        await this.journalEffect({
-          kind: 'integration',
-          state: 'intent',
-          companyId: context.company.id,
-          projectId: context.project.id,
-          taskId: context.task.id,
-          runId: run.id,
-          idempotencyKey: integrationKey,
-        })
+        const integrationKey = `integration:${context.task.id}:${checkpointHead ?? run.id}`
         try {
-          const integrated = await this.taskWorktrees.integrate(context.project.workspacePath, context.task.id)
-          await this.journalEffect({
-            kind: 'integration',
-            state: 'complete',
+          const recoveredHead = await this.beginIntegrationEffect({
             companyId: context.company.id,
             projectId: context.project.id,
             taskId: context.task.id,
             runId: run.id,
-            resourceId: integrated.head,
             idempotencyKey: integrationKey,
           })
-          await this.store.markIntegrated(context.task.id, integrated.head)
+          if (recoveredHead) {
+            await this.store.markIntegrated(context.task.id, recoveredHead)
+          } else {
+            const integrated = await this.taskWorktrees.integrate(context.project.workspacePath, context.task.id)
+            await this.journalEffect({
+              kind: 'integration',
+              state: 'complete',
+              companyId: context.company.id,
+              projectId: context.project.id,
+              taskId: context.task.id,
+              runId: run.id,
+              resourceId: integrated.head,
+              idempotencyKey: integrationKey,
+            })
+            await this.store.markIntegrated(context.task.id, integrated.head)
+          }
         } catch (cause) {
           await this.journalEffect({
             kind: 'integration',
@@ -768,29 +770,31 @@ export class OrganizationOrchestrator {
         }
         const workflow = await this.workflowKinds(run.projectId)
         if (!workflow.has('review') && worktree) {
-          const integrationKey = `integration:${run.taskId}:${run.id}`
-          await this.journalEffect({
-            kind: 'integration',
-            state: 'intent',
-            companyId: context.company.id,
-            projectId: context.project.id,
-            taskId: run.taskId,
-            runId: run.id,
-            idempotencyKey: integrationKey,
-          })
+          const integrationKey = `integration:${run.taskId}:${checkpointHead ?? run.id}`
           try {
-            const integrated = await this.taskWorktrees.integrate(context.project.workspacePath, run.taskId)
-            await this.journalEffect({
-              kind: 'integration',
-              state: 'complete',
+            const recoveredHead = await this.beginIntegrationEffect({
               companyId: context.company.id,
               projectId: context.project.id,
               taskId: run.taskId,
               runId: run.id,
-              resourceId: integrated.head,
               idempotencyKey: integrationKey,
             })
-            await this.store.markIntegrated(run.taskId, integrated.head)
+            if (recoveredHead) {
+              await this.store.markIntegrated(run.taskId, recoveredHead)
+            } else {
+              const integrated = await this.taskWorktrees.integrate(context.project.workspacePath, run.taskId)
+              await this.journalEffect({
+                kind: 'integration',
+                state: 'complete',
+                companyId: context.company.id,
+                projectId: context.project.id,
+                taskId: run.taskId,
+                runId: run.id,
+                resourceId: integrated.head,
+                idempotencyKey: integrationKey,
+              })
+              await this.store.markIntegrated(run.taskId, integrated.head)
+            }
           } catch (cause) {
             await this.journalEffect({
               kind: 'integration',
@@ -912,30 +916,32 @@ export class OrganizationOrchestrator {
       if (passed) {
         const checkpoint = this.reviewWorktrees.get(sessionId)
         if (checkpoint) {
-          const integrationKey = `integration:${taskId}:${reviewRunId}`
+          const integrationKey = `integration:${taskId}:${checkpoint.head}`
           try {
             await this.taskWorktrees.assertUnchanged(checkpoint.worktree, checkpoint.head)
-            await this.journalEffect({
-              kind: 'integration',
-              state: 'intent',
+            const recoveredHead = await this.beginIntegrationEffect({
               companyId: context.company.id,
               projectId: context.project.id,
               taskId,
               runId: reviewRunId,
               idempotencyKey: integrationKey,
             })
-            const integrated = await this.taskWorktrees.integrate(context.project.workspacePath, taskId)
-            await this.journalEffect({
-              kind: 'integration',
-              state: 'complete',
-              companyId: context.company.id,
-              projectId: context.project.id,
-              taskId,
-              runId: reviewRunId,
-              resourceId: integrated.head,
-              idempotencyKey: integrationKey,
-            })
-            await this.store.markIntegrated(taskId, integrated.head)
+            if (recoveredHead) {
+              await this.store.markIntegrated(taskId, recoveredHead)
+            } else {
+              const integrated = await this.taskWorktrees.integrate(context.project.workspacePath, taskId)
+              await this.journalEffect({
+                kind: 'integration',
+                state: 'complete',
+                companyId: context.company.id,
+                projectId: context.project.id,
+                taskId,
+                runId: reviewRunId,
+                resourceId: integrated.head,
+                idempotencyKey: integrationKey,
+              })
+              await this.store.markIntegrated(taskId, integrated.head)
+            }
           } catch (cause) {
             await this.journalEffect({
               kind: 'integration',
@@ -1088,6 +1094,39 @@ export class OrganizationOrchestrator {
   private routeEvidence(sessionId: string): string {
     const route = this.executionRoutes.get(sessionId)
     return route ? `\n\n<nd-dsh-execution-route>${JSON.stringify(route)}</nd-dsh-execution-route>` : ''
+  }
+
+  private async beginIntegrationEffect(input: {
+    companyId: string
+    projectId: string
+    taskId: string
+    runId: string
+    idempotencyKey: string
+  }): Promise<string | undefined> {
+    if (this.core) {
+      const recovery = await this.core.request<{
+        state: 'notStarted' | 'inProgress' | 'knownComplete' | 'knownFailed' | 'outcomeUncertain'
+        record?: { resourceId?: string }
+      }>('effectJournal.state', { idempotencyKey: input.idempotencyKey }, 5_000)
+      if (recovery.state === 'knownComplete') {
+        const head = recovery.record?.resourceId
+        if (!head) throw new Error('Completed integration effect has no recorded integrated head.')
+        return head
+      }
+      if (recovery.state === 'inProgress' || recovery.state === 'outcomeUncertain') {
+        throw new Error(`Integration effect ${input.idempotencyKey} requires reconciliation before retry.`)
+      }
+    }
+    await this.journalEffect({
+      kind: 'integration',
+      state: 'intent',
+      companyId: input.companyId,
+      projectId: input.projectId,
+      taskId: input.taskId,
+      runId: input.runId,
+      idempotencyKey: input.idempotencyKey,
+    })
+    return undefined
   }
 
   private async journalEffect(input: {
