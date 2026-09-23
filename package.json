@@ -43,7 +43,8 @@
     "browser:host:build": "cargo build --release -p nd-browser-host",
     "browser:host:test": "cargo fmt --check && cargo clippy -p nd-browser-host --all-targets -- -D warnings && cargo test -p nd-browser-host",
     "browser:register": "node scripts/register-browser-native-host.mjs",
-    "browser:verify": "corepack pnpm browser:host:test && corepack pnpm typecheck && corepack pnpm test -- browser-companion"
+    "browser:verify": "corepack pnpm browser:host:test && corepack pnpm typecheck && corepack pnpm test -- browser-companion",
+    "bench:browser-runtime": "node benchmarks/browser-runtime-spike.mjs"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
