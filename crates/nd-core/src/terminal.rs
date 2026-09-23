@@ -190,7 +190,10 @@ struct OutputTail {
 }
 
 impl OutputTail {
-    fn push(&mut self, seq: u64, bytes: Vec<u8>) {
+    fn push(&mut self, seq: u64, mut bytes: Vec<u8>) {
+        if bytes.len() > MAX_TERMINAL_TAIL_BYTES {
+            bytes = bytes.split_off(bytes.len() - MAX_TERMINAL_TAIL_BYTES);
+        }
         if self.chunks.is_empty() {
             self.first_retained_seq = seq;
         }
@@ -281,9 +284,6 @@ impl TerminalManager {
         }
         let spec = spec_from(&params)?;
         let shell = spec.shell.clone();
-        if params.initial_bytes.len() > MAX_TERMINAL_TAIL_BYTES {
-            bail!("initial terminal tail is too large");
-        }
         let mut initial_tail = OutputTail::default();
         if !params.initial_bytes.is_empty() {
             initial_tail.push(params.initial_seq, params.initial_bytes.clone());
