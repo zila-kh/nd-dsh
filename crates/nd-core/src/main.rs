@@ -284,7 +284,10 @@ fn dispatch(
                     run_id: acquire.run_id.clone(),
                     resource_id: acquire.permit_id.clone(),
                     idempotency_key: Some(intent_key.clone()),
-                    data: Some(json!({ "kind": acquire.kind.clone(), "pools": acquire.pools.clone() })),
+                    data: Some(json!({
+                        "kind": acquire.kind.clone(),
+                        "pools": acquire.pools.clone()
+                    })),
                 })?;
             }
             match state.scheduler.acquire(acquire) {
@@ -298,13 +301,28 @@ fn dispatch(
                             } else {
                                 nd_runtime::effect_journal::EffectState::Failed
                             },
-                            company_id: result.permit.as_ref().and_then(|permit| permit.company_id.clone()),
-                            project_id: result.permit.as_ref().and_then(|permit| permit.project_id.clone()),
-                            task_id: result.permit.as_ref().and_then(|permit| permit.task_id.clone()),
-                            run_id: result.permit.as_ref().and_then(|permit| permit.run_id.clone()),
+                            company_id: result
+                                .permit
+                                .as_ref()
+                                .and_then(|permit| permit.company_id.clone()),
+                            project_id: result
+                                .permit
+                                .as_ref()
+                                .and_then(|permit| permit.project_id.clone()),
+                            task_id: result
+                                .permit
+                                .as_ref()
+                                .and_then(|permit| permit.task_id.clone()),
+                            run_id: result
+                                .permit
+                                .as_ref()
+                                .and_then(|permit| permit.run_id.clone()),
                             resource_id: result.permit.as_ref().map(|permit| permit.id.clone()),
                             idempotency_key: Some(intent_key),
-                            data: Some(json!({ "granted": result.granted, "reason": result.reason.clone() })),
+                            data: Some(json!({
+                                "granted": result.granted,
+                                "reason": result.reason.clone()
+                            })),
                         })?;
                     }
                     to_value(result)
@@ -312,22 +330,22 @@ fn dispatch(
                 Err(error) => {
                     if journal_enabled {
                         let _ = state.effect_journal.append(EffectJournalAppendParams {
-                        record_id: None,
-                        kind: "lease.acquire".into(),
-                        state: nd_runtime::effect_journal::EffectState::Failed,
-                        company_id: None,
-                        project_id: None,
-                        task_id: None,
-                        run_id: None,
-                        resource_id: None,
-                        idempotency_key: Some(intent_key),
+                            record_id: None,
+                            kind: "lease.acquire".into(),
+                            state: nd_runtime::effect_journal::EffectState::Failed,
+                            company_id: None,
+                            project_id: None,
+                            task_id: None,
+                            run_id: None,
+                            resource_id: None,
+                            idempotency_key: Some(intent_key),
                             data: Some(json!({ "error": format!("{error:#}") })),
                         });
                     }
                     Err(error)
                 }
             }
-        },
+        }
         "scheduler.bind" => to_value(state.scheduler.bind(from_params::<BindParams>(params)?)?),
         "scheduler.heartbeat" => to_value(state.scheduler.heartbeat(from_params(params)?)?),
         "scheduler.release" => {
@@ -336,32 +354,32 @@ fn dispatch(
             let journal_enabled = state.effect_journal.stats().configured;
             if journal_enabled {
                 state.effect_journal.append(EffectJournalAppendParams {
-                record_id: None,
-                kind: "lease.release".into(),
-                state: nd_runtime::effect_journal::EffectState::Intent,
-                company_id: None,
-                project_id: None,
-                task_id: None,
-                run_id: None,
-                resource_id: Some(params.permit_id.clone()),
-                idempotency_key: Some(key.clone()),
-                data: None,
+                    record_id: None,
+                    kind: "lease.release".into(),
+                    state: nd_runtime::effect_journal::EffectState::Intent,
+                    company_id: None,
+                    project_id: None,
+                    task_id: None,
+                    run_id: None,
+                    resource_id: Some(params.permit_id.clone()),
+                    idempotency_key: Some(key.clone()),
+                    data: None,
                 })?;
             }
             state.processes.cancel_permit(&params.permit_id);
             let released = state.scheduler.release(params)?;
             if journal_enabled {
                 state.effect_journal.append(EffectJournalAppendParams {
-                record_id: None,
-                kind: "lease.release".into(),
-                state: nd_runtime::effect_journal::EffectState::Complete,
-                company_id: None,
-                project_id: None,
-                task_id: None,
-                run_id: None,
-                resource_id: None,
-                idempotency_key: Some(key),
-                data: Some(json!({ "released": released })),
+                    record_id: None,
+                    kind: "lease.release".into(),
+                    state: nd_runtime::effect_journal::EffectState::Complete,
+                    company_id: None,
+                    project_id: None,
+                    task_id: None,
+                    run_id: None,
+                    resource_id: None,
+                    idempotency_key: Some(key),
+                    data: Some(json!({ "released": released })),
                 })?;
             }
             Ok(json!({ "released": released }))
