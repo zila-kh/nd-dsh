@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 const MAX_RECORD_BYTES: usize = 256 * 1024;
 const MAX_DATA_BYTES: usize = 64 * 1024;
+pub const MAX_JOURNAL_BYTES: u64 = 64 * 1024 * 1024;
 const DEFAULT_REPLAY_LIMIT: usize = 1_000;
 const HARD_REPLAY_LIMIT: usize = 10_000;
 
@@ -123,6 +124,7 @@ pub struct EffectJournalStats {
     pub record_count: usize,
     pub bytes: u64,
     pub last_seq: u64,
+    pub max_bytes: u64,
 }
 
 #[derive(Default)]
@@ -215,6 +217,9 @@ impl EffectJournalStore {
             bail!("effect journal record exceeds {MAX_RECORD_BYTES} bytes");
         }
         encoded.push(b'\n');
+        if state.bytes.saturating_add(encoded.len() as u64) > MAX_JOURNAL_BYTES {
+            bail!("effect journal reached its {} byte retention bound; archive/reset policy is required before more effects can run", MAX_JOURNAL_BYTES);
+        }
 
         let mut file = OpenOptions::new()
             .create(true)
@@ -370,6 +375,7 @@ fn stats_locked(state: &JournalState) -> EffectJournalStats {
         record_count: state.records.len(),
         bytes: state.bytes,
         last_seq: state.records.last().map(|record| record.seq).unwrap_or(0),
+        max_bytes: MAX_JOURNAL_BYTES,
     }
 }
 
