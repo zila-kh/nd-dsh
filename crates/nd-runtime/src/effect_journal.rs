@@ -157,9 +157,8 @@ impl EffectJournalStore {
     pub fn configure(&self, params: EffectJournalConfigureParams) -> Result<EffectJournalStats> {
         let path = validate_path(&params.path)?;
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).with_context(|| {
-                format!("create effect journal directory {}", parent.display())
-            })?;
+            fs::create_dir_all(parent)
+                .with_context(|| format!("create effect journal directory {}", parent.display()))?;
         }
         if !path.exists() {
             OpenOptions::new()
@@ -229,10 +228,16 @@ impl EffectJournalStore {
             }
         }
 
-        let seq = state.records.last().map(|record| record.seq + 1).unwrap_or(1);
+        let seq = state
+            .records
+            .last()
+            .map(|record| record.seq + 1)
+            .unwrap_or(1);
         let record = EffectRecord {
             seq,
-            record_id: params.record_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
+            record_id: params
+                .record_id
+                .unwrap_or_else(|| Uuid::new_v4().to_string()),
             time: now_ms(),
             kind: params.kind,
             state: params.state,
@@ -261,7 +266,8 @@ impl EffectJournalStore {
             .append(true)
             .open(&path)
             .with_context(|| format!("open effect journal {}", path.display()))?;
-        file.write_all(&encoded).context("append effect journal record")?;
+        file.write_all(&encoded)
+            .context("append effect journal record")?;
         file.flush().context("flush effect journal record")?;
         file.sync_data().context("sync effect journal record")?;
 
@@ -294,11 +300,7 @@ impl EffectJournalStore {
         let limit = params.limit.clamp(1, HARD_REPLAY_LIMIT);
         let after = params.after_seq.unwrap_or(0);
         let mut matching = state.records.iter().filter(|record| record.seq > after);
-        let records = matching
-            .by_ref()
-            .take(limit)
-            .cloned()
-            .collect::<Vec<_>>();
+        let records = matching.by_ref().take(limit).cloned().collect::<Vec<_>>();
         let truncated = matching.next().is_some();
         Ok(EffectJournalReplayResult {
             last_seq: state.records.last().map(|record| record.seq).unwrap_or(0),
@@ -343,16 +345,14 @@ impl EffectJournalStore {
     }
 
     pub fn stats(&self) -> EffectJournalStats {
-        let state = self
-            .state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         stats_locked(&state)
     }
 }
 
 fn load_records(path: &Path, state: &mut JournalState) -> Result<()> {
-    let file = File::open(path).with_context(|| format!("open effect journal {}", path.display()))?;
+    let file =
+        File::open(path).with_context(|| format!("open effect journal {}", path.display()))?;
     for (line_index, line) in BufReader::new(file).lines().enumerate() {
         let line = line.with_context(|| format!("read effect journal line {}", line_index + 1))?;
         if line.trim().is_empty() {
@@ -411,7 +411,10 @@ fn validate_append(params: &EffectJournalAppendParams) -> Result<()> {
         }
     }
     if let Some(data) = params.data.as_ref()
-        && serde_json::to_vec(data).context("encode effect journal data")?.len() > MAX_DATA_BYTES
+        && serde_json::to_vec(data)
+            .context("encode effect journal data")?
+            .len()
+            > MAX_DATA_BYTES
     {
         bail!("effect journal data exceeds {MAX_DATA_BYTES} bytes");
     }
@@ -480,7 +483,9 @@ mod tests {
                 path: path.to_string_lossy().into_owned(),
             })
             .unwrap();
-        let written = first.append(params("effect-1", EffectState::Complete)).unwrap();
+        let written = first
+            .append(params("effect-1", EffectState::Complete))
+            .unwrap();
         assert!(!written.duplicate);
         drop(first);
 
@@ -490,7 +495,9 @@ mod tests {
                 path: path.to_string_lossy().into_owned(),
             })
             .unwrap();
-        let duplicate = second.append(params("effect-1", EffectState::Intent)).unwrap();
+        let duplicate = second
+            .append(params("effect-1", EffectState::Intent))
+            .unwrap();
         assert!(duplicate.duplicate);
         assert_eq!(duplicate.record.seq, written.record.seq);
         assert_eq!(second.stats().record_count, 1);
@@ -506,7 +513,9 @@ mod tests {
                 path: path.to_string_lossy().into_owned(),
             })
             .unwrap();
-        first.append(params("effect-intent", EffectState::Intent)).unwrap();
+        first
+            .append(params("effect-intent", EffectState::Intent))
+            .unwrap();
         drop(first);
 
         let second = EffectJournalStore::new();
@@ -539,7 +548,9 @@ mod tests {
                 path: path.to_string_lossy().into_owned(),
             })
             .unwrap();
-        store.append(params("effect-3", EffectState::Uncertain)).unwrap();
+        store
+            .append(params("effect-3", EffectState::Uncertain))
+            .unwrap();
         let error = store
             .append(params("effect-3", EffectState::Intent))
             .unwrap_err();
@@ -560,7 +571,9 @@ mod tests {
                 path: path.to_string_lossy().into_owned(),
             })
             .unwrap();
-        first.append(params("effect-2", EffectState::Uncertain)).unwrap();
+        first
+            .append(params("effect-2", EffectState::Uncertain))
+            .unwrap();
         drop(first);
 
         let second = EffectJournalStore::new();

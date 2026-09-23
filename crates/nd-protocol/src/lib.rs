@@ -16,8 +16,7 @@ pub use wire::{
 mod contract_parity {
     use super::*;
 
-    const TYPESCRIPT_CONTRACT: &str =
-        include_str!("../../../src/main/core/core-protocol.ts");
+    const TYPESCRIPT_CONTRACT: &str = include_str!("../../../src/main/core/core-protocol.ts");
 
     #[test]
     fn typescript_protocol_constants_match_rust_source_of_truth() {

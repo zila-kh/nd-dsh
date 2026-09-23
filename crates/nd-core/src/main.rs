@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use nd_protocol::errors::{self, CODE_INVALID_PARAMS, CODE_METHOD_FAILED, CODE_RUNTIME_BUSY};
 use nd_protocol::{PROTOCOL_VERSION, ProtocolWriter, read_request};
-use nd_runtime::cache::ResponseCache;
+use nd_runtime::cache::{self, ResponseCache};
 use nd_runtime::deadline::{Deadline, Interrupt, InterruptGuard, InterruptRegistry};
 use nd_runtime::decision::{self, DecisionEvaluateParams};
 use nd_runtime::dispatcher::{DispatchStats, Dispatcher, priority_for_method};
@@ -11,7 +11,9 @@ use nd_runtime::effect_journal::{
 };
 use nd_runtime::git::{self, GitExecParams, GitLogParams, GitQueryParams};
 use nd_runtime::metrics::{self, MetricsRegistry};
-use nd_runtime::process::{CancelParams, CloseStdinParams, ProcessManager, SpawnParams, WriteParams};
+use nd_runtime::process::{
+    CancelParams, CloseStdinParams, ProcessManager, SpawnParams, WriteParams,
+};
 use nd_runtime::revision;
 use nd_runtime::scheduler::{AcquireParams, BindParams, ReleaseParams, Scheduler};
 use nd_runtime::search;

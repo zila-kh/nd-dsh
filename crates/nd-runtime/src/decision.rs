@@ -115,9 +115,7 @@ pub fn evaluate(params: DecisionEvaluateParams) -> Result<DecisionEvaluateResult
     };
     let escalated = params.mode == DecisionSupportMode::Assist
         && (attempted > 1
-            || (attempted == 1
-                && selected_provider.is_none()
-                && params.provider_count > 1));
+            || (attempted == 1 && selected_provider.is_none() && params.provider_count > 1));
 
     Ok(DecisionEvaluateResult {
         receipt: DecisionReceipt {

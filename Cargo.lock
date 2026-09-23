@@ -275,8 +275,11 @@ dependencies = [
  "anyhow",
  "nd-protocol",
  "nd-runtime",
+ "rmp-serde",
  "serde",
+ "serde_bytes",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -286,6 +289,7 @@ dependencies = [
  "anyhow",
  "rmp-serde",
  "serde",
+ "serde_bytes",
  "serde_json",
 ]
 
