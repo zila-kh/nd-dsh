@@ -39,7 +39,11 @@
     "bench:contract": "corepack pnpm core:build:dev && node benchmarks/nd-core-contract.mjs",
     "bench:tasks": "corepack pnpm core:build:dev && corepack pnpm build && node benchmarks/task-metrics.mjs",
     "bench:tasks:baseline": "corepack pnpm core:build:dev && corepack pnpm build && node benchmarks/task-metrics.mjs --baseline",
-    "bench:tasks:check": "node benchmarks/task-metrics.mjs --verify benchmarks/baselines/agent-task-normal-loop.json"
+    "bench:tasks:check": "node benchmarks/task-metrics.mjs --verify benchmarks/baselines/agent-task-normal-loop.json",
+    "browser:host:build": "cargo build --release -p nd-browser-host",
+    "browser:host:test": "cargo fmt --check && cargo clippy -p nd-browser-host --all-targets -- -D warnings && cargo test -p nd-browser-host",
+    "browser:register": "node scripts/register-browser-native-host.mjs",
+    "browser:verify": "corepack pnpm browser:host:test && corepack pnpm typecheck && corepack pnpm test -- browser-companion"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
