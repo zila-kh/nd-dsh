@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ND Browser Companion</title>
+  <style>
+    body{font:13px/1.45 system-ui,sans-serif;margin:0;padding:16px;color:#1f2328;background:#fff}
+    h1{font-size:15px;margin:0 0 12px} .card{border:1px solid #d0d7de;border-radius:10px;padding:12px;margin:0 0 10px}
+    .row{display:flex;justify-content:space-between;gap:12px;align-items:center}.muted{color:#656d76;font-size:12px}
+    button{border:1px solid #8c959f;border-radius:7px;background:#f6f8fa;padding:6px 9px;cursor:pointer}button:disabled{opacity:.5}
+    input{width:100%;box-sizing:border-box;border:1px solid #d0d7de;border-radius:7px;padding:6px;margin-top:6px}
+    .ok{color:#1a7f37}.bad{color:#cf222e}
+  </style>
+</head>
+<body>
+  <h1>ND Browser Companion</h1>
+  <div class="card">
+    <div class="row"><strong>ND desktop</strong><span id="status">Checking…</span></div>
+    <div class="muted" id="site">No active web tab</div>
+  </div>
+  <div class="card">
+    <strong>Profile label</strong>
+    <div class="muted">Shown in ND when several browser profiles are connected.</div>
+    <input id="profile" maxlength="128" placeholder="Chrome Personal">
+    <div style="margin-top:8px"><button id="saveProfile">Save label</button></div>
+  </div>
+  <div class="card">
+    <strong>Site access</strong>
+    <div class="muted" id="permissionText">Open an http/https tab to grant access.</div>
+    <div style="margin-top:8px"><button id="allowSite" disabled>Allow current site</button></div>
+  </div>
+  <script src="sidepanel.js"></script>
+</body>
+</html>
