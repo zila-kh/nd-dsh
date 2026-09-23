@@ -31,6 +31,32 @@ mod contract_parity {
     }
 
     #[test]
+    fn typescript_frame_shapes_keep_required_wire_fields() {
+        for field in [
+            "version: number",
+            "kind: 'request'",
+            "id: string",
+            "method: string",
+            "deadlineMs?: number",
+            "params: unknown",
+            "kind: 'response'",
+            "result?: T",
+            "error?: NdCoreErrorFrame",
+            "kind: 'event'",
+            "event: string",
+            "resourceId?: string",
+            "seq?: number",
+            "priority: string",
+            "data: T",
+        ] {
+            assert!(
+                TYPESCRIPT_CONTRACT.contains(field),
+                "TypeScript core protocol is missing required wire field {field}"
+            );
+        }
+    }
+
+    #[test]
     fn typescript_error_vocabulary_matches_rust() {
         for code in [
             errors::CODE_METHOD_FAILED,
