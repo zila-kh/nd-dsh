@@ -9,6 +9,7 @@ interface PendingBatch {
   waiters: Array<{ resolve: () => void; reject: (error: Error) => void }>
   timer?: ReturnType<typeof setTimeout>
   flushing: boolean
+  active?: Promise<void>
 }
 
 interface CoreTailResult {
@@ -57,32 +58,42 @@ export class CoreSessionJournalStore implements SessionJournalStore {
 
   private async flush(sessionId: string): Promise<void> {
     const batch = this.pending.get(sessionId)
-    if (!batch || batch.flushing || batch.events.length === 0) return
-    batch.flushing = true
+    if (!batch) return
+    if (batch.active) return batch.active
+    if (batch.events.length === 0) return
+
     if (batch.timer) {
       clearTimeout(batch.timer)
       batch.timer = undefined
     }
     const events = batch.events.splice(0)
     const waiters = batch.waiters.splice(0)
-    try {
-      for (let index = 0; index < events.length; index += MAX_BATCH_EVENTS) {
-        await this.core.request('sessionJournal.append', {
-          sessionId,
-          events: events.slice(index, index + MAX_BATCH_EVENTS),
-        }, 5_000)
+    batch.flushing = true
+
+    const active = (async () => {
+      try {
+        for (let index = 0; index < events.length; index += MAX_BATCH_EVENTS) {
+          await this.core.request('sessionJournal.append', {
+            sessionId,
+            events: events.slice(index, index + MAX_BATCH_EVENTS),
+          }, 5_000)
+        }
+        for (const waiter of waiters) waiter.resolve()
+      } catch (cause) {
+        const error = cause instanceof Error ? cause : new Error(String(cause))
+        for (const waiter of waiters) waiter.reject(error)
+        throw error
+      } finally {
+        batch.flushing = false
+        batch.active = undefined
+        if (batch.events.length > 0) {
+          void this.flush(sessionId).catch(() => undefined)
+        } else if (batch.waiters.length === 0) {
+          this.pending.delete(sessionId)
+        }
       }
-      for (const waiter of waiters) waiter.resolve()
-    } catch (cause) {
-      const error = cause instanceof Error ? cause : new Error(String(cause))
-      for (const waiter of waiters) waiter.reject(error)
-    } finally {
-      batch.flushing = false
-      if (batch.events.length > 0) {
-        void this.flush(sessionId)
-      } else if (batch.waiters.length === 0) {
-        this.pending.delete(sessionId)
-      }
-    }
+    })()
+    batch.active = active
+    return active
   }
 }
