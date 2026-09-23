@@ -3,6 +3,12 @@ import './organization.js'
 import './terminal.js'
 import { contextBridge, ipcRenderer } from 'electron'
 import { CAPABILITIES_IPC, type CapabilityAssignmentSnapshot, type CapabilityKind, type CapabilitySubjectType } from '../shared/capabilities.js'
+import {
+  BROWSER_COMPANION_IPC,
+  type BrowserCompanionLeaseScope,
+  type BrowserCompanionState,
+  type BrowserTabLease,
+} from '../shared/browser-companion.js'
 import { IPC, type DesktopApi, type ModelProvider } from '../shared/contracts.js'
 import { EXTENSIONS_IPC, type AgentExtensionManifest, type ExtensionsDesktopApi } from '../shared/extensions.js'
 import { USAGE_IPC, type UsageDesktopApi, type UsageScope, type UsageSummary } from '../shared/usage.js'
@@ -130,6 +136,17 @@ const api: DesktopApi = {
     getProjectBinding: (workspaceRoot) => ipcRenderer.invoke(IPC.chatGptWebProjectGet, workspaceRoot),
     setProjectBinding: (workspaceRoot, input) => ipcRenderer.invoke(IPC.chatGptWebProjectSet, workspaceRoot, input),
     clearProjectBinding: (workspaceRoot) => ipcRenderer.invoke(IPC.chatGptWebProjectClear, workspaceRoot),
+  },
+  browserCompanion: {
+    state: () => ipcRenderer.invoke(BROWSER_COMPANION_IPC.state) as Promise<BrowserCompanionState>,
+    acquireLease: (connectionId: string, tabId: number, ownerId: string, scope?: BrowserCompanionLeaseScope) =>
+      ipcRenderer.invoke(BROWSER_COMPANION_IPC.acquireLease, connectionId, tabId, ownerId, scope) as Promise<BrowserTabLease>,
+    releaseLease: (leaseId: string) => ipcRenderer.invoke(BROWSER_COMPANION_IPC.releaseLease, leaseId) as Promise<boolean>,
+    onChanged: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: BrowserCompanionState) => listener(state)
+      ipcRenderer.on(BROWSER_COMPANION_IPC.changedEvent, handler)
+      return () => ipcRenderer.removeListener(BROWSER_COMPANION_IPC.changedEvent, handler)
+    },
   },
   browser: {
     state: () => ipcRenderer.invoke(IPC.browserState),
