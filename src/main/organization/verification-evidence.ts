@@ -133,24 +133,57 @@ function verificationShell(command: string): { command: string; args: string[] }
 }
 
 async function stopVerificationProcess(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return
+  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return
+  const pid = child.pid
+  if (process.platform === 'win32') {
+    await new Promise<void>((resolveStop) => {
+      let settled = false
+      const finish = (): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        try { child.kill() } catch { /* already gone */ }
+        resolveStop()
+      }
+      const timer = setTimeout(finish, 3_000)
+      try {
+        const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], {
+          stdio: 'ignore',
+          windowsHide: true,
+        })
+        killer.once('close', finish)
+        killer.once('error', finish)
+      } catch {
+        finish()
+      }
+    })
+    return
+  }
+
+  let groupSignalled = false
+  try {
+    process.kill(-pid, 'SIGTERM')
+    groupSignalled = true
+  } catch {
+    try { child.kill('SIGTERM') } catch { return }
+  }
   await new Promise<void>((resolveStop) => {
     let settled = false
-    let timer: ReturnType<typeof setTimeout> | undefined
     const finish = (): void => {
       if (settled) return
       settled = true
-      if (timer) clearTimeout(timer)
+      clearTimeout(timer)
       resolveStop()
     }
+    const timer = setTimeout(() => {
+      try {
+        if (groupSignalled) process.kill(-pid, 'SIGKILL')
+        else child.kill('SIGKILL')
+      } catch { /* already gone */ }
+      finish()
+    }, 3_000)
     child.once('exit', finish)
     child.once('error', finish)
-    timer = setTimeout(finish, 3_000)
-    try {
-      child.kill(process.platform === 'win32' ? undefined : 'SIGTERM')
-    } catch {
-      finish()
-    }
   })
 }
 
