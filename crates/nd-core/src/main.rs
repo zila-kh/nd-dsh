@@ -36,8 +36,8 @@ use serde_json::{Value, json};
 use std::io::BufReader;
 use std::sync::Arc;
 use terminal::{
-    TerminalCloseParams, TerminalCreateParams, TerminalManager, TerminalResizeParams,
-    TerminalRestartParams, TerminalStateParams, TerminalWriteParams,
+    TerminalCloseParams, TerminalCreateParams, TerminalHistoryAppendParams, TerminalManager,
+    TerminalResizeParams, TerminalRestartParams, TerminalStateParams, TerminalWriteParams,
 };
 use workspace::{ListParams, ReadParams};
 
@@ -303,6 +303,12 @@ fn dispatch(
             state
                 .terminals
                 .resize(from_params::<TerminalResizeParams>(params)?)?;
+            Ok(json!({ "ok": true }))
+        }
+        "terminal.appendHistory" => {
+            state
+                .terminals
+                .append_history(from_params::<TerminalHistoryAppendParams>(params)?)?;
             Ok(json!({ "ok": true }))
         }
         "terminal.close" => {
