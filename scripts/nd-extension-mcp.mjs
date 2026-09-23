@@ -12,6 +12,7 @@ import { spawn } from 'node:child_process'
 
 const NODE = process.env.ND_EXTENSION_NODE?.trim() || process.execPath
 const PROXY = process.env.ND_EXTENSION_PROXY?.trim() || process.env.ND_DSH_EXTENSION_PROXY_ENTRY?.trim() || ''
+const BROWSER_PROXY = process.env.ND_BROWSER_COMPANION_RUNTIME?.trim() || ''
 const TIMEOUT_MS = 120_000
 const HARNESS_ENGINE_ID = 'nd-harness'
 
@@ -25,6 +26,27 @@ const TOOLS = [
         extensionId: { type: 'string', description: 'ND extension id from the trusted extension context.' },
       },
       required: ['extensionId'],
+    },
+  },
+  {
+    name: 'nd_browser_call',
+    description: 'Call the built-in ND Browser Companion. Read methods include browser.connections, browser.tabs, browser.snapshot, and browser.screenshot. Use browser.attach to acquire a writable tab lease before browser.navigate/click/fill/press/scroll, and browser.detach when finished.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        method: { type: 'string' },
+        connectionId: { type: 'string' },
+        tabId: { type: 'number' },
+        leaseId: { type: 'string' },
+        ref: { type: 'string' },
+        revision: { type: 'number' },
+        url: { type: 'string' },
+        text: { type: 'string' },
+        key: { type: 'string' },
+        deltaX: { type: 'number' },
+        deltaY: { type: 'number' }
+      },
+      required: ['method']
     },
   },
   {
@@ -56,10 +78,10 @@ function cleanTool(value) {
   return value.trim()
 }
 
-async function runProxy(args) {
-  if (!PROXY) throw new Error('ND extension proxy entry is not configured')
+async function runEntry(entry, args, label) {
+  if (!entry) throw new Error(`${label} entry is not configured`)
   return await new Promise((resolve, reject) => {
-    const child = spawn(NODE, [PROXY, ...args], {
+    const child = spawn(NODE, [entry, ...args], {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: process.env,
       windowsHide: true,
@@ -68,7 +90,7 @@ async function runProxy(args) {
     let stderr = ''
     const timer = setTimeout(() => {
       try { child.kill() } catch { /* gone */ }
-      reject(new Error('ND extension proxy timed out'))
+      reject(new Error(`${label} timed out`))
     }, TIMEOUT_MS)
     child.stdout.setEncoding('utf8')
     child.stderr.setEncoding('utf8')
@@ -81,19 +103,27 @@ async function runProxy(args) {
     child.once('exit', (code, signal) => {
       clearTimeout(timer)
       if (code !== 0) {
-        reject(new Error(stderr.trim() || `extension proxy exited (${signal ?? String(code)})`))
+        reject(new Error(stderr.trim() || `${label} exited (${signal ?? String(code)})`))
         return
       }
       try {
         resolve(JSON.parse(stdout))
       } catch {
-        reject(new Error('extension proxy returned invalid JSON'))
+        reject(new Error(`${label} returned invalid JSON`))
       }
     })
   })
 }
 
+const runProxy = (args) => runEntry(PROXY, args, 'ND extension proxy')
+const runBrowserProxy = (args) => runEntry(BROWSER_PROXY, args, 'ND browser companion')
+
 async function dispatch(name, args) {
+  if (name === 'nd_browser_call') {
+    const input = args && typeof args === 'object' && !Array.isArray(args) ? { ...args } : {}
+    if (typeof input.method !== 'string' || !input.method.startsWith('browser.')) throw new Error('A browser.* method is required')
+    return { mode: 'list', value: await runBrowserProxy(['call', JSON.stringify(input)]) }
+  }
   if (name === 'nd_extension_list') {
     const extensionId = cleanId(args?.extensionId, 'extensionId')
     return { mode: 'list', value: await runProxy(['list', extensionId, HARNESS_ENGINE_ID]) }
