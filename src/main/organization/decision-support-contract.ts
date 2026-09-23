@@ -40,6 +40,23 @@ export interface DecisionSupportReceipt {
   createdAt: number
 }
 
+export interface DecisionKernelInput {
+  purpose: DecisionSupportReceipt['purpose']
+  mode: DecisionSupportMode
+  threshold: number
+  providerCount: number
+  attempts: DecisionProviderAttempt[]
+}
+
+export interface DecisionKernelEvaluation {
+  receipt: DecisionSupportReceipt
+  shouldContinue: boolean
+}
+
+export interface DecisionKernel {
+  evaluate(input: DecisionKernelInput): Promise<DecisionKernelEvaluation>
+}
+
 export interface ReviewAssistInput {
   company: string
   project: string
