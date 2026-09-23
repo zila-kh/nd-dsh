@@ -152,6 +152,47 @@ describe('decision support cascade', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
 
+  it('delegates cascade selection to the Rust kernel when selected', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      model: 'english',
+      answers: {
+        review_route: {
+          type: 'choice',
+          choice: 'standard_review',
+          confidence: 0.91,
+        },
+      },
+    }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    const request = vi.fn(async (method: string, params: any) => {
+      expect(method).toBe('decision.evaluate')
+      expect(params.providerCount).toBe(1)
+      expect(params.attempts).toHaveLength(1)
+      return {
+        receipt: {
+          purpose: params.purpose,
+          mode: params.mode,
+          threshold: params.threshold,
+          attempts: params.attempts,
+          selectedProvider: 'laya',
+          escalated: false,
+          createdAt: 123,
+        },
+        shouldContinue: false,
+      }
+    })
+    const service = createDecisionSupportFromEnv({
+      ND_DECISION_SUPPORT_MODE: 'assist',
+      ND_DECISION_SUPPORT_RUNTIME: 'rust',
+      ND_LAYA_SYSTEMONE_URL: 'http://127.0.0.1:8765',
+    }, fetchImpl as typeof fetch, { request } as never)
+
+    const receipt = await service?.reviewAssist(input)
+
+    expect(receipt?.selectedProvider).toBe('laya')
+    expect(receipt?.createdAt).toBe(123)
+    expect(request).toHaveBeenCalledTimes(1)
+  })
+
   it('contains provider failures and continues the cascade', async () => {
     const laya: DecisionProvider = {
       id: 'laya',
