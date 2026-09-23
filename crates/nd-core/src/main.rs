@@ -281,7 +281,7 @@ fn dispatch(
                 run_id: acquire.run_id.clone(),
                 resource_id: acquire.permit_id.clone(),
                 idempotency_key: Some(intent_key.clone()),
-                data: Some(json!({ "kind": acquire.kind, "pools": acquire.pools })),
+                data: Some(json!({ "kind": acquire.kind.clone(), "pools": acquire.pools.clone() })),
             })?;
             match state.scheduler.acquire(acquire) {
                 Ok(result) => {
@@ -299,7 +299,7 @@ fn dispatch(
                         run_id: result.permit.as_ref().and_then(|permit| permit.run_id.clone()),
                         resource_id: result.permit.as_ref().map(|permit| permit.id.clone()),
                         idempotency_key: Some(intent_key),
-                        data: Some(json!({ "granted": result.granted, "reason": result.reason })),
+                        data: Some(json!({ "granted": result.granted, "reason": result.reason.clone() })),
                     })?;
                     to_value(result)
                 }
