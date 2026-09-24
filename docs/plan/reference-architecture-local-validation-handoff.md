@@ -1,8 +1,37 @@
 # Reference Architecture Local Validation Handoff
 
-Status: **implementation merged to main via PR #36; local validation/evidence still required**  
+Status: **local validation recorded 2026-09-24 — WIP 0031–0033 closed as done; WIP 0034 open only on the live Laya/Jev shadow comparison**  
 Validation target: current `main` (create a feature branch from `main` for any fixes)  
-Tasks: [WIP 0031](../tasks/wip-0031-nd-protocol-extraction.md) · [WIP 0032](../tasks/wip-0032-canonical-execution-effect-journal.md) · [WIP 0033](../tasks/wip-0033-nd-runtime-crate-extraction.md) · [WIP 0034](../tasks/wip-0034-rust-decision-kernel.md)
+Tasks: [done-0031](../tasks/done/done-0031-nd-protocol-extraction.md) · [done-0032](../tasks/done/done-0032-canonical-execution-effect-journal.md) · [done-0033](../tasks/done/done-0033-nd-runtime-crate-extraction.md) · [WIP 0034](../tasks/wip-0034-rust-decision-kernel.md)
+
+## Evidence recorded (2026-09-24)
+
+Windows reference machine, commit `d3de5be` (Windows 10.0.26100, rustc 1.98.1,
+node v24.16.0, pnpm 11.7.0):
+
+```text
+cargo metadata --locked: PASS        cargo fmt --all --check: PASS (Cargo.lock unchanged)
+pnpm core:test: PASS                 pnpm verify: PASS
+pnpm typecheck: PASS                 focused decision/approval tests: PASS (16)
+pnpm test: PASS (841 passed / 8 skipped, five consecutive runs)
+pnpm build: PASS
+pnpm bench:contract: PASS  benchmark-results/2026-09-24T09-20-59-580Z-win32-x64/
+pnpm bench:runtime: PASS   benchmark-results/2026-09-24T09-21-42-507Z-win32-x64/
+                           (budget classes hold; baseline host differs — no speed claim)
+pnpm bench:tasks:check: PASS (136 expectations, 0 deviations)
+
+effect journal app smoke: PASS   benchmark-results/effect-journal-smoke/
+restart/replay smoke: PASS       (16 -> 32 records, seq monotonic, all known-complete ids survived)
+Laya TS shadow: SKIPPED          (laya-serve not installed on this machine)
+Laya Rust shadow: SKIPPED        (same)
+Rust assist + Jev: SKIPPED       (no Jev credential configured for this run)
+machine-verification red-gate check: PASS (tests/beta-reliability.test.ts)
+unexpected diffs: none
+```
+
+Section 7–9 below remain the checklist for the single open item: the live
+Laya TS/Rust shadow and optional Jev assist comparison that gates promoting the
+Rust decision kernel to the default. Nothing in sections 2–6, 10, or 11 is open.
 
 ## 1. Sync current main without editing it
 

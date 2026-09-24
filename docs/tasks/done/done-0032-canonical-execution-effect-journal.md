@@ -1,8 +1,8 @@
 # WIP 0032 — Canonical Execution and Effect Journal
 
-> Plan: [Reference-Inspired Runtime and Company Evolution](../plan/reference-inspired-runtime-company-evolution.md)  
+> Plan: [Reference-Inspired Runtime and Company Evolution](../../plan/reference-inspired-runtime-company-evolution.md)  
 > Priority: P0  
-> Status: **merged to main via PR #36; implementation complete; local validation pending**  
+> Status: **done — local validation recorded 2026-09-24; app smoke, restart replay and contract benchmark green**  
 > Owner: unassigned
 
 ## Objective
@@ -38,8 +38,30 @@ Add a durable ND-owned journal for autonomous company execution/effect intent, o
 
 ## Acceptance status
 
-Implementation is complete. Local crash/restart and benchmark evidence remain to be recorded.
+Implementation is complete. Local crash/restart and benchmark evidence recorded
+2026-09-24 on the Windows reference machine, commit `d3de5be`:
+
+- **Contract benchmark** (`pnpm bench:contract`, bundle `benchmark-results/2026-09-24T09-20-59-580Z-win32-x64/`):
+  `contract-effect-journal` — append p50 2.38 ms / p95 3.90 ms, replay p50 0.78 ms /
+  p95 0.97 ms, 10 records / 2 493 bytes, `duplicateSuppressed: true`,
+  `uncertainState: outcomeUncertain`.
+- **Durable app smoke** (new `e2e/effect-journal.spec.ts`, live E2E model route):
+  one real task through worker → machine verification → independent review →
+  integration produced 16 receipts — `workspace.allocate`, `engine.session` ×2,
+  `checkpoint`, `verification.receipt`, `review.result`, `integration` ×2 (intent
+  before complete), `lease.acquire` ×4, `lease.release` ×4 — each carrying
+  company/project/task/run identity where applicable, with the integration intent
+  ordered before its outcome. Bundle:
+  `benchmark-results/effect-journal-smoke/effect-journal-first-task.json`.
+- **Restart/replay smoke** — relaunched on the same profile, all 16 known-complete
+  record ids survived, sequence numbers continued monotonically (16 → 32) while a
+  second task completed and integrated. Bundle:
+  `benchmark-results/effect-journal-smoke/effect-journal-restart-replay.json`.
+- **Secret absence** — the journal contains no provider API key, no `Authorization`
+  header, and no raw provider request payload; asserted on both legs.
+- Rust crash/restart fixtures (known-complete dedupe, unmatched intent promoted to
+  `outcomeUncertain`, blind-retry refusal) pass inside `pnpm core:test`.
 
 ## Handoff
 
-See [Reference Architecture Local Validation Handoff](../plan/reference-architecture-local-validation-handoff.md).
+See [Reference Architecture Local Validation Handoff](../../plan/reference-architecture-local-validation-handoff.md).

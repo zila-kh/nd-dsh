@@ -41,6 +41,8 @@ This approved MVP is the active implementation vehicle for the runtime-distribut
 
 **Status:** implementation backlog complete on `feat/complete-active-work`. The production desktop is single-runtime (`nd-core`), the agent fast path and matched measurement are implemented, the CI-gate defects 0012-0014 are repaired and merged (PR #30), the runtime evidence baseline is recorded and committed (0015), and stale TODO/WIP records are archived. Fresh Windows release validation remains explicitly blocked in task 0004, now purely on a runner: the implementation side is done, and so is the locally-recordable evidence side.
 
+**Local evidence refresh (2026-09-24):** the current tree's locally-recordable release evidence is green and re-recorded — portable build + staging verified, forced-core-crash cleanup proof passed, packaged runtime smoke passed against the artifact, `bench:contract` 9/9, `bench:runtime` inside every shared baseline budget class (different baseline host — budget-class check only), `bench:tasks:check` 136/0, and the new effect-journal e2e smoke (task + restart replay) passed. The three runner-only criteria in blocked-0004 are unchanged and deferred while Actions stays parked.
+
 **CI reality check (2026-09-23):** run `35762360604`, the first run on `main` after PR #29 merged, failed `Verify ND Core` in **both** jobs — `validate` in 59 s and `windows-package` in 1m43s — so every Windows step and the performance-evidence bundle were skipped. The cause was platform-independent: `crates/nd-core` was merged with unformatted, lint-failing source that aborts `pnpm core:test` on Linux too, having arrived via commits carrying a skip-ci directive that no gate ever evaluated. The last green `validate` was run `35719173634` on 2026-09-22, before those commits. All three defects that run exposed are fixed and merged: [done-0012](tasks/done/done-0012-nd-core-format-lint-gate.md) restored the gate, [done-0013](tasks/done/done-0013-windows-timing-flakes.md) removed the Windows timing flakes that the repaired gate then revealed, and [done-0014](tasks/done/done-0014-app-runtime-terminal-marker.md) fixed the app-runtime terminal marker that failed the one `performance-evidence` attempt (run `35771982331`). Each is verified locally and each had its runner confirmation dropped, not waived, when Actions was parked.
 
 **CI parked (2026-09-23, operator direction):** GitHub Actions is no longer in use — the operator renamed `.github/` to `.github-bk/` (`2ff4a3c`, merged as `8fd7c16`) to conserve compute until the product is stable enough to justify it. The workflows are unchanged inside that folder; renaming it back restores them, and no acceptance criterion is waived. Work continues against local verification (`pnpm core:test`, `pnpm verify`, `pnpm typecheck`, `pnpm test`, `pnpm build`), which is now the gate. The Windows release-validation criteria in blocked task 0004 are deferred, not dropped: they need a runner and cannot be satisfied locally.
@@ -63,9 +65,9 @@ Target: **fast native runtime + minimal round trips + structured agent actions +
 | [done-0014](tasks/done/done-0014-app-runtime-terminal-marker.md) | P1 | **done** — app-runtime terminal marker fixed (PR #30); bundle confirmation dropped when Actions was parked |
 | [done-0015](tasks/done/done-0015-runtime-evidence-baseline.md) | P1 | **done** — runtime evidence bundle recorded locally, baseline committed (`benchmarks/baselines/win11-x64.json`); runner artifact stays in blocked-0004 |
 | [done-0016](tasks/done/done-0016-agent-task-baseline-fast-path-budgets.md) | P1 | **done** — agent-task baseline re-recorded against the §12.4 comparison; §9.1 router placement settled (main-process TypeScript) |
-| [wip-0017](tasks/wip-0017-windows-worktree-test-ebusy-flake.md) | P2 | **implementation complete; local Windows confirmation pending** — teardown uses the repository's bounded transient-lock retry policy; product Git/worktree behavior is unchanged |
+| [done-0017](tasks/done/done-0017-windows-worktree-test-ebusy-flake.md) | P2 | **done** — bounded teardown policy confirmed by five consecutive green full-suite runs (2026-09-24), zero `EBUSY` |
 | [done-0018](tasks/done/done-0018-rust-parallel-runtime-v2.md) | P1 | **done; merged and locally validated** — merged by `d1aed436`; reference bundle `2026-09-23T10-27-15-202Z-win32-x64` passed 24/24 checks at feature commit `ae801def` |
-| [blocked-0004](tasks/blocked-0004-windows-release-validation.md) | P0 | **blocked on fresh Windows release validation** — implementation complete (0012-0014 done) and baseline recorded (0015); needs the workflows restored and a runner |
+| [blocked-0004](tasks/blocked-0004-windows-release-validation.md) | P0 | **blocked on fresh Windows release validation** — portable build, forced-cleanup proof, and packaged smoke re-recorded green locally 2026-09-24; the three runner-only criteria wait for the workflows to be restored (Update 6) |
 | [done-0005](tasks/done/done-0005-agent-task-measurement.md) | P1 | **done** — task-cost measurement + normal-loop baseline |
 | [done-0006](tasks/done/done-0006-nd-core-runtime-contract.md) | P1 | **done** — workspace/deadline/revision/cache/search/runtime contract |
 | [done-0007](tasks/done/done-0007-retire-legacy-paths-and-dispatch.md) | P1 | **done** — single production runtime, node-pty/legacy path retired, typed dispatch availability |
@@ -137,7 +139,7 @@ Success criterion: users can tell why an engine is not ready before starting wor
 - Plan: [reference-inspired-runtime-company-evolution.md](plan/reference-inspired-runtime-company-evolution.md).
 - Maintained research set: [agent-orchestration-reference-matrix.md](plan/agent-orchestration-reference-matrix.md).
 - Scope: protocol contract extraction, canonical execution/effect journal, thin Rust runtime composition, Rust decision kernel/provider seam, sandbox-provider seam, trace inspector, durable team mailbox/wake, eval/budget/interoperability follow-ons.
-- Validation-open tickets: [wip-0031](tasks/wip-0031-nd-protocol-extraction.md) -> [wip-0032](tasks/wip-0032-canonical-execution-effect-journal.md) -> [wip-0033](tasks/wip-0033-nd-runtime-crate-extraction.md) -> [wip-0034](tasks/wip-0034-rust-decision-kernel.md). Implementation merged to `main` via PR #36; local correctness/performance/live-provider evidence remains before promotion/default or release claims.
+- Validation tickets: [done-0031](tasks/done/done-0031-nd-protocol-extraction.md) → [done-0032](tasks/done/done-0032-canonical-execution-effect-journal.md) → [done-0033](tasks/done/done-0033-nd-runtime-crate-extraction.md) closed with recorded local evidence on 2026-09-24 (protocol/contract benchmark, durable effect-journal app smoke + restart replay, runtime budget-class comparison, 136/0 agent-task expectations); [wip-0034](tasks/wip-0034-rust-decision-kernel.md) remains open only on the live Laya/Jev shadow comparison before the Rust decision kernel becomes the default.
 - Reference set now includes earlier QM/AWS/Orca/Paperclip/Gajae/LazyCodex/JCode work plus LoopX, Bamboo-agent, Aex Brain, Pioneer, Moltis, OpenAI Codex, Goose, kern, Capsule, and PocketPaw.
 
 This is **not** a broad Rust rewrite. The first slice is implemented: `nd-protocol` -> durable effect journal -> `nd-runtime` extraction -> Rust decision kernel. Sandbox/trace/mailbox/eval follow-ons remain separate work after local evidence validates these contracts. Organization/business truth remains ND-owned and TypeScript-owned until a separately approved migration proves value.
@@ -153,7 +155,7 @@ This work formalizes the existing per-task worktree/checkpoint/review/integratio
 ## P1 — Browser Companion MVP
 
 - PRD: [0004-browser-companion-mvp.md](prd/0004-browser-companion-mvp.md) — implementation baseline merged via PR #32 (`main@9e0fcc5`).
-- Task: [wip-0019-browser-companion-mvp.md](tasks/wip-0019-browser-companion-mvp.md) — implementation merged; local automated validation, real-Chrome smoke, and performance evidence remain pending.
+- Task: [wip-0019-browser-companion-mvp.md](tasks/wip-0019-browser-companion-mvp.md) — local automated validation recorded green 2026-09-24 (host tests, companion suites, full repository gates); the real-Chrome smoke and companion p50/p95 numbers are the only remaining items.
 
 The MVP keeps the embedded ND browser and adds an explicit Native Messaging path
 for a user's existing Chrome/Chromium profile. It uses optional per-origin
@@ -164,11 +166,11 @@ browser action policy remains a follow-up requirement before enterprise claims.
 ## P1 — unified browser platform
 
 - Plan: [unified-browser-platform.md](plan/unified-browser-platform.md)
-- PRD: [0005-unified-browser-platform.md](prd/0005-unified-browser-platform.md) — **implementation complete; local validation/evidence pending**.
+- PRD: [0005-unified-browser-platform.md](prd/0005-unified-browser-platform.md) — **implementation complete; built-in correctness + performance evidence recorded 2026-09-24; real-Chrome companion smoke stays manual**.
 - Historical planning branch: `feat/unified-browser-platform-plan`.
 - Historical implementation branch: `feat/unified-browser-platform`; merged to `main` via PR #41 (`b558eddad12b`).
 - External-browser foundation: Browser Companion merged via PR #32 (`main@9e0fcc5`).
-- Task set: 0020-0030 — implementation complete; task 0030 local evidence handoff pending.
+- Task set: 0020-0030 — implementation complete; task 0030 recorded the built-in correctness gates, the password-redaction/stale-ref checks, and 1/2/4/8-tab performance evidence on 2026-09-24, fixing the stale-ref diagnosability defect that first run exposed (`c1c3e78`); the real-Chrome companion smoke remains manual.
 
 Target product shape:
 
@@ -184,7 +186,7 @@ Target product shape:
 
 ND must not claim "100% Chrome Web Store compatibility" until reproducible evidence proves that breadth. The product requirement is first-class built-in extensions plus an evidence-based compatibility level.
 
-**Implementation result:** Electron is retained under decision B with an explicit compatibility ceiling. The unified BrowserTarget/router, real built-in tabs, companion adapter, browser profile services, credential mediation, extension manager, site tools, trusted leases/policy, target UX, tests and benchmark harness are implemented. Merge/release claims remain blocked on the local correctness, real-Chrome, representative-extension and performance evidence handoff.
+**Implementation result:** Electron is retained under decision B with an explicit compatibility ceiling. The unified BrowserTarget/router, real built-in tabs, companion adapter, browser profile services, credential mediation, extension manager, site tools, trusted leases/policy, target UX, tests and benchmark harness are implemented. Built-in correctness and 1/2/4/8-tab performance evidence is recorded (task 0030); the real-Chrome companion smoke and representative-extension breadth evidence remain before release claims.
 
 ## Public Beta P1 — best-in-class AI development environment
 

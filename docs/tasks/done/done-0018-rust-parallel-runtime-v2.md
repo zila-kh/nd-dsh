@@ -176,7 +176,7 @@ The operator completed the local correctness and reference-machine evidence pass
 - [x] `corepack pnpm build`
 - [x] `corepack pnpm bench:smoke`
 
-Known caveat: [WIP 0017](../wip-0017-windows-worktree-test-ebusy-flake.md)
+Known caveat: [done-0017](done-0017-windows-worktree-test-ebusy-flake.md)
 records the Windows `EBUSY` teardown race and its bounded cleanup fix in
 `tests/task-worktree.test.ts`. If that exact teardown symptom is the only
 full-suite failure, preserve the log and run the focused worktree spec; do not

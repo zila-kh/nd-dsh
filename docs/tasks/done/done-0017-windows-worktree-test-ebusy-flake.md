@@ -1,9 +1,9 @@
 # WIP 0017 — `pnpm test` intermittently fails in worktree teardown on Windows
 
-> PRD: [PRD-0002](../prd/0002-rust-sidecar-mvp-migration.md)
+> PRD: [PRD-0002](../../prd/0002-rust-sidecar-mvp-migration.md)
 > Priority: P2
 > Owner: test infrastructure
-> Status: implementation complete — local Windows full-suite confirmation pending
+> Status: **done — local Windows confirmation recorded 2026-09-24; five consecutive green full-suite runs with zero `EBUSY` teardown failures**
 > Updated: 2026-09-24
 
 ## What happens
@@ -19,7 +19,7 @@ The same file passes on its own and the same tests passed their own assertions i
 
 ## Why it matters
 
-Local gates are the only validation while GitHub Actions is parked as `.github-bk/`. A gate that is red for reasons unrelated to the change under test trains everyone to re-run until green, which is exactly the habit that lets a real failure through — the failure mode [done-0013](done/done-0013-windows-timing-flakes.md) removed for the Rust suite.
+Local gates are the only validation while GitHub Actions is parked as `.github-bk/`. A gate that is red for reasons unrelated to the change under test trains everyone to re-run until green, which is exactly the habit that lets a real failure through — the failure mode [done-0013](done-0013-windows-timing-flakes.md) removed for the Rust suite.
 
 ## What is known
 
@@ -46,10 +46,10 @@ This is deliberately a teardown-only fix. A focused-spec assertion failure or ta
 
 ## Local confirmation
 
-Run on the Windows reference machine:
+Run on the Windows reference machine (commit `d3de5be`, Windows 10.0.26100, node v24.16.0, pnpm 11.7.0):
 
-- [ ] `corepack pnpm vitest run tests/task-worktree.test.ts`
-- [ ] `corepack pnpm test`
-- [ ] repeat the full suite enough times to cover the previous intermittent window and confirm there is no `EBUSY` teardown failure.
+- [x] `corepack pnpm vitest run tests/task-worktree.test.ts` — 6 tests passed.
+- [x] `corepack pnpm test` — 841 passed / 8 skipped on every run.
+- [x] repeat the full suite enough times to cover the previous intermittent window and confirm there is no `EBUSY` teardown failure. — Five consecutive full-suite runs (2026-09-24) all green with zero `EBUSY` occurrences across the run logs; the previously observed window was one failure in three runs.
 
 If a future failure identifies a live Git descendant rather than a transient filesystem lock, reopen this as a production process-lifecycle defect instead of increasing retry bounds.

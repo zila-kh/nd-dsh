@@ -2,7 +2,7 @@
 
 > Plan: [Reference-Inspired Runtime and Company Evolution](../plan/reference-inspired-runtime-company-evolution.md)  
 > Priority: P1  
-> Status: **merged to main via PR #36; implementation complete; local parity/live-provider validation pending**  
+> Status: **parity tests + benchmark evidence recorded 2026-09-24; live Laya/Jev shadow comparison remains before Rust becomes the default**  
 > Depends on: WIP 0031 and WIP 0033  
 > Prototype: `src/main/organization/decision-support*.ts`  
 > Owner: unassigned
@@ -66,7 +66,26 @@ A future native/ONNX local decision model can replace the Laya transport without
 
 ## Acceptance status
 
-Implementation is complete. Local shared-fixture tests, full repository gates, live Laya/Jev shadow/assist comparison, and benchmark evidence are the remaining promotion gate before making Rust the default.
+Implementation is complete. Local evidence recorded 2026-09-24 on the Windows
+reference machine, commit `d3de5be`:
+
+- **Shared parity corpus** — `tests/fixtures/decision-kernel-parity.json` is consumed
+  by both the Rust kernel tests (inside `pnpm core:test`) and the TypeScript kernel
+  tests (`tests/decision-support.test.ts`), all passing alongside
+  `tests/organization-approval-gate.test.ts` (16 focused tests).
+- **Contract benchmark** — `contract-decision-kernel` in
+  `benchmark-results/2026-09-24T09-20-59-580Z-win32-x64/`: evaluate p50 0.67 ms /
+  p95 0.72 ms, `selectedProvider: jev`, `escalated: true`.
+- **Full repository gates** — `pnpm verify`, `pnpm typecheck`, `pnpm test`
+  (841 passed / 8 skipped, five consecutive green runs), `pnpm build` all pass.
+- **Live provider comparison** — Laya TS shadow, Laya Rust shadow, and Rust assist +
+  Jev are **SKIPPED for this run**: `laya`/`laya-serve` is not installed on this
+  machine (it needs `pip install "laya[serve]"` plus a model preload) and no Jev
+  credential was configured. Deterministic control semantics remain covered by the
+  focused fixture tests; the live wire-compatibility confirmation is the remaining
+  item before Rust becomes the default.
+- Rust is **not** yet promoted to the decision-kernel default; the TypeScript kernel
+  stays in place until the live shadow comparison is recorded.
 
 ## Handoff
 
