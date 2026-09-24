@@ -24,6 +24,8 @@ for (const marker of [
   'to: nd-core',
   'from: .release/nd-browser-host',
   'to: nd-browser-host',
+  'from: .release/THIRD_PARTY_NOTICES.nd-dsh.md',
+  'to: THIRD_PARTY_NOTICES.nd-dsh.md',
   'from: extensions/browser-companion',
   'to: browser-companion',
   'from: node_modules/agent-browser',
@@ -57,6 +59,14 @@ if (!configOnly) {
     '.release/harness/lib/bin.js',
     '.release/harness/LICENSE',
     '.release/harness/THIRD_PARTY_NOTICES.md',
+    '.release/THIRD_PARTY_NOTICES.nd-dsh.md',
+    'LICENSE',
+    'vendor/openpencil.LICENSE',
+    'vendor/vscode-git.LICENSE',
+    'resources/nd-pencil/LICENSE.openpencil',
+    'node_modules/agent-browser/LICENSE',
+    'node_modules/electron/dist/LICENSE',
+    'node_modules/electron/dist/LICENSES.chromium.html',
     '.release/harness/node_modules/@deepseek-ai/cordis-plugin-group/lib/index.js',
     '.release/harness/node_modules/@deepseek-ai/dsh-mcp-client/lib/index.js',
     '.release/harness/node_modules/@deepseek-ai/dsh-subagent-codex/lib/index.js',
@@ -83,9 +93,33 @@ if (!configOnly) {
     || manifest.browserCompanion.nativeHostSha256.length !== 64) {
     throw new Error('Packaged Browser Companion provenance is missing or invalid')
   }
+  verifyThirdPartyNotices()
 }
 
 console.log(configOnly ? 'Release packaging configuration verified.' : 'Release runtime inputs verified.')
+
+/**
+ * A notices file that exists but names nothing is worse than no file at all:
+ * it claims compliance without recording the software. Assert that the
+ * generated aggregate covers every direct runtime dependency the app bundles
+ * and every third-party runtime the artifact redistributes.
+ */
+function verifyThirdPartyNotices() {
+  const notices = readFileSync(join(root, '.release', 'THIRD_PARTY_NOTICES.nd-dsh.md'), 'utf8')
+  for (const name of Object.keys(packageJson.dependencies ?? {})) {
+    if (!notices.includes(`\`${name}\``)) {
+      throw new Error(`Third-party notices do not name the runtime dependency ${name}`)
+    }
+  }
+  for (const component of ['DeepSeek Harness', 'agent-browser', 'ND Pencil', 'Electron', 'Chromium']) {
+    if (!notices.includes(component)) {
+      throw new Error(`Third-party notices do not include the bundled component ${component}`)
+    }
+  }
+  if (!/Native runtime crates[\s\S]*\| Crate \|/.test(notices)) {
+    throw new Error('Third-party notices do not include the native runtime crate table')
+  }
+}
 
 function verifyProductionRendererIsolation() {
   const outputRoot = join(root, 'out', 'renderer')

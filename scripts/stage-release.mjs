@@ -77,6 +77,13 @@ await fs.copyFile(join(harnessSource, 'THIRD_PARTY_NOTICES.md'), join(harnessOut
 console.log('\nBuilding and staging the ND Pencil runtime...')
 await run(process.execPath, [pencilBuildScript], root)
 
+// Every redistributed surface needs a notice in the artifact: the Harness and
+// Pencil ship their own, the npm/Electron/Chromium files ship beside the app,
+// and this generated aggregate covers the app.asar packages and the crates
+// linked into the native binaries. verify-release.mjs asserts it arrives.
+console.log('\nGenerating the aggregated third-party notices...')
+await run(process.execPath, [join(root, 'scripts', 'gen-third-party-notices.mjs')], root)
+
 const required = [
   join(harnessOutput, 'lib', 'bin.js'),
   join(cordisGroupOutput, 'lib', 'index.js'),
@@ -98,6 +105,7 @@ const required = [
   pencilBinary,
   join(root, 'resources', 'nd-pencil', 'bin', 'web-bundle', 'op_host_web.js'),
   join(root, 'resources', 'nd-pencil', 'bin', 'web-bundle', 'op_host_web_bg.wasm'),
+  join(stageRoot, 'THIRD_PARTY_NOTICES.nd-dsh.md'),
 ]
 for (const path of required) await requireFile(path, 'Release runtime file')
 
