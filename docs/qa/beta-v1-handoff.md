@@ -1,5 +1,7 @@
 # Beta v1 QA Handoff
 
+> **Historical (2026-08-28, PR #12).** Superseded by the dated records under `docs/tasks/` and [beta-release-readiness.md](../plan/beta-release-readiness.md); kept for audit context. See [README.md](README.md) in this folder.
+
 Branch: `feat/improve-beta-v1`
 PR: #12
 Date: 2026-08-28
