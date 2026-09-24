@@ -820,7 +820,23 @@ export class BrowserController {
     await this.ensureSemanticDriver(contents)
     const methodJson = JSON.stringify(method)
     const inputJson = JSON.stringify(input)
-    return contents.executeJavaScript(`window.__ND_BROWSER_BUILTIN_DRIVER__[${methodJson}](${inputJson})`, true)
+    // A page-thrown error does not survive the executeJavaScript boundary with
+    // its message intact (main sees only "Script failed to execute"), so the
+    // driver result crosses as a value and is re-thrown here with its coded
+    // reason — e.g. STALE_BROWSER_REFERENCE — preserved.
+    const wrapped = await contents.executeJavaScript(
+      `(() => { try { return { ok: true, value: window.__ND_BROWSER_BUILTIN_DRIVER__[${methodJson}](${inputJson}) } } catch (error) { return { ok: false, code: error?.code, message: error?.message ?? String(error) } } })()`,
+      true,
+    ) as { ok?: boolean; code?: unknown; message?: unknown; value?: unknown }
+    if (!wrapped || wrapped.ok !== true) {
+      const message = typeof wrapped?.message === 'string' && wrapped.message ? wrapped.message : 'Browser semantic action failed'
+      const error = new Error(message)
+      if (typeof wrapped?.code === 'string' && wrapped.code) {
+        ;(error as Error & { code?: string }).code = wrapped.code
+      }
+      throw error
+    }
+    return wrapped.value
   }
 
   private async ensureSemanticDriver(contents: WebContents): Promise<void> {

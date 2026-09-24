@@ -38,6 +38,10 @@ try {
   })
   if (code !== 0) throw new Error('ND browser benchmark exited with code ' + String(code))
   const result = JSON.parse(await readFile(output, 'utf8'))
+  const correctness = result.builtIn?.correctness
+  if (correctness && (correctness.passwordRedacted === false || correctness.staleRefRejected === false)) {
+    throw new Error('ND browser benchmark correctness failure: ' + JSON.stringify(correctness))
+  }
   process.stdout.write(JSON.stringify({
     status: 'pass',
     output,

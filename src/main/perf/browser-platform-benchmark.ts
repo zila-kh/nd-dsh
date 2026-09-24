@@ -76,14 +76,28 @@ export async function runBrowserPlatformBenchmark(input: {
     const password = firstSnapshot.elements?.find((item) => item.type === 'password')
     const passwordRedacted = Boolean(password?.sensitive && (password.text ?? '') === '')
     const staleCandidate = firstSnapshot.elements?.find((item) => item.name === 'Increment')
-    let staleRefRejected = false
+    const staleRefCheck: {
+      attempted: boolean
+      firstRevision?: number
+      outcome: 'rejected' | 'accepted' | 'skipped'
+      detail?: string
+    } = { attempted: false, outcome: 'skipped' }
     if (staleCandidate?.ref && Number.isInteger(firstSnapshot.revision)) {
+      staleRefCheck.attempted = true
+      staleRefCheck.firstRevision = firstSnapshot.revision!
       await input.browser.click(tabId, staleCandidate.ref, firstSnapshot.revision!)
       try {
         await input.browser.click(tabId, staleCandidate.ref, firstSnapshot.revision!)
+        staleRefCheck.outcome = 'accepted'
+        staleRefCheck.detail = 'second click with the consumed snapshot revision was not rejected'
       } catch (cause) {
-        staleRefRejected = cause instanceof Error && /STALE_BROWSER_REFERENCE|stale|changed after the snapshot/i.test(cause.message)
+        const code = (cause as { code?: unknown }).code
+        const message = cause instanceof Error ? cause.message : String(cause)
+        staleRefCheck.outcome = code === 'STALE_BROWSER_REFERENCE' || /STALE_BROWSER_REFERENCE|stale|changed after the snapshot/i.test(message) ? 'rejected' : 'accepted'
+        staleRefCheck.detail = [typeof code === 'string' ? code : undefined, message].filter(Boolean).join(': ')
       }
+    } else {
+      staleRefCheck.detail = 'first snapshot exposed no Increment ref or no integer revision'
     }
 
     const snapshotMs: number[] = []
@@ -126,6 +140,10 @@ export async function runBrowserPlatformBenchmark(input: {
     }
 
     const state = await input.browserPlatform.state()
+    if (!passwordRedacted) throw new Error('Browser benchmark correctness failure: password values are not redacted in semantic snapshots')
+    if (staleRefCheck.outcome !== 'rejected') {
+      throw new Error(`Browser benchmark correctness failure: consumed snapshot revision was not rejected (${staleRefCheck.outcome}: ${staleRefCheck.detail ?? 'no detail'})`)
+    }
     const result = {
       schemaVersion: 1,
       kind: 'nd-unified-browser-platform-benchmark',
@@ -141,7 +159,8 @@ export async function runBrowserPlatformBenchmark(input: {
         scalePoints: [1, 2, 4, 8],
         correctness: {
           passwordRedacted,
-          staleRefRejected,
+          staleRefRejected: staleRefCheck.outcome === 'rejected',
+          staleRefCheck,
         },
         points,
         snapshotMs: summarize(snapshotMs),
