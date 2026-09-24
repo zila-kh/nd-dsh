@@ -56,6 +56,7 @@ import { TaskWorktreeManager } from './organization/task-worktree.js'
 import { ProviderStore } from './providers.js'
 import { agentTaskBenchmarkScenarioFromEnv, runAgentTaskBenchmark } from './perf/agent-task-benchmark.js'
 import { runBrowserPlatformBenchmark } from './perf/browser-platform-benchmark.js'
+import { runCompanionChromeSmoke } from './perf/companion-chrome-smoke.js'
 import { runPackagedRuntimeSmoke } from './perf/packaged-runtime-smoke.js'
 import { runRuntimeBenchmark } from './perf/runtime-benchmark.js'
 import { flushStartupBenchmark, markStartup } from './perf/startup-metrics.js'
@@ -530,6 +531,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   await flushStartupBenchmark({ core: core?.health ?? null, coreMetrics: startupCoreMetrics })
   const runtimeBenchmarkOutput = process.env.ND_DSH_RUNTIME_BENCH_OUTPUT?.trim()
   const browserPlatformBenchmarkOutput = process.env.ND_DSH_BROWSER_PLATFORM_BENCH_OUTPUT?.trim()
+  const companionChromeSmokeOutput = process.env.ND_DSH_COMPANION_SMOKE_OUTPUT?.trim()
   const packagedSmokeOutput = process.env.ND_DSH_PACKAGED_SMOKE_OUTPUT?.trim()
   const agentTaskBenchmarkOutput = process.env.ND_DSH_AGENT_TASK_BENCH_OUTPUT?.trim()
   if (browserPlatformBenchmarkOutput) {
@@ -543,6 +545,19 @@ async function createWindow(cdpPort: number): Promise<void> {
       setTimeout(() => app.quit(), 25)
     } catch (error) {
       console.error('Unified browser platform benchmark failed:', error)
+      app.exit(1)
+      return
+    }
+  } else if (companionChromeSmokeOutput) {
+    try {
+      await runCompanionChromeSmoke({
+        outputPath: companionChromeSmokeOutput,
+        browser,
+        browserPlatform,
+      })
+      setTimeout(() => app.quit(), 25)
+    } catch (error) {
+      console.error('Browser companion Chrome smoke failed:', error)
       app.exit(1)
       return
     }
