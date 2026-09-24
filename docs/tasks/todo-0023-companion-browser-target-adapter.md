@@ -2,7 +2,7 @@
 
 > Priority: P1
 > Owner: ND browser/runtime
-> Status: done — implementation complete; real-Chrome validation pending
+> Status: merged to main via PR #41 — implementation complete; real-Chrome validation pending
 > Depends on: Browser Companion merged in `main@9e0fcc5` via PR #32, 0021
 
 ## Objective

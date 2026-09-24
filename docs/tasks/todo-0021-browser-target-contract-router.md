@@ -2,7 +2,7 @@
 
 > Priority: P1
 > Owner: ND browser/control plane
-> Status: done — implementation complete; local validation pending
+> Status: merged to main via PR #41 — implementation complete; local validation pending
 > Depends on: 0020
 
 ## Objective

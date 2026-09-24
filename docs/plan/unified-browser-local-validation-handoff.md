@@ -3,39 +3,29 @@
 ## Repository
 
 - Repository: https://github.com/zila-kh/nd-dsh
-- Feature branch: `feat/unified-browser-platform`
-- Feature head at handoff creation: `b805952e744354f743aa28f0305a4836789aa5e5`
-- Immediate base branch: `feat/unified-browser-runtime-spike`
-- Immediate base head: `83ad88228a79a69bd424158c19d97f5ddbf9e568`
-- Planning branch: `feat/unified-browser-platform-plan`
-- Planning head: `41ad7d0adb4abe669a2e13f52a0656f42ca341b1`
-- Default branch: `main`
-- Default head: `9e0fcc523b020c462e96d38c7d2e9a91702fa825`
-- Stacked PRs:
-  - #33 `docs: plan unified built-in and Chrome browser platform` — base `main`
-  - #34 `bench: add built-in browser runtime capability spike` — base planning branch
-  - #37 `feat: implement unified browser platform` — base runtime-spike branch, draft
+- Validation target: current `main`
+- Unified browser implementation: merged via PR #41 (`b558eddad12b`)
+- Browser Companion foundation: merged via PR #32 (`9e0fcc5`)
+- Historical implementation branch: `feat/unified-browser-platform`
 - GitHub Actions: intentionally parked; local verification is authoritative.
 
-Before doing anything else, establish repository truth:
+Before validation:
 
 ~~~bash
+git fetch origin
+git switch main
+git pull --ff-only
 git status --short --branch
 git log -1 --oneline
-bash scripts/collect-git-context.sh main
 ~~~
 
-Repository truth wins if anything differs from this handoff.
-
-Do not work directly on `main`.
-Do not force-push, rebase, merge stacked branches, restore GitHub Actions, or
-merge any PR unless the operator explicitly asks.
+Validation may run read-only on `main`. If a defect is demonstrated, create a new
+`fix/...` or `feat/...` branch from that exact `main` commit. Do not patch
+`main` directly and do not restore GitHub Actions unless the operator asks.
 
 ## Mission
 
-Validate the implementation-complete PRD 0005 unified browser platform, fix only
-demonstrated defects on `feat/unified-browser-platform`, collect the required
-correctness/manual/performance evidence, and report factual merge readiness.
+Validate the merged PRD 0005 unified browser platform, fix only demonstrated defects on a new branch from current `main`, collect the required correctness/manual/performance evidence, and report factual release-evidence readiness.
 
 The implementation unifies:
 
