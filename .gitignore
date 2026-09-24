@@ -4,6 +4,8 @@ dist/
 .release/
 coverage/
 test-results/
+# Real-user production E2E evidence: one directory per run, never committed.
+e2e-results/
 .smoke/
 target/
 .DS_Store
