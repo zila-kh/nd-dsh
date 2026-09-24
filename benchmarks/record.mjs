@@ -4,7 +4,7 @@ import { dirname, join, relative, resolve } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { evaluateEvidence } from './lib/budgets.mjs'
-import { benchmarkRoot } from './lib/core-rpc.mjs'
+import { benchmarkRoot, coreBinaryForProfile } from './lib/core-rpc.mjs'
 import { defaultOutputDir, resultProvenance } from './lib/results.mjs'
 
 if (process.platform !== 'win32') {
@@ -28,8 +28,12 @@ if (process.env.ND_DSH_BENCH_SKIP_PACKAGE_BUILD !== '1') {
 
 const packagedApp = await resolvePortable()
 const staged = await stagedCoreIdentity()
+if (!staged) throw new Error('Release manifest with the staged ND Core SHA-256 is required for packaged benchmark provenance.')
+const releaseCoreBinary = coreBinaryForProfile('release')
+if (!existsSync(releaseCoreBinary)) throw new Error('Release ND Core binary is missing: ' + releaseCoreBinary)
 const shared = safeEnvironment()
 Object.assign(shared, {
+  ND_DSH_CORE_BIN: releaseCoreBinary,
   ND_DSH_BENCH_PROFILE: 'release',
   ND_DSH_BENCH_FIXTURE_REVISION: 'prd-0002-v1',
   ND_DSH_BENCH_RUNS: String(runs),
@@ -38,6 +42,7 @@ Object.assign(shared, {
 // They get the profile above; without this the summary would hash the debug
 // binary while all three documents it summarizes measured the release one.
 process.env.ND_DSH_BENCH_PROFILE = shared.ND_DSH_BENCH_PROFILE
+process.env.ND_DSH_CORE_BIN = releaseCoreBinary
 if (staged) {
   console.log('Staged release manifest identifies nd-core ' + staged.sha256.slice(0, 12) + ' (from ' + staged.path + ').')
 }
@@ -54,7 +59,11 @@ await runNode(['benchmarks/app-startup.mjs'], {
   ND_DSH_BENCH_BACKEND: 'rust-core',
   ND_DSH_BENCH_OUTPUT: packagedDir,
   ND_DSH_BENCH_PACKAGED_APP: packagedApp,
-  ...(staged ? { ND_DSH_BENCH_ND_CORE_SHA256: staged.sha256, ND_DSH_BENCH_ND_CORE_SOURCE: 'release-manifest' } : {}),
+  ...(staged ? {
+    ND_DSH_BENCH_ND_CORE_SHA256: staged.sha256,
+    ND_DSH_BENCH_ND_CORE_SOURCE: 'release-manifest',
+    ND_DSH_BENCH_ND_CORE_PATH: staged.path,
+  } : {}),
 })
 
 const paths = {
@@ -129,7 +138,7 @@ async function stagedCoreIdentity() {
   try {
     const manifest = await readJson(manifestPath)
     const sha256 = manifest?.ndCore?.sha256
-    if (typeof sha256 !== 'string' || !sha256.trim()) return undefined
+    if (typeof sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(sha256.trim())) return undefined
     return { sha256: sha256.trim().toLowerCase(), path: relative(root, manifestPath).replaceAll('\\', '/') }
   } catch {
     return undefined

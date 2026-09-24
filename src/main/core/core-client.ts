@@ -20,7 +20,23 @@ interface PendingRequest {
   resolve(value: unknown): void
   reject(error: Error): void
   timer: ReturnType<typeof setTimeout>
+  requestBytes: number
 }
+
+const DEFAULT_MAX_PENDING_REQUESTS = 1_024
+const DEFAULT_MAX_OUTSTANDING_REQUEST_BYTES = 64 * 1024 * 1024
+const DEFAULT_MAX_QUEUED_REQUEST_BYTES = 32 * 1024 * 1024
+const RESERVED_CONTROL_REQUEST_SLOTS = 32
+const RESERVED_CONTROL_REQUEST_BYTES = 8 * 1024 * 1024
+const CONTROL_METHODS = new Set([
+  'core.cancel',
+  'process.cancel',
+  'process.closeStdin',
+  'terminal.resize',
+  'terminal.close',
+  'scheduler.heartbeat',
+  'scheduler.release',
+])
 
 export interface CoreRequestOptions {
   /**
@@ -34,14 +50,22 @@ export interface CoreRequestOptions {
 
 export interface CoreClientOptions {
   binaryPath?: string
+  maxPendingRequests?: number
+  maxOutstandingRequestBytes?: number
+  maxQueuedRequestBytes?: number
   log?(line: string): void
   onUnexpectedExit?(code: number | null, signal: NodeJS.Signals | null): void
 }
 
 export class CoreClient {
   private child: ChildProcessWithoutNullStreams | undefined
-  private buffer = Buffer.alloc(0)
+  private readonly frameHeader = Buffer.allocUnsafe(4)
+  private frameHeaderBytes = 0
+  private framePayload: Buffer | undefined
+  private framePayloadBytes = 0
   private pending = new Map<string, PendingRequest>()
+  private outstandingRequestBytes = 0
+  private queuedRequestBytes = 0
   private listeners = new Map<string, Set<(frame: NdCoreEventFrame) => void>>()
   private starting: Promise<NdCoreHealth> | undefined
   private healthValue: NdCoreHealth | undefined
@@ -118,6 +142,8 @@ export class CoreClient {
     this.healthValue = undefined
     const child = this.child
     this.child = undefined
+    this.queuedRequestBytes = 0
+    this.resetFrameReader()
     if (!child) return
 
     child.stdin.end()
@@ -159,7 +185,7 @@ export class CoreClient {
       },
     })
     this.child = child
-    this.buffer = Buffer.alloc(0)
+    this.resetFrameReader()
 
     child.stdout.on('data', (chunk: Buffer) => this.handleStdout(generation, chunk))
     child.stderr.setEncoding('utf8')
@@ -201,6 +227,16 @@ export class CoreClient {
     }
     if (!method || method.length > 128) return Promise.reject(new Error('Invalid ND Core method.'))
 
+    const isControl = CONTROL_METHODS.has(method)
+    const configuredMaxPending = this.options.maxPendingRequests
+    const maxPending = configuredMaxPending !== undefined && Number.isFinite(configuredMaxPending)
+      ? Math.max(RESERVED_CONTROL_REQUEST_SLOTS + 1, Math.floor(configuredMaxPending))
+      : DEFAULT_MAX_PENDING_REQUESTS
+    const maxPendingForMethod = isControl ? maxPending : Math.max(1, maxPending - RESERVED_CONTROL_REQUEST_SLOTS)
+    if (this.pending.size >= maxPendingForMethod) {
+      return Promise.reject(new NdCoreError('runtime_busy', 'ND Core client request limit reached.'))
+    }
+
     // Every request here is one main-process <-> nd-core crossing. Counting the
     // attempt (not the successful reply) keeps a composite core operation's
     // claim honest: failed and timed-out crossings cost the caller too.
@@ -212,12 +248,32 @@ export class CoreClient {
     if (encoded.length > ND_CORE_MAX_FRAME_BYTES) {
       return Promise.reject(new Error('ND Core request exceeds the protocol frame limit.'))
     }
+    const frameBytes = encoded.length + 4
+    const configuredMaxOutstandingBytes = this.options.maxOutstandingRequestBytes
+    const maxOutstandingBytes = configuredMaxOutstandingBytes !== undefined && Number.isFinite(configuredMaxOutstandingBytes)
+      ? Math.max(ND_CORE_MAX_FRAME_BYTES + 4, Math.floor(configuredMaxOutstandingBytes))
+      : DEFAULT_MAX_OUTSTANDING_REQUEST_BYTES
+    const maxOutstandingBytesForMethod = isControl
+      ? maxOutstandingBytes
+      : Math.max(ND_CORE_MAX_FRAME_BYTES + 4, maxOutstandingBytes - RESERVED_CONTROL_REQUEST_BYTES)
+    if (this.outstandingRequestBytes + frameBytes > maxOutstandingBytesForMethod) {
+      return Promise.reject(new NdCoreError('runtime_busy', 'ND Core client in-flight request budget is full.'))
+    }
+    const configuredMaxQueuedBytes = this.options.maxQueuedRequestBytes
+    const maxQueuedBytes = configuredMaxQueuedBytes !== undefined && Number.isFinite(configuredMaxQueuedBytes)
+      ? Math.max(ND_CORE_MAX_FRAME_BYTES + 4, Math.floor(configuredMaxQueuedBytes))
+      : DEFAULT_MAX_QUEUED_REQUEST_BYTES
+    const maxQueuedBytesForMethod = isControl ? maxQueuedBytes : Math.max(ND_CORE_MAX_FRAME_BYTES + 4, maxQueuedBytes - RESERVED_CONTROL_REQUEST_BYTES)
+    if (this.queuedRequestBytes + frameBytes > maxQueuedBytesForMethod) {
+      return Promise.reject(new NdCoreError('runtime_busy', 'ND Core client outbound queue is full.'))
+    }
     const header = Buffer.allocUnsafe(4)
     header.writeUInt32BE(encoded.length, 0)
+    const frame = Buffer.concat([header, encoded])
 
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.pending.delete(id)
+        this.takePending(id)
         // The client timer is only a backstop for a sidecar that stopped answering,
         // and it must not become the old defect of a caller giving up while the work
         // continues in Rust: the request is told to stop as well.
@@ -228,39 +284,91 @@ export class CoreClient {
         resolve: (value) => resolve(value as T),
         reject,
         timer,
+        requestBytes: frameBytes,
       })
-      child.stdin.write(Buffer.concat([header, encoded]), (error) => {
+      this.outstandingRequestBytes += frameBytes
+      this.queuedRequestBytes += frameBytes
+      let writeAccounted = true
+      const onWriteComplete = (error?: Error | null): void => {
+        if (writeAccounted) {
+          writeAccounted = false
+          this.queuedRequestBytes = Math.max(0, this.queuedRequestBytes - frameBytes)
+        }
         if (!error) return
-        const pending = this.pending.get(id)
+        const pending = this.takePending(id)
         if (!pending) return
         clearTimeout(pending.timer)
-        this.pending.delete(id)
         pending.reject(error)
-      })
+      }
+      let accepted = false
+      try {
+        accepted = child.stdin.write(frame, onWriteComplete)
+      } catch (error) {
+        onWriteComplete(error instanceof Error ? error : new Error(String(error)))
+        return
+      }
+      if (!accepted) this.options.log?.('[nd-core] stdin backpressure; bounded request queue is holding further writes.')
     })
   }
 
   private handleStdout(generation: number, chunk: Buffer): void {
     if (generation !== this.generation) return
-    this.buffer = Buffer.concat([this.buffer, chunk])
-    while (this.buffer.length >= 4) {
-      const length = this.buffer.readUInt32BE(0)
-      if (length <= 0 || length > ND_CORE_MAX_FRAME_BYTES) {
-        this.failProtocol(new Error('Invalid ND Core frame length: ' + length))
-        return
+    let offset = 0
+    while (offset < chunk.length) {
+      if (!this.framePayload) {
+        const copied = Math.min(4 - this.frameHeaderBytes, chunk.length - offset)
+        chunk.copy(this.frameHeader, this.frameHeaderBytes, offset, offset + copied)
+        this.frameHeaderBytes += copied
+        offset += copied
+        if (this.frameHeaderBytes < 4) return
+
+        const length = this.frameHeader.readUInt32BE(0)
+        if (length <= 0 || length > ND_CORE_MAX_FRAME_BYTES) {
+          this.failProtocol(new Error('Invalid ND Core frame length: ' + length))
+          return
+        }
+        if (chunk.length - offset >= length) {
+          const payload = chunk.subarray(offset, offset + length)
+          offset += length
+          this.frameHeaderBytes = 0
+          this.handlePayload(payload)
+          if (!this.child) return
+          continue
+        }
+        this.framePayload = Buffer.allocUnsafe(length)
+        this.framePayloadBytes = 0
       }
-      if (this.buffer.length < 4 + length) return
-      const payload = this.buffer.subarray(4, 4 + length)
-      this.buffer = this.buffer.subarray(4 + length)
-      let decoded: unknown
-      try {
-        decoded = decode(payload)
-      } catch (error) {
-        this.failProtocol(error instanceof Error ? error : new Error(String(error)))
-        return
-      }
-      this.handleFrame(decoded)
+
+      const payload = this.framePayload
+      const copied = Math.min(payload.length - this.framePayloadBytes, chunk.length - offset)
+      chunk.copy(payload, this.framePayloadBytes, offset, offset + copied)
+      this.framePayloadBytes += copied
+      offset += copied
+      if (this.framePayloadBytes < payload.length) return
+
+      this.framePayload = undefined
+      this.framePayloadBytes = 0
+      this.frameHeaderBytes = 0
+      this.handlePayload(payload)
+      if (!this.child) return
     }
+  }
+
+  private handlePayload(payload: Buffer): void {
+    let decoded: unknown
+    try {
+      decoded = decode(payload)
+    } catch (error) {
+      this.failProtocol(error instanceof Error ? error : new Error(String(error)))
+      return
+    }
+    this.handleFrame(decoded)
+  }
+
+  private resetFrameReader(): void {
+    this.frameHeaderBytes = 0
+    this.framePayload = undefined
+    this.framePayloadBytes = 0
   }
 
   private handleFrame(value: unknown): void {
@@ -274,10 +382,9 @@ export class CoreClient {
         this.failProtocol(new Error('ND Core response is missing its request id.'))
         return
       }
-      const pending = this.pending.get(frame.id)
+      const pending = this.takePending(frame.id)
       if (!pending) return
       clearTimeout(pending.timer)
-      this.pending.delete(frame.id)
       if (frame.error) pending.reject(new NdCoreError(frame.error.code, frame.error.message))
       else pending.resolve(frame.result)
       return
@@ -301,6 +408,8 @@ export class CoreClient {
     this.restartResetTimer = undefined
     this.child = undefined
     this.healthValue = undefined
+    this.queuedRequestBytes = 0
+    this.resetFrameReader()
     this.rejectPending(new Error('ND Core exited unexpectedly (code=' + String(code) + ', signal=' + String(signal) + ').'))
     if (this.closing) return
 
@@ -341,6 +450,8 @@ export class CoreClient {
     const child = this.child
     this.child = undefined
     this.healthValue = undefined
+    this.queuedRequestBytes = 0
+    this.resetFrameReader()
     this.rejectPending(error)
     try { child?.kill() } catch { /* best effort */ }
   }
@@ -363,6 +474,16 @@ export class CoreClient {
       pending.reject(error)
     }
     this.pending.clear()
+    this.outstandingRequestBytes = 0
+    this.queuedRequestBytes = 0
+  }
+
+  private takePending(id: string): PendingRequest | undefined {
+    const pending = this.pending.get(id)
+    if (!pending) return undefined
+    this.pending.delete(id)
+    this.outstandingRequestBytes = Math.max(0, this.outstandingRequestBytes - pending.requestBytes)
+    return pending
   }
 }
 

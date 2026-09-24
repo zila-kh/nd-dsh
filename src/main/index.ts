@@ -85,6 +85,8 @@ app.enableSandbox()
 
 let mainWindow: BrowserWindow | undefined
 let activeHarness: HarnessService | undefined
+let activeQa: QaService | undefined
+let activeProjectRuntime: ProjectRuntimeService | undefined
 let activeBrowser: BrowserController | undefined
 let activeBrowserCompanion: BrowserCompanionService | undefined
 let activeBrowserPlatform: BrowserPlatformService | undefined
@@ -330,6 +332,7 @@ async function createWindow(cdpPort: number): Promise<void> {
       })
     },
   })
+  activeProjectRuntime = projectRuntime
   const design = new DesignService(workspace, browser)
   const ndPencil = new NdPencilController(window, workspace, projectRoot(), ndPencilPreload)
   await ndPencil.initialize()
@@ -342,6 +345,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter, projectRuntime, capabilities, executionCoordinator, taskWorktrees, core, { spawnProcess: unscopedCoreSpawn, stopProcess: stopCoreManagedChildProcess }, browserPlatform, decisionSupport)
   const approvalGate = new OrganizationApprovalGate(organizationStore, harness, core)
   const qa = new QaService()
+  activeQa = qa
   qa.setProjectRoot(workspace.state().root)
   const disposeIpc = registerIpc({ window, preloadPath: preload, browser, dshSurface, engines, engineRouter, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, qa, sessionArchive, usageLedger, capabilities, organizationStore })
   const disposeBrowserCompanionIpc = registerBrowserCompanionIpc(window, browserCompanion)
@@ -658,11 +662,10 @@ async function createWindow(cdpPort: number): Promise<void> {
     disposeIpc()
     disposeCoreReady()
     disposeHarnessJournalRecovery()
-    void qa.dispose()
-    void projectRuntime.dispose()
+    if (activeQa === qa) { activeQa = undefined; beginQaClose(qa) }
+    if (activeProjectRuntime === projectRuntime) { activeProjectRuntime = undefined; beginProjectRuntimeClose(projectRuntime) }
     design.destroy()
-    if (activeNdPencil === ndPencil) activeNdPencil = undefined
-    void ndPencil.destroy()
+    if (activeNdPencil === ndPencil) { activeNdPencil = undefined; beginNdPencilClose(ndPencil) }
     if (activeEngineRouter === engineRouter) { activeEngineRouter = undefined; beginEngineRouterClose(engineRouter) }
     if (activeBrowserPlatform === browserPlatform) { activeBrowserPlatform = undefined; beginBrowserPlatformClose(browserPlatform) }
     if (activeBrowser === browser) { activeBrowser = undefined; beginBrowserClose(browser) }
@@ -678,7 +681,8 @@ async function createWindow(cdpPort: number): Promise<void> {
     if (activeClaudeEngine === claudeEngine) activeClaudeEngine = undefined
     if (activeTerminalManager === terminalManager) { activeTerminalManager = undefined; beginTerminalClose(terminalManager) }
     if (activeExecutionCoordinator === executionCoordinator) { activeExecutionCoordinator = undefined; beginExecutionCoordinatorClose(executionCoordinator) }
-    if (core && activeCore === core) { activeCore = undefined; beginCoreClose(core) }
+    const coreToClose = core && activeCore === core ? core : undefined
+    if (coreToClose) activeCore = undefined
     beginCodexClose(codexEngine)
     beginAntigravityClose(antigravityEngine)
     beginZcodeClose(zcodeEngine)
@@ -686,6 +690,7 @@ async function createWindow(cdpPort: number): Promise<void> {
     beginCursorClose(cursorEngine)
     beginClaudeClose(claudeEngine)
     beginHarnessClose(harness)
+    if (coreToClose) beginCoreCloseAfterTrackedServices(coreToClose)
   })
 }
 
@@ -707,10 +712,21 @@ if (hasSingleInstanceLock) {
 app.on('before-quit', (event) => {
   if (shutdownStarted) return
   const ndPencilForRetry = activeNdPencil
+  let coreToClose: CoreClient | undefined
   if (activeHarness) {
     const harness = activeHarness
     activeHarness = undefined
     beginHarnessClose(harness)
+  }
+  if (activeQa) {
+    const qa = activeQa
+    activeQa = undefined
+    beginQaClose(qa)
+  }
+  if (activeProjectRuntime) {
+    const projectRuntime = activeProjectRuntime
+    activeProjectRuntime = undefined
+    beginProjectRuntimeClose(projectRuntime)
   }
   if (activeBrowserPlatform) {
     const browserPlatform = activeBrowserPlatform
@@ -773,15 +789,15 @@ app.on('before-quit', (event) => {
     beginExecutionCoordinatorClose(executionCoordinator)
   }
   if (activeCore) {
-    const core = activeCore
+    coreToClose = activeCore
     activeCore = undefined
-    beginCoreClose(core)
   }
   if (activeNdPencil) {
     const ndPencil = activeNdPencil
     activeNdPencil = undefined
     beginNdPencilClose(ndPencil)
   }
+  if (coreToClose) beginCoreCloseAfterTrackedServices(coreToClose)
   if (closingServices.size === 0) {
     // Nothing tracked is left to close, but a browser daemon can still be running:
     // it may have been started by a child that already exited.
@@ -822,6 +838,7 @@ app.on('before-quit', (event) => {
     if (results.some((result) => result.status === 'rejected')) {
       shutdownStarted = false
       if (ndPencilForRetry) activeNdPencil = ndPencilForRetry
+      if (coreToClose) activeCore = coreToClose
       console.error('ND quit was canceled because the Freeform document could not be saved safely.')
       return
     }
@@ -861,12 +878,26 @@ function beginExecutionCoordinatorClose(coordinator: ExecutionCoordinator): void
   trackClose(coordinator.close().catch((error) => console.error('Failed to close ND runtime permits cleanly:', error)))
 }
 
-function beginCoreClose(core: CoreClient): void {
-  trackClose(core.close().catch((error) => console.error('Failed to close ND Core cleanly:', error)))
+function beginCoreCloseAfterTrackedServices(core: CoreClient): void {
+  // Services use ND Core for their final flush, terminal close, and permit
+  // release. Snapshot their shutdown promises before tracking this dependent
+  // close so the core remains available until all clients have finished.
+  const dependencies = [...closingServices]
+  trackClose(Promise.all(dependencies).then(() => core.close()).catch((error) => {
+    console.error('Failed to close ND Core after its clients stopped:', error)
+  }))
 }
 
 function beginHarnessClose(harness: HarnessService): void {
   trackClose(harness.close().catch((error) => console.error('Failed to close ND runtime cleanly:', error)))
+}
+
+function beginQaClose(qa: QaService): void {
+  trackClose(qa.dispose().catch((error) => console.error('Failed to stop project checks cleanly:', error)))
+}
+
+function beginProjectRuntimeClose(projectRuntime: ProjectRuntimeService): void {
+  trackClose(projectRuntime.dispose().catch((error) => console.error('Failed to stop the project runtime cleanly:', error)))
 }
 
 function beginCodexClose(codexEngine: CodexCliEngine): void {
@@ -914,6 +945,9 @@ function trackClose(promise: Promise<void>): void {
   let task: Promise<void>
   task = promise.finally(() => closingServices.delete(task))
   closingServices.add(task)
+  // Keep rejection visible to the quit handler, while preventing an
+  // unhandled-rejection if a macOS window closes before the app quits.
+  void task.catch(() => undefined)
 }
 
 function reportFatalStartupError(error: unknown): void {
