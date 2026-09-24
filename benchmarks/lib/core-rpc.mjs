@@ -186,8 +186,12 @@ export class TerminalHandshake {
 }
 
 export function defaultCoreBinary(profile = process.env.ND_DSH_BENCH_PROFILE || 'debug') {
+  return resolve(process.env.ND_DSH_CORE_BIN?.trim() || coreBinaryForProfile(profile))
+}
+
+export function coreBinaryForProfile(profile) {
   const name = process.platform === 'win32' ? 'nd-core.exe' : 'nd-core'
-  return process.env.ND_DSH_CORE_BIN?.trim() || join(benchmarkRoot, 'target', profile, name)
+  return resolve(join(benchmarkRoot, 'target', profile, name))
 }
 
 export class CoreRpc extends EventEmitter {

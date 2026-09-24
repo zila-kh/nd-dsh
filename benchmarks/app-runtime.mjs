@@ -1,5 +1,6 @@
 import { execFile, spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
+import { existsSync } from 'node:fs'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -7,7 +8,7 @@ import process from 'node:process'
 import { promisify } from 'node:util'
 import { defaultOutputDir, writeResult } from './lib/results.mjs'
 import { sleep, summarize } from './lib/metrics.mjs'
-import { benchmarkRoot } from './lib/core-rpc.mjs'
+import { benchmarkRoot, coreBinaryForProfile } from './lib/core-rpc.mjs'
 
 const execFileAsync = promisify(execFile)
 const require = createRequire(import.meta.url)
@@ -18,6 +19,10 @@ if (!backend) {
   console.error('Usage: node benchmarks/app-runtime.mjs [rust-core] (legacy runtime retired)')
   process.exit(2)
 }
+const releaseCoreBinary = coreBinaryForProfile('release')
+if (!existsSync(releaseCoreBinary)) throw new Error('Release ND Core binary is missing: ' + releaseCoreBinary)
+process.env.ND_DSH_BENCH_PROFILE = 'release'
+process.env.ND_DSH_CORE_BIN = releaseCoreBinary
 const runs = Math.max(2, Number(process.env.ND_DSH_BENCH_RUNS || 5))
 const outputDir = resolve(process.env.ND_DSH_BENCH_OUTPUT || defaultOutputDir())
 const workspace = await mkdtemp(join(tmpdir(), 'nd-dsh-app-runtime-workspace-'))
@@ -34,6 +39,8 @@ try {
     try {
       const env = safeEnvironment()
       Object.assign(env, {
+        ND_DSH_BENCH_PROFILE: 'release',
+        ND_DSH_CORE_BIN: releaseCoreBinary,
         ND_DSH_CORE_PROFILE: 'release',
         ND_DSH_WORKSPACE: workspace,
         ND_DSH_USER_DATA_DIR: userData,

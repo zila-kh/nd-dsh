@@ -28,9 +28,10 @@ export async function collectSuggestionIndex(
 ): Promise<WorkspaceSuggestion[]> {
   const entries: WorkspaceSuggestion[] = []
   const queue: string[] = ['']
-  while (queue.length > 0 && entries.length < limit) {
-    const directory = queue.shift()
-    if (directory === undefined) break
+  let queueIndex = 0
+  while (queueIndex < queue.length && entries.length < limit) {
+    const directory = queue[queueIndex++]
+    if (directory === undefined) continue
     let children
     try {
       children = await readdir(directory)

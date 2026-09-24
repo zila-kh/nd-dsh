@@ -21,11 +21,16 @@ for (let index = 0; index < runs; index += 1) {
   const userData = await mkdtemp(join(tmpdir(), 'nd-dsh-app-bench-user-data-'))
   const output = join(workspace, 'startup.json')
   try {
+    const appEnvironment = safeEnvironment()
+    // Packaged startup must exercise the core bundled inside the app, not the
+    // external release binary used by the source runtime benchmarks.
+    delete appEnvironment.ND_DSH_CORE_BIN
+    delete appEnvironment.ND_DSH_CORE_PROFILE
     const child = spawn(resolve(executable), [], {
       windowsHide: true,
       stdio: 'ignore',
       env: {
-        ...safeEnvironment(),
+        ...appEnvironment,
         ND_DSH_BENCHMARK_OUTPUT: output,
         ND_DSH_BENCHMARK_EXIT: '1',
         ND_DSH_WORKSPACE: workspace,

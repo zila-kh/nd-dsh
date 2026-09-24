@@ -16,12 +16,23 @@ export function defaultOutputDir() {
 }
 
 export async function resultProvenance() {
+  const binary = defaultCoreBinary()
+  const declaredProfile = process.env.ND_DSH_BENCH_PROFILE?.trim()
+  const binaryProfile = profileFromBinaryPath(binary)
+  if (declaredProfile && binaryProfile && declaredProfile !== binaryProfile) {
+    throw new Error(`Benchmark profile ${declaredProfile} does not match ND Core binary path profile ${binaryProfile}: ${binary}`)
+  }
   return {
     commit: process.env.GITHUB_SHA?.trim() || await repositoryCommit(),
-    buildProfile: process.env.ND_DSH_BENCH_PROFILE?.trim() || 'release',
+    buildProfile: declaredProfile || binaryProfile || 'custom',
     fixtureRevision: process.env.ND_DSH_BENCH_FIXTURE_REVISION?.trim() || 'prd-0002-v1',
     ndCore: await ndCoreProvenance(),
   }
+}
+
+function profileFromBinaryPath(binary) {
+  const match = /[\\/]target[\\/](debug|release)[\\/]/i.exec(binary)
+  return match?.[1]?.toLowerCase()
 }
 
 /**
@@ -37,10 +48,11 @@ export async function resultProvenance() {
 async function ndCoreProvenance() {
   const declared = process.env.ND_DSH_BENCH_ND_CORE_SHA256?.trim()
   if (declared) {
+    if (!/^[a-f0-9]{64}$/i.test(declared)) throw new Error('ND Core benchmark provenance must be a 64-character SHA-256 digest.')
     return {
       sha256: declared.toLowerCase(),
       source: process.env.ND_DSH_BENCH_ND_CORE_SOURCE?.trim() || 'declared',
-      path: process.env.ND_DSH_CORE_BIN?.trim() || null,
+      path: process.env.ND_DSH_BENCH_ND_CORE_PATH?.trim() || process.env.ND_DSH_CORE_BIN?.trim() || null,
     }
   }
   const binary = defaultCoreBinary()

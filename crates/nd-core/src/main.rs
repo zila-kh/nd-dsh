@@ -158,8 +158,8 @@ fn main() -> Result<()> {
         }
     }
 
-    dispatcher.shutdown();
     state.shutdown();
+    dispatcher.shutdown();
     eprintln!("[nd-core] stopped");
     Ok(())
 }
