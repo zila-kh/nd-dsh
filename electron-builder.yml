@@ -16,6 +16,8 @@ files:
 extraResources:
   - from: .release/release-manifest.json
     to: release-manifest.json
+  - from: .release/THIRD_PARTY_NOTICES.nd-dsh.md
+    to: THIRD_PARTY_NOTICES.nd-dsh.md
   - from: .release/nd-core
     to: nd-core
   - from: .release/nd-browser-host

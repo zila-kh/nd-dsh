@@ -276,7 +276,7 @@ resources/nd-pencil/      bundled ND Pencil engine (pinned upstream source: vend
 
 ## License
 
-Released under the **MIT License** — see [`LICENSE`](LICENSE). DeepSeek Harness and Codex remain third-party runtime dependencies governed by their respective licenses and distribution terms.
+Released under the **MIT License** — see [`LICENSE`](LICENSE). DeepSeek Harness and Codex remain third-party runtime dependencies governed by their respective licenses and distribution terms. Packaged builds ship an aggregated `THIRD_PARTY_NOTICES.nd-dsh.md` (generated at release staging from the actual dependency closure) alongside each bundled runtime's own license notices.
 
 ---
 

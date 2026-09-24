@@ -27,6 +27,7 @@
     "verify": "node scripts/verify.mjs && node scripts/verify-nd-pencil.mjs && node scripts/verify-vendor-vscode-git.mjs",
     "release:stage": "node scripts/stage-release.mjs",
     "release:verify": "node scripts/verify-release.mjs",
+    "notices:generate": "node scripts/gen-third-party-notices.mjs",
     "dist:win:dir": "corepack pnpm release:stage && corepack pnpm build && corepack pnpm release:verify && electron-builder --win --dir",
     "dist:win:portable": "corepack pnpm release:stage && corepack pnpm build && corepack pnpm release:verify && electron-builder --win portable",
     "dsh:build": "node scripts/build-harness.mjs",
