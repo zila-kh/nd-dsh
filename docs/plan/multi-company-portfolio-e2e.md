@@ -3,6 +3,8 @@
 Status: **merged to main via PR #42; layers 1–2 and the whole-app sweep validated green locally on 2026-09-24 — see “Local validation evidence” below**  
 Historical branch: `feat/e2e-multi-company-portfolio`
 
+> **Layer 4 — real-user production journey:** the coherent multi-company / multi-autonomy / parallel / restart end-to-end run (three companies, five tiny projects, switch-while-running evidence, restart recovery) lives in [`real-user-production-e2e.md`](./real-user-production-e2e.md) and runs with `corepack pnpm e2e:prod:user` (or the full matrix via `corepack pnpm e2e:prod`).
+
 ## Goal
 
 Prove ND's strongest organization feature with a deliberately small fixture:

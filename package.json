@@ -21,6 +21,8 @@
     "e2e": "playwright test",
     "e2e:portfolio": "playwright test e2e/organization-portfolio.spec.ts",
     "e2e:portfolio:models": "playwright test e2e/organization-portfolio-models.spec.ts",
+    "e2e:prod:user": "node e2e/real-user-prod.mjs",
+    "e2e:prod": "node scripts/e2e-prod.mjs",
     "e2e:models": "node e2e/beta-multimodel.mjs",
     "verify": "node scripts/verify.mjs && node scripts/verify-nd-pencil.mjs && node scripts/verify-vendor-vscode-git.mjs",
     "release:stage": "node scripts/stage-release.mjs",
