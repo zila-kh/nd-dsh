@@ -132,6 +132,11 @@ async function dispatch(method, params) {
       const tabId = tabIdOf(params)
       const url = String(params.url ?? '')
       if (!/^https?:\/\//i.test(url)) throw new Error('Only http/https navigation is allowed by the browser companion')
+      // A script-initiated navigation is a client redirect to Chrome: it
+      // replaces the tab's current session-history entry rather than pushing
+      // one, so page.back/page.forward only traverse history the page itself
+      // created (links, form posts, redirects). Reproduced on Chrome 153 for
+      // both tabs.update and an injected location.assign.
       await chrome.tabs.update(tabId, { url })
       await waitForComplete(tabId)
       return normalizeTab(await chrome.tabs.get(tabId))
