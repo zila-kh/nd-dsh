@@ -251,7 +251,9 @@ test('top-level company and project switchers expose only the selected portfolio
   await expect(projectSwitcher).toContainText(PROJECTS.dispatch.name)
 
   // The active Company Workspace board must show only this project's work.
+  // The workspace view opens on Overview; the task board lives in Work.
   await page.getByRole('button', { name: 'Company Workspace', exact: true }).click()
+  await page.getByRole('button', { name: 'Work', exact: true }).click()
   await expect(page.getByText('Dispatch status badge', { exact: true })).toBeVisible()
   await expect(page.getByText('Dispatch search', { exact: true })).toBeVisible()
   await expect(page.getByText('Driver job card', { exact: true })).toHaveCount(0)
@@ -262,6 +264,9 @@ test('top-level company and project switchers expose only the selected portfolio
   await expect(companySwitcher).toContainText(COMPANY_B.name)
   await expect(projectSwitcher).toContainText(PROJECTS.catalog.name)
 
+  // Re-assert Work so a remounted workspace view cannot silently fall back to
+  // Overview and make the board assertions vacuous.
+  await page.getByRole('button', { name: 'Work', exact: true }).click()
   await expect(page.getByText('Catalog item row', { exact: true })).toBeVisible()
   await expect(page.getByText('Dispatch status badge', { exact: true })).toHaveCount(0)
   await expect(page.getByText('Driver job card', { exact: true })).toHaveCount(0)

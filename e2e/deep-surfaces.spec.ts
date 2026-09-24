@@ -6,13 +6,14 @@
 /// <reference lib="dom" />
 
 import { expect, test } from '@playwright/test'
-import { closeApp, createWorkspaceDir, launchApp, type LaunchedApp } from './fixtures.js'
+import { closeApp, createWorkspaceDir, e2eModelConfig, E2E_PROVIDER_NAME, launchApp, type LaunchedApp } from './fixtures.js'
 
 test.describe.configure({ mode: 'serial' })
 
 let launched: LaunchedApp
 let projectWorkspace: string
 const rendererErrors: string[] = []
+const E2E_MODELS = e2eModelConfig().modelIds
 
 test.beforeAll(async () => {
   // The project form needs a folder that exists on the machine running the
@@ -67,14 +68,14 @@ test('Bootstrap: create company and project for deep-surface tests', async () =>
 
 // ─── Model Settings ──────────────────────────────────────────────────────────
 
-test('Model settings: seeded opencode-go provider is listed and configurable', async () => {
+test('Model settings: the seeded E2E provider is listed and configurable', async () => {
   const { page } = launched
   await page.getByRole('navigation', { name: 'ND-DSH navigation' }).getByTitle('Settings').click()
   await page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab', { name: 'Models', exact: true }).click()
   await expect(page).toHaveURL(/#\/settings\?tab=model$/)
 
-  // The seeded opencode-go provider should appear in the detail panel heading.
-  await expect(page.getByRole('heading', { name: 'OpenCode Go' })).toBeVisible()
+  // The seeded E2E provider should appear in the detail panel heading.
+  await expect(page.getByRole('heading', { name: E2E_PROVIDER_NAME })).toBeVisible()
 
   // Provider is enabled — the enable toggle should reflect that.
   await expect(page.getByText('Enabled', { exact: true })).toBeVisible()
@@ -82,11 +83,11 @@ test('Model settings: seeded opencode-go provider is listed and configurable', a
   // API format field shows the OpenAI-compatible format (inside the combobox).
   await expect(page.getByRole('combobox', { name: 'API format' })).toBeVisible()
 
-  // The seeded model mimo-v2.5 appears in the model list (scope to the
+  // The first seeded model appears in the model list (scope to the
   // "Model list" section to avoid matching the titlebar model trigger).
   const modelList = page.getByText('Model list').locator('..').locator('span.font-mono')
   await expect(modelList.first()).toBeVisible()
-  await expect(modelList.first()).toHaveText('mimo-v2.5')
+  await expect(modelList.first()).toHaveText(E2E_MODELS[0]!)
 
   // Test connection button is present (provider-level, not the per-model one).
   await expect(page.getByRole('button', { name: 'Test connection', exact: true })).toBeVisible()
@@ -357,7 +358,7 @@ test('Chat: create a session and verify the composer is ready', async () => {
   await page.getByRole('navigation', { name: 'ND-DSH navigation' }).getByTitle('Agent').click()
 
   // Verify the chat composer textarea is present.
-  const textarea = page.getByPlaceholder('Ask the agent to work in this workspace — use @ for files and / for skills')
+  const textarea = page.getByPlaceholder('Ask the agent to work here — @ files/browser targets, / skills')
   await expect(textarea).toBeVisible()
 
   // Type a message — the send button should enable when text is entered.
@@ -375,10 +376,13 @@ test('Chat: create a session and verify the composer is ready', async () => {
   expect(rendererErrors).toEqual([])
 })
 
-test('Chat: model picker shows the seeded mimo-v2.5 route', async () => {
+test('Chat: model picker shows the seeded E2E model route', async () => {
   const { page } = launched
   // The model trigger button shows the current model selection.
-  const modelTrigger = page.getByRole('button', { name: /Model|mimo|OpenCode/ }).first()
+  const modelTrigger = page.getByRole('button', { name: 'Model' })
+    .or(page.getByRole('button', { name: E2E_PROVIDER_NAME }))
+    .or(page.getByRole('button', { name: E2E_MODELS[0]! }))
+    .first()
   await expect(modelTrigger).toBeVisible()
 
   // Click to open the model menu.

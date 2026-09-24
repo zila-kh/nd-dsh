@@ -1,10 +1,15 @@
-import 'dotenv/config'
+import { config as loadDotenv } from 'dotenv'
 import { spawn, spawnSync } from 'node:child_process'
 import { readFileSync, readdirSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
+
+// E2E credentials live in the gitignored .env.e2e; plain .env supplies the rest
+// (for example ND_DSH_CDP_PORT). Load .env.e2e first so it wins.
+loadDotenv({ path: '.env.e2e', quiet: true })
+loadDotenv({ quiet: true })
 
 /**
  * A real, writable project workspace for specs that create an ND project.
@@ -38,54 +43,72 @@ function git(cwd: string, args: string[]): void {
   }
 }
 
+export const E2E_PROVIDER_ID = 'e2e-openai-compatible'
+export const E2E_PROVIDER_NAME = 'E2E OpenAI Compatible'
+
+const DUMMY_MODEL_IDS = ['model-id-1', 'model-id-2', 'model-id-3']
+
+export interface E2eModelConfig {
+  /** True when all five E2E_MODEL_* variables are present. */
+  configured: boolean
+  baseUrl: string
+  apiKey: string
+  modelIds: string[]
+  context: string
+}
+
 /**
- * Pre-seed provider metadata into the throwaway E2E profile.
- *
- * Local live-model specs may explicitly opt into one shared OpenAI-compatible
- * endpoint plus exactly three model ids through .env. Ordinary deterministic
- * E2E ignores those variables and retains the existing OpenCode Go fixture route.
- *
- * The apiKey is written only into the throwaway profile. ProviderStore migrates
- * plaintext legacy input into Electron safeStorage on first persist; .env itself
- * is gitignored and must never be committed.
+ * The single OpenAI-compatible route every E2E layer uses, plus the dummy
+ * placeholders deterministic specs see when no credentials are configured.
  */
-async function seedProviders(userDataDir: string, useConfiguredModels = false): Promise<void> {
+export function e2eModelConfig(): E2eModelConfig {
   const baseUrl = process.env.E2E_MODEL_BASE_URL?.trim() ?? ''
   const apiKey = process.env.E2E_MODEL_API_KEY?.trim() ?? ''
-  const modelIds = [
+  const configuredIds = [
     process.env.E2E_MODEL_1?.trim() ?? '',
     process.env.E2E_MODEL_2?.trim() ?? '',
     process.env.E2E_MODEL_3?.trim() ?? '',
   ]
-  const envConfigured = useConfiguredModels && Boolean(baseUrl || apiKey || modelIds.some(Boolean))
+  const configured = Boolean(baseUrl && apiKey && configuredIds.every(Boolean))
+  return {
+    configured,
+    baseUrl: configured ? baseUrl : 'https://your-endpoint.example/v1',
+    apiKey: configured ? apiKey : 'sk-test-placeholder',
+    modelIds: configured ? configuredIds : [...DUMMY_MODEL_IDS],
+    context: process.env.E2E_MODEL_CONTEXT?.trim() || '256000',
+  }
+}
 
-  if (useConfiguredModels && (!baseUrl || !apiKey || modelIds.some((id) => !id))) {
+/**
+ * Pre-seed provider metadata into the throwaway E2E profile.
+ *
+ * Every E2E layer routes through one shared OpenAI-compatible provider exposing
+ * exactly the three E2E_MODEL_* ids from .env.e2e (or .env). Deterministic specs
+ * that never execute a model still need the provider record, so without
+ * credentials it is seeded with explicit dummy placeholders and stays green
+ * offline.
+ *
+ * The apiKey is written only into the throwaway profile. ProviderStore migrates
+ * plaintext legacy input into Electron safeStorage on first persist; the env
+ * file itself is gitignored and must never be committed.
+ */
+async function seedProviders(userDataDir: string, useConfiguredModels = false): Promise<void> {
+  const config = e2eModelConfig()
+  if (useConfiguredModels && !config.configured) {
     throw new Error(
       'Incomplete E2E model configuration. Set E2E_MODEL_BASE_URL, E2E_MODEL_API_KEY, E2E_MODEL_1, E2E_MODEL_2 and E2E_MODEL_3 together.',
     )
   }
 
-  const providers = envConfigured
-    ? [{
-        id: 'e2e-openai-compatible',
-        name: 'E2E OpenAI Compatible',
-        enabled: true,
-        baseUrl,
-        apiFormat: 'OpenAI compatible (/v1/chat/completions)',
-        apiKey,
-        models: modelIds.map((id) => ({ id, context: process.env.E2E_MODEL_CONTEXT?.trim() || '256000' })),
-      }]
-    : [{
-        id: 'opencode-go',
-        name: 'OpenCode Go',
-        enabled: true,
-        baseUrl: 'https://opencode.ai/zen/go/v1',
-        apiFormat: 'OpenAI compatible (/v1/chat/completions)',
-        apiKey: process.env.OPENCODE_API_KEY || '',
-        models: [
-          { id: 'mimo-v2.5', context: '256000' },
-        ],
-      }]
+  const providers = [{
+    id: E2E_PROVIDER_ID,
+    name: E2E_PROVIDER_NAME,
+    enabled: true,
+    baseUrl: config.baseUrl,
+    apiFormat: 'OpenAI compatible (/v1/chat/completions)',
+    apiKey: config.apiKey,
+    models: config.modelIds.map((id) => ({ id, context: config.context })),
+  }]
 
   await writeFile(join(userDataDir, 'providers.json'), JSON.stringify(providers, null, 2), 'utf8')
 }
@@ -118,7 +141,7 @@ const appDiagnostics = new WeakMap<ElectronApplication, AppDiagnostics>()
 export interface LaunchAppOptions {
   /** Reuse an existing profile when a spec needs to prove restart persistence. */
   userDataDir?: string
-  /** Opt into the .env OpenAI-compatible E2E_MODEL_1/2/3 provider. */
+  /** Require the .env.e2e E2E_MODEL_1/2/3 route and fail fast when it is incomplete. */
   useConfiguredModels?: boolean
 }
 
@@ -202,12 +225,53 @@ export async function closeApp(launched: LaunchedApp | undefined, options: Close
 
     console.log(`[e2e-close] path=${path} pid=${child.pid ?? 'unknown'} quitRequestSettled=${quitRequestSettled} exited=${exited} descendantsBefore=${initialTree.length}`)
     if (!exited) throw new Error('Electron process did not exit after bounded e2e shutdown cleanup.')
+
+    // The worker keeps Playwright's own Electron child handle and its CDP
+    // sockets alive until the ElectronApplication is disposed, which makes it
+    // miss the 120 s teardown window even though every spec passed (task 0010).
+    // Bounded, so a stuck dispose cannot reintroduce the hang this graceful
+    // close path exists to avoid.
+    await settlesWithin(app.close().catch(() => undefined), 15_000)
+    if (process.env.ND_E2E_TEARDOWN_DIAG) logActiveHandles()
   } finally {
     appDiagnostics.delete(app)
     if (options.removeUserData !== false) {
       await rm(userDataDir, { recursive: true, force: true }).catch(() => undefined)
     }
   }
+}
+
+/**
+ * Name what still keeps the worker's event loop alive. The worker-teardown
+ * watchdog fires 120 s after the last spec has already passed, so the leaking
+ * handle has to be printed rather than guessed at: the listing records whether
+ * each handle still holds a ref, and enough of its identity (pid, fd, peer,
+ * spawn args) to name the process or socket behind it.
+ */
+function logActiveHandles(): void {
+  const internals = process as unknown as {
+    _getActiveHandles?: () => unknown[]
+    _getActiveRequests?: () => unknown[]
+  }
+  const describe = (item: unknown): string => {
+    const record = item as Record<string, unknown>
+    const ctor = (record?.constructor as { name?: string } | undefined)?.name ?? typeof item
+    const bits: string[] = []
+    if (typeof record.pid === 'number') bits.push(`pid=${record.pid}`)
+    if (typeof record.fd === 'number') bits.push(`fd=${record.fd}`)
+    if (typeof record.remoteAddress === 'string' && record.remoteAddress) {
+      bits.push(`peer=${record.remoteAddress}:${String(record.remotePort ?? '')}`)
+    }
+    if (typeof record.spawnfile === 'string') bits.push(record.spawnfile)
+    if (Array.isArray(record.spawnargs)) bits.push((record.spawnargs as unknown[]).slice(0, 2).join(' '))
+    const hasRef = (item as { hasRef?: () => boolean })?.hasRef
+    if (typeof hasRef === 'function') bits.push(hasRef.call(item) ? 'ref' : 'unref')
+    return bits.length ? `${ctor}(${bits.join(' ')})` : ctor
+  }
+  const handles = internals._getActiveHandles?.() ?? []
+  const requests = internals._getActiveRequests?.() ?? []
+  console.log(`[e2e-teardown] handles=${handles.length}: ${handles.map(describe).join(' | ') || 'none'}`)
+  console.log(`[e2e-teardown] requests=${requests.length}: ${requests.map(describe).join(' | ') || 'none'}`)
 }
 
 async function settlesWithin(promise: Promise<unknown>, timeoutMs: number): Promise<boolean> {

@@ -4,7 +4,7 @@
 /// <reference lib="dom" />
 
 import { expect, test } from '@playwright/test'
-import { closeApp, createWorkspaceDir, launchApp, type LaunchedApp } from './fixtures.js'
+import { closeApp, createWorkspaceDir, e2eModelConfig, E2E_PROVIDER_NAME, launchApp, type LaunchedApp } from './fixtures.js'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -24,11 +24,12 @@ test.afterAll(async () => {
 })
 
 test('QA: full work loop — company, project, PM plan, worker, reviewer, completion', async () => {
-  // This spec drives a real organization run, so it needs a live model route:
-  // the fixture seeds opencode-go from OPENCODE_API_KEY, and with no key the
-  // run can only fail. Skipping keeps the suite honest about what it covered —
-  // previously it simply failed on every keyless runner, including CI.
-  test.skip(!process.env.OPENCODE_API_KEY, 'requires OPENCODE_API_KEY for the live organization loop')
+  // This spec drives a real organization run, so it needs the live model route:
+  // the fixture seeds one OpenAI-compatible provider from E2E_MODEL_* in
+  // .env.e2e, and without those variables the run can only fail. Skipping keeps
+  // the suite honest about what it covered — previously it simply failed on
+  // every keyless runner, including CI.
+  test.skip(!e2eModelConfig().configured, 'requires the E2E_MODEL_* live configuration for the live organization loop')
   test.setTimeout(300_000) // PM plan + worker + reviewer can take several minutes
   const { page } = launched
 
@@ -64,17 +65,20 @@ test('QA: full work loop — company, project, PM plan, worker, reviewer, comple
   await projectForm.getByRole('button', { name: 'Add project' }).click()
   await expect(page.getByText('Created project “QA Feature Project”')).toBeVisible({ timeout: 10_000 })
 
-  // 4. Verify workforce was seeded and assign mimo-v2.5 to PM agent
+  // 4. Verify workforce was seeded and assign the first E2E route to every agent
   await page.getByRole('button', { name: 'Teams & Skills' }).click()
   await expect(page.getByText('AI workers')).toBeVisible()
 
-  // Assign mimo-v2.5 to ALL agents so every role (PM, engineer, reviewer, researcher)
-  // routes through opencode-go instead of falling back to deepseek-official (no API key)
+  // Assign the first configured model to ALL agents so every role (PM, engineer,
+  // reviewer, researcher) routes through the seeded provider instead of falling
+  // back to a route without credentials. Exact matching keeps model ids that are
+  // prefixes of one another (combo-free vs combo-free1) unambiguous.
+  const modelOption = `${E2E_PROVIDER_NAME} · ${e2eModelConfig().modelIds[0]}`
   const modelComboboxes = page.getByRole('combobox', { name: 'Model' })
   const count = await modelComboboxes.count()
   for (let i = 0; i < count; i++) {
     await modelComboboxes.nth(i).click()
-    await page.getByRole('option', { name: /OpenCode Go · mimo-v2\.5/ }).click()
+    await page.getByRole('option', { name: modelOption, exact: true }).click()
     await page.waitForTimeout(500)
   }
 
@@ -109,9 +113,13 @@ test('QA: Explorer Search and Source Control are functional', async () => {
   await searchTab.click()
   await expect(page.getByPlaceholder('Search files')).toBeVisible()
 
-  // Type a search query — expect the root package.json file to appear in results
-  await page.getByPlaceholder('Search files').fill('package.json')
-  await expect(page.getByRole('button', { name: 'package.json file', exact: true })).toBeVisible({ timeout: 10_000 })
+  // Type a search query — the panel must return matching files from the active
+  // workspace. That is the seeded project folder when the work-loop test ran, or
+  // the app's own checkout when it skipped; the checkout has many nested READMEs
+  // and the result list is capped, so assert on any README.md result rather than
+  // an exact root path.
+  await page.getByPlaceholder('Search files').fill('README')
+  await expect(page.getByRole('button', { name: /README\.md file/ }).first()).toBeVisible({ timeout: 10_000 })
 
   // Test Source Control tab
   const gitTab = page.getByRole('button', { name: 'Source Control' })

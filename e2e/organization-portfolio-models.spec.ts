@@ -1,10 +1,8 @@
 /// <reference lib="dom" />
 
-import 'dotenv/config'
-
 import { expect, test } from '@playwright/test'
 import type { OrganizationDesktopApi, OrganizationRun, OrganizationSnapshot } from '../src/shared/organization.js'
-import { closeApp, createWorkspaceDir, launchApp, type LaunchedApp } from './fixtures.js'
+import { closeApp, createWorkspaceDir, E2E_PROVIDER_ID, launchApp, type LaunchedApp } from './fixtures.js'
 
 type OrganizationWindow = typeof globalThis & {
   ndDshOrganization: OrganizationDesktopApi
@@ -26,7 +24,7 @@ if (ANY_MODEL_ENV && !MODEL_ENV_READY) {
   )
 }
 
-const PROVIDER_ID = 'e2e-openai-compatible'
+const PROVIDER_ID = E2E_PROVIDER_ID
 const COMPANY_A = 'SwiftCab Live'
 const COMPANY_B = 'TinyCart Live'
 
@@ -82,7 +80,12 @@ async function terminalTaskState(taskId: string): Promise<{
 async function completedTaskState(taskId: string): Promise<OrganizationSnapshot> {
   await expect.poll(async () => {
     const snapshot = await state()
-    return snapshot.tasks.find((item) => item.id === taskId)?.status ?? 'missing'
+    const task = snapshot.tasks.find((item) => item.id === taskId)
+    // The workspace-switch guard rejects project.activate while ANY run is still
+    // marked running, so the task's review run has to settle before the caller
+    // activates the next project.
+    const busy = snapshot.runs.some((run) => run.status === 'running')
+    return busy ? 'settling' : task?.status ?? 'missing'
   }, {
     timeout: 12 * 60_000,
     intervals: [1_000, 2_000, 5_000, 10_000],

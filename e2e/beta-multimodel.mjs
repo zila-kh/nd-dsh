@@ -1,4 +1,4 @@
-import 'dotenv/config'
+import { config as loadDotenv } from 'dotenv'
 /**
  * Multi-agent, multi-model beta driver — 3 combo routes only.
  *
@@ -30,6 +30,11 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from '@playwright/test'
+
+// E2E credentials live in the gitignored .env.e2e; plain .env supplies the rest.
+// Load .env.e2e first so it wins.
+loadDotenv({ path: '.env.e2e', quiet: true })
+loadDotenv({ quiet: true })
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPO = resolve(HERE, '..')

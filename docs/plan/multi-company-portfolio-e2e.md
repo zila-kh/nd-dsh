@@ -1,6 +1,6 @@
 # Multi-company portfolio E2E + 3-model local validation
 
-Status: **merged to main via PR #42; local validation/evidence pending**  
+Status: **merged to main via PR #42; layers 1–2 and the whole-app sweep validated green locally on 2026-09-24 — see “Local validation evidence” below**  
 Historical branch: `feat/e2e-multi-company-portfolio`
 
 ## Goal
@@ -65,7 +65,7 @@ This layer does **not** require a model or network. It ignores the live E2E mode
 
 ## Layer 2 — live multi-company 3-model portfolio
 
-Copy `.env.e2e.example` to `.env` and fill:
+Copy `.env.e2e.example` to `.env.e2e` and fill:
 
 ```env
 E2E_MODEL_BASE_URL=https://your-endpoint.example/v1
@@ -76,7 +76,7 @@ E2E_MODEL_2=model-id-2
 E2E_MODEL_3=model-id-3
 ```
 
-The configuration is all-or-none. If any E2E model variable is present, ND requires the base URL, API key and all three model ids. No credential is committed; `.env` is already gitignored.
+The configuration is all-or-none. If any E2E model variable is present, ND requires the base URL, API key and all three model ids. No credential is committed; `.env.e2e` is gitignored and is read directly by the E2E fixtures and the beta driver, while plain `.env` only supplies non-model variables such as `ND_DSH_CDP_PORT`.
 
 The live-model path seeds one provider into its throwaway profile:
 
@@ -86,7 +86,7 @@ format:   OpenAI compatible (/v1/chat/completions)
 models:   E2E_MODEL_1, E2E_MODEL_2, E2E_MODEL_3
 ```
 
-Ordinary Playwright fixtures do **not** change just because `.env` exists. They keep the existing deterministic OpenCode Go fixture unless a future spec explicitly calls `launchApp({ useConfiguredModels: true })`. This protects the current E2E suite from accidental provider-dependent drift.
+Every E2E layer seeds that one provider; there is no second fixture route. Deterministic specs never execute a model, so when `.env.e2e` is absent they still receive the provider record filled with explicit dummy placeholders (`sk-test-placeholder`, `model-id-1..3`) and stay green offline. Live specs opt into strict mode with `launchApp({ useConfiguredModels: true })`, which fails fast on an incomplete configuration instead of drifting.
 
 The primary live portfolio test is `e2e/organization-portfolio-models.spec.ts`.
 
@@ -216,3 +216,63 @@ Do not call this portfolio proof complete until:
 - no secret appears in logs or committed files.
 
 If the deterministic suite passes but live models fail for an external provider reason, record the live-model evidence as **blocked by provider**, not as a tenant-isolation failure.
+
+## Local validation evidence — 2026-09-24 (Windows, Node 24.18.0, Electron build from `main`)
+
+| Gate | Command | Result |
+| --- | --- | --- |
+| Static | `pnpm verify`, `pnpm typecheck` | passed |
+| Unit | `pnpm test` | 841 passed, 8 skipped (109 files) |
+| Build | `pnpm build` | passed |
+| Layer 1 | `pnpm e2e:portfolio` | 4/4 passed (20.4 s, re-verified at 29.9 s after the test-side fixes); the restart test reused the retained throwaway profile |
+| Layer 2 | `pnpm e2e:portfolio:models` | passed three times: 4.0 min before the race fix, then 4.1 min and 8.2 min after it |
+| Whole app | `pnpm exec playwright test` | 42 passed across all 8 spec files (7.1 min, exit 0) — includes the live portfolio layer. The earlier sweep's single failure (this live spec racing the workspace-switch guard) was fixed before this run |
+
+Layer 2 route evidence (route asserted from each execution run's recorded output):
+
+| Company | Project | Builder route (asserted) | Reviewer route (configured) | Result |
+| --- | --- | --- | --- | --- |
+| SwiftCab Live | Dispatch Live | `combo-free` (`E2E_MODEL_1`) | `combo-free-2` | execution reached review, review passed, `integrated`, project 100% |
+| SwiftCab Live | Driver Live | `combo-free1` (`E2E_MODEL_2`) | `combo-free-2` | execution reached review, review passed, `integrated`, project 100% |
+| TinyCart Live | Catalog Live | `combo-free-2` (`E2E_MODEL_3`) | `combo-free` | execution reached review, review passed, `integrated`, project 100% |
+
+Every execution run recorded both a checkpoint commit and a task workspace. Worktree evidence (the throwaway profile is deleted after the run; the workspaces stay under `%TEMP%/nd-dsh-e2e-workspace-*`):
+
+- `dispatch-status.txt` → `AVAILABLE` / `BUSY`
+- `driver-job.txt` → `Pickup -> Destination`
+- `catalog-item.txt` → `Widget | 9.99 | 3`
+
+Each workspace holds the ND checkpoint commit (`nd-dsh: Create … artifact`) plus a merge of the task branch back into the base branch. Renderer console/page errors: none — every layer asserts an empty error list. No secret appears in the run output; routes are reported by model id only.
+
+### What the whole-app sweep actually clicks (user-facing flows)
+
+- shell chrome and navigation across Company / Agent / Design / QA / Settings, coding-surface switch, theme persistence;
+- company creation dialog, project creation with the workspace folder picker, company and project switchers;
+- Company Workspace board (Overview → Work), Operations and Strategy views, workflow integration panel;
+- **AI PM plan** button and the full work loop (plan → task → execution → review);
+- Settings: Models (seeded provider + model list), coding engines, gateway, capabilities, plugins, agent presets;
+- Agent surface: chat composer and model picker, terminal PTY command, embedded browser controls, source-control commit/branch, explorer files and search;
+- QA surface project checks, Design Live App panes with workspace and inspector.
+
+### Fixes made while validating (test-side, no product behavior changed)
+
+- `organization-portfolio.spec.ts` — the board assertion now selects the Company Workspace **Work** section; the workspace view opens on Overview since the dashboard refactor, and the section is re-selected after switching company.
+- `deep-surfaces.spec.ts` — chat composer placeholder updated to the current copy (`@ files/browser targets`).
+- `qa-functional.spec.ts` — Explorer search works with either workspace: the seeded project folder or the app's own checkout (many nested READMEs behind a capped result list).
+- `organization-portfolio-models.spec.ts` — `completedTaskState` waits for run quiescence so `project.activate` cannot race the workspace-switch guard.
+
+### Not yet run
+
+Layer 3 (`pnpm e2e:models`) — the autonomous multi-agent stress loop.
+
+### Known non-green signal — worker-teardown watchdog (reduced, not eliminated)
+
+Playwright's worker-teardown watchdog (`Worker teardown timeout of 120000ms exceeded`, reported outside any test) can still make `pnpm exec playwright test` exit non-zero after every spec has passed. On this machine it is intermittent: before any fix it fired in roughly 5 of 5 qa-functional runs; after the changes below it fired once in 4 verification runs (qa-functional #2) while the full sweep exited 0.
+
+What the diagnostics established (the app is not the cause):
+
+- `closeApp` logs `path=graceful … exited=true descendantsBefore=0` on the hanging runs, so the app quits cleanly and no descendant survives.
+- An env-gated handle dump (`ND_E2E_TEARDOWN_DIAG=1`) shows the worker holding Playwright's own Electron child handle plus its CDP sockets — the app's `ChildProcess` handle disappears once the `ElectronApplication` is disposed.
+- The only handle that reports `ref` is the worker's own IPC pipe (fd 3), which is normal; the remaining sockets drain on their own in clean runs, so no single leaked handle is named yet.
+
+Mitigation in place: after the app has exited, `closeApp` disposes the `ElectronApplication` with a bounded 15 s wait (`e2e/fixtures.ts`). This is what produced the first fully green full-sweep exit; it does not remove the flake, so task 0010 stays open until a run is shown to exit cleanly every time.
