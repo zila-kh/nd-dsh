@@ -9,6 +9,8 @@ ND-DSH is a desktop **AI Company Operating System for software delivery**. Inste
 
 The current product is coding-first: an AI PM plans work, assigned workers can execute independent tasks in parallel in ND-owned task workspaces, ND checkpoints and machine-verifies the result, an independent reviewer verifies the exact checkpoint, failed reviews can return to bounded rework, durable memory is recorded, dependencies unlock, and the next safe task can continue according to company autonomy and policy.
 
+Two more first-class surfaces ship with the desktop: a **unified browser platform** — the ND built-in multi-tab browser (tabs, history, downloads, credential mediation, extensions, trusted leases/policy) plus an explicit **Browser Companion** target into your existing Chrome/Chromium profile, both behind one governed BrowserTarget contract — and **ND Pencil**, ND's native Freeform design surface for design work against the active project's real source.
+
 ## Product boundary
 
 ND-DSH is the product and control plane. Runtime vendors are replaceable implementation dependencies.
@@ -188,7 +190,7 @@ corepack pnpm e2e
 
 The QA view in the app runs the same unit and e2e suites from inside ND-DSH and streams their output; it requires a development checkout with runners installed.
 
-GitHub Actions runs the same repository invariants, type checks, unit tests, and production desktop build on branch/PR changes.
+Routine gates currently run **locally**: GitHub Actions is parked as `.github-bk/` to conserve compute until the product is stable enough to justify it — renaming the folder back restores the workflows unchanged. Until then, the verification commands above (plus `corepack pnpm core:test` and the E2E suites) are the release gate.
 
 ## Syncing the Harness runtime
 
@@ -205,9 +207,9 @@ Review the resulting runtime/config compatibility against the ND overlay and ada
 
 **ND-DSH is a Developer Preview / Private Beta.** Supervised source-build and staged-runtime workflows are available, but a signed public installer, installed-app coverage, and a broad compatibility guarantee are still pending; expect breaking changes.
 
-What exists today is the source tree and a real running slice: the app runs on actual desktop/runtime state with no production fallback to mock companies, fake sessions, fake workspaces, or a localhost demo page, and the renderer fails closed if its trusted desktop bridges are missing.
+What exists today is a real running slice: the app runs on actual desktop/runtime state with no production fallback to mock companies, fake sessions, fake workspaces, or a localhost demo page, and the renderer fails closed if its trusted desktop bridges are missing. As of 2026-09-24 every locally-runnable gate is green on the current tree: repository verification, typecheck, 841 unit tests, Rust `core:test`, the full Playwright sweep, a real-user production E2E journey across companies/parallel modes/restart, a portable Windows build with packaged runtime smoke and a forced-core-crash cleanup proof, and benchmark contract/budget checks against the committed baseline. Release validation that needs a Windows CI runner is explicitly tracked as [blocked-0004](docs/tasks/blocked-0004-windows-release-validation.md).
 
-A **Public Beta** still requires packaged runtime distribution, signed/notarized installers, installed-app E2E on supported platforms, Codex authentication/health onboarding, and broader normalized action metadata for policy enforcement beyond Harness approval frames.
+A **Public Beta** still requires the remaining P0 gates — restored CI with runner-attested release evidence, signed installers with an update channel, a clean-machine offline runtime proof, installed-app E2E against the packaged artifact, and the real-Chrome companion smoke. The ordered checklist lives in [`docs/plan/beta-release-readiness.md`](docs/plan/beta-release-readiness.md); normalized action metadata for policy enforcement beyond Harness approval frames remains the pre-GA gate.
 
 ## What we ship and what's planned
 
@@ -221,8 +223,11 @@ A **Public Beta** still requires packaged runtime distribution, signed/notarized
 | Delivery loop | 🚢 Shipped | AI PM → dependency graph → parallel workers → checkpoint → machine verify → independent review → integration/rework |
 | Coding engines | 🚢 Shipped | ND Harness; direct Codex, ZCode, Antigravity, Pi, Cursor, Claude Code; installed OpenCode/Goose/JCode/Hermes adapters; delegated Codex fallback |
 | Source Control | 🚢 Shipped | Built-in Git panel (status groups, stage/commit, diffs, branches, fetch/pull/push) derived from microsoft/vscode extensions/git (MIT) — see [`docs/source-control.md`](docs/source-control.md) |
+| Rust core runtime | 🚢 Shipped | Single production runtime `nd-core` (Rust sidecar): runtime permits, process/PTY lifecycle, durable effect journal with restart replay, decision-kernel contract — organization truth stays ND/TypeScript-owned |
+| Unified browser platform | 🚢 Shipped | Built-in multi-tab browser (tabs, history, downloads, credential mediation, extension manager, trusted leases/policy) + Browser Companion into the user's real Chrome profile, one BrowserTarget/router contract across both |
+| ND Pencil | 🚢 Shipped | Native Freeform design surface (bundled `resources/nd-pencil`, sandboxed child view) editing the active project's real source — see [`docs/nd-pencil.md`](docs/nd-pencil.md) |
 | Policy gate | 🚢 Shipped | Main-process DENY/ALLOW/ASK enforcement for approval-bearing organization runs |
-| Packaging & installers | 🛠 Planned | Bundled runtime, signed/notarized installers, offline install without dev tooling |
+| Packaging & installers | 🛠 Planned | Portable Windows build with bundled runtime (ND Core, Harness closure, ND Pencil, agent-browser) verified locally; signed/notarized installers, an update channel, and clean-machine offline install are still pending |
 | Codex onboarding | 🛠 Planned | Native authentication and health checks in first-run onboarding |
 | More execution providers | 🛠 Planned | Additional local/offline and remote/cloud workers behind the same ND task/workspace/evidence contract |
 | Broader company templates | 🛠 Planned | Non-coding business roles once the software-company loop is reliable |
@@ -240,6 +245,7 @@ The full, ordered roadmap lives in [`docs/roadmap.md`](docs/roadmap.md), and the
 - Renderer: context isolation on, Node integration off, sandbox on.
 - Browser pane: isolated Electron `WebContentsView`; permissions denied by default.
 - Browser automation: attaches to the exact visible pane through loopback CDP; no hidden second browser.
+- ND Pencil: sandboxed, context-isolated child view; the managed engine binds to loopback only with a per-instance token/allowed-origin contract, denies popups/permissions, and blocks upstream authentication, collaboration, and built-in AI routes.
 - IPC: main-frame sender validation and narrow contracts.
 - Workspace: path containment and symlink protections.
 - Provider credentials: separated from provider metadata, encrypted at rest when OS secure storage is available, and never returned to React after storage.
@@ -264,6 +270,8 @@ configs/dsh/              ND Harness overlay and agent preset
 .dsh/skills/              repository-local ND skills
 tests/                    product/unit contracts
 vendor/deepseek-harness/  runtime submodule (tracks upstream latest)
+crates/                   Rust core: nd-protocol, nd-runtime, nd-core, nd-browser-host
+resources/nd-pencil/      bundled ND Pencil engine (pinned upstream source: vendor/openpencil)
 ```
 
 ## License

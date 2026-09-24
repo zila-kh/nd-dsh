@@ -28,6 +28,8 @@ The `ai-company-workflow` branch already contains the product vertical slice:
 
 These are blockers for a downloadable public beta, not optional polish.
 
+> Current gap state and ordered next actions (2026-09-24): [beta-release-readiness.md](plan/beta-release-readiness.md).
+
 
 ### PRD 0002 convergence — implementation complete; Windows release validation blocked
 
