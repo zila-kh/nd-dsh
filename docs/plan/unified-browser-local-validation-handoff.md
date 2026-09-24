@@ -43,17 +43,17 @@ Primary references:
 - `docs/prd/0005-unified-browser-platform.md`
 - `docs/plan/unified-browser-platform.md`
 - `docs/plan/browser-runtime-capability-spike.md`
-- `docs/tasks/todo-0020-builtin-browser-runtime-decision.md`
-- `docs/tasks/todo-0021-browser-target-contract-router.md`
-- `docs/tasks/todo-0022-builtin-browser-tabs-profile.md`
-- `docs/tasks/todo-0023-companion-browser-target-adapter.md`
-- `docs/tasks/todo-0024-builtin-browser-history-downloads-data.md`
-- `docs/tasks/todo-0025-browser-credential-autofill.md`
-- `docs/tasks/todo-0026-builtin-browser-extension-manager.md`
-- `docs/tasks/todo-0027-webmcp-site-tools.md`
-- `docs/tasks/todo-0028-browser-policy-permissions-leases-audit.md`
-- `docs/tasks/todo-0029-browser-target-picker-auto-routing.md`
-- `docs/tasks/todo-0030-unified-browser-validation-performance.md`
+- `docs/tasks/done/done-0020-builtin-browser-runtime-decision.md`
+- `docs/tasks/done/done-0021-browser-target-contract-router.md`
+- `docs/tasks/done/done-0022-builtin-browser-tabs-profile.md`
+- `docs/tasks/done/done-0023-companion-browser-target-adapter.md`
+- `docs/tasks/done/done-0024-builtin-browser-history-downloads-data.md`
+- `docs/tasks/done/done-0025-browser-credential-autofill.md`
+- `docs/tasks/done/done-0026-builtin-browser-extension-manager.md`
+- `docs/tasks/done/done-0027-webmcp-site-tools.md`
+- `docs/tasks/done/done-0028-browser-policy-permissions-leases-audit.md`
+- `docs/tasks/done/done-0029-browser-target-picker-auto-routing.md`
+- `docs/tasks/done/done-0030-unified-browser-validation-performance.md`
 
 ## Critical rules
 
