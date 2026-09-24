@@ -492,6 +492,13 @@ export class HarnessService {
       stdio: ['pipe', 'pipe', 'pipe'],
     })
     this.child = child
+    // The spawn truth (pid/file/port) balances the ready banner below; without
+    // it a boot that never binds is indistinguishable from a hang, and an
+    // unhandled spawn error would take the whole app down via uncaughtException.
+    console.log(`ND-DSH runtime spawning: ${new Date().toISOString()} pid=${child.pid ?? 'NONE'} file=${child.spawnfile} port=${port}`)
+    child.once('error', (cause) => {
+      console.error(`ND-DSH runtime spawn error: ${new Date().toISOString()} ${cause.message}`)
+    })
     if (child.stdout) child.stdout.setEncoding('utf8')
     if (child.stderr) child.stderr.setEncoding('utf8')
 
@@ -512,10 +519,11 @@ export class HarnessService {
       this.baseUrl = undefined
       gateway?.close()
       const reason = wasExpected ? undefined : `Runtime exited (${signal ?? String(code ?? 'unknown')}): ${childError.split(/\r?\n/).at(-1) ?? ''}`.trim()
+      console.log(`ND-DSH runtime child exited: ${new Date().toISOString()} code=${String(code)} signal=${String(signal)} expectedStop=${String(wasExpected)}`)
       this.updateStatus(wasExpected ? 'stopped' : 'error', wasExpected ? undefined : reason)
     })
 
-    const rootStatus = await this.waitUntilReady(child, baseUrl, () => childError)
+    const rootStatus = await this.waitUntilReady(child, baseUrl, () => childError, () => childOutput)
     let authenticatedUrl = rootStatus === 401
       ? await this.waitForAuthenticatedUrl(child, baseUrl, () => childOutput, () => childError)
       : undefined
@@ -525,7 +533,7 @@ export class HarnessService {
     // The static frontend becomes reachable before the /api route tree has
     // finished mounting. Do not mistake that short-lived HTTP 404 for a port
     // collision and kill the healthy child before it can accept session RPCs.
-    await this.waitUntilGatewayReady(child, gateway, () => childError, async () => {
+    await this.waitUntilGatewayReady(child, gateway, () => childError, () => childOutput, async () => {
       authenticatedUrl = await this.waitForAuthenticatedUrl(child, baseUrl, () => childOutput, () => childError)
       gateway = await GatewayClient.authenticate(authenticatedUrl)
       return gateway
@@ -572,10 +580,13 @@ export class HarnessService {
    * before the listener binds, so stdout alone proves nothing; polling is the
    * only trustworthy signal.
    */
-  private async waitUntilReady(child: ChildProcess, baseUrl: string, getChildError: () => string): Promise<number> {
+  private async waitUntilReady(child: ChildProcess, baseUrl: string, getChildError: () => string, getChildOutput: () => string = () => ''): Promise<number> {
     const deadline = Date.now() + READY_TIMEOUT_MS
     while (Date.now() < deadline) {
-      if (child.exitCode !== null) break
+      // A signal-killed child (workspace-switch close during boot) never sets
+      // exitCode — only signalCode — so exitCode alone leaves this loop
+      // polling a dead child for the full timeout instead of failing fast.
+      if (child.exitCode !== null || child.signalCode !== null) break
       try {
         const response = await fetch(baseUrl, { signal: AbortSignal.timeout(2_000) })
         // 404 is an intermediate state while the route tree mounts. Current
@@ -588,7 +599,10 @@ export class HarnessService {
       await new Promise((resolve) => setTimeout(resolve, READY_POLL_MS))
     }
     const err = getChildError().trim()
-    throw new Error(`Runtime did not become ready within the timeout${err ? `: ${err}` : ''}`)
+    // The stdout banner is the only evidence of how far a silent boot got;
+    // without it a bind/listen mismatch is indistinguishable from a hang.
+    const out = getChildOutput().trim()
+    throw new Error(`Runtime did not become ready within the timeout${err ? `: ${err}` : ''}${out ? ` | stdout: ${out.slice(-2_000)}` : ''}`)
   }
 
   private async waitForAuthenticatedUrl(
@@ -599,7 +613,10 @@ export class HarnessService {
   ): Promise<string> {
     const deadline = Date.now() + READY_TIMEOUT_MS
     while (Date.now() < deadline) {
-      if (child.exitCode !== null) break
+      // A signal-killed child (workspace-switch close during boot) never sets
+      // exitCode — only signalCode — so exitCode alone leaves this loop
+      // polling a dead child for the full timeout instead of failing fast.
+      if (child.exitCode !== null || child.signalCode !== null) break
       const url = dshWebUrl(getOutput(), baseUrl)
       if (url) return url
       await new Promise((resolve) => setTimeout(resolve, READY_POLL_MS))
@@ -609,11 +626,14 @@ export class HarnessService {
   }
 
   /** Wait until the already-listening web runtime has mounted its RPC routes. */
-  private async waitUntilGatewayReady(child: ChildProcess, gateway: GatewayClient, getChildError: () => string, authenticate?: () => Promise<GatewayClient>): Promise<void> {
+  private async waitUntilGatewayReady(child: ChildProcess, gateway: GatewayClient, getChildError: () => string, getChildOutput: () => string = () => '', authenticate?: () => Promise<GatewayClient>): Promise<void> {
     const deadline = Date.now() + READY_TIMEOUT_MS
     let lastError = ''
     while (Date.now() < deadline) {
-      if (child.exitCode !== null) break
+      // A signal-killed child (workspace-switch close during boot) never sets
+      // exitCode — only signalCode — so exitCode alone leaves this loop
+      // polling a dead child for the full timeout instead of failing fast.
+      if (child.exitCode !== null || child.signalCode !== null) break
       const identity = await gateway.rpc('session.list')
       if (identity.ok) return
       lastError = identity.error?.message ?? ''
@@ -625,7 +645,8 @@ export class HarnessService {
       await new Promise((resolve) => setTimeout(resolve, READY_POLL_MS))
     }
     const err = getChildError().trim()
-    throw new Error(`Runtime gateway did not become ready within the timeout${lastError ? `: ${lastError}` : ''}${err ? `: ${err}` : ''}`)
+    const out = getChildOutput().trim()
+    throw new Error(`Runtime gateway did not become ready within the timeout${lastError ? `: ${lastError}` : ''}${err ? `: ${err}` : ''}${out ? ` | stdout: ${out.slice(-2_000)}` : ''}`)
   }
 
   private handleEvent(frame: DshEventFrame): void {

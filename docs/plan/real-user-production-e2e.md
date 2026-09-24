@@ -1,6 +1,6 @@
 # Real-user production E2E (vibe-coder journey)
 
-Status: **implemented on `feat/real-user-prod-e2e`; local validation results recorded in “Local validation evidence” below**
+Status: **implemented on `feat/real-user-prod-e2e`; the driver passes all 19 self-evaluated acceptance gates locally — see “Local validation evidence” below**
 Driver: `e2e/real-user-prod.mjs` · Evidence helper: `e2e/lib/prod-evidence.mjs` · Orchestrator: `scripts/e2e-prod.mjs`
 
 ## Goal
@@ -161,9 +161,58 @@ The driver evaluates gates 1–19 itself (gate 20 is external) and writes them i
 
 ## Local validation evidence
 
-Filled in after each real local run on this branch. **Nothing below is claimed before it was executed.**
+Recorded from real local runs on this branch (2026-09-24, Windows, Node 24.16.0). **Nothing below is claimed before it was executed.**
 
-_(pending — see the handoff report for this branch's run)_
+| Gate | Command | Result |
+| --- | --- | --- |
+| Static | `pnpm verify`, `pnpm typecheck` | passed |
+| Unit | `pnpm test` | 841 passed, 8 skipped (109 files) |
+| Rust core | `pnpm core:test` | fmt + clippy + all crate tests passed |
+| Build | `pnpm build` | passed |
+| Layer 1 | `pnpm e2e:portfolio` | 4/4 passed (36.0 s) |
+| Layer 2 | `pnpm e2e:portfolio:models` | passed (3.7 min; re-run baseline 3.5 min) |
+| **Layer 4 (this doc)** | `pnpm e2e:prod:user` | **`terminal: pass` — gates 1–19 all PASS (12.9 min)**; gate 20 evaluated by the sweep row |
+| Layer 3 | `pnpm e2e:models` | passed — `terminal: completed`, 9/9 tasks, project 100%, max parallel 3, both required builder routes observed (32.7 min) |
+| Whole suite | `pnpm exec playwright test` | **44 passed (9.6 min), exit 0** — every spec file including both live portfolio layers; no worker-teardown watchdog fired on this run |
+
+Latest `e2e:prod:user` run (`e2e-results/real-user-prod-2026-09-24T13-38-44-641Z`):
+
+```json
+{
+  "terminal": "pass",
+  "companies": 3, "projects": 5,
+  "configuredModels": 3, "observedModels": 3,
+  "maxParallelTaskRuns": 5,
+  "crossProjectOverlap": true, "crossCompanyOverlap": true, "sameProjectParallelism": true,
+  "workspaceIsolation": true, "routeIsolation": true, "restartRecovery": true,
+  "rendererErrors": 0, "secretLeaks": 0, "durationMinutes": 12.9,
+  "gateFailures": []
+}
+```
+
+Notable run facts:
+
+- 5 task executions were live simultaneously across 4 projects and 2 companies at start; every overlap claim is recomputed from run-receipt intervals in `concurrency.json`.
+- Phase F: quit during a live execution → relaunch on the same profile → **14/14 restart checks pass** (`Interrupted:` run failure, blocked task with interruption note, released worker, preserved worktree/branch, clean base checkout, restored active context, no false completion) → explicit ND retry → task completed + integrated → Checkout Mini 100%.
+- Every switch attempt during live runs was refused with the UI's disabled-option marker; active context and all running-task workspaces stayed byte-identical.
+- The optional engine probe recorded `failed — Codex CLI (engine) is disabled. Enable it in Settings → Capabilities` in `engine-compat.json`; it is installed-but-not-enabled on this machine and does **not** gate the core matrix (by design).
+- The scripted-action audit trail (`actions.json`) contains only the scenario's own dispatches — no repairs, no retries except the scripted Phase F one.
+
+### Findings fixed while validating (product-side)
+
+The driver exposed a real runtime-restart defect, proven with spawn/exit timestamps:
+
+1. **Signal-killed runtime children were never detected.** Each workspace rebind closes the shared DSH runtime; the chat surface immediately respawns it on its session-list refresh, so back-to-back context mutations SIGTERM a runtime that is still booting. The readiness loops only checked `child.exitCode !== null`, which stays `null` for signal deaths — the app then polled a dead child for the full 120 s and reported `Runtime did not become ready within the timeout`. **Fixed** (`src/main/harness/harness-service.ts`): readiness loops now also break on `signalCode`, and the start path logs `runtime spawning (pid/file/port)` + `runtime child exited (code/signal/time)` and includes the child's stdout tail in timeout errors.
+2. The driver additionally serializes context mutations on runtime quiescence (`[pace]` log lines) — the state-based equivalent of a user pausing between clicks — so the churn cannot race itself regardless of the fix above.
+
+No production guard was weakened for the test; the fail-closed context-switch guard, policy gates and machine-verification gates were exercised exactly as shipped.
+
+### Driver-side defects found and fixed during bring-up (test-only)
+
+- Chat completion is detected from the product's own `session-status` frame stream (`running:true` → `running:false`), not from the panel's busy flag, which can go stale when the final frame races the session-list refresh.
+- The composer Send button is *disabled* whenever the text is empty (always true right after a send), so completion uses button/stop-button visibility + frames instead of enabled-ness.
+- The Work board has **no backlog column** (`ready/in_progress/review/blocked/completed` only): PM-planned dependent tasks wait in backlog and are legitimately not rendered; board-scope assertions compare the renderable statuses.
+- An interrupted execution legitimately has no checkpoint/route receipt; gate 11 requires checkpoints only for completed executions (receipt + bound workspace for all).
 
 ### Known limitations / not exercised
 
