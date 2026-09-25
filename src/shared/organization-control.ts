@@ -95,6 +95,7 @@ export interface OrganizationBudget {
   spentTurns: number
   spentCostUsd: number
   spentMonthlyCostUsd: number
+  cashAccountingKnown: boolean
   windowStartedAt: number
   monthlyWindowStartedAt: number
   updatedAt: number
