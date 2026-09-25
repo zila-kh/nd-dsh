@@ -159,6 +159,44 @@ describe('organization control plane', () => {
     expect(management.compute?.actualCashUsd).toBeCloseTo(1)
   })
 
+
+  it('enforces the monthly cash cap independently of the daily cap', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nd-control-monthly-'))
+    temporary.push(root)
+    const compute = new ComputeLedger(join(root, 'compute.jsonl'))
+    await compute.upsertAccount({
+      id: 'payg-monthly',
+      provider: 'openai',
+      label: 'PAYG monthly',
+      billingKind: 'payg',
+      allowPaidOverage: false,
+      meters: [{ kind: 'cash_usd', period: 'month', limitUsd: 10, spentUsd: 0 }],
+      refreshedAt: Date.now(),
+      status: 'healthy',
+    })
+    const { control } = await fixture(compute)
+    await control.mutate({
+      type: 'budget.set',
+      companyId: 'company-1',
+      projectId: 'project-1',
+      monthlyCostUsd: 1,
+    })
+    await compute.recordUsage({
+      id: 'monthly-cash',
+      accountId: 'payg-monthly',
+      companyId: 'company-1',
+      projectId: 'project-1',
+      billingClass: 'payg',
+      actualCashUsd: 1,
+      source: 'provider',
+      observedAt: Date.now(),
+    })
+
+    const decision = await control.shouldRun('project-1', 'workflow.continue')
+    expect(decision.route).toBe('wait')
+    expect(decision.reason).toMatch(/monthly cash budget exhausted/i)
+  })
+
   it('fails closed when a cash cap exists but compute accounting is unavailable', async () => {
     const { control } = await fixture()
     await control.mutate({
