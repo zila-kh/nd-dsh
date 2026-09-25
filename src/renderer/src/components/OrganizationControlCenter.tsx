@@ -37,7 +37,7 @@ export function OrganizationControlCenter({ companyId, projectId, agents, onErro
   const [busy, setBusy] = useState<string | null>(null)
   const [humanDraft, setHumanDraft] = useState({ kind: 'action' as 'action' | 'gate', title: '', question: '', scope: '' })
   const [signalDraft, setSignalDraft] = useState({ source: 'user', title: '', summary: '' })
-  const [budgetDraft, setBudgetDraft] = useState({ turns: '', workers: '' })
+  const [budgetDraft, setBudgetDraft] = useState({ turns: '', dailyCost: '', monthlyCost: '', workers: '' })
   const [usage, setUsage] = useState<UsageSummary | null>(null)
 
   // Token accounting for this project (or the whole company when the view is
@@ -75,6 +75,8 @@ export function OrganizationControlCenter({ companyId, projectId, agents, onErro
           ?? projection.budgets.find((item) => !item.projectId)
         if (budget) setBudgetDraft({
           turns: budget.dailyTurnLimit === undefined ? '' : String(budget.dailyTurnLimit),
+          dailyCost: budget.dailyCostUsd === undefined ? '' : String(budget.dailyCostUsd),
+          monthlyCost: budget.monthlyCostUsd === undefined ? '' : String(budget.monthlyCostUsd),
           workers: budget.maxParallelWorkers === undefined ? '' : String(budget.maxParallelWorkers),
         })
       })
@@ -124,6 +126,8 @@ export function OrganizationControlCenter({ companyId, projectId, agents, onErro
     await act('budget-save', () => window.ndDshControl.mutate({
       type: 'budget.set', companyId, ...(projectId ? { projectId } : {}),
       ...(budgetDraft.turns.trim() ? { dailyTurnLimit: Number(budgetDraft.turns) } : {}),
+      ...(budgetDraft.dailyCost.trim() ? { dailyCostUsd: Number(budgetDraft.dailyCost) } : {}),
+      ...(budgetDraft.monthlyCost.trim() ? { monthlyCostUsd: Number(budgetDraft.monthlyCost) } : {}),
       ...(budgetDraft.workers.trim() ? { maxParallelWorkers: Number(budgetDraft.workers) } : {}),
     }))
   }
@@ -192,6 +196,12 @@ export function OrganizationControlCenter({ companyId, projectId, agents, onErro
           <label className="grid gap-1 text-xs text-muted-foreground">Daily bounded turns
             <input className={input} type="number" min="0" step="1" placeholder="Unlimited" value={budgetDraft.turns} onChange={(event) => setBudgetDraft((current) => ({ ...current, turns: event.target.value }))} />
           </label>
+          <label className="grid gap-1 text-xs text-muted-foreground">Daily actual cash cap (USD)
+            <input className={input} type="number" min="0" step="0.01" placeholder="Unlimited" value={budgetDraft.dailyCost} onChange={(event) => setBudgetDraft((current) => ({ ...current, dailyCost: event.target.value }))} />
+          </label>
+          <label className="grid gap-1 text-xs text-muted-foreground">Monthly actual cash cap (USD)
+            <input className={input} type="number" min="0" step="0.01" placeholder="Unlimited" value={budgetDraft.monthlyCost} onChange={(event) => setBudgetDraft((current) => ({ ...current, monthlyCost: event.target.value }))} />
+          </label>
           <label className="grid gap-1 text-xs text-muted-foreground">Max parallel workers (capacity target)
             <input className={input} type="number" min="1" step="1" placeholder="Current engine limit" value={budgetDraft.workers} onChange={(event) => setBudgetDraft((current) => ({ ...current, workers: event.target.value }))} />
           </label>
@@ -200,6 +210,7 @@ export function OrganizationControlCenter({ companyId, projectId, agents, onErro
         {(management?.budgets ?? []).map((item) => (
           <p key={item.id} className="m-0 mt-2 rounded-md border border-border-soft bg-surface-0 px-2 py-1.5 text-xs text-muted-foreground">
             Used <strong className="text-foreground">{item.spentTurns}</strong>{item.dailyTurnLimit === undefined ? '' : ` / ${item.dailyTurnLimit}`} turns in the current window.
+            {' '}Cash: <strong className="text-foreground">{item.cashAccountingKnown ? `${item.spentCostUsd.toFixed(2)} today · ${item.spentMonthlyCostUsd.toFixed(2)} month` : 'accounting unavailable'}</strong>.
           </p>
         ))}
         {usage ? <UsageLine usage={usage} projectScoped={Boolean(projectId)} /> : null}
