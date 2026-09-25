@@ -1,7 +1,7 @@
 # Beta release readiness — gap list and order of work
 
 > Updated: 2026-09-24 · Basis: full-tree review at `feat/real-user-prod-e2e` (`e276974`)
-> Purpose: one ordered checklist of what stands between the current tree and a stable **Public Beta**, and what remains for **GA** after that. Roadmap context and gate definitions: [roadmap.md](../roadmap.md) ("Public Beta P0", "Release labels").
+> Purpose: one ordered checklist of what stands between the current tree and a stable **Public Beta**, and what remains for **GA** after that. Roadmap context and gate definitions: [roadmap.md](../roadmap.md) ("Public Beta P0", "Release labels"). The per-area gate checklist with current coverage standing lives in [beta-release-gate.md](beta-release-gate.md).
 
 ## Where the tree stands (2026-09-24)
 
