@@ -12,6 +12,7 @@ import {
   type OrganizationStrategySnapshot,
 } from '../../shared/organization-strategy.js'
 import type { ProjectRuntimeService } from '../workspace/project-runtime.js'
+import { ComputeLedger } from '../compute/compute-ledger.js'
 import type { ProjectWorkspaceCoordinator } from '../workspace/project-workspace-coordinator.js'
 import { OrganizationControlPlane, taskDispatchAvailability } from './control-plane.js'
 import type { ExecutionCoordinator, RuntimePermit } from './execution-coordinator.js'
@@ -42,7 +43,8 @@ export function registerOrganizationIpc(
   executionCoordinator?: ExecutionCoordinator,
 ): () => void {
   const channels: string[] = []
-  const control = new OrganizationControlPlane(join(app.getPath('userData'), 'organization-control.json'), store)
+  const computeLedger = new ComputeLedger(join(app.getPath('userData'), 'compute-usage.jsonl'))
+  const control = new OrganizationControlPlane(join(app.getPath('userData'), 'organization-control.json'), store, computeLedger)
   const strategy = new OrganizationStrategyPlane(join(app.getPath('userData'), 'organization-strategy.json'), store)
   control.setOnChanged((state) => {
     if (!window.isDestroyed()) window.webContents.send(ORGANIZATION_CONTROL_IPC.changed, state)
