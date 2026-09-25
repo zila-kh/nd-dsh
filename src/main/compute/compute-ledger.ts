@@ -176,9 +176,10 @@ export class ComputeLedger {
     const reservation = this.requireReservation(reservationId)
     if (reservation.state === 'released' || reservation.state === 'expired') return clone(reservation)
     if (reservation.state === 'settled') throw new Error('Settled reservations cannot be released')
+    const now = Date.now()
     reservation.state = 'released'
-    reservation.releasedAt = Date.now()
-    this.updatedAt = reservation.releasedAt
+    reservation.releasedAt = now
+    this.updatedAt = now
     await this.saveState()
     return clone(reservation)
   }
