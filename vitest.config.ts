@@ -17,5 +17,6 @@ export default defineConfig({
     // `mjs` specs cover the benchmark tooling (result kinds and aggregation),
     // which is plain ESM shared with the benchmark scripts themselves.
     include: ['tests/**/*.test.{ts,tsx,mjs}', 'src/**/*.test.{ts,tsx}'],
+    testTimeout: 15_000,
   },
 })

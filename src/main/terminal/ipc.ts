@@ -1,15 +1,16 @@
 import { ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
 import { TERMINAL_IPC, type TerminalCreateInput, type TerminalPaneLayout } from '../../shared/terminal.js'
 import { registerTokenSaverIpc } from '../token-saver/ipc.js'
+import { registerToolRoutingIpc } from '../organization/tool-routing-ipc.js'
 import type { TerminalManager } from './terminal-manager.js'
 
 type Handler = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown | Promise<unknown>
 
 export function registerTerminalIpc(window: BrowserWindow, manager: TerminalManager): () => void {
-  // Token Saver is registered beside the small terminal preload/IPC bridge to
-  // avoid expanding the already-large desktop IPC composition root. The two
-  // services remain independent; this is only lifecycle wiring.
+  // Token Saver and Tool Routing are registered beside the small terminal
+  // preload/IPC bridge to avoid expanding the already-large desktop IPC composition root.
   const disposeTokenSaverIpc = registerTokenSaverIpc(window)
+  const { dispose: disposeToolRoutingIpc } = registerToolRoutingIpc(window)
   const channels: string[] = []
   const handle = (channel: string, listener: Handler): void => {
     ipcMain.removeHandler(channel)
@@ -30,6 +31,7 @@ export function registerTerminalIpc(window: BrowserWindow, manager: TerminalMana
   return () => {
     for (const channel of channels) ipcMain.removeHandler(channel)
     disposeTokenSaverIpc()
+    disposeToolRoutingIpc()
   }
 }
 

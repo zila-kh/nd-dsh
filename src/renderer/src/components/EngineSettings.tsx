@@ -12,6 +12,7 @@ import {
 } from './settings-primitives'
 import { GatewaySettings } from './GatewaySettings'
 import { TokenSaverSettings } from './TokenSaverSettings'
+import { TokenToolOptimizationSettings } from './TokenToolOptimizationSettings'
 
 interface EngineSettingsProps {
   onError(message: string): void
@@ -36,6 +37,7 @@ export function EngineSettings({ onError }: EngineSettingsProps) {
 
   return (
     <div className="min-h-0 overflow-auto px-[26px] pb-[42px] pt-1.5">
+      <TokenToolOptimizationSettings onError={onError} />
       <TokenSaverSettings onError={onError} />
       <GatewaySettings onError={onError} />
 
