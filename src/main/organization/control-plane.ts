@@ -129,6 +129,14 @@ export class OrganizationControlPlane {
         humanActionIds: [], budgetId: budget.id, checkedAt: Date.now(),
       }
     }
+    if (budget && (budget.dailyCostUsd !== undefined || budget.monthlyCostUsd !== undefined) && budget.cashAccountingKnown === false) {
+      return {
+        route: 'wait', action, companyId: company.id, projectId: project.id,
+        ...(taskId ? { taskId } : {}),
+        reason: 'Cash accounting is unavailable or stale; paid work is blocked conservatively.',
+        humanActionIds: [], budgetId: budget.id, checkedAt: Date.now(),
+      }
+    }
     if (budget?.dailyCostUsd !== undefined && budget.spentCostUsd >= budget.dailyCostUsd) {
       return {
         route: 'wait', action, companyId: company.id, projectId: project.id,
@@ -499,15 +507,13 @@ export class OrganizationControlPlane {
         this.computeLedger.cashSummary({ ...scope, since: budget.windowStartedAt }),
         this.computeLedger.cashSummary({ ...scope, since: budget.monthlyWindowStartedAt }),
       ])
-      if (!daily.accountingKnown || !monthly.accountingKnown) {
-        if (budget.dailyCostUsd !== undefined || budget.monthlyCostUsd !== undefined) {
-          budget.spentCostUsd = Number.POSITIVE_INFINITY
-          budget.spentMonthlyCostUsd = Number.POSITIVE_INFINITY
-          budget.updatedAt = Date.now()
-          changed = true
-        }
-        continue
+      const accountingKnown = daily.accountingKnown && monthly.accountingKnown
+      if (budget.cashAccountingKnown !== accountingKnown) {
+        budget.cashAccountingKnown = accountingKnown
+        budget.updatedAt = Date.now()
+        changed = true
       }
+      if (!accountingKnown) continue
       if (budget.spentCostUsd !== daily.actualCashUsd) {
         budget.spentCostUsd = daily.actualCashUsd
         budget.updatedAt = Date.now()
@@ -562,6 +568,7 @@ export class OrganizationControlPlane {
       spentTurns: 0,
       spentCostUsd: 0,
       spentMonthlyCostUsd: 0,
+      cashAccountingKnown: Boolean(this.computeLedger),
       windowStartedAt: now,
       monthlyWindowStartedAt: startOfUtcMonth(now),
       updatedAt: now,
@@ -637,6 +644,7 @@ function normalize(value: unknown): OrganizationControlSnapshot {
   const now = Date.now()
   for (const budget of normalized.budgets) {
     if (!Number.isFinite(budget.spentMonthlyCostUsd)) budget.spentMonthlyCostUsd = 0
+    if (typeof budget.cashAccountingKnown !== 'boolean') budget.cashAccountingKnown = false
     if (!Number.isFinite(budget.monthlyWindowStartedAt)) budget.monthlyWindowStartedAt = startOfUtcMonth(now)
   }
   return normalized
