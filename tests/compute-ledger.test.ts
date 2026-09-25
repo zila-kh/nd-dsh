@@ -47,21 +47,27 @@ describe('compute ledger', () => {
   it('prevents concurrent reservations from overspending one shared account', async () => {
     const { ledger } = await fixture(1)
 
-    await ledger.reserve({
-      accountId: 'payg-main',
-      companyId: 'company-1',
-      projectId: 'project-1',
-      taskId: 'task-a',
-      reservedUsd: 0.7,
-    })
+    const results = await Promise.allSettled([
+      ledger.reserve({
+        accountId: 'payg-main',
+        companyId: 'company-1',
+        projectId: 'project-1',
+        taskId: 'task-a',
+        reservedUsd: 0.7,
+      }),
+      ledger.reserve({
+        accountId: 'payg-main',
+        companyId: 'company-1',
+        projectId: 'project-2',
+        taskId: 'task-b',
+        reservedUsd: 0.7,
+      }),
+    ])
 
-    await expect(ledger.reserve({
-      accountId: 'payg-main',
-      companyId: 'company-1',
-      projectId: 'project-2',
-      taskId: 'task-b',
-      reservedUsd: 0.7,
-    })).rejects.toThrow(/cash limit would be exceeded/i)
+    expect(results.filter((item) => item.status === 'fulfilled')).toHaveLength(1)
+    expect(results.filter((item) => item.status === 'rejected')).toHaveLength(1)
+    const rejected = results.find((item): item is PromiseRejectedResult => item.status === 'rejected')
+    expect(String(rejected?.reason)).toMatch(/cash limit would be exceeded/i)
 
     const summary = await ledger.cashSummary({ accountId: 'payg-main' })
     expect(summary.heldUsd).toBeCloseTo(0.7)
