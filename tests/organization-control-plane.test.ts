@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { OrganizationSnapshot } from '../src/shared/organization.js'
 import { OrganizationControlPlane, taskDispatchAvailability } from '../src/main/organization/control-plane.js'
 import { ExecutionCoordinator } from '../src/main/organization/execution-coordinator.js'
+import { ComputeLedger } from '../src/main/compute/compute-ledger.js'
 
 const temporary: string[] = []
 afterEach(async () => {
@@ -23,7 +24,7 @@ function organization(): OrganizationSnapshot {
   }
 }
 
-async function fixture() {
+async function fixture(computeLedger?: ComputeLedger) {
   const root = await mkdtemp(join(tmpdir(), 'nd-control-'))
   temporary.push(root)
   const value = organization()
@@ -52,7 +53,7 @@ async function fixture() {
       policies: [],
     }),
   }
-  return { root, value, control: new OrganizationControlPlane(join(root, 'control.json'), store as never) }
+  return { root, value, control: new OrganizationControlPlane(join(root, 'control.json'), store as never, computeLedger) }
 }
 
 describe('organization control plane', () => {
@@ -100,6 +101,76 @@ describe('organization control plane', () => {
     expect(state.turns.some((turn) => turn.runId === 'historical-run')).toBe(true)
     expect(state.budgets[0]?.spentTurns).toBe(0)
     expect((await control.shouldRun('project-1', 'workflow.continue')).route).toBe('ready')
+  })
+
+
+  it('enforces daily and monthly cash limits from settled compute usage only', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nd-control-compute-'))
+    temporary.push(root)
+    const compute = new ComputeLedger(join(root, 'compute.jsonl'))
+    await compute.upsertAccount({
+      id: 'payg-main',
+      provider: 'openai',
+      label: 'PAYG main',
+      billingKind: 'payg',
+      allowPaidOverage: false,
+      meters: [{ kind: 'cash_usd', period: 'month', limitUsd: 10, spentUsd: 0 }],
+      refreshedAt: Date.now(),
+      status: 'healthy',
+    })
+    const { control } = await fixture(compute)
+    await control.mutate({
+      type: 'budget.set',
+      companyId: 'company-1',
+      projectId: 'project-1',
+      dailyCostUsd: 1,
+      monthlyCostUsd: 2,
+    })
+
+    await compute.recordUsage({
+      id: 'cash-1',
+      accountId: 'payg-main',
+      companyId: 'company-1',
+      projectId: 'project-1',
+      billingClass: 'payg',
+      actualCashUsd: 1,
+      source: 'provider',
+      observedAt: Date.now(),
+    })
+    await compute.recordUsage({
+      id: 'included-1',
+      accountId: 'payg-main',
+      companyId: 'company-1',
+      projectId: 'project-1',
+      billingClass: 'included',
+      providerValueUsd: 25,
+      source: 'provider',
+      observedAt: Date.now(),
+    })
+
+    const decision = await control.shouldRun('project-1', 'workflow.continue')
+    expect(decision.route).toBe('wait')
+    expect(decision.reason).toMatch(/daily cash budget exhausted/i)
+
+    const management = await control.management('project-1')
+    expect(management.budgets[0]?.spentCostUsd).toBeCloseTo(1)
+    expect(management.budgets[0]?.spentMonthlyCostUsd).toBeCloseTo(1)
+    expect(management.budgets[0]?.cashAccountingKnown).toBe(true)
+    expect(management.compute?.actualCashUsd).toBeCloseTo(1)
+  })
+
+  it('fails closed when a cash cap exists but compute accounting is unavailable', async () => {
+    const { control } = await fixture()
+    await control.mutate({
+      type: 'budget.set',
+      companyId: 'company-1',
+      projectId: 'project-1',
+      dailyCostUsd: 1,
+    })
+
+    const decision = await control.shouldRun('project-1', 'workflow.continue')
+    expect(decision.route).toBe('wait')
+    expect(decision.reason).toMatch(/requires compute accounting/i)
   })
 
   it('keeps signals separate from tasks and projects them into the manager view', async () => {
