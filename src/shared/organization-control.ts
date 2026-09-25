@@ -1,3 +1,5 @@
+import type { ComputeManagementProjection } from './compute-budget.js'
+
 export type OrganizationTurnRoute =
   | 'ready'
   | 'repair_required'
@@ -85,13 +87,17 @@ export interface OrganizationBudget {
   projectId?: string
   dailyTurnLimit?: number
   dailyCostUsd?: number
+  monthlyCostUsd?: number
   maxParallelWorkers?: number
   maxReviewWorkers?: number
   roleWorkerLimits?: Record<string, number>
   teamWorkerLimits?: Record<string, number>
   spentTurns: number
   spentCostUsd: number
+  spentMonthlyCostUsd: number
+  cashAccountingKnown: boolean
   windowStartedAt: number
+  monthlyWindowStartedAt: number
   updatedAt: number
 }
 
@@ -181,6 +187,7 @@ export interface OrganizationManagementProjection {
   staleEvidenceTaskIds: string[]
   budgets: OrganizationBudget[]
   performance: OrganizationAgentPerformance[]
+  compute?: ComputeManagementProjection
   metrics: {
     completedTasks: number
     verifiedTasks: number
@@ -197,7 +204,7 @@ export type OrganizationControlMutation =
   | { type: 'human-action.resolve'; id: string; resolution: string; dismiss?: boolean }
   | { type: 'signal.add'; companyId: string; projectId?: string; source: string; title: string; summary: string; confidence?: number }
   | { type: 'signal.triage'; id: string; disposition: SignalDisposition; archive?: boolean }
-  | { type: 'budget.set'; companyId: string; projectId?: string; dailyTurnLimit?: number; dailyCostUsd?: number; maxParallelWorkers?: number; maxReviewWorkers?: number; roleWorkerLimits?: Record<string, number>; teamWorkerLimits?: Record<string, number> }
+  | { type: 'budget.set'; companyId: string; projectId?: string; dailyTurnLimit?: number; dailyCostUsd?: number; monthlyCostUsd?: number; maxParallelWorkers?: number; maxReviewWorkers?: number; roleWorkerLimits?: Record<string, number>; teamWorkerLimits?: Record<string, number> }
   | { type: 'feedback.add'; companyId: string; projectId?: string; taskId?: string; runId?: string; agentId?: string; label: ReviewFeedbackLabel; note?: string }
 
 export interface OrganizationControlDesktopApi {

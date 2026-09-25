@@ -21,6 +21,7 @@ import type { OrganizationStore } from './store.js'
 import { taskEvidenceWorkspace } from './task-worktree.js'
 import { captureWorkspaceEvidence } from './worktree-evidence.js'
 import type { ExecutionCoordinator, RuntimeAvailability, RuntimePoolClaim } from './execution-coordinator.js'
+import type { ComputeLedger } from '../compute/compute-ledger.js'
 
 const DAY_MS = 24 * 60 * 60 * 1_000
 const DEFAULT_LEASE_MS = 30 * 60 * 1_000
@@ -68,6 +69,7 @@ export class OrganizationControlPlane {
   constructor(
     private readonly filePath: string,
     private readonly store: Pick<OrganizationStore, 'state' | 'taskContext'>,
+    private readonly computeLedger?: Pick<ComputeLedger, 'cashSummary' | 'management'>,
   ) {}
 
   setOnChanged(listener: ((state: OrganizationControlSnapshot) => void) | undefined): void {
@@ -119,6 +121,38 @@ export class OrganizationControlPlane {
     }
 
     const budget = this.effectiveBudget(company.id, project.id)
+    if (budget && (budget.dailyCostUsd !== undefined || budget.monthlyCostUsd !== undefined) && !this.computeLedger) {
+      return {
+        route: 'wait', action, companyId: company.id, projectId: project.id,
+        ...(taskId ? { taskId } : {}),
+        reason: 'Cash budget enforcement requires compute accounting to be configured.',
+        humanActionIds: [], budgetId: budget.id, checkedAt: Date.now(),
+      }
+    }
+    if (budget && (budget.dailyCostUsd !== undefined || budget.monthlyCostUsd !== undefined) && budget.cashAccountingKnown === false) {
+      return {
+        route: 'wait', action, companyId: company.id, projectId: project.id,
+        ...(taskId ? { taskId } : {}),
+        reason: 'Cash accounting is unavailable or stale; paid work is blocked conservatively.',
+        humanActionIds: [], budgetId: budget.id, checkedAt: Date.now(),
+      }
+    }
+    if (budget?.dailyCostUsd !== undefined && budget.spentCostUsd >= budget.dailyCostUsd) {
+      return {
+        route: 'wait', action, companyId: company.id, projectId: project.id,
+        ...(taskId ? { taskId } : {}),
+        reason: `Daily cash budget exhausted (${budget.spentCostUsd.toFixed(2)}/${budget.dailyCostUsd.toFixed(2)}).`,
+        humanActionIds: [], budgetId: budget.id, checkedAt: Date.now(),
+      }
+    }
+    if (budget?.monthlyCostUsd !== undefined && budget.spentMonthlyCostUsd >= budget.monthlyCostUsd) {
+      return {
+        route: 'wait', action, companyId: company.id, projectId: project.id,
+        ...(taskId ? { taskId } : {}),
+        reason: `Monthly cash budget exhausted (${budget.spentMonthlyCostUsd.toFixed(2)}/${budget.monthlyCostUsd.toFixed(2)}).`,
+        humanActionIds: [], budgetId: budget.id, checkedAt: Date.now(),
+      }
+    }
     if (budget?.dailyTurnLimit !== undefined && budget.spentTurns >= budget.dailyTurnLimit) {
       return {
         route: 'wait', action, companyId: company.id, projectId: project.id,
@@ -299,6 +333,12 @@ export class OrganizationControlPlane {
 
     const humanAttentionEvents = scopedActions.length
       + this.value.feedback.filter((item) => companyFilter(item.companyId) && projectFilter(item.projectId) && attentionFeedback(item.label)).length
+    const compute = this.computeLedger && companyId
+      ? await this.computeLedger.management({
+          companyId,
+          ...(project ? { projectId: project.id } : {}),
+        })
+      : undefined
 
     return {
       generatedAt: Date.now(), ...(companyId ? { companyId } : {}), ...(project ? { projectId: project.id } : {}),
@@ -310,6 +350,7 @@ export class OrganizationControlPlane {
       staleEvidenceTaskIds,
       budgets: clone(this.value.budgets.filter((item) => companyFilter(item.companyId) && projectFilter(item.projectId))),
       performance,
+      ...(compute ? { compute } : {}),
       metrics: {
         completedTasks: scopedTasks.filter((item) => item.status === 'completed').length,
         verifiedTasks: verifiedTaskIds.length,
@@ -326,6 +367,7 @@ export class OrganizationControlPlane {
     await this.load()
     const organization = await this.store.state()
     let changed = this.resetBudgetWindows() || this.expireLeases()
+    changed = await this.refreshCashBudgets() || changed
 
     for (const run of organization.runs) {
       let turn = this.value.turns.find((item) => item.runId === run.id)
@@ -441,9 +483,46 @@ export class OrganizationControlPlane {
   private resetBudgetWindows(): boolean {
     let changed = false
     const now = Date.now()
+    const monthStart = startOfUtcMonth(now)
     for (const budget of this.value.budgets) {
       if (now - budget.windowStartedAt >= DAY_MS) {
         budget.windowStartedAt = now; budget.spentTurns = 0; budget.spentCostUsd = 0; budget.updatedAt = now; changed = true
+      }
+      if (budget.monthlyWindowStartedAt !== monthStart) {
+        budget.monthlyWindowStartedAt = monthStart; budget.spentMonthlyCostUsd = 0; budget.updatedAt = now; changed = true
+      }
+    }
+    return changed
+  }
+
+  private async refreshCashBudgets(): Promise<boolean> {
+    if (!this.computeLedger) return false
+    let changed = false
+    for (const budget of this.value.budgets) {
+      const scope = {
+        companyId: budget.companyId,
+        ...(budget.projectId ? { projectId: budget.projectId } : {}),
+      }
+      const [daily, monthly] = await Promise.all([
+        this.computeLedger.cashSummary({ ...scope, since: budget.windowStartedAt }),
+        this.computeLedger.cashSummary({ ...scope, since: budget.monthlyWindowStartedAt }),
+      ])
+      const accountingKnown = daily.accountingKnown && monthly.accountingKnown
+      if (budget.cashAccountingKnown !== accountingKnown) {
+        budget.cashAccountingKnown = accountingKnown
+        budget.updatedAt = Date.now()
+        changed = true
+      }
+      if (!accountingKnown) continue
+      if (budget.spentCostUsd !== daily.actualCashUsd) {
+        budget.spentCostUsd = daily.actualCashUsd
+        budget.updatedAt = Date.now()
+        changed = true
+      }
+      if (budget.spentMonthlyCostUsd !== monthly.actualCashUsd) {
+        budget.spentMonthlyCostUsd = monthly.actualCashUsd
+        budget.updatedAt = Date.now()
+        changed = true
       }
     }
     return changed
@@ -482,11 +561,24 @@ export class OrganizationControlPlane {
     assertCompanyProject(organization, input.companyId, input.projectId)
     const existing = this.value.budgets.find((item) => item.companyId === input.companyId && item.projectId === input.projectId)
     const now = Date.now()
-    const target = existing ?? { id: randomUUID(), companyId: input.companyId, ...(input.projectId ? { projectId: input.projectId } : {}), spentTurns: 0, spentCostUsd: 0, windowStartedAt: now, updatedAt: now }
+    const target = existing ?? {
+      id: randomUUID(),
+      companyId: input.companyId,
+      ...(input.projectId ? { projectId: input.projectId } : {}),
+      spentTurns: 0,
+      spentCostUsd: 0,
+      spentMonthlyCostUsd: 0,
+      cashAccountingKnown: Boolean(this.computeLedger),
+      windowStartedAt: now,
+      monthlyWindowStartedAt: startOfUtcMonth(now),
+      updatedAt: now,
+    }
     if (input.dailyTurnLimit === undefined) delete target.dailyTurnLimit
     else target.dailyTurnLimit = nonNegativeInteger(input.dailyTurnLimit, 'dailyTurnLimit')
     if (input.dailyCostUsd === undefined) delete target.dailyCostUsd
     else target.dailyCostUsd = nonNegative(input.dailyCostUsd, 'dailyCostUsd')
+    if (input.monthlyCostUsd === undefined) delete target.monthlyCostUsd
+    else target.monthlyCostUsd = nonNegative(input.monthlyCostUsd, 'monthlyCostUsd')
     if (input.maxParallelWorkers === undefined) delete target.maxParallelWorkers
     else target.maxParallelWorkers = positiveInteger(input.maxParallelWorkers, 'maxParallelWorkers')
     if (input.maxReviewWorkers === undefined) delete target.maxReviewWorkers
@@ -548,7 +640,14 @@ function normalize(value: unknown): OrganizationControlSnapshot {
   for (const key of ['turns', 'humanActions', 'signals', 'budgets', 'leases', 'evidence', 'feedback'] as const) {
     if (!Array.isArray(record[key])) throw new Error(`Organization control field ${key} must be an array`)
   }
-  return clone(record as OrganizationControlSnapshot)
+  const normalized = clone(record as OrganizationControlSnapshot)
+  const now = Date.now()
+  for (const budget of normalized.budgets) {
+    if (!Number.isFinite(budget.spentMonthlyCostUsd)) budget.spentMonthlyCostUsd = 0
+    if (typeof budget.cashAccountingKnown !== 'boolean') budget.cashAccountingKnown = false
+    if (!Number.isFinite(budget.monthlyWindowStartedAt)) budget.monthlyWindowStartedAt = startOfUtcMonth(now)
+  }
+  return normalized
 }
 
 function actionForRun(kind: OrganizationRunKind): OrganizationControlAction {
@@ -623,6 +722,11 @@ function scopeBaseOverlaps(left: string, right: string): boolean {
   const b = base(right)
   if (!a || !b) return true
   return a === b || a.startsWith(b + '/') || b.startsWith(a + '/')
+}
+
+function startOfUtcMonth(value: number): number {
+  const date = new Date(value)
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1)
 }
 
 function positiveInteger(value: number, label: string): number { if (!Number.isInteger(value) || value < 1) throw new Error(`${label} must be a positive integer`); return value }
