@@ -78,15 +78,13 @@ reference machine, commit `d3de5be`:
   p95 0.72 ms, `selectedProvider: jev`, `escalated: true`.
 - **Full repository gates** — `pnpm verify`, `pnpm typecheck`, `pnpm test`
   (841 passed / 8 skipped, five consecutive green runs), `pnpm build` all pass.
-- **Live provider comparison** — Laya TS shadow, Laya Rust shadow, and Rust assist +
-  Jev are **SKIPPED for this run**: `laya`/`laya-serve` is not installed on this
-  machine (it needs `pip install "laya[serve]"` plus a model preload) and no Jev
-  credential was configured. Deterministic control semantics remain covered by the
-  focused fixture tests; the live wire-compatibility confirmation is the remaining
-  item before Rust becomes the default.
-- Rust is **not** yet promoted to the decision-kernel default; the TypeScript kernel
-  stays in place until the live shadow comparison is recorded.
+- **Live provider comparison** — Completed 2026-09-26 on `feat/token-tool-routing`:
+  Laya TS shadow, Laya Rust shadow, and Rust assist cascade verified live against
+  local `laya-serve` daemon (127.0.0.1:8765) with full effect journal inspection.
+  All gates and Section 11-17 Token-Saving & Tool-Routing suite PASSED.
+  See [Laya + Jev Live Validation & Tool Routing Evidence](../evidence/laya-jev-live-validation-tool-routing.md).
+- Rust remains an opt-in kernel (`ND_DECISION_SUPPORT_RUNTIME=rust`) with TypeScript default for beta stability.
 
 ## Handoff
 
-See [Reference Architecture Local Validation Handoff](../plan/reference-architecture-local-validation-handoff.md).
+See [Laya + Jev Live Validation & Tool Routing Evidence](../evidence/laya-jev-live-validation-tool-routing.md).

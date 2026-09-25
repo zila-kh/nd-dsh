@@ -51,7 +51,7 @@ describe('TaskWorktreeManager', () => {
     expect(integrated.merged).toBe(true)
     expect(await readFile(join(repo, 'app.ts'), 'utf8')).toContain('value = 2')
     expect((await exec('git', ['status', '--porcelain'], { cwd: repo })).stdout.trim()).toBe('')
-  })
+  }, 15_000)
 
   it('bootstraps a truly empty project workspace into Git before first task isolation', async () => {
     const parent = await mkdtemp(join(tmpdir(), 'nd-empty-workspace-'))

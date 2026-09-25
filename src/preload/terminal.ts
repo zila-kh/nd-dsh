@@ -56,6 +56,15 @@ const gatewayApi: NdGatewayDesktopApi = {
   },
 }
 
+import { TOOL_ROUTING_IPC, type ToolRoutingDesktopApi } from '../shared/tool-routing.js'
+
+const toolRoutingApi: ToolRoutingDesktopApi = {
+  state: () => ipcRenderer.invoke(TOOL_ROUTING_IPC.state),
+  updateSettings: (settings) => ipcRenderer.invoke(TOOL_ROUTING_IPC.updateSettings, settings),
+  routeTools: (taskText) => ipcRenderer.invoke(TOOL_ROUTING_IPC.routeTools, taskText),
+}
+
 contextBridge.exposeInMainWorld('ndDshTerminal', api)
 contextBridge.exposeInMainWorld('ndDshTokenSaver', tokenSaverApi)
+contextBridge.exposeInMainWorld('ndDshToolRouting', toolRoutingApi)
 contextBridge.exposeInMainWorld('ndDshGateway', gatewayApi)

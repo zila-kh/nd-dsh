@@ -7,6 +7,7 @@ import type { OrganizationDesktopApi } from '../../shared/organization'
 import type { OrganizationStrategyDesktopApi } from '../../shared/organization-strategy'
 import type { TerminalDesktopApi } from '../../shared/terminal'
 import type { TokenSaverDesktopApi } from '../../shared/token-saver'
+import type { ToolRoutingDesktopApi } from '../../shared/tool-routing'
 import type { UsageDesktopApi } from '../../shared/usage'
 import type { WorkflowPluginsDesktopApi } from '../../shared/workflow-plugins'
 
@@ -20,6 +21,7 @@ declare global {
     ndDshStrategy: OrganizationStrategyDesktopApi
     ndDshTerminal: TerminalDesktopApi
     ndDshTokenSaver: TokenSaverDesktopApi
+    ndDshToolRouting: ToolRoutingDesktopApi
     ndDshGateway: NdGatewayDesktopApi
     ndDshWorkflowPlugins: WorkflowPluginsDesktopApi
     ndDshUsage: UsageDesktopApi
