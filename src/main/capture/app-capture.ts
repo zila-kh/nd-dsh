@@ -22,7 +22,14 @@ export interface AppCaptureImage {
 /** Keep prompt payloads sane on high-DPI displays. */
 const MAX_CAPTURE_WIDTH = 1_600
 
-export async function capturePrimaryDisplay(): Promise<AppCaptureImage> {
+export interface AppCaptureArea {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export async function capturePrimaryDisplay(rect?: AppCaptureArea): Promise<AppCaptureImage> {
   const primary = screen.getPrimaryDisplay()
   const scale = Math.min(1, MAX_CAPTURE_WIDTH / Math.max(1, primary.size.width))
   const sources = await desktopCapturer.getSources({
@@ -34,23 +41,44 @@ export async function capturePrimaryDisplay(): Promise<AppCaptureImage> {
   })
   const source = sources.find((item) => item.display_id === String(primary.id)) ?? sources[0]
   if (!source) throw new Error('No capturable display was available')
-  const png = source.thumbnail.toPNG()
+  let image = source.thumbnail
+  if (rect && rect.width > 0 && rect.height > 0) {
+    const thumbSize = image.getSize()
+    const scaleX = thumbSize.width / Math.max(1, primary.size.width)
+    const scaleY = thumbSize.height / Math.max(1, primary.size.height)
+    const cropX = Math.max(0, Math.min(thumbSize.width - 1, Math.round(rect.x * scaleX)))
+    const cropY = Math.max(0, Math.min(thumbSize.height - 1, Math.round(rect.y * scaleY)))
+    const cropW = Math.max(1, Math.min(thumbSize.width - cropX, Math.round(rect.width * scaleX)))
+    const cropH = Math.max(1, Math.min(thumbSize.height - cropY, Math.round(rect.height * scaleY)))
+    if (cropW > 0 && cropH > 0) {
+      image = image.crop({ x: cropX, y: cropY, width: cropW, height: cropH })
+    }
+  }
+  const png = image.toPNG()
   if (png.length === 0) throw new Error('The display capture returned an empty image')
-  const size = source.thumbnail.getSize()
+  const size = image.getSize()
   return {
     data: png.toString('base64'),
     mediaType: 'image/png',
     name: `app-capture-${new Date().toISOString().replace(/[:.]/g, '-')}.png`,
     width: size.width,
     height: size.height,
-    displayLabel: `${primary.size.width}x${primary.size.height}`,
+    displayLabel: rect && rect.width > 0 && rect.height > 0
+      ? `${Math.round(rect.width)}x${Math.round(rect.height)}`
+      : `${primary.size.width}x${primary.size.height}`,
   }
 }
 
 /** Self-inspect: render this ND-DSH window's own contents, no screen capture. */
-export async function captureSelfWindow(window: BrowserWindow): Promise<AppCaptureImage> {
+export async function captureSelfWindow(window: BrowserWindow, rect?: AppCaptureArea): Promise<AppCaptureImage> {
   if (window.isDestroyed() || window.webContents.isDestroyed()) throw new Error('The ND-DSH window is no longer available')
-  const image = await window.webContents.capturePage()
+  const bounds = rect && rect.width > 0 && rect.height > 0 ? {
+    x: Math.max(0, Math.round(rect.x)),
+    y: Math.max(0, Math.round(rect.y)),
+    width: Math.max(1, Math.round(rect.width)),
+    height: Math.max(1, Math.round(rect.height)),
+  } : undefined
+  const image = bounds ? await window.webContents.capturePage(bounds) : await window.webContents.capturePage()
   if (image.isEmpty()) throw new Error('The window capture returned an empty image')
   const full = image.getSize()
   const scale = Math.min(1, MAX_CAPTURE_WIDTH / Math.max(1, full.width))
@@ -64,6 +92,6 @@ export async function captureSelfWindow(window: BrowserWindow): Promise<AppCaptu
     name: `self-capture-${new Date().toISOString().replace(/[:.]/g, '-')}.png`,
     width: size.width,
     height: size.height,
-    displayLabel: `${full.width}x${full.height}`,
+    displayLabel: bounds ? `${bounds.width}x${bounds.height}` : `${full.width}x${full.height}`,
   }
 }

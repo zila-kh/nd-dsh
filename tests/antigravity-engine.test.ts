@@ -244,6 +244,8 @@ describe('AntigravityEngine', () => {
         '--output-format', 'stream-json',
         '--input-format', 'stream-json',
         '--disable-slash-commands',
+        '--mode', 'accept-edits',
+        '--dangerously-skip-permissions',
         '--add-dir', '/workspace',
       ])
       expect(spawned[0]!.spawnCwd).toBe('/workspace')
@@ -465,6 +467,48 @@ describe('AntigravityEngine', () => {
       // The short cache serves repeat calls without respawning the CLI.
       await expect(engine.listModels()).resolves.toHaveLength(2)
       expect(spawnCount).toBe(1)
+    } finally {
+      await engine.close()
+    }
+  }, 15_000)
+
+  it('maps read-only permission mode to --mode plan and omits --dangerously-skip-permissions', async () => {
+    const { engine, spawned } = await makeEngine()
+    try {
+      const { sessionId } = await engine.createSession({ cwd: '/workspace' })
+      const runPromise = engine.run('analyze this code', { sessionId, permissionMode: 'read-only' })
+      await flush()
+      expect(spawned.length).toBe(1)
+      expect(spawned[0]!.argv).toContain('--mode')
+      expect(spawned[0]!.argv[spawned[0]!.argv.indexOf('--mode') + 1]).toBe('plan')
+      expect(spawned[0]!.argv).not.toContain('--dangerously-skip-permissions')
+      spawned[0]!.completeTurn('analysis complete')
+      await runPromise
+    } finally {
+      await engine.close()
+    }
+  }, 15_000)
+
+  it('respawns child with updated mode when permissionMode changes mid-session', async () => {
+    const { engine, spawned } = await makeEngine()
+    try {
+      const { sessionId } = await engine.createSession({ cwd: '/workspace' })
+      const first = engine.run('plan only', { sessionId, permissionMode: 'read-only' })
+      await flush()
+      expect(spawned.length).toBe(1)
+      expect(spawned[0]!.argv).toContain('--mode')
+      expect(spawned[0]!.argv[spawned[0]!.argv.indexOf('--mode') + 1]).toBe('plan')
+      spawned[0]!.completeTurn('planned')
+      await first
+
+      const second = engine.run('now apply changes', { sessionId, permissionMode: 'workspace-write' })
+      await flush()
+      expect(spawned.length).toBe(2)
+      expect(spawned[1]!.argv).toContain('--mode')
+      expect(spawned[1]!.argv[spawned[1]!.argv.indexOf('--mode') + 1]).toBe('accept-edits')
+      expect(spawned[1]!.argv).toContain('--dangerously-skip-permissions')
+      spawned[1]!.completeTurn('applied')
+      await second
     } finally {
       await engine.close()
     }

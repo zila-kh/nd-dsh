@@ -63,6 +63,7 @@ interface AntigravitySession {
   conversationId?: string
   cwd?: string
   model?: string
+  permissionMode?: string
   title: string
   createdAt: number
   updatedAt: number
@@ -116,6 +117,10 @@ export interface AntigravityEngineOptions {
   log?: (line: string) => void
   /** Test seam: process spawner (defaults to node:child_process.spawn). */
   spawnProcess?: typeof spawn
+  /** Execution mode for agy (defaults to accept-edits). */
+  mode?: string
+  /** Auto-approve headless tool calls without prompting (defaults to true in headless stream-json). */
+  skipPermissions?: boolean
 }
 
 export class AntigravityEngine {
@@ -237,7 +242,7 @@ export class AntigravityEngine {
    * id is given). Progress streams out as frames; the promise settles with the
    * turn, which is exactly one `result` event on the child's stdout.
    */
-  async run(prompt: string, options: { sessionId?: string; cwd?: string; model?: string } = {}): Promise<{ sessionId: string }> {
+  async run(prompt: string, options: { sessionId?: string; cwd?: string; model?: string; permissionMode?: string } = {}): Promise<{ sessionId: string }> {
     const cleaned = prompt.trim()
     if (!cleaned) throw new Error('Prompt cannot be empty')
     if (cleaned.length > 100_000) throw new Error('Prompt exceeds the 100,000 character limit')
@@ -255,6 +260,14 @@ export class AntigravityEngine {
     const activeSession = session
     if (activeSession.running) throw new Error('This Antigravity chat already has an active turn')
     if (options.cwd !== undefined) activeSession.cwd = options.cwd
+    if (options.permissionMode !== undefined && options.permissionMode !== activeSession.permissionMode) {
+      activeSession.permissionMode = options.permissionMode
+      const staleChild = activeSession.child
+      if (staleChild && staleChild.exitCode === null && staleChild.signalCode === null) {
+        delete activeSession.child
+        await killProcessTree(staleChild)
+      }
+    }
     if (options.model !== undefined && options.model !== activeSession.model) {
       activeSession.model = options.model
       // Model selection is a per-process CLI flag: tear the current child down
@@ -351,6 +364,16 @@ export class AntigravityEngine {
     const bin = antigravityBinPath()
     if (!bin) throw new Error('The Antigravity CLI (agy) is not installed. Install it from https://antigravity.google or set ND_DSH_ANTIGRAVITY_BINARY.')
     const argv = [bin, '--output-format', 'stream-json', '--input-format', 'stream-json', '--disable-slash-commands']
+    const resolvedPermissionMode = session.permissionMode
+      ?? (process.env.ND_DSH_PERMISSION_MODE?.trim() || 'workspace-write')
+    const defaultMode = resolvedPermissionMode === 'read-only' ? 'plan' : 'accept-edits'
+    const mode = process.env.ND_DSH_ANTIGRAVITY_MODE ?? this.options.mode ?? defaultMode
+    if (mode) argv.push('--mode', mode)
+    const defaultSkipPermissions = resolvedPermissionMode !== 'read-only'
+    const skipPermissions = process.env.ND_DSH_ANTIGRAVITY_SKIP_PERMISSIONS !== '0'
+      && process.env.ND_DSH_ANTIGRAVITY_SKIP_PERMISSIONS !== 'false'
+      && (this.options.skipPermissions ?? defaultSkipPermissions)
+    if (skipPermissions) argv.push('--dangerously-skip-permissions')
     if (session.conversationId !== undefined) argv.push('--conversation', session.conversationId)
     if (session.model !== undefined) argv.push('--model', session.model)
     // `agy` sandboxes its file tools to its own brain workspace; without this

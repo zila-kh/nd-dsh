@@ -25,23 +25,39 @@ export function resolveModelSelectionDisplay(
   const groups = models?.groups ?? []
   const current = models?.current
 
-  if (current) {
-    const group = groups.find((item) => item.id === current.provider)
-    const model = group?.models.find((item) => item.id === current.model)
-    const stale = groups.length > 0 && (!group || !model)
-    const route = `${group?.name ?? current.provider}/${current.model}`
-    return {
-      label: `${stale ? '⚠ ' : ''}${route}`,
-      title: stale ? `Removed from model catalog — pick another · ${route}` : route,
-      stale,
+  if (current && current.provider && current.model) {
+    const isDeepSeek = current.provider === 'deepseek-official' || current.provider === 'deepseek'
+    const deepseekEnabled = providers.some((p) => (p.id === 'deepseek' || p.id === 'deepseek-official') && p.enabled)
+    if (!isDeepSeek || deepseekEnabled) {
+      const group = groups.find((item) => item.id === current.provider)
+      const model = group?.models.find((item) => item.id === current.model)
+      const stale = groups.length > 0 && (!group || !model)
+      const route = `${group?.name ?? current.provider}/${current.model}`
+      return {
+        label: `${stale ? '⚠ ' : ''}${route}`,
+        title: stale ? `Removed from model catalog — pick another · ${route}` : route,
+        stale,
+      }
     }
   }
 
-  if (activeSessionId) {
+  if (activeSessionId && !models) {
     if (catalogState === 'loading') {
       return { label: 'Loading models…', title: 'Loading this session’s model catalog.', stale: false }
     }
     return { label: 'Model unavailable', title: 'This session’s model catalog is unavailable.', stale: false }
+  }
+
+  for (const group of groups) {
+    const isDs = group.id === 'deepseek-official' || group.id === 'deepseek'
+    const provider = providers.find((p) => p.id === group.id || (isDs && p.id === 'deepseek'))
+    if (isDs && !providers.some((p) => p.id === 'deepseek' && p.enabled)) continue
+    if (provider && !provider.enabled) continue
+    const model = group.models[0]
+    if (model) {
+      const route = `${group.name}/${model.name ?? model.id}`
+      return { label: route, title: route, stale: false }
+    }
   }
 
   for (const provider of providers) {
@@ -50,6 +66,10 @@ export function resolveModelSelectionDisplay(
     if (!model) continue
     const route = `${provider.name.trim() || provider.id}/${model.id.trim()}`
     return { label: route, title: `Default for the next ND Harness session · ${route}`, stale: false }
+  }
+
+  if (activeSessionId) {
+    return { label: 'Model unavailable', title: 'This session’s model catalog is unavailable.', stale: false }
   }
 
   return {

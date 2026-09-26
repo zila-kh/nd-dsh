@@ -47,9 +47,11 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+export const DEFAULT_AGENT_BROWSER_SESSION = 'nd-visible'
+
 export class AgentBrowserClient {
   readonly cdpPort: number
-  readonly sessionName = 'nd-dsh-visible-browser'
+  readonly sessionName: string
   readonly configPath: string
   readonly socketDir: string
   readonly binary: string
@@ -59,8 +61,12 @@ export class AgentBrowserClient {
   private sessionTouched = false
   private closing: Promise<void> | undefined
 
-  constructor(cdpPort: number, projectRoot: string) {
+  constructor(cdpPort: number, projectRoot: string, sessionName?: string) {
     this.cdpPort = cdpPort
+    this.sessionName = sessionName?.trim()
+      || process.env.ND_DSH_AGENT_BROWSER_SESSION?.trim()
+      || process.env.AGENT_BROWSER_SESSION?.trim()
+      || DEFAULT_AGENT_BROWSER_SESSION
     this.configPath = appBrowserConfigPath()
     this.socketDir = appBrowserSocketDir()
     this.binary = this.resolveBinary(projectRoot)
@@ -343,7 +349,25 @@ export class AgentBrowserClient {
 
 /** The app's private daemon socket directory. */
 export function appBrowserSocketDir(): string {
-  return join(app.getPath('userData'), 'agent-browser-runtime')
+  const override = process.env.AGENT_BROWSER_SOCKET_DIR?.trim() || process.env.ND_DSH_AGENT_BROWSER_SOCKET_DIR?.trim()
+  if (override) return resolve(override)
+
+  const candidate = join(app.getPath('userData'), 'agent-browser-runtime')
+  if (process.platform === 'win32') return candidate
+
+  // UNIX domain socket paths have strict limits: 104 bytes on Darwin (103 chars
+  // max) and 108 bytes on Linux (107 chars max). agent-browser appends
+  // `/namespaces/<namespace>/run/<session>.sock` to this directory. If the
+  // userData directory produces a path that exceeds the platform limit, fall
+  // back to a per-user runtime directory under /tmp.
+  const maxSocketPathLength = process.platform === 'darwin' ? 103 : 107
+  const maxNamespaceSuffix = `/namespaces/${AGENT_BROWSER_DAEMON_NAMESPACE}/run/${DEFAULT_AGENT_BROWSER_SESSION}.sock`.length
+  if (candidate.length + maxNamespaceSuffix <= maxSocketPathLength) {
+    return candidate
+  }
+
+  const uid = typeof process.getuid === 'function' ? process.getuid() : '0'
+  return `/tmp/nd-dsh-${uid}/ab`
 }
 
 /** The config file every app-owned agent-browser client reads. */
@@ -501,11 +525,22 @@ export async function stopAgentBrowserDaemonProcesses(socketDir: string, configP
  * so a daemon started by an earlier build is still reapable.
  */
 function daemonRootsFor(socketDir: string): string[] {
-  return [
-    join(socketDir, 'namespaces', AGENT_BROWSER_DAEMON_NAMESPACE, 'run'),
-    join(app.getPath('home'), '.agent-browser', 'namespaces', AGENT_BROWSER_DAEMON_NAMESPACE, 'run'),
-    socketDir,
-  ]
+  const roots = new Set<string>()
+  roots.add(join(socketDir, 'namespaces', AGENT_BROWSER_DAEMON_NAMESPACE, 'run'))
+  roots.add(socketDir)
+  try {
+    roots.add(join(app.getPath('home'), '.agent-browser', 'namespaces', AGENT_BROWSER_DAEMON_NAMESPACE, 'run'))
+  } catch {
+    // Ignore when home is unavailable
+  }
+  try {
+    const candidate = join(app.getPath('userData'), 'agent-browser-runtime')
+    roots.add(join(candidate, 'namespaces', AGENT_BROWSER_DAEMON_NAMESPACE, 'run'))
+    roots.add(candidate)
+  } catch {
+    // Ignore when userData is unavailable
+  }
+  return [...roots]
 }
 
 async function daemonPidsFor(socketDir: string): Promise<number[]> {

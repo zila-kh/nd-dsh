@@ -1,10 +1,13 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import type { ModelProvider, ProviderModel, ProviderPingResult } from '../../../shared/contracts'
 import { parseModelTokenLimit } from '../../../shared/provider-models'
 import { BoxIcon, CheckIcon, EyeIcon, EyeOffIcon, PencilIcon, PlugIcon, PlusIcon, RotateIcon, TrashIcon } from './Icons'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
+import { Switch } from './ui/switch'
 import { cn } from '../lib/utils'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog'
+
+const SHOW_ONLY_ENABLED_STORAGE_KEY = 'nd-dsh.models.show-only-enabled'
 
 interface ModelSettingsProps {
   onError(message: string): void
@@ -51,6 +54,13 @@ interface ModelSettingsDraft {
 }
 
 export function ModelSettings({ onError }: ModelSettingsProps) {
+  const [showOnlyEnabled, setShowOnlyEnabled] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(SHOW_ONLY_ENABLED_STORAGE_KEY) === 'true'
+    } catch {
+      return false
+    }
+  })
   const [providers, setProviders] = useState<ModelProvider[]>([])
   const [selectedId, setSelectedId] = useState('')
   const [showApiKey, setShowApiKey] = useState(false)
@@ -71,6 +81,15 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
   const [newHeaderValue, setNewHeaderValue] = useState('')
   const [saveStatus, setSaveStatus] = useState<string | null>(null)
 
+  const toggleShowOnlyEnabled = (checked: boolean): void => {
+    setShowOnlyEnabled(checked)
+    try {
+      localStorage.setItem(SHOW_ONLY_ENABLED_STORAGE_KEY, String(checked))
+    } catch {
+      // Ignore storage errors
+    }
+  }
+
   // Clear per-model pings when the selected provider changes.
   useEffect(() => {
     setModelPings({})
@@ -85,7 +104,10 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
         .then((loaded) => {
           if (!mounted) return
           setProviders(loaded)
-          setSelectedId((current) => (loaded.some((provider) => provider.id === current) ? current : (loaded[0]?.id ?? '')))
+          setSelectedId((current) => {
+            const list = showOnlyEnabled ? loaded.filter((provider) => provider.enabled) : loaded
+            return list.some((provider) => provider.id === current) ? current : (list[0]?.id ?? '')
+          })
         })
         .catch((cause) => onError(errorMessage(cause)))
     }
@@ -97,7 +119,7 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
       mounted = false
       unsubscribe()
     }
-  }, [onError])
+  }, [onError, showOnlyEnabled])
 
   useEffect(() => {
     setApiKeyDraft('')
@@ -107,7 +129,18 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
     setNewHeaderValue('')
   }, [selectedId])
 
-  const selected = providers.find((provider) => provider.id === selectedId) ?? providers[0] ?? null
+  const visibleProviders = useMemo(
+    () => (showOnlyEnabled ? providers.filter((provider) => provider.enabled) : providers),
+    [showOnlyEnabled, providers],
+  )
+
+  const selected = visibleProviders.find((provider) => provider.id === selectedId) ?? visibleProviders[0] ?? null
+
+  useEffect(() => {
+    if (visibleProviders.length > 0 && !visibleProviders.some((provider) => provider.id === selectedId)) {
+      setSelectedId(visibleProviders[0]?.id ?? '')
+    }
+  }, [visibleProviders, selectedId])
 
   const commit = (next: ModelProvider[]): void => {
     const safe = next.map((provider) => ({ ...provider, apiKey: '' }))
@@ -140,11 +173,17 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
 
   const removeProvider = (id: string): void => {
     const next = providers.filter((provider) => provider.id !== id)
-    if (selectedId === id) setSelectedId(next[0]?.id ?? '')
+    if (selectedId === id) {
+      const nextVisible = showOnlyEnabled ? next.filter((provider) => provider.enabled) : next
+      setSelectedId(nextVisible[0]?.id ?? '')
+    }
     commit(next)
   }
 
   const addProvider = (): void => {
+    if (showOnlyEnabled) {
+      toggleShowOnlyEnabled(false)
+    }
     const provider: ModelProvider = {
       id: `custom-${crypto.randomUUID().slice(0, 8)}`,
       name: 'Custom provider',
@@ -279,7 +318,8 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
     try {
       const loaded = await window.ndDsh.providers.list()
       setProviders(loaded)
-      setSelectedId((current) => loaded.some((provider) => provider.id === current) ? current : (loaded[0]?.id ?? ''))
+      const list = showOnlyEnabled ? loaded.filter((provider) => provider.enabled) : loaded
+      setSelectedId((current) => list.some((provider) => provider.id === current) ? current : (list[0]?.id ?? ''))
     } catch (cause) {
       onError(errorMessage(cause))
     }
@@ -369,22 +409,44 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
           <h2 className="m-0 text-xl font-semibold tracking-tight">Model settings</h2>
           <p className="mb-0 mt-1 text-xs/[1.5] text-(--models-muted)">Configure model-provider routes independently from coding engines. Enabled routes become available to ND Harness sessions on the next prompt.</p>
         </div>
-        <button
-          className="grid size-[30px] shrink-0 place-items-center rounded-[7px] text-(--models-muted) transition-colors hover:bg-(--models-field) hover:text-(--models-text) [&_svg]:size-[15px]"
-          title="Reload providers from storage"
-          aria-label="Refresh model settings"
-          onClick={() => void refresh()}
-        >
-          <RotateIcon />
-        </button>
+        <div className="flex shrink-0 items-center gap-3 pt-0.5">
+          <label
+            htmlFor="toggle-show-only-enabled"
+            className="flex cursor-pointer select-none items-center gap-2 text-xs text-(--models-muted) transition-colors hover:text-(--models-text)"
+            title="Show only enabled providers"
+          >
+            <Switch
+              id="toggle-show-only-enabled"
+              size="sm"
+              checked={showOnlyEnabled}
+              onCheckedChange={toggleShowOnlyEnabled}
+              aria-label="Show only enabled providers"
+            />
+            <span>Show only enabled</span>
+          </label>
+          <button
+            className="grid size-[30px] shrink-0 place-items-center rounded-[7px] text-(--models-muted) transition-colors hover:bg-(--models-field) hover:text-(--models-text) [&_svg]:size-[15px]"
+            title="Reload providers from storage"
+            aria-label="Refresh model settings"
+            onClick={() => void refresh()}
+          >
+            <RotateIcon />
+          </button>
+        </div>
       </header>
 
       <div className="grid min-h-0 overflow-hidden grid-cols-[240px_minmax(0,1fr)] gap-4 px-6 pb-6">
         <aside className="flex min-h-0 flex-col overflow-auto" aria-label="Providers">
           <div className="px-1.5 pb-1.5 pt-2.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-(--models-faint)">Providers</div>
-          {providers.map((provider) => (
-            <ProviderItem key={provider.id} provider={provider} selected={provider.id === selectedId} onSelect={() => setSelectedId(provider.id)} />
-          ))}
+          {visibleProviders.length === 0 ? (
+            <div className="px-2 py-3 text-left text-xs text-(--models-faint)">
+              {providers.length === 0 ? 'No providers' : 'No enabled providers'}
+            </div>
+          ) : (
+            visibleProviders.map((provider) => (
+              <ProviderItem key={provider.id} provider={provider} selected={provider.id === selectedId} onSelect={() => setSelectedId(provider.id)} />
+            ))
+          )}
           <button className="mt-2.5 flex items-center gap-[7px] rounded-md px-[9px] py-1.5 text-left text-[12px] text-(--models-muted) transition-colors hover:text-(--models-text) [&_svg]:size-3.5" onClick={addProvider}>
             <PlusIcon />Add provider
           </button>
@@ -722,7 +784,11 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
           </div>
         ) : (
           <div className="flex min-h-0 flex-col items-center justify-center rounded-[14px] border border-(--models-border) bg-(--models-surface) p-[22px] text-center text-[12px] text-(--models-faint)">
-            <p>No providers yet. Use “Add provider” to create one.</p>
+            <p>
+              {showOnlyEnabled && providers.length > 0
+                ? 'No enabled providers. Toggle off “Show only enabled” to see all providers.'
+                : 'No providers yet. Use “Add provider” to create one.'}
+            </p>
           </div>
         )}
       </div>

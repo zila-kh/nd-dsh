@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync, promises as fs } from 'node:fs'
+import { existsSync, readFileSync, promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import type {
   DshEventFrame,
@@ -9,9 +9,11 @@ import type {
   HarnessRunOptions,
   HarnessRunResult,
   HarnessStatus,
+  SessionModels,
   UiAnnotation,
   UiTarget,
 } from '../../shared/contracts.js'
+import { restrictDeepSeekCatalog } from '../../shared/model-catalog.js'
 import { appendWorkspaceContext, stripWorkspaceContext, workspaceContextForPersona } from '../../shared/workspace-context.js'
 import { bundledResourceRoot, dshPatchPath, harnessCliBinPath, harnessRoot, presetSourceDir } from '../app-paths.js'
 import type { BrowserController } from '../browser/browser-controller.js'
@@ -28,8 +30,8 @@ import { SessionEventHub } from './session-event-hub.js'
 import type { SessionJournalStore } from './session-journal-store.js'
 import type { WorkspaceService } from '../workspace/workspace-service.js'
 
-const COMPAT_DEFAULT_PROVIDER = 'deepseek-official'
-const COMPAT_DEFAULT_MODEL = 'deepseek-v4-flash'
+const DEFAULT_FALLBACK_PROVIDER = ''
+const DEFAULT_FALLBACK_MODEL = ''
 const READY_TIMEOUT_MS = 120_000
 const READY_POLL_MS = 300
 const UI_CONTEXT_MARKER = '\n\n[ND-DSH LIVE UI CONTEXT]'
@@ -255,6 +257,9 @@ export class HarnessService {
     const { result } = await this.rpcWithRecovery(started, method, payload)
     if (method === 'session.history') return sanitizeHistoryResult(result)
     if (method === 'session.list') return this.annotateArchivedSessions(result)
+    if (method === 'session.models' && result.ok && result.value && typeof result.value === 'object') {
+      return { ...result, value: restrictDeepSeekCatalog(result.value as SessionModels, this.providers.list()) }
+    }
     return result
   }
 
@@ -462,11 +467,14 @@ export class HarnessService {
     const providerRevision = this.providers.revision()
     const tokenSaverEnabled = this.tokenSaverEnabled()
     const providerRuntime = this.providers.runtimeConfig()
+    const deepseekProvider = this.providers.list().find((item) => item.id === 'deepseek')
+    const deepseekEnabled = deepseekProvider?.enabled === true
     const port = await pickFreePort()
     const environment: NodeJS.ProcessEnv = {
       ...process.env,
       ...providerRuntime.environment,
       ND_DSH_LLM_PROVIDERS_JSON: JSON.stringify(providerRuntime.profiles),
+      ND_DSH_DEEPSEEK_ENABLED: deepseekEnabled ? '1' : '0',
       ...(providerRuntime.defaultProvider ? { ND_DSH_DEFAULT_PROVIDER: providerRuntime.defaultProvider } : {}),
       ...(providerRuntime.defaultModel ? { ND_DSH_DEFAULT_MODEL: providerRuntime.defaultModel } : {}),
       ND_DSH_TOKEN_SAVER_ENABLED: tokenSaverEnabled ? '1' : '0',
@@ -691,13 +699,15 @@ export class HarnessService {
     const runtime = this.providers.runtimeConfig()
     const apiKeyPresent = Boolean(configured?.apiKey.trim())
     const apiKeyRequired = providerRequiresCredential(configured)
+    const runtimeVersion = readHarnessVersion()
     return {
       state,
       sourceReady,
       apiKeyPresent,
       apiKeyRequired,
-      provider: nonEmpty(runtime.defaultProvider, process.env.ND_DSH_PROVIDER, COMPAT_DEFAULT_PROVIDER),
-      model: nonEmpty(runtime.defaultModel, process.env.ND_DSH_MODEL, COMPAT_DEFAULT_MODEL),
+      provider: nonEmpty(runtime.defaultProvider, process.env.ND_DSH_PROVIDER, DEFAULT_FALLBACK_PROVIDER),
+      model: nonEmpty(runtime.defaultModel, process.env.ND_DSH_MODEL, DEFAULT_FALLBACK_MODEL),
+      ...(runtimeVersion ? { runtimeVersion } : {}),
       ...(this.activeSessionId ? { sessionId: this.activeSessionId } : {}),
       ...(this.baseUrl ? { url: this.baseUrl, port: Number(new URL(this.baseUrl).port) } : {}),
       ...(error ? { error } : {}),
@@ -723,6 +733,22 @@ function providerRequiresCredential(provider: { baseUrl: string } | undefined): 
     return true
   }
 }
+
+/** Reads the harness package version from its package.json (cached after first read). */
+let _harnessVersionCache: string | undefined | null = null
+function readHarnessVersion(): string | undefined {
+  if (_harnessVersionCache !== null) return _harnessVersionCache
+  try {
+    const pkgPath = join(harnessRoot(), 'package.json')
+    if (!existsSync(pkgPath)) { _harnessVersionCache = undefined; return undefined }
+    const parsed = JSON.parse(readFileSync(pkgPath, 'utf8')) as { version?: unknown }
+    _harnessVersionCache = typeof parsed.version === 'string' ? parsed.version : undefined
+  } catch {
+    _harnessVersionCache = undefined
+  }
+  return _harnessVersionCache ?? undefined
+}
+
 
 /** Extract only the loopback URL for the port ND assigned to this child. */
 export function dshWebUrl(output: string, expectedBaseUrl: string): string | undefined {

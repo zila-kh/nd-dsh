@@ -27,7 +27,7 @@ import { applyMention, detectMentionTrigger } from '../../../shared/mentions'
 import type { BrowserPlatformState, BrowserSelection } from '../../../shared/browser-platform'
 import { openSkillPicker, parseSkillCatalog, skillSelectionScope, type SkillSuggestion } from '../../../shared/skill-catalog'
 import { isVisionModel, resolveModelSelectionDisplay, type ModelCatalogState } from '../lib/model-selection'
-import { archiveableVisibleSessionIds } from '../../../shared/session-archive-selection'
+import { archiveableVisibleSessionIds, cleanThreadTitle, nextSessionAfterArchive } from '../../../shared/session-archive-selection'
 import { describeAgentError, type AgentErrorRoute } from '../lib/runtime-notices'
 import {
   ArchiveIcon,
@@ -43,7 +43,6 @@ import {
   CrosshairIcon,
   FileIcon,
   FolderIcon,
-  MoreHorizontalIcon,
   PlusIcon,
   RotateIcon,
   SearchIcon,
@@ -97,6 +96,8 @@ const PERMISSION_MODES = [
 
 /** Stable fallback so the project-scope memos keep a consistent dependency. */
 const EMPTY_SESSION_PROJECTS: Readonly<Record<string, string>> = {}
+
+const PREFERRED_CHAT_ENGINE_STORAGE_KEY = 'nd-dsh-preferred-chat-engine'
 
 const FS_WRITE_TOOL_NAMES = new Set(['fs_edit', 'fs_write', 'fs_write_text', 'fs_create', 'fs_apply_patch', 'fs_str_replace', 'apply_patch'])
 
@@ -163,7 +164,34 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
   const [engineSessions, setEngineSessions] = useState<EngineSessionSummary[]>([])
   // Engine id for a chat that is drafted but not created yet; the session is
   // created by the first send (router-side), never via gateway session.create.
-  const [draftEngineId, setDraftEngineId] = useState<string | null>(null)
+  const [draftEngineId, setDraftEngineId] = useState<string | null>(() => {
+    try {
+      const saved = localStorage.getItem(PREFERRED_CHAT_ENGINE_STORAGE_KEY)
+      return saved && saved !== ND_HARNESS_ENGINE_ID ? saved : null
+    } catch {
+      return null
+    }
+  })
+
+  useEffect(() => {
+    const onPreferredChanged = (): void => {
+      try {
+        const saved = localStorage.getItem(PREFERRED_CHAT_ENGINE_STORAGE_KEY)
+        const engineId = saved && saved !== ND_HARNESS_ENGINE_ID ? saved : null
+        if (activeSessionId === null) {
+          setDraftEngineId(engineId)
+        }
+      } catch {
+        // ignore
+      }
+    }
+    window.addEventListener('nd-dsh-preferred-engine-changed', onPreferredChanged)
+    window.addEventListener('storage', onPreferredChanged)
+    return () => {
+      window.removeEventListener('nd-dsh-preferred-engine-changed', onPreferredChanged)
+      window.removeEventListener('storage', onPreferredChanged)
+    }
+  }, [activeSessionId])
   // Dedicated terminal session that hosts the interactive `agy` TUI for native
   // account switching (/logout); independent from per-chat terminals.
   const [switchAccountTerminalOpen, setSwitchAccountTerminalOpen] = useState(false)
@@ -176,9 +204,8 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
   // opened from the ZCode runtime error card and the engine model menu.
   const [zcodeConfigOpen, setZcodeConfigOpen] = useState(false)
   // Chat archival lives ND-side; the sidebar filters on it and each thread
-  // card gets a hover menu that toggles it (harness and engine chats alike).
+  // card gets a direct hover action that toggles it (harness and engine chats alike).
   const [showArchived, setShowArchived] = useState(false)
-  const [sessionMenuId, setSessionMenuId] = useState<string | null>(null)
   const [archiveAllIds, setArchiveAllIds] = useState<string[] | null>(null)
   const [archivingAll, setArchivingAll] = useState(false)
   // ChatGPT Project binding: ChatGPT Web requires a project to scope conversations.
@@ -268,6 +295,11 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
   }, [activeEngineId, activeWorkspaceRoot, refreshChatGptProjectBinding])
   // Extra chat engines come straight from the catalog; unavailable ones never render.
   const chatEngines = useMemo(() => engines.filter((engine) => engine.available && engine.id !== ND_HARNESS_ENGINE_ID), [engines])
+  // Header engine selector shows only active or available/enabled engines.
+  const headerEngines = useMemo(
+    () => engines.filter((engine) => engine.id !== ND_HARNESS_ENGINE_ID && (engine.available || engine.id === activeEngineId)),
+    [engines, activeEngineId],
+  )
   // Both listings arrive pre-annotated with ND archive flags; the sidebar
   // shows one bucket at a time. Run attribution narrows each bucket to the
   // active project's sessions (unattributed manual chats always stay).
@@ -317,12 +349,16 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
         return next
       })
       setHarnessSessionsLoaded(true)
-      setActiveSessionId((current) => current ?? items[0]?.sessionId ?? null)
+      setActiveSessionId((current) => {
+        if (current !== null) return current
+        if (draftEngineId !== null) return null
+        return items[0]?.sessionId ?? null
+      })
     } catch (cause) {
       setHarnessSessionsLoaded(true)
       onError(cause instanceof Error ? cause.message : String(cause))
     }
-  }, [onError])
+  }, [onError, draftEngineId])
 
   const loadHistory = useCallback(async (sessionId: string): Promise<void> => {
     try {
@@ -355,12 +391,16 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
         return next
       })
       setEngineSessionsLoaded(true)
-      setActiveSessionId((current) => current ?? items[0]?.sessionId ?? null)
+      setActiveSessionId((current) => {
+        if (current !== null) return current
+        if (draftEngineId !== null) return null
+        return items[0]?.sessionId ?? null
+      })
     } catch {
       // Engine chat listing stays empty; not an error surface.
       setEngineSessionsLoaded(true)
     }
-  }, [])
+  }, [draftEngineId])
 
   useEffect(() => {
     void refreshEngineSessions()
@@ -415,37 +455,79 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
   // Archival is a desktop-side flag; refetching both listings re-applies the
   // annotated flags exactly like every other session mutation does.
   const setSessionArchived = useCallback(async (sessionId: string, archived: boolean): Promise<void> => {
+    // Optimistically update renderer state immediately (0ms latency)
+    setSessions((current) => current.map((s) => (s.sessionId === sessionId ? { ...s, archived } : s)))
+    setEngineSessions((current) => current.map((s) => (s.sessionId === sessionId ? { ...s, archived } : s)))
+
+    if (archived && !showArchived && activeSessionId === sessionId) {
+      const nextId = nextSessionAfterArchive(sessionId, [sessionId], sessions, engineSessions)
+      setActiveSessionId(nextId)
+    }
+
     try {
       await window.ndDsh.sessions.setArchived(sessionId, archived)
-      await Promise.all([refreshSessions(), refreshEngineSessions()])
+      await Promise.allSettled([refreshSessions(), refreshEngineSessions()])
     } catch (cause) {
+      // Revert optimistic update on failure
+      setSessions((current) => current.map((s) => (s.sessionId === sessionId ? { ...s, archived: !archived } : s)))
+      setEngineSessions((current) => current.map((s) => (s.sessionId === sessionId ? { ...s, archived: !archived } : s)))
       onError(cause instanceof Error ? cause.message : String(cause))
     }
-  }, [onError, refreshEngineSessions, refreshSessions])
+  }, [activeSessionId, showArchived, sessions, engineSessions, onError, refreshEngineSessions, refreshSessions])
 
   const confirmArchiveAll = useCallback(async (): Promise<void> => {
     const ids = archiveAllIds
     if (!ids || ids.length === 0 || archivingAll) return
     setArchivingAll(true)
+    const idSet = new Set(ids)
+
+    // Optimistically update both listings
+    setSessions((current) => current.map((s) => (idSet.has(s.sessionId) ? { ...s, archived: true } : s)))
+    setEngineSessions((current) => current.map((s) => (idSet.has(s.sessionId) ? { ...s, archived: true } : s)))
+    if (!showArchived && activeSessionId && idSet.has(activeSessionId)) {
+      setActiveSessionId(nextSessionAfterArchive(activeSessionId, ids, sessions, engineSessions))
+    }
+    setArchiveAllIds(null)
+
     try {
       await window.ndDsh.sessions.setArchivedMany(ids, true)
-      await Promise.all([refreshSessions(), refreshEngineSessions()])
-      setArchiveAllIds(null)
+      await Promise.allSettled([refreshSessions(), refreshEngineSessions()])
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : String(cause))
+      await Promise.allSettled([refreshSessions(), refreshEngineSessions()])
     } finally {
       setArchivingAll(false)
     }
-  }, [archiveAllIds, archivingAll, onError, refreshEngineSessions, refreshSessions])
+  }, [archiveAllIds, archivingAll, activeSessionId, showArchived, sessions, engineSessions, onError, refreshEngineSessions, refreshSessions])
 
   /** Draft a chat on a non-harness engine; creation happens on first send. */
   const startEngineDraft = useCallback((engineId: string): void => {
+    try {
+      if (engineId === ND_HARNESS_ENGINE_ID) {
+        localStorage.removeItem(PREFERRED_CHAT_ENGINE_STORAGE_KEY)
+      } else {
+        localStorage.setItem(PREFERRED_CHAT_ENGINE_STORAGE_KEY, engineId)
+      }
+      window.dispatchEvent(new Event('nd-dsh-preferred-engine-changed'))
+    } catch {
+      // ignore
+    }
     setDraftEngineId(engineId)
     setActiveSessionId(null)
     setChangedFiles([])
   }, [])
 
   const handleNewSession = useCallback(async (): Promise<void> => {
+    let preferred: string | null = null
+    try {
+      preferred = localStorage.getItem(PREFERRED_CHAT_ENGINE_STORAGE_KEY)
+    } catch {
+      // ignore
+    }
+    if (preferred && preferred !== ND_HARNESS_ENGINE_ID) {
+      startEngineDraft(preferred)
+      return
+    }
     try {
       const result = await window.ndDsh.dsh.rpc('session.create', {})
       const sessionId = ((result.value ?? {}) as { sessionId?: string }).sessionId
@@ -459,9 +541,19 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : String(cause))
     }
-  }, [onError])
+  }, [onError, startEngineDraft])
 
   const selectHeaderEngine = useCallback((engineId: string): void => {
+    try {
+      if (engineId === ND_HARNESS_ENGINE_ID) {
+        localStorage.removeItem(PREFERRED_CHAT_ENGINE_STORAGE_KEY)
+      } else {
+        localStorage.setItem(PREFERRED_CHAT_ENGINE_STORAGE_KEY, engineId)
+      }
+      window.dispatchEvent(new Event('nd-dsh-preferred-engine-changed'))
+    } catch {
+      // ignore storage failure
+    }
     if (engineId === activeEngineId) return
     if (engineId === ND_HARNESS_ENGINE_ID) {
       // Return to the default ND Agent thread without an eager session.create:
@@ -974,10 +1066,10 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
       ? { model: engineModel }
       : {}
     const options = activeSessionId !== null
-      ? { sessionId: activeSessionId, ...engineModelOption }
+      ? { sessionId: activeSessionId, permissionMode, ...engineModelOption }
       : draftEngine !== null
-        ? { engineId: draftEngine, ...engineModelOption }
-        : undefined
+        ? { engineId: draftEngine, permissionMode, ...engineModelOption }
+        : { permissionMode }
     try {
       const catalog = /^\s*\//.test(input) ? await window.ndDsh.skills.catalog(activeProjectId ?? null) : undefined
       const result = await window.ndDsh.harness.run(input, { ...options, ...(catalog ? { skillScope: selectedScope ?? catalog.scope, ...(selection?.selectionId ? { skillSelectionId: selection.selectionId } : {}) } : {}) })
@@ -1056,7 +1148,11 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
     setPermissionMenuOpen(false)
     try {
       await window.ndDsh.harness.setPermissionMode(mode)
-      onError('Permission mode changed; the runtime restarts on the next prompt.')
+      if (onHarnessThread) {
+        onError('Permission mode changed; the runtime restarts on the next prompt.')
+      } else {
+        onError(`Permission mode changed to ${PERMISSION_MODES.find((m) => m.id === mode)?.label ?? mode}.`)
+      }
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : String(cause))
     }
@@ -1124,7 +1220,12 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
     })
   }
 
-  const modelGroups: ModelProviderGroup[] = models?.groups ?? []
+  const enabledProviders = providerRoutes.filter((provider) => provider.enabled)
+  const enabledProviderIds = new Set(
+    enabledProviders.flatMap((provider) => [provider.id, provider.id === 'deepseek' ? 'deepseek-official' : provider.id])
+  )
+  const modelGroups: ModelProviderGroup[] = (models?.groups ?? [])
+    .filter((group) => enabledProviderIds.has(group.id))
   const currentModel = models?.current
   const currentGroup = modelGroups.find((group) => group.id === currentModel?.provider)
   const currentModelMeta = currentGroup?.models.find((model) => model.id === currentModel?.model)
@@ -1155,8 +1256,7 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
 
   const sessionTitle = (session: SessionSummary): string => {
     const title = session.projections?.values?.title
-    if (typeof title === 'string' && title.trim()) return title
-    return 'New Chat Thread'
+    return cleanThreadTitle(typeof title === 'string' ? title : undefined)
   }
 
   return (
@@ -1281,12 +1381,7 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
                     title={sessionTitle(session)}
                     time={sessionTime(session)}
                     archived={session.archived === true}
-                    menuOpen={sessionMenuId === session.sessionId}
-                    onMenuOpenChange={(open) => setSessionMenuId(open ? session.sessionId : null)}
-                    onToggleArchive={() => {
-                      setSessionMenuId(null)
-                      void setSessionArchived(session.sessionId, session.archived !== true)
-                    }}
+                    onToggleArchive={() => void setSessionArchived(session.sessionId, session.archived !== true)}
                     onClick={() => selectSession(session)}
                   />
                 ))}
@@ -1295,17 +1390,12 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
                     key={session.sessionId}
                     active={activeSessionId === session.sessionId}
                     busy={busySessions.has(session.sessionId) || Boolean(session.running)}
-                    title={session.title}
+                    title={cleanThreadTitle(session.title)}
                     time={sessionTime({ updatedAt: session.updatedAt } as SessionSummary)}
                     engineChip={engines.find((engine) => engine.id === session.engineId)?.name ?? session.engineId}
                     cardTitle={`${engines.find((engine) => engine.id === session.engineId)?.name ?? session.engineId} chat`}
                     archived={session.archived === true}
-                    menuOpen={sessionMenuId === session.sessionId}
-                    onMenuOpenChange={(open) => setSessionMenuId(open ? session.sessionId : null)}
-                    onToggleArchive={() => {
-                      setSessionMenuId(null)
-                      void setSessionArchived(session.sessionId, session.archived !== true)
-                    }}
+                    onToggleArchive={() => void setSessionArchived(session.sessionId, session.archived !== true)}
                     onClick={() => selectEngineSession(session)}
                   />
                 ))}
@@ -1374,7 +1464,7 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
               </SelectTrigger>
               <SelectContent align="end">
                 <SelectItem value={ND_HARNESS_ENGINE_ID}>Default · ND Harness</SelectItem>
-                {engines.filter((engine) => engine.id !== ND_HARNESS_ENGINE_ID).map((engine) => (
+                {headerEngines.map((engine) => (
                   <SelectItem
                     key={engine.id}
                     value={engine.id}
@@ -1746,7 +1836,7 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
                   setPermissionMenuOpen(false); setModelMenuOpen(false); setEngineModelMenuOpen(false); setContextMenuOpen(false)
                   requestAnimationFrame(() => { textareaRef.current?.focus(); textareaRef.current?.setSelectionRange(next.caret, next.caret) })
                 }}><SparkIcon /> Skills</button>
-              {onHarnessThread ? (
+              {onHarnessThread || activeEngineId === ANTIGRAVITY_ENGINE_ID ? (
                 <div className="relative">
                   <button
                     className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-[#f59e0b]/30 bg-[#f59e0b]/10 px-1.5 py-[3px] text-[10px] font-medium text-[#f59e0b] transition-colors hover:bg-[#f59e0b]/20 [&_svg]:size-3"
@@ -2059,10 +2149,10 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
 
 /**
  * Session thread card in the left sidebar. The card stays a plain select
- * button; Archive/Unarchive lives on a sibling kebab that swaps in for the
- * timestamp on hover, so no interactive element nests inside another.
+ * button; Archive/Unarchive is a single-click action button that swaps in
+ * for the timestamp on hover, so no interactive element nests inside another.
  */
-function SessionCard({ active, busy, title, time, engineChip, cardTitle, archived = false, menuOpen, onMenuOpenChange, onToggleArchive, onClick }: {
+function SessionCard({ active, busy, title, time, engineChip, cardTitle, archived = false, onToggleArchive, onClick }: {
   active: boolean
   busy: boolean
   title: string
@@ -2070,14 +2160,13 @@ function SessionCard({ active, busy, title, time, engineChip, cardTitle, archive
   engineChip?: string
   cardTitle?: string
   archived?: boolean
-  menuOpen: boolean
-  onMenuOpenChange(open: boolean): void
   onToggleArchive(): void
   onClick(): void
 }) {
   return (
     <div className="group relative">
       <button
+        type="button"
         className={cn(
           'flex w-full items-center justify-between rounded-lg border border-border-soft bg-surface-1 px-2.5 py-1.5 text-left text-[11px] text-soft transition-colors',
           active
@@ -2097,33 +2186,20 @@ function SessionCard({ active, busy, title, time, engineChip, cardTitle, archive
             </span>
           ) : null}
         </span>
-        <span className={cn('shrink-0 text-[10px] text-faint transition-opacity', menuOpen ? 'opacity-0' : 'group-hover:opacity-0')}>{time}</span>
+        <span className="shrink-0 text-[10px] text-faint transition-opacity group-hover:opacity-0">{time}</span>
       </button>
       <button
-        aria-label="Chat options"
-        className={cn(
-          'absolute right-[4px] top-1/2 hidden -translate-y-1/2 place-items-center rounded-[5px] p-px text-faint transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[14px]',
-          menuOpen ? 'grid' : 'group-hover:grid',
-        )}
-        onClick={() => onMenuOpenChange(!menuOpen)}
+        type="button"
+        title={archived ? 'Unarchive chat' : 'Archive chat'}
+        aria-label={archived ? 'Unarchive chat' : 'Archive chat'}
+        className="absolute right-[4px] top-1/2 hidden -translate-y-1/2 place-items-center rounded-[5px] p-1 text-faint transition-colors hover:bg-accent hover:text-foreground group-hover:grid [&_svg]:size-[13px]"
+        onClick={(e) => {
+          e.stopPropagation()
+          onToggleArchive()
+        }}
       >
-        <MoreHorizontalIcon />
+        <ArchiveIcon />
       </button>
-      {menuOpen ? (
-        <>
-          {/* Click-away catcher sits under the flyout and above the page. */}
-          <div className="fixed inset-0 z-[135]" onMouseDown={() => onMenuOpenChange(false)} />
-          <div className="absolute right-0 top-full z-[140] mt-1 min-w-[124px] rounded-[10px] border border-border-strong bg-surface-1 p-1 shadow-[0_10px_30px_rgba(0,0,0,0.4)]">
-            <button
-              className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[11px] text-soft transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[13px]"
-              onClick={onToggleArchive}
-            >
-              <ArchiveIcon />
-              <span>{archived ? 'Unarchive' : 'Archive'}</span>
-            </button>
-          </div>
-        </>
-      ) : null}
     </div>
   )
 }

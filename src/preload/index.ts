@@ -98,6 +98,7 @@ const api: DesktopApi = {
     setFloatMode: (enabled) => ipcRenderer.invoke(IPC.windowSetFloatMode, enabled),
     resizeFloatWindow: (width, height) => ipcRenderer.invoke(IPC.windowResizeFloatWindow, width, height),
     moveFloatWindow: (deltaX, deltaY) => ipcRenderer.invoke(IPC.windowMoveFloatWindow, deltaX, deltaY),
+    setCaptureOverlay: (active) => ipcRenderer.invoke(IPC.windowSetCaptureOverlay, active),
     onFloatMode: (listener) => {
       const handler = (_event: Electron.IpcRendererEvent, enabled: boolean) => listener(enabled)
       ipcRenderer.on(IPC.windowFloatModeEvent, handler)
@@ -135,7 +136,7 @@ const api: DesktopApi = {
     setArchivedMany: (sessionIds, archived) => ipcRenderer.invoke(IPC.sessionsSetArchivedMany, sessionIds, archived),
   },
   capture: {
-    inspectApp: (copyToClipboard, scope) => ipcRenderer.invoke(IPC.captureInspectApp, copyToClipboard, scope),
+    inspectApp: (copyToClipboard, scope, options) => ipcRenderer.invoke(IPC.captureInspectApp, copyToClipboard, scope, options),
     inspectElement: (scope) => ipcRenderer.invoke(IPC.captureInspectElement, scope),
     stageElement: (element, targetTitle, pickId) => ipcRenderer.invoke(IPC.captureStageElement, element, targetTitle, pickId),
     elementAttachments: () => ipcRenderer.invoke(IPC.captureElementAttachments),

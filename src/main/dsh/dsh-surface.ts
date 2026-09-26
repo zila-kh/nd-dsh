@@ -32,7 +32,7 @@ export class DshSurfaceController {
     this.view.setBounds({ x: 0, y: 0, width: 0, height: 0 })
     this.view.setVisible(false)
 
-    this.stateValue = { ready: false, loading: false, title: 'DeepSeek', visible: false }
+    this.stateValue = { ready: false, loading: false, title: 'ND Harness', visible: false }
     this.installListeners()
   }
 
@@ -140,7 +140,7 @@ export class DshSurfaceController {
     })
     contents.on('page-title-updated', (event, title) => {
       event.preventDefault()
-      this.stateValue.title = title || 'DeepSeek'
+      this.stateValue.title = title || 'ND Harness'
       this.emitState()
     })
     contents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {

@@ -218,6 +218,8 @@ export interface HarnessStatus {
   url?: string
   port?: number
   error?: string
+  /** Semver of the active @deepseek-ai/dsh runtime package, when known. */
+  runtimeVersion?: string
 }
 
 export interface HarnessRunResult {
@@ -240,6 +242,7 @@ export interface HarnessRunOptions {
   provider?: string
   model?: string
   image?: HarnessRunImage
+  permissionMode?: string
 }
 
 /** ND-managed non-harness chat session surfaced alongside gateway sessions. */
@@ -474,6 +477,21 @@ export interface ProviderPingResult {
  */
 export type InspectScope = 'external' | 'self'
 
+export type AppInspectMode = 'full' | 'area' | 'annotate'
+
+export interface AppInspectArea {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface AppInspectOptions {
+  mode?: AppInspectMode
+  rect?: AppInspectArea
+  customPrompt?: string
+}
+
 /** Cross-app inspect: a screen capture bridged into the ND chat session. */
 export interface AppInspectResult {
   sessionId: string
@@ -482,6 +500,7 @@ export interface AppInspectResult {
   width: number
   height: number
   displayLabel: string
+  mode?: AppInspectMode
 }
 
 /** Element picked in an external Electron app via the injected CDP inspector. */
@@ -622,7 +641,7 @@ export interface DesktopApi {
     setArchivedMany(sessionIds: string[], archived: boolean): Promise<string[]>
   }
   capture: {
-    inspectApp(copyToClipboard: boolean, scope?: InspectScope): Promise<AppInspectResult>
+    inspectApp(copyToClipboard: boolean, scope?: InspectScope, options?: AppInspectOptions): Promise<AppInspectResult>
     inspectElement(scope?: InspectScope): Promise<ExternalElementPickResult>
     stageElement(element: ExternalElementPickView, targetTitle: string, pickId?: string): Promise<ExternalElementAttachmentView[]>
     elementAttachments(): Promise<ExternalElementAttachmentView[]>
@@ -729,6 +748,7 @@ export interface DesktopApi {
     setFloatMode(enabled: boolean): Promise<{ float: boolean }>
     resizeFloatWindow(width: number, height: number): Promise<void>
     moveFloatWindow(deltaX: number, deltaY: number): Promise<void>
+    setCaptureOverlay?(active: boolean): Promise<{ width: number; height: number }>
     onFloatMode?(listener: (enabled: boolean) => void): () => void
   }
 }
@@ -739,6 +759,7 @@ export const IPC = {
   windowSetFloatMode: 'window:set-float-mode',
   windowResizeFloatWindow: 'window:resize-float-window',
   windowMoveFloatWindow: 'window:move-float-window',
+  windowSetCaptureOverlay: 'window:set-capture-overlay',
   windowFloatModeEvent: 'window:float-mode-event',
   browserState: 'browser:state',
   browserSetBounds: 'browser:set-bounds',

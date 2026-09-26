@@ -67,7 +67,7 @@ export interface ChatGptWebRuntime {
  * never branch on engine ids.
  */
 export interface DirectWorkspaceEngine {
-  run(prompt: string, options?: { sessionId?: string; cwd?: string; model?: string }): Promise<{ sessionId: string }>
+  run(prompt: string, options?: { sessionId?: string; cwd?: string; model?: string; permissionMode?: string }): Promise<{ sessionId: string }>
   createSession(input?: { cwd?: string; model?: string }): Promise<{ sessionId: string }>
   stop(sessionId?: string): Promise<void>
   listSessions(): EngineSessionSummary[]
@@ -262,6 +262,7 @@ export class EngineSessionRouter {
       return direct.run(appendWorkspaceContext(optimizedPrompt, workspace), {
         ...(options?.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
         ...(options?.model !== undefined ? { model: options.model } : {}),
+        ...(options?.permissionMode !== undefined ? { permissionMode: options.permissionMode } : {}),
         // A session keeps the root it was created with. Re-rooting every turn
         // at the active workspace would run an isolated task worktree's worker
         // against the base checkout, which is exactly what per-task isolation

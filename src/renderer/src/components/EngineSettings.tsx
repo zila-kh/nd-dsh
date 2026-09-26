@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { CodingEngineDescriptor } from '../../../shared/contracts'
+import { ND_HARNESS_ENGINE_ID } from '../../../shared/coding-engines'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 import {
   SettingsRow,
   SettingsSection,
@@ -14,6 +16,8 @@ import { GatewaySettings } from './GatewaySettings'
 import { TokenSaverSettings } from './TokenSaverSettings'
 import { TokenToolOptimizationSettings } from './TokenToolOptimizationSettings'
 
+const PREFERRED_CHAT_ENGINE_STORAGE_KEY = 'nd-dsh-preferred-chat-engine'
+
 interface EngineSettingsProps {
   onError(message: string): void
 }
@@ -21,6 +25,44 @@ interface EngineSettingsProps {
 export function EngineSettings({ onError }: EngineSettingsProps) {
   const [engines, setEngines] = useState<CodingEngineDescriptor[]>([])
   const [loading, setLoading] = useState(true)
+  const [preferredEngine, setPreferredEngine] = useState<string>(() => {
+    try {
+      return localStorage.getItem(PREFERRED_CHAT_ENGINE_STORAGE_KEY) || ND_HARNESS_ENGINE_ID
+    } catch {
+      return ND_HARNESS_ENGINE_ID
+    }
+  })
+
+  useEffect(() => {
+    const sync = (): void => {
+      try {
+        const saved = localStorage.getItem(PREFERRED_CHAT_ENGINE_STORAGE_KEY)
+        setPreferredEngine(saved || ND_HARNESS_ENGINE_ID)
+      } catch {
+        // ignore
+      }
+    }
+    window.addEventListener('nd-dsh-preferred-engine-changed', sync)
+    window.addEventListener('storage', sync)
+    return () => {
+      window.removeEventListener('nd-dsh-preferred-engine-changed', sync)
+      window.removeEventListener('storage', sync)
+    }
+  }, [])
+
+  const updatePreferredEngine = (engineId: string): void => {
+    setPreferredEngine(engineId)
+    try {
+      if (engineId === ND_HARNESS_ENGINE_ID) {
+        localStorage.removeItem(PREFERRED_CHAT_ENGINE_STORAGE_KEY)
+      } else {
+        localStorage.setItem(PREFERRED_CHAT_ENGINE_STORAGE_KEY, engineId)
+      }
+      window.dispatchEvent(new Event('nd-dsh-preferred-engine-changed'))
+    } catch {
+      // ignore
+    }
+  }
 
   useEffect(() => {
     let mounted = true
@@ -50,6 +92,31 @@ export function EngineSettings({ onError }: EngineSettingsProps) {
             </div>
             <StatusChip good>Provider-neutral</StatusChip>
           </SettingsRow>
+          <SettingsRow>
+            <div className={rowStack}>
+              <strong className={rowTitle}>Default chat engine</strong>
+              <span className={rowDesc}>Engine used when starting a new chat in the workbench. Synchronized with the chat header engine selector.</span>
+            </div>
+            <div className="flex shrink-0 items-center">
+              <Select value={preferredEngine} onValueChange={updatePreferredEngine}>
+                <SelectTrigger className="h-7 w-[180px] font-mono text-[11px]">
+                  <SelectValue placeholder="Default · ND Harness" />
+                </SelectTrigger>
+                <SelectContent align="end">
+                  <SelectItem value={ND_HARNESS_ENGINE_ID}>Default · ND Harness</SelectItem>
+                  {engines.filter((engine) => engine.id !== ND_HARNESS_ENGINE_ID).map((engine) => (
+                    <SelectItem
+                      key={engine.id}
+                      value={engine.id}
+                      disabled={!engine.available}
+                    >
+                      {engine.name}{engine.available ? '' : ' · Unavailable'}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </SettingsRow>
           {loading ? (
             <SettingsRow>
               <div className={rowStack}><strong className={rowTitle}>Detecting engines…</strong></div>
@@ -78,6 +145,12 @@ export function EngineSettings({ onError }: EngineSettingsProps) {
             <div className={rowStack}>
               <strong className={rowTitle}>ND Harness</strong>
               <span className={rowDesc}>Primary durable runtime for ND agents, browser, MCP, skills, approvals, and provider-routed models.</span>
+            </div>
+          </SettingsRow>
+          <SettingsRow>
+            <div className={rowStack}>
+              <strong className={rowTitle}>Antigravity CLI (agy)</strong>
+              <span className={rowDesc}>Google Antigravity CLI (agy) managed directly by ND: streamed multi-turn conversations over stream-json wires with native Google-account credentials. Edits are scoped to the active workspace directory, and permission mode maps to native agy flags (plan mode for read-only; accept-edits and auto-approval for workspace write/full access).</span>
             </div>
           </SettingsRow>
           <SettingsRow>

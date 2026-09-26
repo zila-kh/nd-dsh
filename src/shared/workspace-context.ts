@@ -60,8 +60,11 @@ ${JSON.stringify(workspaceMetadata(workspace), null, 2)}
 ${ND_WORKSPACE_CONTEXT_END_MARKER}`
 }
 
-/** Remove the main-process workspace block before it is shown in chat history. */
+/** Remove the main-process workspace block and injected ND context tags before it is shown in chat history. */
 export function stripWorkspaceContext(value: string): string {
   const markerIndex = value.indexOf(ND_WORKSPACE_CONTEXT_MARKER)
-  return markerIndex >= 0 ? value.slice(0, markerIndex) : value
+  const base = markerIndex >= 0 ? value.slice(0, markerIndex) : value
+  return base
+    .replace(/<nd-[a-z0-9_-]+>[\s\S]*?(?:<\/nd-[a-z0-9_-]+>|$)/gi, '')
+    .trimEnd()
 }

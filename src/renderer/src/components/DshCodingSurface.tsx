@@ -102,7 +102,14 @@ export function DshCodingSurface({ active, inspectOverlayVisible = false, state,
   return (
     <section className="flex h-full w-full min-h-0 min-w-0 flex-col bg-background" aria-label="DSH coding surface">
       <div className="flex h-[39px] shrink-0 items-center gap-2 border-b border-border-soft bg-secondary px-2">
-        <strong className="text-[11px] tracking-[0.04em] text-strong">DSH coding</strong>
+        <strong className="text-[11px] tracking-[0.04em] text-strong">
+          DSH coding
+          {runtimeStatus?.runtimeVersion && (
+            <span className="ml-1.5 font-mono font-normal text-[9px] text-faint tracking-normal">
+              v{runtimeStatus.runtimeVersion}
+            </span>
+          )}
+        </strong>
         <BridgePill state={runtimeError ? 'unavailable' : state?.ready ? 'ready' : 'binding'} className="ml-1 py-1" title={runtimeError}>
           {runtimeError ? 'Runtime error' : state?.ready ? `Gateway :${state.port ?? ''}` : 'Starting runtime'}
         </BridgePill>
@@ -111,9 +118,9 @@ export function DshCodingSurface({ active, inspectOverlayVisible = false, state,
           className={runtimeError
             ? 'min-w-0 flex-1 truncate font-mono text-[9px] text-destructive'
             : 'min-w-0 flex-1 truncate font-mono text-[9px] text-faint'}
-          title={runtimeError ?? state?.title ?? 'DeepSeek route'}
+          title={runtimeError ?? state?.title ?? 'ND Harness'}
         >
-          {runtimeError ?? state?.title ?? 'DeepSeek route'}
+          {runtimeError ?? state?.title ?? 'ND Harness'}
         </span>
         <button
           type="button"

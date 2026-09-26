@@ -30,7 +30,7 @@ function defaultProvider(): ModelProvider {
   return {
     id: 'deepseek',
     name: 'DeepSeek',
-    enabled: true,
+    enabled: false,
     baseUrl: process.env.ND_DSH_BASE_URL?.trim() || DEFAULT_BASE_URL,
     apiFormat: DEFAULT_API_FORMAT,
     apiKey: process.env.DEEPSEEK_API_KEY?.trim() ?? '',
@@ -68,10 +68,13 @@ function sanitizeProvider(value: unknown, includeLegacySecret = false): ModelPro
   const maxRetries = typeof record.maxRetries === 'number' && Number.isFinite(record.maxRetries)
     ? Math.max(0, Math.min(Math.round(record.maxRetries), 5))
     : undefined
+  const enabled = typeof record.enabled === 'boolean'
+    ? record.enabled
+    : id === 'deepseek' ? false : record.enabled !== false
   return {
     id,
     name,
-    enabled: record.enabled !== false,
+    enabled,
     baseUrl: typeof record.baseUrl === 'string' ? record.baseUrl : '',
     apiFormat: typeof record.apiFormat === 'string' ? record.apiFormat : DEFAULT_API_FORMAT,
     apiKey: includeLegacySecret && typeof record.apiKey === 'string' ? record.apiKey : '',

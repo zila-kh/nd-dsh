@@ -259,6 +259,7 @@ body.float-mode,
 .float-mode {
   background: transparent !important;
   background-color: transparent !important;
+  overflow: visible !important;
 }
 
 /*

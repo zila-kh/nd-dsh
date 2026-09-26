@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import { toast } from 'sonner'
-import type { BrowserState, DshSurface, DshViewState, ExternalElementPickView, HarnessStatus, InspectScope, SurfaceState, ThemeMode, ThemeState, WorkspaceFile, WorkspaceState } from '../../shared/contracts'
+import type { AppInspectArea, AppInspectMode, AppInspectResult, BrowserState, DshSurface, DshViewState, ExternalElementPickView, HarnessStatus, InspectScope, SurfaceState, ThemeMode, ThemeState, WorkspaceFile, WorkspaceState } from '../../shared/contracts'
 import type { OrganizationSnapshot } from '../../shared/organization'
 import { BrowserPane } from './components/BrowserPane'
 import { ProjectGitControls } from './components/ProjectGitControls'
@@ -24,6 +24,8 @@ import { QaView } from './components/QaView'
 import { RuntimePrompts } from './components/RuntimePrompts'
 import { ThemeToggle } from './components/ThemeToggle'
 import { TitlebarIconButton } from './components/titlebar-icon-button'
+import { CaptureOverlay, type CaptureOverlayMode } from './components/CaptureOverlay'
+import { ScreenshotDropdown } from './components/ScreenshotDropdown'
 import { cn } from './lib/utils'
 import { fileAccent } from './lib/file-accents'
 import { pickSelfElement } from './lib/self-element-picker'
@@ -46,6 +48,7 @@ type AgentPane = 'files' | 'browser'
 const VIEWS: ProductView[] = ['company', 'agent', 'design', 'qa', 'settings']
 
 const CHAT_MIN_PX = 580
+const CHAT_DEFAULT_PX = 640
 const CHAT_MIN_PX_SIDEBAR_COLLAPSED = 420
 const WORKSPACE_MIN_PX = 480
 
@@ -139,7 +142,9 @@ export default function App() {
   // the compact pill bounds before effects get a chance to run.
   const [inspectScope, setInspectScope] = useState<InspectScope>(() => isFloatOverlay ? 'external' : 'self')
   const [pendingPick, setPendingPick] = useState<{ element: ExternalElementPickView; targetTitle: string; shortName: string; hover: string; pickId?: string; hasShot?: boolean } | null>(null)
-  const [pendingAppInspect, setPendingAppInspect] = useState<{ displayLabel: string; width: number; height: number; copiedToClipboard: boolean; scope: InspectScope } | null>(null)
+  const [pendingAppInspect, setPendingAppInspect] = useState<{ displayLabel: string; width: number; height: number; copiedToClipboard: boolean; scope: InspectScope; mode?: AppInspectMode } | null>(null)
+  const [captureOverlay, setCaptureOverlay] = useState<{ active: boolean; mode: CaptureOverlayMode } | null>(null)
+  const [floatDropdownOpen, setFloatDropdownOpen] = useState(false)
   const inspectOverlayVisible = pendingPick !== null || pendingAppInspect !== null
   const [elementAttachmentVersion, setElementAttachmentVersion] = useState(0)
   const appInspectTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
@@ -174,10 +179,14 @@ export default function App() {
   }, [isFloatOverlay])
 
   useEffect(() => {
-    if (!isFloatOverlay) return
+    if (!isFloatOverlay || captureOverlay || floatDropdownOpen) return
     const hasSummary = pendingAppInspect !== null
-    void window.ndDsh.window?.resizeFloatWindow(hasSummary ? 324 : 170, hasSummary ? 194 : 56)
-  }, [isFloatOverlay, pendingAppInspect])
+    const hasCountdown = appInspectCountdown !== null
+    void window.ndDsh.window?.resizeFloatWindow(
+      hasSummary ? 324 : hasCountdown ? 220 : 170,
+      hasSummary ? 194 : hasCountdown ? 96 : 56,
+    )
+  }, [isFloatOverlay, pendingAppInspect, captureOverlay, floatDropdownOpen, appInspectCountdown])
 
   useEffect(() => {
     let mounted = true
@@ -212,51 +221,97 @@ export default function App() {
 
   const handlePillPointerUp = (e: React.PointerEvent<HTMLDivElement>): void => {
     pillDragRef.current = null
-    e.currentTarget.releasePointerCapture(e.pointerId)
+    try {
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId)
+      }
+    } catch {
+      // Ignore if pointer capture was already released
+    }
+  }
+
+  const handleFloatDropdownOpen = (open: boolean): void => {
+    setFloatDropdownOpen(open)
+    if (open) {
+      void window.ndDsh.window?.resizeFloatWindow(260, 230)
+    } else {
+      const hasSummary = pendingAppInspect !== null
+      const hasCountdown = appInspectCountdown !== null
+      void window.ndDsh.window?.resizeFloatWindow(
+        hasSummary ? 324 : hasCountdown ? 220 : 170,
+        hasSummary ? 194 : hasCountdown ? 96 : 56,
+      )
+    }
+  }
+
+  const openCaptureOverlay = async (mode: CaptureOverlayMode): Promise<void> => {
+    setFloatDropdownOpen(false)
+    if (isFloatOverlay || inspectScope === 'external') {
+      await window.ndDsh.window?.setCaptureOverlay?.(true)
+    }
+    setCaptureOverlay({ active: true, mode })
+  }
+
+  const closeCaptureOverlay = async (): Promise<void> => {
+    setCaptureOverlay(null)
+    if (isFloatOverlay || inspectScope === 'external') {
+      await window.ndDsh.window?.setCaptureOverlay?.(false)
+    }
   }
 
   // Cross-app inspect: after a short countdown (so the user can focus the
   // target app), the trusted main process captures the screen, bridges the
   // screenshot into the ND chat session, and copies it to the clipboard.
   // In 'self' scope there is nothing to switch to, so capture immediately.
-  const startAppInspect = (): void => {
-    if (appInspectCountdown !== null || appInspectInFlight) return
+  const startAppInspect = (mode: AppInspectMode = 'full', rect?: AppInspectArea): Promise<AppInspectResult | undefined> => {
+    if (appInspectCountdown !== null || appInspectInFlight) return Promise.resolve(undefined)
     const selfScope = inspectScope === 'self'
     let remaining = 3
-    if (!selfScope) setAppInspectCountdown(remaining)
-    const fire = (): void => {
+    if (!selfScope && mode === 'full') setAppInspectCountdown(remaining)
+    const fire = async (): Promise<AppInspectResult> => {
       setAppInspectInFlight(true)
-      void window.ndDsh.capture.inspectApp(true, inspectScope)
-        .then((result) => {
-          setPendingAppInspect({
-            displayLabel: result.displayLabel,
-            width: result.width,
-            height: result.height,
-            copiedToClipboard: result.copiedToClipboard,
-            scope: inspectScope,
-          })
-          toast(result.copiedToClipboard
-            ? `Screenshot of ${selfScope ? 'this app' : 'the screen'} sent to the agent and copied to the clipboard.`
-            : `Screenshot of ${selfScope ? 'this app' : 'the screen'} sent to the agent.`, { duration: 5000 })
+      try {
+        const result = await window.ndDsh.capture.inspectApp(true, inspectScope, { mode, ...(rect !== undefined ? { rect } : {}) })
+        setPendingAppInspect({
+          displayLabel: result.displayLabel,
+          width: result.width,
+          height: result.height,
+          copiedToClipboard: result.copiedToClipboard,
+          scope: inspectScope,
+          mode,
         })
-        .catch((cause) => notify(errorMessage(cause)))
-        .finally(() => setAppInspectInFlight(false))
-    }
-    if (selfScope) {
-      fire()
-      return
-    }
-    appInspectTimer.current = setInterval(() => {
-      remaining -= 1
-      if (remaining > 0) {
-        setAppInspectCountdown(remaining)
-        return
+        const prefix = mode === 'area'
+          ? 'Area screenshot'
+          : mode === 'annotate'
+            ? 'Annotated screenshot'
+            : `Screenshot of ${selfScope ? 'this app' : 'the screen'}`
+        toast(result.copiedToClipboard
+          ? `${prefix} sent to the agent and copied to the clipboard.`
+          : `${prefix} sent to the agent.`, { duration: 5000 })
+        return result
+      } catch (cause) {
+        notify(errorMessage(cause))
+        throw cause
+      } finally {
+        setAppInspectInFlight(false)
       }
-      clearInterval(appInspectTimer.current)
-      appInspectTimer.current = undefined
-      setAppInspectCountdown(null)
-      fire()
-    }, 1_000)
+    }
+    if (selfScope || mode !== 'full') {
+      return fire()
+    }
+    return new Promise<AppInspectResult | undefined>((resolve) => {
+      appInspectTimer.current = setInterval(() => {
+        remaining -= 1
+        if (remaining > 0) {
+          setAppInspectCountdown(remaining)
+          return
+        }
+        clearInterval(appInspectTimer.current)
+        appInspectTimer.current = undefined
+        setAppInspectCountdown(null)
+        void fire().then(resolve, () => resolve(undefined))
+      }, 1_000)
+    })
   }
 
   useEffect(() => {
@@ -285,7 +340,10 @@ export default function App() {
         startElementInspect()
       } else if (key === 'c') {
         event.preventDefault()
-        startAppInspect()
+        startAppInspect('full')
+      } else if (key === 'a') {
+        event.preventDefault()
+        openCaptureOverlay('area')
       }
     }
     window.addEventListener('keydown', onKeyDown)
@@ -459,23 +517,35 @@ export default function App() {
     }
   }, [])
 
-  const openSettings = (tab?: SettingsTab): void => {
-    if (tab) setSettingsTab(tab)
-    setView('settings')
-  }
-
-  const selectTheme = (mode: ThemeMode): void => {
-    void window.ndDsh.theme.set(mode).then(setTheme).catch((cause) => notify(errorMessage(cause)))
-  }
-
   const selectSurface = (next: DshSurface): void => {
     if (next === surface) return
+    setSurface(next)
     void window.ndDsh.surface.set(next)
       .then((state) => {
         setSurface(state.surface)
         setDshView(state.view)
       })
-      .catch((cause) => notify(errorMessage(cause)))
+      .catch((cause) => {
+        void window.ndDsh.surface.state().then((current) => {
+          setSurface(current.surface)
+          setDshView(current.view)
+        }).catch(() => undefined)
+        notify(errorMessage(cause))
+      })
+  }
+
+  const switchToWorkbench = (nextView?: ProductView): void => {
+    if (nextView) setView(nextView)
+    selectSurface('workbench')
+  }
+
+  const openSettings = (tab?: SettingsTab): void => {
+    if (tab) setSettingsTab(tab)
+    switchToWorkbench('settings')
+  }
+
+  const selectTheme = (mode: ThemeMode): void => {
+    void window.ndDsh.theme.set(mode).then(setTheme).catch((cause) => notify(errorMessage(cause)))
   }
 
   const changeWorkspace = (next: WorkspaceState): void => {
@@ -487,7 +557,7 @@ export default function App() {
 
   const openLink = async (url: string): Promise<void> => {
     try {
-      setView('agent')
+      switchToWorkbench('agent')
       setAgentPane('browser')
       await window.ndDsh.browser.navigate(url)
     } catch (cause) {
@@ -510,7 +580,7 @@ export default function App() {
       })
       setActiveDiff(null)
       setAgentPane('files')
-      setView('agent')
+      switchToWorkbench('agent')
     } catch (cause) {
       notify(errorMessage(cause))
     }
@@ -536,7 +606,7 @@ export default function App() {
 
   const askAgent = (prompt: string): void => {
     setExternalPrompt({ id: crypto.randomUUID(), text: prompt })
-    setView('agent')
+    switchToWorkbench('agent')
   }
 
   const company = orgState?.companies.find((item) => item.id === orgState.activeCompanyId) ?? orgState?.companies[0] ?? null
@@ -603,56 +673,89 @@ export default function App() {
   if (inspectScope === 'external') {
     return (
       <div className="float-mode flex h-screen w-screen flex-col items-center justify-start gap-2 bg-transparent p-1.5 select-none font-sans overflow-hidden">
-        <div
-          className="app-drag flex items-center gap-1.5 rounded-full border-2 border-primary bg-surface-1/95 p-1.5 text-primary shadow-[0_10px_30px_rgba(0,0,0,0.6)] backdrop-blur cursor-grab active:cursor-grabbing"
-          onPointerDown={handlePillPointerDown}
-          onPointerMove={handlePillPointerMove}
-          onPointerUp={handlePillPointerUp}
-        >
-          <button
-            type="button"
-            aria-label="Inspect screen"
-            className="app-no-drag grid size-8 place-items-center rounded-full bg-primary/15 text-primary hover:bg-primary/25 transition-colors"
-            onClick={startAppInspect}
-            title="Inspect external screen (Ctrl+Alt+C)"
+        {!captureOverlay ? (
+          <div
+            className="app-drag flex items-center gap-1.5 rounded-full border-2 border-primary bg-surface-1/95 p-1.5 text-primary shadow-[0_10px_30px_rgba(0,0,0,0.6)] backdrop-blur cursor-grab active:cursor-grabbing"
+            onPointerDown={handlePillPointerDown}
+            onPointerMove={handlePillPointerMove}
+            onPointerUp={handlePillPointerUp}
           >
-            <CameraIcon className="size-4 text-primary" />
-          </button>
-          <button
-            type="button"
-            aria-label="Inspect element in external app"
-            className="app-no-drag grid size-7 place-items-center rounded-full text-faint hover:bg-accent hover:text-foreground transition-colors"
-            onClick={startElementInspect}
-            title="Inspect element in external app (Ctrl+Alt+E)"
-          >
-            <CrosshairIcon className="size-3.5" />
-          </button>
-          <button
-            type="button"
-            aria-label="Restore full ND-DSH app window"
-            className="app-no-drag grid size-7 place-items-center rounded-full text-faint hover:bg-accent hover:text-foreground transition-colors"
-            onClick={() => {
-              void window.ndDsh.window?.setFloatMode(false)
-            }}
-            title="Restore full ND-DSH app window"
-          >
-            <MonitorIcon className="size-3.5" />
-          </button>
-        </div>
-        {pendingAppInspect ? (
+            <ScreenshotDropdown
+              scope={inspectScope}
+              open={floatDropdownOpen}
+              onOpenChange={handleFloatDropdownOpen}
+              disabled={appInspectCountdown !== null || appInspectInFlight}
+              onSelectMode={(selectedMode) => {
+                setFloatDropdownOpen(false)
+                if (selectedMode === 'full') void startAppInspect('full')
+                else void openCaptureOverlay(selectedMode)
+              }}
+              side="bottom"
+              align="start"
+            >
+              <button
+                type="button"
+                aria-label="Inspect screen"
+                className="app-no-drag grid size-8 place-items-center rounded-full bg-primary/15 text-primary hover:bg-primary/25 transition-colors"
+                title="Inspect screen options (Full, Area, Direct Annotation)"
+              >
+                <CameraIcon className="size-4 text-primary" />
+              </button>
+            </ScreenshotDropdown>
+            <button
+              type="button"
+              aria-label="Inspect element in external app"
+              className="app-no-drag grid size-7 place-items-center rounded-full text-faint hover:bg-accent hover:text-foreground transition-colors"
+              onClick={startElementInspect}
+              title="Inspect element in external app (Ctrl+Alt+E)"
+            >
+              <CrosshairIcon className="size-3.5" />
+            </button>
+            <button
+              type="button"
+              aria-label="Restore full ND-DSH app window"
+              className="app-no-drag grid size-7 place-items-center rounded-full text-faint hover:bg-accent hover:text-foreground transition-colors"
+              onClick={() => {
+                void window.ndDsh.window?.setFloatMode(false)
+              }}
+              title="Restore full ND-DSH app window"
+            >
+              <MonitorIcon className="size-3.5" />
+            </button>
+          </div>
+        ) : null}
+        {appInspectCountdown !== null && !captureOverlay ? (
+          <div role="status" className="app-no-drag flex items-center gap-2 rounded-full border border-primary/40 bg-surface-1/95 px-3 py-1.5 text-xs font-medium text-primary shadow-[0_8px_24px_rgba(0,0,0,0.5)] backdrop-blur">
+            <span className="relative flex size-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
+              <span className="relative inline-flex size-2 rounded-full bg-primary" />
+            </span>
+            <span>Capturing screen in {appInspectCountdown}s...</span>
+          </div>
+        ) : null}
+        {pendingAppInspect && !captureOverlay ? (
           <div role="dialog" aria-label="Inspected app info" className="app-no-drag flex w-[300px] flex-col gap-2 rounded-[10px] border border-border-strong bg-surface-1 p-3 shadow-[0_14px_40px_rgba(0,0,0,0.5)]">
             <div className="flex min-w-0 items-center gap-[7px]">
               <CameraIcon className="size-[13px] shrink-0 text-primary" />
               <strong className="overflow-hidden font-mono text-[11px] text-ellipsis whitespace-nowrap">
-                App Inspect Summary
+                External App Inspect
               </strong>
+              {pendingAppInspect.mode && pendingAppInspect.mode !== 'full' ? (
+                <Badge variant="outline" className="text-[9px] font-normal text-primary border-primary/30">
+                  {pendingAppInspect.mode === 'area' ? 'Area' : 'Annotated'}
+                </Badge>
+              ) : null}
+              <Badge variant="outline" className="ml-auto text-[9px] font-normal">
+                {pendingAppInspect.scope}
+              </Badge>
             </div>
             <div className="flex flex-col gap-1 pl-[20px] text-[10px] text-muted-foreground font-mono">
               <div><span className="text-faint">Target:</span> {pendingAppInspect.displayLabel}</div>
               <div><span className="text-faint">Resolution:</span> {pendingAppInspect.width} × {pendingAppInspect.height}</div>
               <div className="text-primary font-medium">✓ Sent to ND Chat Agent</div>
+              {pendingAppInspect.copiedToClipboard ? <div className="text-faint">✓ Copied image to clipboard</div> : null}
             </div>
-            <div className="flex gap-2 pt-1">
+            <div className="flex flex-wrap gap-2 pt-1">
               <Button
                 type="button"
                 variant="outline"
@@ -662,9 +765,35 @@ export default function App() {
               >
                 Dismiss
               </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-auto rounded-md px-2.5 py-1 text-[11px]"
+                title="Copy summary information for this application inspection"
+                onClick={() => {
+                  navigator.clipboard.writeText(`App Inspect Info:\nScope: ${pendingAppInspect.scope}\nMode: ${pendingAppInspect.mode ?? 'full'}\nTarget: ${pendingAppInspect.displayLabel}\nResolution: ${pendingAppInspect.width}x${pendingAppInspect.height}`)
+                    .then(() => toast('App inspect info copied to clipboard.'))
+                    .catch((cause) => notify(errorMessage(cause)))
+                }}
+              >
+                Copy info
+              </Button>
             </div>
           </div>
         ) : null}
+        {captureOverlay ? (
+          <CaptureOverlay
+            active={captureOverlay.active}
+            initialMode={captureOverlay.mode}
+            scope={inspectScope}
+            onCapture={async ({ mode, rect }) => {
+              await startAppInspect(mode === 'area' ? 'area' : 'annotate', rect)
+            }}
+            onClose={closeCaptureOverlay}
+          />
+        ) : null}
+        <Toaster position="bottom-right" duration={5000} />
       </div>
     )
   }
@@ -823,7 +952,7 @@ export default function App() {
                   </SelectContent>
                 </Select>
               </label>
-              <Button variant="outline" size="xs" className="h-6 rounded-md px-2 text-xs" onClick={() => { setView('company'); setCompanyView('operations') }}>
+              <Button variant="outline" size="xs" className="h-6 rounded-md px-2 text-xs" onClick={() => { switchToWorkbench('company'); setCompanyView('operations') }}>
                 Manage
               </Button>
               {showGitControls && workspace?.root ? <ProjectGitControls key={`${workspace.projectId ?? 'workspace'}:${workspace.root}:${workspace.binding ?? 'standalone'}`} root={workspace.root} editable={gitEditable} workspaceBinding={workspace.binding} onError={notify} /> : null}
@@ -835,10 +964,10 @@ export default function App() {
             {navItems.map((item) => (
               <button
                 key={item.id}
-                className={navButtonClasses(view === item.id)}
-                onClick={() => setView(item.id)}
+                className={navButtonClasses(surface === 'workbench' && view === item.id)}
+                onClick={() => switchToWorkbench(item.id)}
                 title={item.label}
-                aria-current={view === item.id ? 'page' : undefined}
+                aria-current={surface === 'workbench' && view === item.id ? 'page' : undefined}
               >
                 {item.icon}
                 <span>{item.label}</span>
@@ -862,13 +991,21 @@ export default function App() {
           >
             <MonitorIcon />
           </TitlebarIconButton>
-          <TitlebarIconButton
-            title="Inspect this app (Ctrl+Alt+C) — captures this ND-DSH window, sends it to the ND chat agent, and copies it to the clipboard"
+          <ScreenshotDropdown
+            scope={inspectScope}
             disabled={appInspectCountdown !== null || appInspectInFlight}
-            onClick={startAppInspect}
+            onSelectMode={(selectedMode) => {
+              if (selectedMode === 'full') startAppInspect('full')
+              else openCaptureOverlay(selectedMode)
+            }}
           >
-            <CameraIcon />
-          </TitlebarIconButton>
+            <TitlebarIconButton
+              title="Inspect screenshot options: Full, Area, or Direct Annotation"
+              disabled={appInspectCountdown !== null || appInspectInFlight}
+            >
+              <CameraIcon />
+            </TitlebarIconButton>
+          </ScreenshotDropdown>
           <TitlebarIconButton
             title="Inspect an element in this app (Ctrl+Alt+E) — hover and click any element in ND-DSH, then Add to chat"
             disabled={elementInspectActive}
@@ -889,14 +1026,14 @@ export default function App() {
 
       <main className="relative min-h-0 min-w-0 overflow-hidden bg-surface-0">
         {surface === 'dsh' ? (
-          <SurfaceErrorBoundary label="DeepSeek" resetKey={surface} onError={notify}>
+          <SurfaceErrorBoundary label="ND Harness" resetKey={surface} onError={notify}>
             <DshCodingSurface active inspectOverlayVisible={inspectOverlayVisible} state={dshView} onNotify={notify} />
           </SurfaceErrorBoundary>
         ) : (
           <>
             <div className={cn('h-full w-full', view === 'settings' ? 'hidden' : 'block')}>
               <Group orientation="horizontal" className="h-full w-full">
-            <Panel className="flex min-w-0 flex-col overflow-hidden" defaultSize={580} minSize={sessionsCollapsed ? CHAT_MIN_PX_SIDEBAR_COLLAPSED : CHAT_MIN_PX}>
+            <Panel className="flex min-w-0 flex-col overflow-hidden" defaultSize={CHAT_DEFAULT_PX} minSize={sessionsCollapsed ? CHAT_MIN_PX_SIDEBAR_COLLAPSED : CHAT_MIN_PX}>
               <SurfaceErrorBoundary label="Chat" resetKey={workspace?.root ?? 'workspace-loading'} onError={notify}>
                 <ChatPanel
                   key={workspace?.root ?? 'workspace-loading'}
@@ -934,7 +1071,7 @@ export default function App() {
             <Panel className="relative min-h-0 min-w-0 overflow-hidden bg-surface-0" minSize={WORKSPACE_MIN_PX}>
               <section aria-hidden={view !== 'company'} className={cn('absolute inset-0 overflow-hidden', view === 'company' ? 'block' : 'hidden')}>
                 <SurfaceErrorBoundary label="Company" resetKey={`${companyView}:${company?.id ?? ''}:${project?.id ?? ''}`} onError={notify}>
-                  <OrganizationDashboard workspace={workspace} onOpenDeepSeek={() => setView('agent')} onAskAgent={askAgent} onError={notify} companyView={companyView} onCompanyViewChange={setCompanyView} />
+                  <OrganizationDashboard workspace={workspace} onOpenDeepSeek={() => switchToWorkbench('agent')} onAskAgent={askAgent} onError={notify} companyView={companyView} onCompanyViewChange={setCompanyView} />
                 </SurfaceErrorBoundary>
               </section>
 
@@ -1159,6 +1296,11 @@ export default function App() {
             <strong className="overflow-hidden font-mono text-[11px] text-ellipsis whitespace-nowrap">
               {pendingAppInspect.scope === 'external' ? 'External App Inspect' : 'Internal App Inspect'}
             </strong>
+            {pendingAppInspect.mode && pendingAppInspect.mode !== 'full' ? (
+              <Badge variant="outline" className="text-[9px] font-normal text-primary border-primary/30">
+                {pendingAppInspect.mode === 'area' ? 'Area' : 'Annotated'}
+              </Badge>
+            ) : null}
             <Badge variant="outline" className="ml-auto text-[9px] font-normal">
               {pendingAppInspect.scope}
             </Badge>
@@ -1186,7 +1328,7 @@ export default function App() {
               className="h-auto rounded-md px-2.5 py-1 text-[11px]"
               title="Copy summary information for this application inspection"
               onClick={() => {
-                navigator.clipboard.writeText(`App Inspect Info:\nScope: ${pendingAppInspect.scope}\nTarget: ${pendingAppInspect.displayLabel}\nResolution: ${pendingAppInspect.width}x${pendingAppInspect.height}`)
+                navigator.clipboard.writeText(`App Inspect Info:\nScope: ${pendingAppInspect.scope}\nMode: ${pendingAppInspect.mode ?? 'full'}\nTarget: ${pendingAppInspect.displayLabel}\nResolution: ${pendingAppInspect.width}x${pendingAppInspect.height}`)
                   .then(() => toast('App inspect info copied to clipboard.'))
                   .catch((cause) => notify(errorMessage(cause)))
               }}
@@ -1200,6 +1342,17 @@ export default function App() {
         <div role="status" className="fixed right-[18px] bottom-[38px] z-50 max-w-[min(420px,calc(100vw-36px))] rounded-lg border border-border-strong bg-secondary px-3 py-2 text-xs text-soft shadow-[0_18px_50px_rgba(0,0,0,0.46)]">
           {`Screen capture in ${appInspectCountdown}s — switch to the app you want to inspect`}
         </div>
+      ) : null}
+      {captureOverlay ? (
+        <CaptureOverlay
+          active={captureOverlay.active}
+          initialMode={captureOverlay.mode}
+          scope={inspectScope}
+          onCapture={async ({ mode, rect }) => {
+            startAppInspect(mode === 'area' ? 'area' : 'annotate', rect)
+          }}
+          onClose={closeCaptureOverlay}
+        />
       ) : null}
       <Toaster position="bottom-right" duration={5000} />
     </div>

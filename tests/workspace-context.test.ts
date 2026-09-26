@@ -33,6 +33,11 @@ describe('workspace prompt context', () => {
     expect(stripWorkspaceContext(prompt)).toBe('Show the project files.')
   })
 
+  it('removes injected nd tags such as nd-browser-context and nd-browser-access', () => {
+    const prompt = 'hi\n\n<nd-browser-context>\nND exposes one unified browser capability...\n</nd-browser-context>\n\n<nd-browser-access>\nOpaque token\n</nd-browser-access>'
+    expect(stripWorkspaceContext(prompt)).toBe('hi')
+  })
+
   it('keeps per-session and per-turn facts out of the persona', () => {
     const personaContext = workspaceContextForPersona({
       ...todoWorkspace,

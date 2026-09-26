@@ -200,7 +200,7 @@ let theme: ThemeState = { mode: 'system', effective: matchMedia('(prefers-color-
 
 let providers: ModelProvider[] = [
   { id: 'openai-prod', name: 'OpenAI', enabled: true, baseUrl: 'https://api.openai.com/v1', apiFormat: 'openai-responses', apiKey: '', hasApiKey: true, models: [{ id: 'gpt-5.6', context: '256k' }] },
-  { id: 'deepseek-official', name: 'DeepSeek', enabled: true, baseUrl: 'https://api.deepseek.com', apiFormat: 'openai-completions', apiKey: '', hasApiKey: true, models: [{ id: 'deepseek-v4-flash', context: '128k' }] },
+  { id: 'deepseek-official', name: 'DeepSeek', enabled: false, baseUrl: 'https://api.deepseek.com', apiFormat: 'openai-completions', apiKey: '', hasApiKey: true, models: [{ id: 'deepseek-v4-flash', context: '128k' }] },
   { id: 'local-lab', name: 'Local Lab', enabled: false, baseUrl: 'http://127.0.0.1:11434/v1', apiFormat: 'openai-completions', apiKey: '', hasApiKey: false, models: [{ id: 'company-code-model', context: '32k' }] },
 ]
 
@@ -556,7 +556,14 @@ const desktopApi: DesktopApi = {
     },
   },
   capture: {
-    inspectApp: async () => ({ sessionId: 'preview-session', copiedToClipboard: false, width: innerWidth, height: innerHeight, displayLabel: 'UI preview' }),
+    inspectApp: async (_copy, _scope, options) => ({
+      sessionId: 'preview-session',
+      copiedToClipboard: false,
+      width: Math.round(options?.rect?.width ?? innerWidth),
+      height: Math.round(options?.rect?.height ?? innerHeight),
+      displayLabel: options?.rect ? `${Math.round(options.rect.width)}x${Math.round(options.rect.height)}` : 'UI preview',
+      mode: options?.mode ?? 'full',
+    }),
     inspectElement: async () => ({ outcome: 'unreachable', message: 'Element inspection is available in Electron.' }),
     stageElement: async () => [],
     elementAttachments: async () => [],
@@ -788,6 +795,13 @@ const desktopApi: DesktopApi = {
       updatedAt: Date.now(),
     }),
     clearProjectBinding: async () => undefined,
+  },
+  window: {
+    setFloatMode: async () => ({ float: false }),
+    resizeFloatWindow: async () => undefined,
+    moveFloatWindow: async () => undefined,
+    setCaptureOverlay: async () => ({ width: window.innerWidth, height: window.innerHeight }),
+    onFloatMode: () => () => undefined,
   },
 }
 
