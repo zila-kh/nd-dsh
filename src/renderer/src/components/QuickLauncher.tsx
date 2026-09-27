@@ -10,6 +10,7 @@ import {
   StickyNote,
 } from 'lucide-react'
 import type { OrganizationSnapshot } from '../../../shared/organization'
+import { compactLauncherText, recentLauncherProjects } from '../lib/quick-launcher-model'
 import {
   CommandDialog,
   CommandEmpty,
@@ -39,11 +40,6 @@ interface Props {
   onCaptureUrl(url: string): void | Promise<void>
 }
 
-function compact(value: string, max = 54): string {
-  const cleaned = value.trim().replace(/\s+/g, ' ')
-  return cleaned.length <= max ? cleaned : `${cleaned.slice(0, max - 1)}…`
-}
-
 export function QuickLauncher({
   open,
   onOpenChange,
@@ -66,10 +62,7 @@ export function QuickLauncher({
   const projects = organization?.projects ?? []
   const activeCompany = companies.find((item) => item.id === organization?.activeCompanyId) ?? companies[0]
   const activeProject = projects.find((item) => item.id === organization?.activeProjectId)
-  const recentProjects = useMemo(
-    () => [...projects].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 6),
-    [projects],
-  )
+  const recentProjects = useMemo(() => recentLauncherProjects(projects), [projects])
   const text = query.trim()
 
   const closeAndRun = (action: () => void | Promise<void>): void => {
@@ -109,7 +102,7 @@ export function QuickLauncher({
               onSelect={() => closeAndRun(() => onCreateTask(text))}
             >
               <ListTodo />
-              <span className="min-w-0 flex-1 truncate">Create task · {compact(text)}</span>
+              <span className="min-w-0 flex-1 truncate">Create task · {compactLauncherText(text)}</span>
               <CommandShortcut>Task</CommandShortcut>
             </CommandItem>
             <CommandItem
@@ -118,7 +111,7 @@ export function QuickLauncher({
               onSelect={() => closeAndRun(() => onQuickNote(text))}
             >
               <StickyNote />
-              <span className="min-w-0 flex-1 truncate">Quick note · {compact(text)}</span>
+              <span className="min-w-0 flex-1 truncate">Quick note · {compactLauncherText(text)}</span>
               <CommandShortcut>Note</CommandShortcut>
             </CommandItem>
             <CommandItem
@@ -127,7 +120,7 @@ export function QuickLauncher({
               onSelect={() => closeAndRun(() => onAskAgent(text))}
             >
               <MessageSquare />
-              <span className="min-w-0 flex-1 truncate">Ask agent · {compact(text)}</span>
+              <span className="min-w-0 flex-1 truncate">Ask agent · {compactLauncherText(text)}</span>
               <CommandShortcut>Agent</CommandShortcut>
             </CommandItem>
           </CommandGroup>
