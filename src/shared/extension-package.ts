@@ -31,6 +31,7 @@ export const ND_EXTENSION_PERMISSIONS = [
   'browser.navigate',
   'browser.openExternal',
   'os.launch',
+  'os.wallpaper.write',
   'chat.start',
   'workflow.read',
 ] as const
@@ -66,6 +67,7 @@ export const ND_HOST_METHODS = [
   { id: 'browser.search', title: 'Search the web', permission: 'browser.navigate', contexts: ['personal', 'company', 'project'], sensitive: false },
   { id: 'browser.openExternal', title: 'Open in the system browser', permission: 'browser.openExternal', contexts: ['personal', 'company', 'project'], sensitive: false },
   { id: 'os.openTarget', title: 'Open an app, file, or folder', permission: 'os.launch', contexts: ['personal', 'company', 'project'], sensitive: false },
+  { id: 'os.wallpaper.chooseAndSet', title: 'Choose and set desktop wallpaper', permission: 'os.wallpaper.write', contexts: ['personal'], sensitive: true },
   { id: 'chat.ask', title: 'Ask ND', permission: 'chat.start', contexts: ['personal', 'company', 'project'], sensitive: false },
   { id: 'workflow.list', title: 'Read repository tasks', permission: 'workflow.read', contexts: ['project'], sensitive: false },
   { id: 'workflow.refresh', title: 'Refresh repository tasks', permission: 'workflow.read', contexts: ['project'], sensitive: false },
