@@ -10,7 +10,7 @@ export function isRetryableExecutionFailure(message: string): boolean {
   const text = message.toLowerCase()
   if (/auth|unauthori[sz]ed|forbidden|permission|policy|approval|invalid api key|missing api key|configuration|config error/.test(text)) return false
   if (/merge conflict|integration conflict|uncommitted human|workspace.*dirty|not a git|worktree path already exists|verification failed|test command failed/.test(text)) return false
-  return /\b5\d\d\b|gateway-unreachable|unreachable|connection|econn|socket|network|timeout|timed out|rate limit|temporar|overload|empty stream|aborted stream|runtime exited|app-server exited|provider/.test(text)
+  return /\b429\b|too many requests|\b5\d\d\b|gateway-unreachable|unreachable|connection|econn|socket|network|timeout|timed out|rate.?limit|quota|temporar|overload|empty stream|aborted stream|runtime exited|app-server exited|provider/.test(text)
 }
 
 export function stallTimeoutMs(environment = process.env.ND_DSH_STALL_TIMEOUT_MS): number {
