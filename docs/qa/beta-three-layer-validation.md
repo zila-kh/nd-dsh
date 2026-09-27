@@ -238,10 +238,10 @@ Fill:
 - `summary.p0Open = 0`;
 - `summary.p1CoreOpen = 0`;
 - Unit/E2E/Human PASS + evidence for every beta-exposed feature;
-- `releaseChecks.automated` -> automated summary JSON;
+- `releaseChecks.automated.summaryPath` -> the real `beta-automated-summary.json`; the gate reads it, requires `status: pass`, and requires its commit to equal `release.commit`;
 - `releaseChecks.packagedCleanMachine` -> human clean-machine result;
 - `releaseChecks.browserCompanionChrome` -> Chrome receipt/human result;
-- `releaseChecks.soak24h` -> duration **>= 1440** + soak receipt;
+- `releaseChecks.soak24h.summaryPath` -> the real soak JSON; the gate reads it and requires `status: pass` + `requestedMinutes >= 1440`;
 - repeated scenario totals;
 - final human release decision.
 
