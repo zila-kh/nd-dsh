@@ -59,7 +59,12 @@
     "e2e:beta:soak": "node scripts/run-beta-soak.mjs",
     "release:smoke:packaged": "node scripts/packaged-runtime-smoke.mjs",
     "beta:automated": "node scripts/run-beta-automated.mjs",
-    "release:smoke:core-crash": "node benchmarks/windows-core-crash-cleanup.mjs"
+    "release:smoke:core-crash": "node benchmarks/windows-core-crash-cleanup.mjs",
+    "beta:unit": "corepack pnpm verify && corepack pnpm typecheck && corepack pnpm test && corepack pnpm core:test && corepack pnpm browser:host:test",
+    "beta:e2e": "corepack pnpm build && corepack pnpm e2e && corepack pnpm e2e:prod:user",
+    "beta:artifact": "corepack pnpm dist:win:portable && node scripts/packaged-runtime-smoke.mjs",
+    "beta:soak": "node scripts/beta-soak.mjs",
+    "beta:preflight": "corepack pnpm beta:unit && corepack pnpm beta:e2e"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
