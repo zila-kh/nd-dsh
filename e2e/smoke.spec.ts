@@ -33,16 +33,26 @@ test.afterAll(async () => {
   await closeApp(launched)
 })
 
-test('product shell boots with the full navigation', async () => {
+test('product shell boots in General and can enter the Coding workspace', async () => {
   const { page } = launched
   await expect(page.getByRole('banner').getByText('ND-DSH', { exact: true })).toBeVisible()
+  const profiles = page.getByRole('group', { name: 'Workspace profile' })
+  const general = profiles.getByRole('button', { name: 'GENERAL', exact: true })
+  const coding = profiles.getByRole('button', { name: 'CODING', exact: true })
+  await expect(general).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('group', { name: 'Coding surface' })).toHaveCount(0)
+  const navigation = page.getByRole('navigation', { name: 'ND-DSH navigation' })
+  for (const label of ['Home', 'Company', 'Agent', 'Design', 'Settings']) {
+    await expect(navigation.getByTitle(label)).toBeVisible()
+  }
+  await expect(navigation.getByTitle('QA')).toHaveCount(0)
+
+  await coding.click()
+  await expect(coding).toHaveAttribute('aria-pressed', 'true')
   const codingSurface = page.getByRole('group', { name: 'Coding surface' })
   await expect(codingSurface.getByRole('button', { name: 'ND', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await expect(codingSurface.getByRole('button', { name: 'DSH', exact: true })).toBeVisible()
-  const navigation = page.getByRole('navigation', { name: 'ND-DSH navigation' })
-  for (const label of ['Company', 'Agent', 'Design', 'QA', 'Settings']) {
-    await expect(navigation.getByTitle(label)).toBeVisible()
-  }
+  await expect(navigation.getByTitle('QA')).toBeVisible()
 })
 
 test('header segment switches between ND and DSH coding surfaces', async () => {
