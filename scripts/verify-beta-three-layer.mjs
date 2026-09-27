@@ -65,6 +65,8 @@ if (automatedReceipt) {
   if (automatedReceipt.kind !== 'nd-beta-automated-release-evidence') errors.push('automated receipt kind is invalid')
   if (automatedReceipt.status !== 'pass') errors.push('automated receipt status must be "pass"')
   if (automatedReceipt.release?.commit !== evidence.release?.commit) errors.push('automated receipt commit must match release.commit')
+  if (!isText(automatedReceipt.release?.artifact?.identity)) errors.push('automated receipt must identify the packaged artifact')
+  else if (automatedReceipt.release.artifact.identity !== evidence.release?.artifact) errors.push('automated receipt artifact must match release.artifact')
 }
 const soakReceipt = readReceipt(evidence.releaseChecks?.soak24h?.summaryPath, 'releaseChecks.soak24h.summaryPath')
 if (soakReceipt) {
