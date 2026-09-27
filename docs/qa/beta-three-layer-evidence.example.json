@@ -3,7 +3,7 @@
   "release": {
     "version": "0.1.0-beta.1",
     "commit": "REPLACE_WITH_RC_COMMIT_SHA",
-    "artifact": "REPLACE_WITH_PACKAGED_ARTIFACT_NAME_OR_HASH",
+    "artifact": "REPLACE_WITH_EXACT_FILE#sha256:REPLACE_WITH_64_HEX_SHA256",
     "recordedAt": "2026-09-27T00:00:00+07:00"
   },
   "summary": {
@@ -52,7 +52,7 @@
       }
     },
     {
-      "id": "parallel-worktree-safety",
+      "id": "parallel-agent-worktree",
       "name": "Parallel agents and isolated task worktrees",
       "severity": "P0",
       "betaExposed": true,
@@ -72,7 +72,7 @@
       }
     },
     {
-      "id": "git-secret-safety",
+      "id": "git-worktree-secret-safety",
       "name": "Git push, worktree and committed-secret safety",
       "severity": "P0",
       "betaExposed": true,
@@ -92,8 +92,8 @@
       }
     },
     {
-      "id": "credential-provider-boundary",
-      "name": "Provider credential and trusted-process boundary",
+      "id": "credential-security-boundaries",
+      "name": "Credential, policy, redaction and trusted-process boundaries",
       "severity": "P0",
       "betaExposed": true,
       "unit": {
@@ -114,26 +114,6 @@
     {
       "id": "persistence-recovery",
       "name": "Persistence, restart, crash recovery and task reconciliation",
-      "severity": "P0",
-      "betaExposed": true,
-      "unit": {
-        "status": "pending",
-        "evidence": []
-      },
-      "e2e": {
-        "status": "pending",
-        "evidence": []
-      },
-      "human": {
-        "status": "pending",
-        "tester": "",
-        "recordedAt": "",
-        "evidence": []
-      }
-    },
-    {
-      "id": "security-policy-redaction",
-      "name": "Security policy, approval and diagnostic redaction boundaries",
       "severity": "P0",
       "betaExposed": true,
       "unit": {
@@ -192,7 +172,7 @@
       }
     },
     {
-      "id": "mcp-skills-containment",
+      "id": "mcp-skills-failure-containment",
       "name": "MCP/skills failure containment",
       "severity": "P1",
       "betaExposed": true,
@@ -214,6 +194,26 @@
     {
       "id": "budget-entitlement",
       "name": "Compute budget and entitlement correctness",
+      "severity": "P1",
+      "betaExposed": true,
+      "unit": {
+        "status": "pending",
+        "evidence": []
+      },
+      "e2e": {
+        "status": "pending",
+        "evidence": []
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "terminal-filesystem",
+      "name": "Terminal, filesystem and path-containment behavior",
       "severity": "P1",
       "betaExposed": true,
       "unit": {
@@ -255,7 +255,8 @@
   "scenarioRuns": {
     "passed": 0,
     "total": 0,
-    "targetPassRate": 0.99
+    "targetPassRate": 0.99,
+    "minimumRuns": 100
   },
   "humanDecision": {
     "status": "no-go",
@@ -274,7 +275,7 @@
       "tester": "",
       "recordedAt": "",
       "evidence": [],
-      "artifact": "REPLACE_WITH_PACKAGED_ARTIFACT_NAME_OR_HASH"
+      "artifact": "REPLACE_WITH_EXACT_FILE#sha256:REPLACE_WITH_64_HEX_SHA256"
     },
     "browserCompanionChrome": {
       "status": "pending",
