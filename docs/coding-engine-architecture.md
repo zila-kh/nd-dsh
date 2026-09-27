@@ -77,6 +77,8 @@ Capabilities ND currently advertises:
 
 For a Codex-routed employee, ND starts the normal organization run in its primary runtime, instructs the parent agent to delegate the complete implementation through `subagent_codex`, and then requires the parent to inspect the real workspace and run validation before it reports the worker result. The independent ND reviewer still verifies the task afterward.
 
+Company **Subagents** mode controls in-ticket child-agent delegation independently from teams and parallel task dispatch. `Auto` (the default, including older snapshots) keeps simple work in the main worker and permits delegation only when useful or required by an explicitly selected execution engine. `Off` forbids child-agent delegation for organization workers; selecting the delegated `codex` engine while Off fails closed because that route is itself implemented by `subagent_codex`. Direct `codex-cli` and the other direct workspace engines remain valid.
+
 ND does **not** currently advertise the delegated Codex route as having ND browser integration, ND skill/MCP compilation, human approval streaming, provider routing, or persistent Codex threads. Native Codex authentication, `HOME` / `CODEX_HOME`, model configuration, project trust, and account state remain authoritative.
 
 The default ND Codex provider configuration uses the pinned adapter's fail-closed `never` permission mode. ND never selects the dangerous sandbox bypass implicitly.
