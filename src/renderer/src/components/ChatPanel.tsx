@@ -308,19 +308,13 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
   const activeProjectId = sessionProjectScope?.activeProjectId
   const sessionProjects = sessionProjectScope?.sessionProjects ?? EMPTY_SESSION_PROJECTS
   const visibleSessions = useMemo(
-    () => filterSessionsInProjectScope(
-      sessions.filter((session) => (showArchived ? session.archived === true : session.archived !== true)),
-      activeProjectId,
-      sessionProjects,
-    ),
+    () => filterSessionsInProjectScope(sessions, activeProjectId, sessionProjects)
+      .filter((session) => (showArchived ? session.archived === true : session.archived !== true)),
     [sessions, showArchived, activeProjectId, sessionProjects],
   )
   const visibleEngineSessions = useMemo(
-    () => filterSessionsInProjectScope(
-      engineSessions.filter((session) => (showArchived ? session.archived === true : session.archived !== true)),
-      activeProjectId,
-      sessionProjects,
-    ),
+    () => filterSessionsInProjectScope(engineSessions, activeProjectId, sessionProjects)
+      .filter((session) => (showArchived ? session.archived === true : session.archived !== true)),
     [engineSessions, showArchived, activeProjectId, sessionProjects],
   )
   const visibleHarnessSessions = useMemo(
