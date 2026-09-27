@@ -34,7 +34,7 @@ describe('verify-beta-three-layer', () => {
     expect(result.status).toBe(0)
     expect(result.stdout).toContain('Beta 3-layer gate: PASS')
     expect(result.stdout).toContain('passed Unit + E2E + Human')
-    expect(result.stdout).toContain('clean-machine + Chrome + 24h soak passed')
+    expect(result.stdout).toContain('clean-machine + Chrome + failure drills + 24h soak passed')
   })
 
   it('fails when the human layer is not actually completed', async () => {
@@ -74,6 +74,17 @@ describe('verify-beta-three-layer', () => {
     expect(result.stderr).toContain('releaseChecks.automated.status must be "pass"')
     expect(result.stderr).toContain('durationMinutes must be at least 1440')
     expect(result.stderr).toContain('soak receipt requestedMinutes must be at least 1440')
+  })
+
+  it('fails when clean-machine evidence names a different artifact', async () => {
+    const evidence = makeEvidence()
+    evidence.releaseChecks.packagedCleanMachine.artifact = 'another-build.exe'
+
+    const evidencePath = await writeEvidence(evidence)
+    const result = spawnSync(process.execPath, [scriptPath, evidencePath], { encoding: 'utf8' })
+
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('packagedCleanMachine.artifact must match release.artifact')
   })
 
   it('fails if automated evidence belongs to another commit', async () => {
@@ -171,6 +182,7 @@ function makeEvidence() {
       },
       packagedCleanMachine: {
         status: 'pass',
+        artifact: 'ND-DSH-beta.exe#sha256:test',
         tester: 'release-owner',
         recordedAt: '2026-09-27T12:35:00+07:00',
         evidence: ['clean Windows VM packaged journey PASS'],
@@ -180,6 +192,12 @@ function makeEvidence() {
         tester: 'release-owner',
         recordedAt: '2026-09-27T12:40:00+07:00',
         evidence: ['e2e:companion:chrome PASS'],
+      },
+      failureDrills: {
+        status: 'pass',
+        tester: 'release-owner',
+        recordedAt: '2026-09-27T13:00:00+07:00',
+        evidence: ['network/core-kill/data-path/disk-pressure drills PASS'],
       },
       soak24h: {
         status: 'pass',
