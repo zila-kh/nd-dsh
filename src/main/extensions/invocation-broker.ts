@@ -183,7 +183,7 @@ export class InvocationBroker {
       return failure('invalid', `Unknown contribution ${contributionId} in ${extensionId}`)
     }
     const descriptor = ndHostMethod(contribution.host)!
-    if (!descriptor.contexts.includes(context.kind)) {
+    if (!(descriptor.contexts as readonly string[]).includes(context.kind)) {
       await audit('denied', `host method is not available in ${context.kind}`, { contextKey: agentGrantKey, host: contribution.host })
       return failure('denied', `“${descriptor.title}” is not available in ${describeContext(context)}.`)
     }
