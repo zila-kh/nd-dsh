@@ -11,7 +11,9 @@ export function resolveInside(root: string, relativePath = '.'): string {
 
 /**
  * Whether an absolute path belongs to the active workspace: it is the workspace
- * root itself or a descendant (delegated task worktrees, open subfolders).
+ * root itself or a descendant (for example an open subfolder). Organization
+ * task worktrees may live beside the repository and are admitted separately by
+ * the exact ND-owned worktree registry, never by path shape.
  * Used to scope chat listings so switching company/project/workspace only shows
  * that context's sessions.
  *
@@ -31,8 +33,9 @@ export function isWithinWorkspace(root: string, candidate: string): boolean {
 /**
  * Whether a session's recorded cwd keeps it in the active workspace's chat
  * list. Sessions record their project cwd at create time; a session belongs
- * here when that cwd is the workspace root or a descendant (delegated task
- * worktrees, open subfolders). A session with no usable cwd cannot be
+ * here when that cwd is the workspace root or a descendant (for example an
+ * open subfolder). ND-owned task worktrees are handled by the caller's trusted
+ * additional-root guard. A session with no usable cwd cannot be
  * attributed to another workspace, so it is kept rather than hidden.
  */
 export function sessionInWorkspace(root: string, cwd: unknown): boolean {

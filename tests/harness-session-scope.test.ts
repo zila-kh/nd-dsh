@@ -24,6 +24,23 @@ describe('scopeSessionListPayload', () => {
     expect(scoped.items[0]).toMatchObject({ sessionId: 'sess-linky', cwd: linky })
   })
 
+  it('preserves runtime lineage fields used by the subagent tree', () => {
+    const parent = session('sess-parent', linky)
+    const child = {
+      ...session('sess-child', linky),
+      parentSessionId: 'sess-parent',
+      origin: 'subagent',
+    }
+    const scoped = scopeSessionListPayload({ items: [parent, child] }, linky, new Set()) as {
+      items: Array<Record<string, unknown>>
+    }
+    expect(scoped.items[1]).toMatchObject({
+      sessionId: 'sess-child',
+      parentSessionId: 'sess-parent',
+      origin: 'subagent',
+    })
+  })
+
   it('stamps the ND archive flag only on surviving rows', () => {
     const value = {
       items: [
@@ -50,5 +67,42 @@ describe('scopeSessionListPayload', () => {
       items: Array<{ sessionId: string }>
     }
     expect(scoped.items.map((item) => item.sessionId)).toEqual(['real'])
+  })
+
+  it('keeps exact ND-owned task worktrees visible even when they live beside the repository', () => {
+    const taskWorktree = join(linky, '..', '.nd-dsh-worktrees', 'repo', 'task-42')
+    const unrelated = join(linky, '..', 'other-repo')
+    const value = {
+      items: [
+        session('sess-task', taskWorktree),
+        session('sess-unrelated', unrelated),
+        session('sess-workspace', linky),
+      ],
+    }
+    const scoped = scopeSessionListPayload(
+      value,
+      linky,
+      new Set(),
+      undefined,
+      undefined,
+      (cwd) => cwd === taskWorktree,
+    ) as { items: Array<Record<string, unknown>> }
+
+    expect(scoped.items.map((item) => item.sessionId)).toEqual(['sess-task', 'sess-workspace'])
+  })
+
+  it('keeps ND Home personal chats visible even though their cwd is outside the workspace', () => {
+    const personal = join(tmpdir(), 'nd-home', 'chats', 'chat-1', 'work')
+    const value = {
+      items: [
+        session('sess-personal', personal),
+        session('sess-other', nimbus),
+        session('sess-workspace', linky),
+      ],
+    }
+    const scoped = scopeSessionListPayload(value, linky, new Set(), undefined, new Set(['sess-personal'])) as {
+      items: Array<Record<string, unknown>>
+    }
+    expect(scoped.items.map((item) => item.sessionId)).toEqual(['sess-personal', 'sess-workspace'])
   })
 })

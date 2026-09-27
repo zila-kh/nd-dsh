@@ -27,6 +27,9 @@
     "src/renderer/src/lib/beta-diagnostics.ts",
     "src/renderer/src/lib/runtime-notices.ts",
     "src/renderer/src/lib/settings-route.ts",
+    "src/renderer/src/lib/quick-launcher-model.ts",
+    "src/renderer/src/lib/command-registry.ts",
+    "src/renderer/src/lib/nd-context-model.ts",
     "tests/**/*.ts",
     "e2e/**/*.ts"
   ]

@@ -4,7 +4,7 @@ import type { CodingEngineDescriptor, ModelProvider, WorkspaceState } from '../.
 import type { CapabilityAssignmentSnapshot, CapabilityDescriptor, CapabilityKind, CapabilityProviderStatus } from '../../../shared/capabilities'
 import { DEFAULT_CAPABILITY_PROVIDER } from '../../../shared/capabilities'
 import { ND_HARNESS_ENGINE_ID } from '../../../shared/coding-engines'
-import type { OrganizationPolicyEffect, OrganizationRun, OrganizationSnapshot, OrganizationTask, ProjectRuntimeStatus, TaskPriority } from '../../../shared/organization'
+import type { OrganizationPolicyEffect, OrganizationRun, OrganizationSnapshot, OrganizationSubagentMode, OrganizationTask, ProjectRuntimeStatus, TaskPriority } from '../../../shared/organization'
 import { DEFAULT_PROJECT_PORT } from '../../../shared/organization'
 import type { RepositoryBoardCard, RepositoryWorkflowPrd, RepositoryWorkflowTask, WorkflowProjectView } from '../../../shared/workflow-plugins'
 import { projectRepositoryBoard, WORKFLOW_BOARD_COLUMNS } from '../../../shared/workflow-plugins'
@@ -438,6 +438,25 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
               <SelectItem value="2">2 Internal</SelectItem>
               <SelectItem value="3">3 Workflow</SelectItem>
               <SelectItem value="4">4 Autopilot</SelectItem>
+            </SelectContent>
+          </Select>
+        </label>
+        <label className="flex items-center gap-1.5 text-sm text-muted-foreground" title="In-ticket subagents only. Company teams, parallel tasks, and independent review are separate.">
+          Subagents
+          <Select
+            value={company.subagentMode ?? 'auto'}
+            onValueChange={(value) => void action('subagents', () => mutate({
+              type: 'company.update',
+              id: company.id,
+              patch: { subagentMode: value as OrganizationSubagentMode },
+            }))}
+          >
+            <SelectTrigger className="h-7 w-[96px] rounded-md border-border-strong bg-secondary px-2 text-sm text-soft">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="auto">Auto</SelectItem>
+              <SelectItem value="off">Off</SelectItem>
             </SelectContent>
           </Select>
         </label>

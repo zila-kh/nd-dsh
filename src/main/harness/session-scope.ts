@@ -11,7 +11,8 @@ function isSessionLike(value: unknown): value is { sessionId: string } {
  *
  * The pinned runtime returns sessions for every project it has ever run; a
  * session belongs to the active workspace when its recorded cwd is the
- * workspace root or a descendant (delegated task worktrees, open subfolders).
+ * workspace root/descendant, or when the trusted caller recognizes an exact
+ * ND-owned auxiliary root (for example a task worktree beside the repository).
  * A session with no usable cwd cannot be attributed to another workspace, so
  * it is kept rather than hidden.
  */
@@ -20,13 +21,24 @@ export function scopeSessionListPayload(
   workspaceRoot: string,
   archivedIds: ReadonlySet<string>,
   runningIds?: ReadonlySet<string>,
+  /**
+   * Sessions that belong to the user outside the active workspace. ND Home
+   * personal chats run in a managed per-chat folder, so they stay visible in
+   * the sidebar as their own bound context instead of disappearing.
+   */
+  extraVisibleIds?: ReadonlySet<string>,
+  /** Exact additional roots owned by ND, such as organization task worktrees. */
+  additionalCwdAllowed?: (cwd: string) => boolean,
 ): unknown {
   const raw = (value as { items?: unknown } | undefined)?.items
   if (!Array.isArray(raw)) return value
   const items = raw
     .filter((item): item is { sessionId: string } => {
       if (!isSessionLike(item)) return false
-      return sessionInWorkspace(workspaceRoot, (item as { cwd?: unknown }).cwd)
+      if (extraVisibleIds?.has(item.sessionId)) return true
+      const cwd = (item as { cwd?: unknown }).cwd
+      if (sessionInWorkspace(workspaceRoot, cwd)) return true
+      return typeof cwd === 'string' && additionalCwdAllowed?.(cwd) === true
     })
     .map((item) => {
       const isArchived = archivedIds.has(item.sessionId)

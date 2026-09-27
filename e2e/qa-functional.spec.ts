@@ -33,8 +33,9 @@ test('QA: full work loop — company, project, PM plan, worker, reviewer, comple
   test.setTimeout(300_000) // PM plan + worker + reviewer can take several minutes
   const { page } = launched
 
-  // 1. App boots with full navigation
+  // 1. App boots in General; this coding QA journey explicitly opts into Coding.
   await expect(page.getByRole('banner').getByText('ND-DSH', { exact: true })).toBeVisible()
+  await page.getByRole('group', { name: 'Workspace profile' }).getByRole('button', { name: 'CODING', exact: true }).click()
   const navigation = page.getByRole('navigation', { name: 'ND-DSH navigation' })
   for (const label of ['Company', 'Agent', 'Design', 'QA', 'Settings']) {
     await expect(navigation.getByTitle(label)).toBeVisible()
@@ -139,7 +140,7 @@ test('QA: Settings surfaces are accessible', async () => {
   await expect(page).toHaveURL(/#\/settings\?tab=general$/)
 
   // Verify settings section tabs are visible (they use role=tab)
-  for (const tab of ['General', 'Appearance', 'Models', 'Capabilities', 'Plugins', 'Coding engines', 'Agent presets']) {
+  for (const tab of ['General', 'Appearance', 'Models', 'Capabilities', 'Extensions', 'Coding engines', 'Agent presets']) {
     await expect(page.getByRole('tab', { name: tab })).toBeVisible()
   }
 

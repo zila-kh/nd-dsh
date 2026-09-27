@@ -14,6 +14,7 @@ import {
   ANTIGRAVITY_ENGINE_ID,
   CHATGPT_WEB_ENGINE_ID,
   CLAUDE_CODE_CLI_ENGINE_ID,
+  CODEX_ENGINE_ID,
   CODEX_CLI_ENGINE_ID,
   CURSOR_CLI_ENGINE_ID,
   ND_HARNESS_ENGINE_ID,
@@ -108,7 +109,7 @@ export class EngineSessionRouter {
   }
   /** Logical engine ids for harness-backed sessions such as delegated Codex. */
   private readonly logicalEngineBySession = new Map<string, string>()
-  /** ND-owned immutable workspace binding for direct task/interactive sessions. */
+  /** ND-owned immutable workspace binding for routed task/interactive sessions. */
   private readonly workspaceRootBySession = new Map<string, string>()
   private readonly chatGptWeb: ChatGptWebEngine | undefined
   private readonly chatGptWebBrowser: BrowserController | undefined
@@ -186,6 +187,7 @@ export class EngineSessionRouter {
     const requested = options?.sessionId
       ? this.engineForSession(options.sessionId)
       : options?.engineId ?? ND_HARNESS_ENGINE_ID
+    if (!options?.sessionId) this.assertKnownEngine(requested)
     const providerId = requested === ND_HARNESS_ENGINE_ID
       ? options?.provider ?? this.harness.status().provider
       : undefined
@@ -196,6 +198,10 @@ export class EngineSessionRouter {
       ? directTarget?.listSessions().find((item) => item.sessionId === requestedSessionId)?.cwd
       : undefined
     const boundSessionCwd = requestedSessionId ? this.workspaceRootBySession.get(requestedSessionId) : undefined
+    const requestedRunCwd = options?.workspaceCwd?.trim()
+    if (boundSessionCwd && requestedRunCwd && !sameWorkspaceRoot(boundSessionCwd, requestedRunCwd)) {
+      throw new Error('Run requested a different workspace than the ND-bound session; create a new session instead of re-rooting this one')
+    }
     if (boundSessionCwd && engineSessionCwd && !sameWorkspaceRoot(boundSessionCwd, engineSessionCwd)) {
       throw new Error('Direct engine changed the ND-bound task workspace; create a new session instead of re-rooting this one')
     }
@@ -213,7 +219,7 @@ export class EngineSessionRouter {
       const result = await this.harness.gatewayRpc('session.list')
       const items = (result.value as { items?: Array<{ sessionId?: string; cwd?: string }> } | undefined)?.items
       const session = items?.find((item) => item.sessionId === options?.sessionId)
-      if (!result.ok || !session?.cwd || !sessionInWorkspace(this.workspace.state().root, session.cwd)) throw new Error('Skill session does not belong to the active workspace')
+      if (!result.ok || !session?.cwd || !this.sessionRootAllowed(session.cwd)) throw new Error('Skill session does not belong to the active workspace')
     }
     let routedPrompt = this.extensions
       ? await this.extensions.decoratePrompt(skill?.prompt ?? prompt, requested, providerId)
@@ -259,7 +265,7 @@ export class EngineSessionRouter {
       }
       this.workspace.assertUsable()
       const workspace = this.workspace.state()
-      return direct.run(appendWorkspaceContext(optimizedPrompt, workspace), {
+      return direct.run(appendWorkspaceContext(optimizedPrompt, workspace, sessionCwd ?? workspace.root), {
         ...(options?.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
         ...(options?.model !== undefined ? { model: options.model } : {}),
         ...(options?.permissionMode !== undefined ? { permissionMode: options.permissionMode } : {}),
@@ -307,7 +313,8 @@ export class EngineSessionRouter {
     if (this.chatGptWeb?.listSessions().some((session) => session.running)) {
       throw new Error('ND Harness and ChatGPT Web share the visible browser. Finish the active ChatGPT Web turn before starting ND Harness.')
     }
-    return this.harness.run(optimizedPrompt, options)
+    const harnessCwd = sessionCwd ?? requestedRunCwd
+    return this.harness.run(optimizedPrompt, harnessCwd ? { ...options, workspaceCwd: harnessCwd } : options)
   }
 
   /**
@@ -316,6 +323,7 @@ export class EngineSessionRouter {
    * worktrees; interactive chat keeps the active workspace default.
    */
   async createSession(engineId: string, cwd?: string): Promise<{ sessionId: string; engineId: string }> {
+    this.assertKnownEngine(engineId)
     const direct = this.directEngines.get(engineId)
     if (direct) {
       const workspaceDirect = this.isWorkspaceDirectEngine(engineId)
@@ -336,6 +344,7 @@ export class EngineSessionRouter {
     if (cwd === undefined) {
       const sessionId = await this.harness.createSession()
       this.logicalEngineBySession.set(sessionId, engineId)
+      this.workspaceRootBySession.set(sessionId, targetCwd)
       return { engineId, sessionId }
     }
     const result = await this.harness.gatewayRpc('session.create', { cwd: targetCwd })
@@ -343,6 +352,7 @@ export class EngineSessionRouter {
     const sessionId = (result.value as { sessionId?: unknown } | undefined)?.sessionId
     if (typeof sessionId !== 'string' || !sessionId) throw new Error('Harness session.create returned no session id')
     this.logicalEngineBySession.set(sessionId, engineId)
+    this.workspaceRootBySession.set(sessionId, targetCwd)
     return { engineId, sessionId }
   }
 
@@ -474,6 +484,16 @@ export class EngineSessionRouter {
     const zcode = this.zcode
     if (!zcode || zcode.listSessions().some((session) => session.running)) return
     await zcode.close()
+  }
+
+  private assertKnownEngine(engineId: string): void {
+    if (
+      engineId === ND_HARNESS_ENGINE_ID
+      || engineId === CODEX_ENGINE_ID
+      || engineId === CHATGPT_WEB_ENGINE_ID
+      || this.directEngines.has(engineId)
+    ) return
+    throw new Error(`Unknown coding engine: ${engineId}`)
   }
 
   private isWorkspaceDirectEngine(engineId: string): boolean {

@@ -8,8 +8,8 @@ const sessionProjects = {
   'sess-engine-ndf': 'project-ndf',
 }
 
-function session(sessionId: string): { sessionId: string } {
-  return { sessionId }
+function session(sessionId: string, parentSessionId?: string, origin: 'subagent' | undefined = parentSessionId ? 'subagent' : undefined): { sessionId: string; parentSessionId?: string; origin?: 'subagent' } {
+  return { sessionId, ...(parentSessionId ? { parentSessionId } : {}), ...(origin ? { origin } : {}) }
 }
 
 describe('isSessionInProjectScope', () => {
@@ -33,15 +33,40 @@ describe('isSessionInProjectScope', () => {
 
 describe('filterSessionsInProjectScope', () => {
   it('filters harness and engine session listings down to the active project', () => {
-    const items = ['sess-plan-dfdf', 'sess-personal', 'sess-plan-ndf', 'sess-engine-ndf'].map(session)
+    const items = ['sess-plan-dfdf', 'sess-personal', 'sess-plan-ndf', 'sess-engine-ndf'].map((sessionId) => session(sessionId))
     expect(filterSessionsInProjectScope(items, 'project-dfdf', sessionProjects).map((item) => item.sessionId)).toEqual([
       'sess-plan-dfdf',
       'sess-personal',
     ])
   })
 
+  it('inherits project attribution for nested subagent sessions from their parent chain', () => {
+    const items = [
+      session('sess-plan-dfdf'),
+      session('sess-child-dfdf', 'sess-plan-dfdf'),
+      session('sess-grandchild-dfdf', 'sess-child-dfdf'),
+      session('sess-plan-ndf'),
+      session('sess-child-ndf', 'sess-plan-ndf'),
+    ]
+    expect(filterSessionsInProjectScope(items, 'project-dfdf', sessionProjects).map((item) => item.sessionId)).toEqual([
+      'sess-plan-dfdf',
+      'sess-child-dfdf',
+      'sess-grandchild-dfdf',
+    ])
+  })
+
+  it('keeps an ordinary fork globally visible when it has no run attribution', () => {
+    // session() defaults origin to 'subagent' when a parent is given, and an
+    // explicit undefined would re-trigger that default, so build the fork here.
+    const fork = { sessionId: 'sess-fork-ndf', parentSessionId: 'sess-plan-ndf' }
+    const items = [session('sess-plan-ndf'), fork]
+    expect(filterSessionsInProjectScope(items, 'project-dfdf', sessionProjects).map((item) => item.sessionId)).toEqual([
+      'sess-fork-ndf',
+    ])
+  })
+
   it('returns the full listing unchanged when no project is active', () => {
-    const items = ['sess-plan-dfdf', 'sess-plan-ndf'].map(session)
+    const items = ['sess-plan-dfdf', 'sess-plan-ndf'].map((sessionId) => session(sessionId))
     expect(filterSessionsInProjectScope(items, undefined, sessionProjects)).toEqual(items)
   })
 })

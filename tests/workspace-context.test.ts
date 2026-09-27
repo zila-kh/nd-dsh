@@ -28,6 +28,16 @@ describe('workspace prompt context', () => {
     expect(prompt).toContain('do not substitute the parent repository for this project')
   })
 
+  it('keeps project identity while overriding the actual task working directory', () => {
+    const taskRoot = 'C:/workspaces/.nd-dsh-worktrees/todo/task-42'
+    const prompt = appendWorkspaceContext('Implement task 42.', todoWorkspace, taskRoot)
+
+    expect(prompt).toContain(`"workingDirectory": "${taskRoot}"`)
+    expect(prompt).toContain('"projectName": "Todo app"')
+    expect(prompt).toContain('"projectWorkspacePath": "C:/workspaces/todo"')
+    expect(prompt).not.toContain('"workingDirectory": "C:/workspaces/todo"')
+  })
+
   it('removes the ND-only block from renderer-visible history', () => {
     const prompt = appendWorkspaceContext('Show the project files.', todoWorkspace)
     expect(stripWorkspaceContext(prompt)).toBe('Show the project files.')

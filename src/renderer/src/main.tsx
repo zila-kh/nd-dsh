@@ -1,6 +1,7 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
+import LauncherPopupApp from './LauncherPopupApp'
 import './index.css'
 
 // Apply a best-effort system theme before the preload-backed theme service
@@ -80,7 +81,7 @@ async function boot(): Promise<void> {
   root.render(
     <React.StrictMode>
       <RendererErrorBoundary>
-        <App />
+        {window.location.hash.replace(/^#\/?/, '').split(/[/?]/)[0] === 'launcher' ? <LauncherPopupApp /> : <App />}
       </RendererErrorBoundary>
     </React.StrictMode>,
   )

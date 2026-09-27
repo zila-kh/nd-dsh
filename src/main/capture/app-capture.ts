@@ -69,6 +69,91 @@ export async function capturePrimaryDisplay(rect?: AppCaptureArea): Promise<AppC
   }
 }
 
+/**
+ * Whole-display capture for Daily Essentials: the display under the pointer by
+ * default, or an explicitly chosen display. Displays may sit at negative
+ * coordinates and use different scale factors; everything here is resolved in
+ * physical screen coordinates and converted per display.
+ */
+export async function captureDisplayUnderPointer(displayId?: number): Promise<AppCaptureImage> {
+  const display = displayId === undefined
+    ? screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+    : screen.getAllDisplays().find((item) => item.id === displayId) ?? screen.getPrimaryDisplay()
+  return captureDisplay(display)
+}
+
+/** Capture the region of the screen under a rect given in desktop coordinates. */
+export async function captureScreenRegion(rect: AppCaptureArea): Promise<AppCaptureImage> {
+  const displays = screen.getAllDisplays()
+  let best: { display: Electron.Display; width: number; height: number } | undefined
+  for (const display of displays) {
+    const intersection = intersect(rect, display.bounds)
+    if (!intersection) continue
+    const area = intersection.width * intersection.height
+    if (!best || area > best.width * best.height) best = { display, width: intersection.width, height: intersection.height }
+  }
+  if (!best) throw new Error('The selected area is not on any connected display')
+  const local = intersect(rect, best.display.bounds)!
+  // Crop coordinates are display-local; negative display origins already
+  // cancelled out in the intersection above.
+  return captureDisplay(best.display, {
+    x: local.x - best.display.bounds.x,
+    y: local.y - best.display.bounds.y,
+    width: local.width,
+    height: local.height,
+  })
+}
+
+async function captureDisplay(display: Electron.Display, rect?: AppCaptureArea): Promise<AppCaptureImage> {
+  const scale = Math.min(1, MAX_CAPTURE_WIDTH / Math.max(1, display.size.width))
+  const sources = await desktopCapturer.getSources({
+    types: ['screen'],
+    thumbnailSize: {
+      width: Math.max(1, Math.round(display.size.width * scale)),
+      height: Math.max(1, Math.round(display.size.height * scale)),
+    },
+  })
+  const source = sources.find((item) => item.display_id === String(display.id)) ?? sources[0]
+  if (!source) throw new Error('No capturable display was available')
+  let image = source.thumbnail
+  if (rect && rect.width > 0 && rect.height > 0) {
+    const thumbSize = image.getSize()
+    const scaleX = thumbSize.width / Math.max(1, display.size.width)
+    const scaleY = thumbSize.height / Math.max(1, display.size.height)
+    const crop = {
+      x: Math.max(0, Math.min(thumbSize.width - 1, Math.round(rect.x * scaleX))),
+      y: Math.max(0, Math.min(thumbSize.height - 1, Math.round(rect.y * scaleY))),
+      width: Math.max(1, Math.round(rect.width * scaleX)),
+      height: Math.max(1, Math.round(rect.height * scaleY)),
+    }
+    crop.width = Math.max(1, Math.min(crop.width, thumbSize.width - crop.x))
+    crop.height = Math.max(1, Math.min(crop.height, thumbSize.height - crop.y))
+    image = image.crop(crop)
+  }
+  const png = image.toPNG()
+  if (png.length === 0) throw new Error('The display capture returned an empty image')
+  const size = image.getSize()
+  return {
+    data: png.toString('base64'),
+    mediaType: 'image/png',
+    name: `nd-capture-${new Date().toISOString().replace(/[:.]/g, '-')}.png`,
+    width: size.width,
+    height: size.height,
+    displayLabel: rect && rect.width > 0 && rect.height > 0
+      ? `${Math.round(rect.width)}x${Math.round(rect.height)}`
+      : `${display.size.width}x${display.size.height}`,
+  }
+}
+
+function intersect(rect: AppCaptureArea, bounds: { x: number; y: number; width: number; height: number }): AppCaptureArea | undefined {
+  const x = Math.max(rect.x, bounds.x)
+  const y = Math.max(rect.y, bounds.y)
+  const right = Math.min(rect.x + rect.width, bounds.x + bounds.width)
+  const bottom = Math.min(rect.y + rect.height, bounds.y + bounds.height)
+  if (right <= x || bottom <= y) return undefined
+  return { x, y, width: right - x, height: bottom - y }
+}
+
 /** Self-inspect: render this ND-DSH window's own contents, no screen capture. */
 export async function captureSelfWindow(window: BrowserWindow, rect?: AppCaptureArea): Promise<AppCaptureImage> {
   if (window.isDestroyed() || window.webContents.isDestroyed()) throw new Error('The ND-DSH window is no longer available')

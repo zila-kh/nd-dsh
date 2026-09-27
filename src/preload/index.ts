@@ -22,6 +22,20 @@ import {
 } from '../shared/browser-platform.js'
 import { IPC, type DesktopApi, type ModelProvider } from '../shared/contracts.js'
 import { EXTENSIONS_IPC, type AgentExtensionManifest, type ExtensionsDesktopApi } from '../shared/extensions.js'
+import {
+  ND_EXTENSIONS_IPC,
+  ND_HOME_IPC,
+  type NdCaptureResultView,
+  type NdExtensionsDesktopApi,
+  type NdExtensionsStateView,
+  type NdHomeDesktopApi,
+  type NdHomeNoteView,
+  type NdHomeStateView,
+  type NdInvocationRequest,
+  type NdInvocationResult,
+  type NdScreenRect,
+  type NdViewData,
+} from '../shared/nd-invocations.js'
 import { USAGE_IPC, type UsageDesktopApi, type UsageScope, type UsageSummary } from '../shared/usage.js'
 import {
   WORKFLOW_PLUGINS_IPC,
@@ -68,6 +82,50 @@ const usageApi: UsageDesktopApi = {
     ipcRenderer.invoke(USAGE_IPC.summary, scope, id, since) as Promise<UsageSummary>,
 }
 
+const ndExtensionsApi: NdExtensionsDesktopApi = {
+  state: () => ipcRenderer.invoke(ND_EXTENSIONS_IPC.state) as Promise<NdExtensionsStateView>,
+  installLocal: () => ipcRenderer.invoke(ND_EXTENSIONS_IPC.installLocal) as Promise<NdExtensionsStateView | null>,
+  installFromPath: (path: string) => ipcRenderer.invoke(ND_EXTENSIONS_IPC.installFromPath, path) as Promise<NdExtensionsStateView>,
+  update: (extensionId: string, sourcePath?: string) => ipcRenderer.invoke(ND_EXTENSIONS_IPC.update, extensionId, sourcePath) as Promise<NdExtensionsStateView>,
+  rollback: (extensionId: string) => ipcRenderer.invoke(ND_EXTENSIONS_IPC.rollback, extensionId) as Promise<NdExtensionsStateView>,
+  uninstall: (extensionId: string) => ipcRenderer.invoke(ND_EXTENSIONS_IPC.uninstall, extensionId) as Promise<NdExtensionsStateView>,
+  setActivation: (extensionId, context, enabled) => ipcRenderer.invoke(ND_EXTENSIONS_IPC.setActivation, extensionId, context, enabled) as Promise<NdExtensionsStateView>,
+  setSetting: (extensionId, context, key, value) => ipcRenderer.invoke(ND_EXTENSIONS_IPC.setSetting, extensionId, context, key, value) as Promise<NdExtensionsStateView>,
+  revokeGrant: (grantId: string) => ipcRenderer.invoke(ND_EXTENSIONS_IPC.revokeGrant, grantId) as Promise<NdExtensionsStateView>,
+  commands: (context) => ipcRenderer.invoke(ND_EXTENSIONS_IPC.commands, context),
+  invoke: (request: NdInvocationRequest) => ipcRenderer.invoke(ND_EXTENSIONS_IPC.invoke, request) as Promise<NdInvocationResult>,
+  loadView: (extensionId: string, viewId: string, context) => ipcRenderer.invoke(ND_EXTENSIONS_IPC.view, extensionId, viewId, context) as Promise<NdViewData>,
+  approve: (approvalId: string, remember?: boolean) => ipcRenderer.invoke(ND_EXTENSIONS_IPC.approve, approvalId, remember) as Promise<NdInvocationResult>,
+  deny: (approvalId: string) => ipcRenderer.invoke(ND_EXTENSIONS_IPC.deny, approvalId) as Promise<void>,
+  onChanged: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: NdExtensionsStateView) => listener(state)
+    ipcRenderer.on(ND_EXTENSIONS_IPC.changedEvent, handler)
+    return () => ipcRenderer.removeListener(ND_EXTENSIONS_IPC.changedEvent, handler)
+  },
+}
+
+const homeApi: NdHomeDesktopApi = {
+  state: () => ipcRenderer.invoke(ND_HOME_IPC.state) as Promise<NdHomeStateView>,
+  createNote: (input) => ipcRenderer.invoke(ND_HOME_IPC.noteCreate, input) as Promise<NdHomeStateView>,
+  updateNote: (id, input) => ipcRenderer.invoke(ND_HOME_IPC.noteUpdate, id, input) as Promise<NdHomeStateView>,
+  deleteNote: (id) => ipcRenderer.invoke(ND_HOME_IPC.noteDelete, id) as Promise<NdHomeStateView>,
+  searchNotes: (query) => ipcRenderer.invoke(ND_HOME_IPC.noteSearch, query) as Promise<NdHomeNoteView[]>,
+  captureScreen: () => ipcRenderer.invoke(ND_HOME_IPC.captureScreen) as Promise<NdCaptureResultView>,
+  captureArea: (rect: NdScreenRect) => ipcRenderer.invoke(ND_HOME_IPC.captureArea, rect) as Promise<NdCaptureResultView | null>,
+  readCapture: (id) => ipcRenderer.invoke(ND_HOME_IPC.captureRead, id) as Promise<NdCaptureResultView | null>,
+  deleteCapture: (id) => ipcRenderer.invoke(ND_HOME_IPC.captureDelete, id) as Promise<NdHomeStateView>,
+  attachCapture: (id, sessionId) => ipcRenderer.invoke(ND_HOME_IPC.captureAttach, id, sessionId) as Promise<NdHomeStateView>,
+  ensureChat: (context) => ipcRenderer.invoke(ND_HOME_IPC.chatEnsure, context),
+  bindChat: (chatId, sessionId) => ipcRenderer.invoke(ND_HOME_IPC.chatBind, chatId, sessionId),
+  setChatTitle: (sessionId, title) => ipcRenderer.invoke(ND_HOME_IPC.chatTitle, sessionId, title) as Promise<NdHomeStateView>,
+  revealStorage: () => ipcRenderer.invoke(ND_HOME_IPC.reveal) as Promise<void>,
+  onChanged: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: NdHomeStateView) => listener(state)
+    ipcRenderer.on(ND_HOME_IPC.changedEvent, handler)
+    return () => ipcRenderer.removeListener(ND_HOME_IPC.changedEvent, handler)
+  },
+}
+
 const api: DesktopApi = {
   app: {
     info: () => ipcRenderer.invoke(IPC.appInfo),
@@ -104,6 +162,26 @@ const api: DesktopApi = {
       ipcRenderer.on(IPC.windowFloatModeEvent, handler)
       return () => ipcRenderer.removeListener(IPC.windowFloatModeEvent, handler)
     },
+    onQuickLauncher: (listener) => {
+      const handler = () => listener()
+      ipcRenderer.on(IPC.windowQuickLauncherEvent, handler)
+      return () => ipcRenderer.removeListener(IPC.windowQuickLauncherEvent, handler)
+    },
+    onLauncherHandoff: (listener) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        target: Parameters<typeof listener>[0],
+        text?: string,
+        context?: Parameters<typeof listener>[2],
+      ) => listener(target, text, context)
+      ipcRenderer.on(IPC.windowLauncherHandoffEvent, handler)
+      return () => ipcRenderer.removeListener(IPC.windowLauncherHandoffEvent, handler)
+    },
+    quickLauncherMode: () => ipcRenderer.invoke(IPC.windowQuickLauncherMode),
+    setQuickLauncherMode: (mode) => ipcRenderer.invoke(IPC.windowQuickLauncherModeSet, mode),
+    toggleLauncherPopup: () => ipcRenderer.invoke(IPC.windowToggleLauncherPopup),
+    hideLauncherPopup: () => ipcRenderer.invoke(IPC.windowHideLauncherPopup),
+    handoffLauncherPopup: (target, text, context) => ipcRenderer.invoke(IPC.windowLauncherHandoff, target, text, context),
   },
   providers: {
     list: () => ipcRenderer.invoke(IPC.providersList),
@@ -150,8 +228,7 @@ const api: DesktopApi = {
     clearProjectBinding: (workspaceRoot) => ipcRenderer.invoke(IPC.chatGptWebProjectClear, workspaceRoot),
   },
   browserCompanion: {
-    state: () => ipcRenderer.invoke(BROWSER_COMPANION_IPC.state) as Promise<BrowserCompanionState>,
-    acquireLease: (connectionId: string, tabId: number, ownerId: string, scope?: BrowserCompanionLeaseScope) =>
+    state: () => ipcRenderer.invoke(BROWSER_COMPANION_IPC.state) as Promise<BrowserCompanionState>,    acquireLease: (connectionId: string, tabId: number, ownerId: string, scope?: BrowserCompanionLeaseScope) =>
       ipcRenderer.invoke(BROWSER_COMPANION_IPC.acquireLease, connectionId, tabId, ownerId, scope) as Promise<BrowserTabLease>,
     releaseLease: (leaseId: string) => ipcRenderer.invoke(BROWSER_COMPANION_IPC.releaseLease, leaseId) as Promise<boolean>,
     onChanged: (listener) => {
@@ -190,6 +267,8 @@ const api: DesktopApi = {
       return () => ipcRenderer.removeListener(BROWSER_PLATFORM_IPC.changedEvent, handler)
     },
   },
+  ndExtensions: ndExtensionsApi,
+  home: homeApi,
   browser: {
     state: () => ipcRenderer.invoke(IPC.browserState),
     setBounds: (bounds) => ipcRenderer.invoke(IPC.browserSetBounds, bounds),
@@ -258,6 +337,10 @@ const api: DesktopApi = {
       ipcRenderer.on(IPC.surfaceChangedEvent, handler)
       return () => ipcRenderer.removeListener(IPC.surfaceChangedEvent, handler)
     },
+  },
+  workspaceProfile: {
+    get: () => ipcRenderer.invoke(IPC.workspaceProfileGet),
+    set: (profile) => ipcRenderer.invoke(IPC.workspaceProfileSet, profile),
   },
   dshView: {
     setBounds: (bounds) => ipcRenderer.invoke(IPC.dshViewSetBounds, bounds),

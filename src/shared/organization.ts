@@ -18,6 +18,7 @@ export type OrganizationTeamEventKind =
   | 'dependency-unblocked'
 export type OrganizationRunKind = 'pm-plan' | 'task-execution' | 'task-review'
 export type OrganizationRunStatus = 'running' | 'completed' | 'failed'
+export type OrganizationSubagentMode = 'auto' | 'off'
 export type OrganizationScope = 'builtin' | 'company' | 'project' | 'team' | 'role' | 'agent'
 export type ProjectRuntimeState = 'stopped' | 'starting' | 'ready' | 'unreachable'
 
@@ -32,6 +33,12 @@ export interface Company {
   name: string
   mission: string
   autonomyLevel: OrganizationAutonomyLevel
+  /**
+   * Controls in-ticket child-agent delegation only. Company teams, parallel
+   * task dispatch and independent review remain separate control-plane concepts.
+   * Older snapshots omit this field and therefore resolve to "auto".
+   */
+  subagentMode?: OrganizationSubagentMode
   status: OrganizationEntityStatus
   createdAt: number
   updatedAt: number
@@ -299,7 +306,7 @@ export interface ProjectPlanInput {
 
 export type OrganizationMutation =
   | { type: 'company.create'; name: string; mission: string }
-  | { type: 'company.update'; id: string; patch: Partial<Pick<Company, 'name' | 'mission' | 'autonomyLevel' | 'status'>> }
+  | { type: 'company.update'; id: string; patch: Partial<Pick<Company, 'name' | 'mission' | 'autonomyLevel' | 'subagentMode' | 'status'>> }
   | { type: 'company.activate'; id: string }
   /**
    * Forget a company inside ND: the company and every record ND owns for it

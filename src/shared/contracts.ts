@@ -1,3 +1,6 @@
+import type { LauncherHandoffTarget, QuickLauncherShortcutMode } from './quick-launcher.js'
+import type { WorkspaceProfile } from './workspace-profile.js'
+
 export interface BrowserBounds {
   x: number
   y: number
@@ -243,6 +246,13 @@ export interface HarnessRunOptions {
   model?: string
   image?: HarnessRunImage
   permissionMode?: string
+  /**
+   * Exact working directory for this session/turn. It is used when a session
+   * is created and keeps the trusted prompt metadata aligned with an existing
+   * task worktree or ND Home chat directory. Defaults to the active workspace.
+   * A path alone is not a sandbox — higher-level workspace policy owns safety.
+   */
+  workspaceCwd?: string
 }
 
 /** ND-managed non-harness chat session surfaced alongside gateway sessions. */
@@ -653,6 +663,10 @@ export interface DesktopApi {
   }
   browserCompanion: import('./browser-companion.js').BrowserCompanionDesktopApi
   browserPlatform: import('./browser-platform.js').BrowserPlatformDesktopApi
+  /** ND extension packages: contexts, activation, grants, commands, typed views. */
+  ndExtensions: import('./nd-invocations.js').NdExtensionsDesktopApi
+  /** ND Home personal storage: notes, captures, and context-bound chats. */
+  home: import('./nd-invocations.js').NdHomeDesktopApi
   browser: {
     state(): Promise<BrowserState>
     setBounds(bounds: BrowserBounds): Promise<void>
@@ -704,6 +718,11 @@ export interface DesktopApi {
     set(surface: DshSurface): Promise<SurfaceState>
     onChanged(listener: (state: SurfaceState) => void): () => void
   }
+  /** Human-facing workspace profile; never an execution/pause state. */
+  workspaceProfile: {
+    get(): Promise<WorkspaceProfile>
+    set(profile: WorkspaceProfile): Promise<WorkspaceProfile>
+  }
   dshView: {
     setBounds(bounds: BrowserBounds): Promise<void>
     setVisible(visible: boolean): Promise<void>
@@ -750,6 +769,13 @@ export interface DesktopApi {
     moveFloatWindow(deltaX: number, deltaY: number): Promise<void>
     setCaptureOverlay?(active: boolean): Promise<{ width: number; height: number }>
     onFloatMode?(listener: (enabled: boolean) => void): () => void
+    onQuickLauncher?(listener: () => void): () => void
+    onLauncherHandoff?(listener: (target: LauncherHandoffTarget, text?: string, context?: import('./nd-context.js').NdContext) => void): () => void
+    quickLauncherMode?(): Promise<QuickLauncherShortcutMode>
+    setQuickLauncherMode?(mode: QuickLauncherShortcutMode): Promise<QuickLauncherShortcutMode>
+    toggleLauncherPopup?(): Promise<{ visible: boolean }>
+    hideLauncherPopup?(): Promise<void>
+    handoffLauncherPopup?(target: LauncherHandoffTarget, text?: string, context?: import('./nd-context.js').NdContext): Promise<void>
   }
 }
 
@@ -761,6 +787,13 @@ export const IPC = {
   windowMoveFloatWindow: 'window:move-float-window',
   windowSetCaptureOverlay: 'window:set-capture-overlay',
   windowFloatModeEvent: 'window:float-mode-event',
+  windowQuickLauncherEvent: 'window:quick-launcher-event',
+  windowQuickLauncherMode: 'window:quick-launcher-mode',
+  windowQuickLauncherModeSet: 'window:quick-launcher-mode:set',
+  windowToggleLauncherPopup: 'window:toggle-launcher-popup',
+  windowHideLauncherPopup: 'window:hide-launcher-popup',
+  windowLauncherHandoff: 'window:launcher-handoff',
+  windowLauncherHandoffEvent: 'window:launcher-handoff-event',
   browserState: 'browser:state',
   browserSetBounds: 'browser:set-bounds',
   browserSetVisible: 'browser:set-visible',
@@ -800,6 +833,8 @@ export const IPC = {
   surfaceState: 'surface:state',
   surfaceSet: 'surface:set',
   surfaceChangedEvent: 'surface:changed',
+  workspaceProfileGet: 'workspace-profile:get',
+  workspaceProfileSet: 'workspace-profile:set',
   dshViewSetBounds: 'dsh-view:set-bounds',
   dshViewSetVisible: 'dsh-view:set-visible',
   dshViewReload: 'dsh-view:reload',

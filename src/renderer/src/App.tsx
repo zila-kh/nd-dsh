@@ -18,7 +18,7 @@ import { DiffView } from './components/DiffView'
 import { DshCodingSurface } from './components/DshCodingSurface'
 import { EditorPane } from './components/EditorPane'
 import { Explorer } from './components/Explorer'
-import { BrowserIcon, CameraIcon, CompanyIcon, CrosshairIcon, ExternalIcon, FileIcon, MonitorIcon, PencilIcon, QualityIcon, SettingsIcon, SidebarToggleIcon, SparkIcon, TrashIcon } from './components/Icons'
+import { BrowserIcon, CameraIcon, CompanyIcon, CrosshairIcon, ExternalIcon, FileIcon, HomeIcon, MonitorIcon, PencilIcon, QualityIcon, SettingsIcon, SidebarToggleIcon, SparkIcon, TrashIcon } from './components/Icons'
 import { OrganizationDashboard, type CompanyView } from './components/OrganizationDashboard'
 import { QaView } from './components/QaView'
 import { RuntimePrompts } from './components/RuntimePrompts'
@@ -26,8 +26,34 @@ import { ThemeToggle } from './components/ThemeToggle'
 import { TitlebarIconButton } from './components/titlebar-icon-button'
 import { CaptureOverlay, type CaptureOverlayMode } from './components/CaptureOverlay'
 import { ScreenshotDropdown } from './components/ScreenshotDropdown'
+import { QuickLauncher } from './components/QuickLauncher'
+import { HomeView } from './components/HomeView'
+import { ExtensionPackagesCard } from './components/ExtensionPackages'
 import { cn } from './lib/utils'
 import { fileAccent } from './lib/file-accents'
+import {
+  buildLauncherMemoryMutation,
+  buildLauncherTaskMutation,
+  isQuickLauncherKey,
+} from './lib/quick-launcher-model'
+import {
+  commandRunPlan,
+  contextForOptionId,
+  contextOptions,
+  currentContext,
+  describeContextForUi,
+  optionIdForContext,
+} from './lib/nd-context-model'
+import type { LauncherHandoffTarget } from '../../shared/quick-launcher'
+import type { NdContext } from '../../shared/nd-context'
+import type { WorkspaceProfile } from '../../shared/workspace-profile'
+import type {
+  NdCaptureResultView,
+  NdCommandView,
+  NdExtensionsStateView,
+  NdHomeStateView,
+  NdInvocationResult,
+} from '../../shared/nd-invocations'
 import { pickSelfElement } from './lib/self-element-picker'
 import {
   capabilitySubTabFromLocation,
@@ -41,11 +67,11 @@ import {
 
 const SettingsPane = lazy(() => import('./components/SettingsPane').then((module) => ({ default: module.SettingsPane })))
 
-type ProductView = 'company' | 'agent' | 'design' | 'qa' | 'settings'
+type ProductView = 'home' | 'company' | 'agent' | 'design' | 'qa' | 'settings'
 
 type AgentPane = 'files' | 'browser'
 
-const VIEWS: ProductView[] = ['company', 'agent', 'design', 'qa', 'settings']
+const VIEWS: ProductView[] = ['home', 'company', 'agent', 'design', 'qa', 'settings']
 
 const CHAT_MIN_PX = 580
 const CHAT_DEFAULT_PX = 640
@@ -115,6 +141,11 @@ export default function App() {
   const [browserState, setBrowserState] = useState<BrowserState | null>(null)
   const [harnessStatus, setHarnessStatus] = useState<HarnessStatus | null>(null)
   const [surface, setSurface] = useState<DshSurface>('workbench')
+  // Unknown until the trusted main-process preference is loaded. Do not assume
+  // General here: doing so would redirect an existing Coding user's deep link
+  // (for example #/qa) before their persisted profile arrives.
+  const [workspaceProfile, setWorkspaceProfile] = useState<WorkspaceProfile | null>(null)
+  const [workspaceProfilePending, setWorkspaceProfilePending] = useState(false)
   const [dshView, setDshView] = useState<DshViewState | null>(null)
   const [selectedFile, setSelectedFile] = useState<WorkspaceFile | null>(null)
   const [openFileTabs, setOpenFileTabs] = useState<WorkspaceFile[]>([])
@@ -145,6 +176,16 @@ export default function App() {
   const [pendingAppInspect, setPendingAppInspect] = useState<{ displayLabel: string; width: number; height: number; copiedToClipboard: boolean; scope: InspectScope; mode?: AppInspectMode } | null>(null)
   const [captureOverlay, setCaptureOverlay] = useState<{ active: boolean; mode: CaptureOverlayMode } | null>(null)
   const [floatDropdownOpen, setFloatDropdownOpen] = useState(false)
+  const [quickLauncherOpen, setQuickLauncherOpen] = useState(false)
+  // PRD 0006: ND Home personal records, extension packages, and the launcher's
+  // explicit context selector (Personal by default, independent of the active
+  // company/project selection).
+  const [ndExtensions, setNdExtensions] = useState<NdExtensionsStateView | null>(null)
+  const [homeState, setHomeState] = useState<NdHomeStateView | null>(null)
+  const [homeBusy, setHomeBusy] = useState(false)
+  const [launcherContextId, setLauncherContextId] = useState('personal')
+  const [extensionCommands, setExtensionCommands] = useState<NdCommandView[]>([])
+  const [localCaptureIntent, setLocalCaptureIntent] = useState(false)
   const inspectOverlayVisible = pendingPick !== null || pendingAppInspect !== null
   const [elementAttachmentVersion, setElementAttachmentVersion] = useState(0)
   const appInspectTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
@@ -176,6 +217,80 @@ export default function App() {
     return window.ndDsh.window?.onFloatMode?.((enabled) => {
       if (!isFloatOverlay || enabled) setInspectScope(enabled ? 'external' : 'self')
     })
+  }, [isFloatOverlay])
+
+  useEffect(() => {
+    if (isFloatOverlay) return
+    // The global shortcut toggles: when the full window was just brought
+    // forward the dialog is closed and opens; when it is already open the
+    // same press dismisses it (Raycast-style toggle).
+    return window.ndDsh.window?.onQuickLauncher?.(() => setQuickLauncherOpen((open) => !open))
+  }, [isFloatOverlay])
+
+  const launcherHandoffRef = useRef<(target: LauncherHandoffTarget, text?: string, context?: NdContext) => void>(() => {})
+
+  useEffect(() => {
+    if (isFloatOverlay) return
+    return window.ndDsh.window?.onLauncherHandoff?.((target, text, context) => launcherHandoffRef.current(target, text, context))
+  }, [isFloatOverlay])
+
+  useEffect(() => {
+    let mounted = true
+    void window.ndDsh.ndExtensions.state()
+      .then((next) => { if (mounted) setNdExtensions(next) })
+      .catch(() => undefined)
+    const off = window.ndDsh.ndExtensions.onChanged((next) => { if (mounted) setNdExtensions(next) })
+    return () => { mounted = false; off() }
+  }, [])
+
+  useEffect(() => {
+    let mounted = true
+    void window.ndDsh.home.state()
+      .then((next) => { if (mounted) setHomeState(next) })
+      .catch(() => undefined)
+    const off = window.ndDsh.home.onChanged((next) => { if (mounted) setHomeState(next) })
+    return () => { mounted = false; off() }
+  }, [])
+
+  const extensionContextOptions = useMemo(() => contextOptions(orgState), [orgState])
+
+  useEffect(() => {
+    if (!quickLauncherOpen) return
+    // The in-app launcher opens on the current company/project context; the OS
+    // popup keeps its own Personal default (handled in the popup renderer).
+    // Deliberately keyed on the open toggle only, so a context the user picked
+    // while the launcher is open is not yanked away by background org updates.
+    const id = optionIdForContext(extensionContextOptions, currentContext(orgState))
+    if (id) setLauncherContextId(id)
+  }, [quickLauncherOpen])
+
+  useEffect(() => {
+    const context = contextForOptionId(extensionContextOptions, launcherContextId) ?? { kind: 'personal' as const }
+    let mounted = true
+    void window.ndDsh.ndExtensions.commands(context)
+      .then((next) => { if (mounted) setExtensionCommands(next) })
+      .catch(() => { if (mounted) setExtensionCommands([]) })
+    return () => { mounted = false }
+  }, [extensionContextOptions, launcherContextId, ndExtensions])
+
+  const pendingApprovals = ndExtensions?.pendingApprovals.length ?? 0
+  const notifiedApprovals = useRef(0)
+  useEffect(() => {
+    if (pendingApprovals > notifiedApprovals.current) {
+      toast('An agent request is waiting for your approval — review it in Settings → Extensions.', { duration: 7000 })
+    }
+    notifiedApprovals.current = pendingApprovals
+  }, [pendingApprovals])
+
+  useEffect(() => {
+    if (isFloatOverlay) return
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (!isQuickLauncherKey(event)) return
+      event.preventDefault()
+      setQuickLauncherOpen((open) => !open)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
   }, [isFloatOverlay])
 
   useEffect(() => {
@@ -263,21 +378,22 @@ export default function App() {
   // target app), the trusted main process captures the screen, bridges the
   // screenshot into the ND chat session, and copies it to the clipboard.
   // In 'self' scope there is nothing to switch to, so capture immediately.
-  const startAppInspect = (mode: AppInspectMode = 'full', rect?: AppInspectArea): Promise<AppInspectResult | undefined> => {
+  const startAppInspect = (mode: AppInspectMode = 'full', rect?: AppInspectArea, scopeOverride?: InspectScope): Promise<AppInspectResult | undefined> => {
     if (appInspectCountdown !== null || appInspectInFlight) return Promise.resolve(undefined)
-    const selfScope = inspectScope === 'self'
+    const targetScope = scopeOverride ?? inspectScope
+    const selfScope = targetScope === 'self'
     let remaining = 3
     if (!selfScope && mode === 'full') setAppInspectCountdown(remaining)
     const fire = async (): Promise<AppInspectResult> => {
       setAppInspectInFlight(true)
       try {
-        const result = await window.ndDsh.capture.inspectApp(true, inspectScope, { mode, ...(rect !== undefined ? { rect } : {}) })
+        const result = await window.ndDsh.capture.inspectApp(true, targetScope, { mode, ...(rect !== undefined ? { rect } : {}) })
         setPendingAppInspect({
           displayLabel: result.displayLabel,
           width: result.width,
           height: result.height,
           copiedToClipboard: result.copiedToClipboard,
-          scope: inspectScope,
+          scope: targetScope,
           mode,
         })
         const prefix = mode === 'area'
@@ -447,6 +563,7 @@ export default function App() {
         setSurface(state.surface)
         setDshView(state.view)
       }),
+      window.ndDsh.workspaceProfile.get().then(setWorkspaceProfile),
     ]).catch((cause) => notify(errorMessage(cause)))
 
     const offWorkspace = window.ndDsh.workspace.onState((next) => {
@@ -544,6 +661,22 @@ export default function App() {
     switchToWorkbench('settings')
   }
 
+  const selectWorkspaceProfile = (next: WorkspaceProfile): void => {
+    if (workspaceProfilePending || next === workspaceProfile) return
+    // Commit in main before changing renderer-visible scope. This keeps the
+    // Coding-only DSH button from becoming clickable before the persisted
+    // profile guard has accepted Coding.
+    setWorkspaceProfilePending(true)
+    void window.ndDsh.workspaceProfile.set(next)
+      .then(setWorkspaceProfile)
+      .catch((cause) => notify(errorMessage(cause)))
+      .finally(() => setWorkspaceProfilePending(false))
+  }
+
+  useEffect(() => {
+    if (workspaceProfile === 'general' && view === 'qa') setView('home')
+  }, [workspaceProfile, view])
+
   const selectTheme = (mode: ThemeMode): void => {
     void window.ndDsh.theme.set(mode).then(setTheme).catch((cause) => notify(errorMessage(cause)))
   }
@@ -639,7 +772,7 @@ export default function App() {
     ? (project ? (workspace?.projectName ?? project.name ?? workspace?.name ?? 'No workspace') : 'No project')
     : (workspace?.projectName ?? workspace?.name ?? 'No workspace')
 
-  const showGitControls = Boolean(
+  const showGitControls = workspaceProfile === 'coding' && Boolean(
     workspace?.root && (!orgState || (project && (!workspace.projectId || workspace.projectId === project.id)))
   )
 
@@ -662,13 +795,331 @@ export default function App() {
       .catch(() => setFailedProjectIds((prev) => new Set(prev).add(id)))
   }
 
-  const navItems: Array<{ id: ProductView; label: string; icon: ReactNode }> = [
+  const launcherCreateTask = async (text: string): Promise<void> => {
+    if (activeLauncherContext().kind === 'personal') {
+      notify('Tasks need a company and project. Switch the launcher context first.')
+      return
+    }
+    if (!company || !project) {
+      notify('Choose a company and project before creating a task.')
+      return
+    }
+    try {
+      await window.ndDshOrganization.mutate(buildLauncherTaskMutation(company.id, project.id, text))
+      setCompanyView('workspace')
+      switchToWorkbench('company')
+      toast('Task created from ND Quick Launcher.')
+    } catch (cause) {
+      notify(errorMessage(cause))
+    }
+  }
+
+  const launcherQuickNote = async (text: string, tags: string[] = ['launcher', 'manual']): Promise<void> => {
+    const context = activeLauncherContext()
+    if (context.kind === 'personal') {
+      // Personal notes live in ND Home and work before any company exists.
+      try {
+        const result = await invokeDailyEssentials('quick-note', 'command', context, { text, tags })
+        if (handleInvocationFailure(result)) return
+        await refreshHome()
+        toast('Note saved to ND Home.')
+      } catch (cause) {
+        notify(errorMessage(cause))
+      }
+      return
+    }
+    if (!company) {
+      notify('Choose a company before saving a note.')
+      return
+    }
+    try {
+      await window.ndDshOrganization.mutate(buildLauncherMemoryMutation(company.id, project?.id, text, tags))
+      toast(project ? `Note saved to ${project.name}.` : `Note saved to ${company.name}.`)
+    } catch (cause) {
+      notify(errorMessage(cause))
+    }
+  }
+
+  const launcherActivateProject = async (projectId: string): Promise<void> => {
+    const target = orgState?.projects.find((item) => item.id === projectId)
+    if (!target) return
+    try {
+      if (target.companyId !== orgState?.activeCompanyId) {
+        await window.ndDshOrganization.mutate({ type: 'company.activate', id: target.companyId })
+      }
+      await window.ndDshOrganization.mutate({ type: 'project.activate', id: projectId })
+      setCompanyView('workspace')
+      switchToWorkbench('company')
+    } catch (cause) {
+      notify(errorMessage(cause))
+    }
+  }
+
+  const launcherSwitchCompany = async (companyId: string): Promise<void> => {
+    try {
+      await window.ndDshOrganization.mutate({ type: 'company.activate', id: companyId })
+      setCompanyView('workspace')
+      switchToWorkbench('company')
+    } catch (cause) {
+      notify(errorMessage(cause))
+    }
+  }
+
+  const captureClipboardToNote = async (contextOverride?: NdContext): Promise<void> => {
+    const context = contextOverride ?? activeLauncherContext()
+    if (context.kind === 'personal') {
+      // One explicit command authorizes exactly this one clipboard read.
+      try {
+        const result = await invokeDailyEssentials('capture-clipboard', 'command', context, {})
+        if (handleInvocationFailure(result)) return
+        await refreshHome()
+        toast('Clipboard captured into ND Home.')
+      } catch (cause) {
+        notify(errorMessage(cause))
+      }
+      return
+    }
+    try {
+      const text = (await navigator.clipboard.readText()).trim()
+      if (!text) {
+        notify('Clipboard does not contain text to capture.')
+        return
+      }
+      await launcherQuickNote(text, ['capture', 'clipboard'])
+    } catch (cause) {
+      notify(errorMessage(cause))
+    }
+  }
+
+  const refreshHome = async (): Promise<void> => {
+    setHomeState(await window.ndDsh.home.state())
+  }
+
+  const activeLauncherContext = (): NdContext =>
+    contextForOptionId(extensionContextOptions, launcherContextId) ?? { kind: 'personal' }
+
+  const DAILY_ESSENTIALS_ID = 'nd.daily-essentials'
+
+  const invokeDailyEssentials = (
+    contributionId: string,
+    contributionKind: 'command' | 'view',
+    context: NdContext,
+    input: Record<string, unknown>,
+  ): Promise<NdInvocationResult> =>
+    window.ndDsh.ndExtensions.invoke({ extensionId: DAILY_ESSENTIALS_ID, contributionId, contributionKind, context, caller: 'user', input })
+
+  /** Personal chats get a managed per-chat folder; other contexts keep the normal agent flow. */
+  const startContextChat = async (prompt: string, context: NdContext): Promise<void> => {
+    if (context.kind !== 'personal') {
+      askAgent(prompt)
+      return
+    }
+    setHomeBusy(true)
+    try {
+      const chat = await window.ndDsh.home.ensureChat(context)
+      const result = await window.ndDsh.harness.run(prompt, { workspaceCwd: chat.workDir })
+      await window.ndDsh.home.bindChat(chat.chatId, result.sessionId)
+      await refreshHome()
+      switchToWorkbench('agent')
+    } catch (cause) {
+      notify(errorMessage(cause))
+    } finally {
+      setHomeBusy(false)
+    }
+  }
+
+  const applyHostEffect = async (host: NdCommandView['host'], value: unknown): Promise<void> => {
+    const result = (value ?? {}) as Record<string, unknown>
+    switch (host) {
+      case 'browser.openUrl':
+      case 'browser.search':
+        switchToWorkbench('agent')
+        setAgentPane('browser')
+        return
+      case 'chat.ask':
+        if (typeof result.text === 'string') await startContextChat(result.text, activeLauncherContext())
+        return
+      case 'capture.screen':
+      case 'capture.area':
+        await refreshHome()
+        setView('home')
+        notify('Capture saved to ND Home.')
+        return
+      case 'note.create':
+      case 'clipboard.read':
+        await refreshHome()
+        notify(`Saved “${String(result.title ?? 'note')}”.`)
+        return
+      case 'os.openTarget':
+        if (result.opened) notify(`Opened ${String(result.path)}`)
+        return
+      case 'os.wallpaper.chooseAndSet':
+        if (result.changed) notify('Desktop wallpaper updated.')
+        return
+      case 'browser.openExternal':
+        notify('Opened in your system browser.')
+        return
+      case 'capture.copy':
+        notify('Capture copied to the clipboard.')
+        return
+      case 'capture.export':
+        if (result.exported) notify(`Exported to ${String(result.path)}`)
+        return
+      default:
+        return
+    }
+  }
+
+  const handleInvocationFailure = (result: NdInvocationResult): boolean => {
+    if (result.ok) return false
+    if (result.error?.code === 'approval-required') {
+      notify('This needs your approval — check Settings → Extensions.')
+      return true
+    }
+    notify(result.error?.message ?? 'The action could not run.')
+    return true
+  }
+
+  const runExtensionCommand = async (command: NdCommandView, text = ''): Promise<void> => {
+    const context = activeLauncherContext()
+    const plan = commandRunPlan(command, text)
+    if (plan.missing) {
+      notify(plan.missing)
+      return
+    }
+    if (command.host === 'capture.area') {
+      await openLocalAreaCapture()
+      return
+    }
+    try {
+      const result = await invokeDailyEssentials(command.contributionId, 'command', context, plan.input)
+      if (handleInvocationFailure(result)) return
+      await applyHostEffect(command.host, result.value)
+    } catch (cause) {
+      notify(errorMessage(cause))
+    }
+  }
+
+  const homeCaptureScreen = async (): Promise<void> => {
+    setHomeBusy(true)
+    try {
+      const result = await invokeDailyEssentials('capture-screen', 'command', { kind: 'personal' }, {})
+      if (handleInvocationFailure(result)) return
+      await refreshHome()
+      setView('home')
+      notify('Capture saved to ND Home.')
+    } catch (cause) {
+      notify(errorMessage(cause))
+    } finally {
+      setHomeBusy(false)
+    }
+  }
+
+  const openLocalAreaCapture = async (): Promise<void> => {
+    setLocalCaptureIntent(true)
+    await openCaptureOverlay('area')
+  }
+
+  const homeCaptureArea = async (rect?: AppInspectArea): Promise<void> => {
+    setHomeBusy(true)
+    try {
+      const result = rect
+        ? await invokeDailyEssentials('capture-area', 'command', { kind: 'personal' }, { rect })
+        : { ok: false as const, error: { code: 'cancelled' as const, message: 'Area capture was cancelled.' } }
+      if (handleInvocationFailure(result)) return
+      await refreshHome()
+      setView('home')
+      notify('Area capture saved to ND Home.')
+    } catch (cause) {
+      notify(errorMessage(cause))
+    } finally {
+      setHomeBusy(false)
+    }
+  }
+
+  const runHomeCaptureAction = async (actionId: string, captureId: string): Promise<void> => {
+    try {
+      const result = await invokeDailyEssentials('captures', 'view', { kind: 'personal' }, { action: actionId, captureId })
+      if (handleInvocationFailure(result)) return
+      await applyHostEffect(actionId === 'capture-export' ? 'capture.export' : 'capture.copy', result.value)
+    } catch (cause) {
+      notify(errorMessage(cause))
+    }
+  }
+
+  const askWithCapture = async (capture: NdCaptureResultView, prompt: string): Promise<void> => {
+    setHomeBusy(true)
+    try {
+      await window.ndDsh.harness.run(prompt, {
+        image: { data: capture.data, mediaType: 'image/png', name: `${capture.captureId}.png` },
+      })
+      switchToWorkbench('agent')
+    } catch (cause) {
+      notify(errorMessage(cause))
+    } finally {
+      setHomeBusy(false)
+    }
+  }
+
+  // Handoffs arrive from the launcher popup surface (a separate sandboxed
+  // renderer) after main brings this window forward. The ref keeps the
+  // subscription stable while the handler always sees the latest closures.
+  useEffect(() => {
+    launcherHandoffRef.current = (target, text, incomingContext) => {
+      const context = incomingContext ?? activeLauncherContext()
+      switch (target) {
+        case 'launcher':
+          setQuickLauncherOpen(true)
+          return
+        case 'home':
+          setView('home')
+          return
+        case 'kanban':
+          setCompanyView('workspace')
+          switchToWorkbench('company')
+          return
+        case 'browser':
+          switchToWorkbench('agent')
+          setAgentPane('browser')
+          if (text) void window.ndDsh.browser.navigate(text).catch((cause) => notify(errorMessage(cause)))
+          return
+        case 'agent':
+          if (text && context.kind === 'personal') void startContextChat(text, context)
+          else {
+            switchToWorkbench('agent')
+            if (text) askAgent(text)
+          }
+          return
+        case 'capture-screen':
+          if (context.kind === 'personal') void homeCaptureScreen()
+          else void startAppInspect('full', undefined, 'external')
+          return
+        case 'capture-tools':
+          if (context.kind === 'personal') {
+            void openLocalAreaCapture()
+            return
+          }
+          setInspectScope('external')
+          void window.ndDsh.window?.setFloatMode(true)
+          return
+        case 'capture-clipboard':
+          void captureClipboardToNote(context)
+          return
+      }
+    }
+  })
+
+  const allNavItems: Array<{ id: ProductView; label: string; icon: ReactNode }> = [
+    { id: 'home', label: 'Home', icon: <HomeIcon /> },
     { id: 'company', label: 'Company', icon: <CompanyIcon /> },
     { id: 'agent', label: 'Agent', icon: <SparkIcon /> },
     { id: 'design', label: 'Design', icon: <PencilIcon /> },
     { id: 'qa', label: 'QA', icon: <QualityIcon /> },
     { id: 'settings', label: 'Settings', icon: <SettingsIcon /> },
   ]
+  const navItems = workspaceProfile === 'coding'
+    ? allNavItems
+    : allNavItems.filter((item) => item.id !== 'qa')
 
   if (inspectScope === 'external') {
     return (
@@ -788,9 +1239,17 @@ export default function App() {
             initialMode={captureOverlay.mode}
             scope={inspectScope}
             onCapture={async ({ mode, rect }) => {
+              if (localCaptureIntent) {
+                setLocalCaptureIntent(false)
+                await homeCaptureArea(rect)
+                return
+              }
               await startAppInspect(mode === 'area' ? 'area' : 'annotate', rect)
             }}
-            onClose={closeCaptureOverlay}
+            onClose={() => {
+              setLocalCaptureIntent(false)
+              void closeCaptureOverlay()
+            }}
           />
         ) : null}
         <Toaster position="bottom-right" duration={5000} />
@@ -819,38 +1278,64 @@ export default function App() {
             <span className="grid size-6 shrink-0 place-items-center rounded-[7px] border border-primary/30 bg-primary/10 text-sm font-extrabold tracking-[0.08em] text-primary">ND</span>
             <div
               role="group"
-              aria-label="Coding surface"
+              aria-label="Workspace profile"
               className="app-no-drag flex h-7 shrink-0 items-center rounded-lg border border-border-soft bg-inset p-[2px] shadow-[inset_0_1px_2px_rgba(0,0,0,0.18)]"
             >
-              <button
-                type="button"
-                aria-pressed={surface === 'workbench'}
-                className={cn(
-                  'grid h-[22px] min-w-[32px] place-items-center rounded-md border px-1.5 text-[9px] font-extrabold tracking-[0.08em] transition-[color,background-color,border-color,box-shadow]',
-                  surface === 'workbench'
-                    ? 'border-primary/25 bg-primary/12 text-primary shadow-[0_1px_3px_rgba(0,0,0,0.2)]'
-                    : 'border-transparent text-faint hover:bg-accent hover:text-foreground',
-                )}
-                title="Use the ND coding workbench"
-                onClick={() => selectSurface('workbench')}
-              >
-                ND
-              </button>
-              <button
-                type="button"
-                aria-pressed={surface === 'dsh'}
-                className={cn(
-                  'grid h-[22px] min-w-[36px] place-items-center rounded-md border px-1.5 text-[9px] font-extrabold tracking-[0.08em] transition-[color,background-color,border-color,box-shadow]',
-                  surface === 'dsh'
-                    ? 'border-primary/25 bg-primary/12 text-primary shadow-[0_1px_3px_rgba(0,0,0,0.2)]'
-                    : 'border-transparent text-faint hover:bg-accent hover:text-foreground',
-                )}
-                title="Use the DSH coding surface"
-                onClick={() => selectSurface('dsh')}
-              >
-                DSH
-              </button>
+              {(['general', 'coding'] as const).map((profile) => (
+                <button
+                  key={profile}
+                  type="button"
+                  aria-pressed={workspaceProfile === profile}
+                  disabled={workspaceProfile === null || workspaceProfilePending}
+                  className={cn(
+                    'grid h-[22px] min-w-[52px] place-items-center rounded-md border px-2 text-[9px] font-extrabold tracking-[0.06em] transition-[color,background-color,border-color,box-shadow] disabled:cursor-not-allowed disabled:opacity-50',
+                    workspaceProfile === profile
+                      ? 'border-primary/25 bg-primary/12 text-primary shadow-[0_1px_3px_rgba(0,0,0,0.2)]'
+                      : 'border-transparent text-faint hover:bg-accent hover:text-foreground',
+                  )}
+                  title={profile === 'general' ? 'General workspace for everyday AI work and extensions' : 'Coding workspace with developer tools and coding surfaces'}
+                  onClick={() => selectWorkspaceProfile(profile)}
+                >
+                  {profile === 'general' ? 'GENERAL' : 'CODING'}
+                </button>
+              ))}
             </div>
+            {workspaceProfile === 'coding' ? (
+              <div
+                role="group"
+                aria-label="Coding surface"
+                className="app-no-drag flex h-7 shrink-0 items-center rounded-lg border border-border-soft bg-inset p-[2px] shadow-[inset_0_1px_2px_rgba(0,0,0,0.18)]"
+              >
+                <button
+                  type="button"
+                  aria-pressed={surface === 'workbench'}
+                  className={cn(
+                    'grid h-[22px] min-w-[32px] place-items-center rounded-md border px-1.5 text-[9px] font-extrabold tracking-[0.08em] transition-[color,background-color,border-color,box-shadow]',
+                    surface === 'workbench'
+                      ? 'border-primary/25 bg-primary/12 text-primary shadow-[0_1px_3px_rgba(0,0,0,0.2)]'
+                      : 'border-transparent text-faint hover:bg-accent hover:text-foreground',
+                  )}
+                  title="Use the ND coding workbench"
+                  onClick={() => selectSurface('workbench')}
+                >
+                  ND
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={surface === 'dsh'}
+                  className={cn(
+                    'grid h-[22px] min-w-[36px] place-items-center rounded-md border px-1.5 text-[9px] font-extrabold tracking-[0.08em] transition-[color,background-color,border-color,box-shadow]',
+                    surface === 'dsh'
+                      ? 'border-primary/25 bg-primary/12 text-primary shadow-[0_1px_3px_rgba(0,0,0,0.2)]'
+                      : 'border-transparent text-faint hover:bg-accent hover:text-foreground',
+                  )}
+                  title="Use the DSH coding surface"
+                  onClick={() => selectSurface('dsh')}
+                >
+                  DSH
+                </button>
+              </div>
+            ) : null}
             <div className="flex min-w-0 flex-col">
               <strong className="text-[15px] tracking-[0.06em] text-strong">ND-DSH</strong>
               <span className="overflow-hidden text-xs text-faint text-ellipsis whitespace-nowrap">
@@ -1025,7 +1510,7 @@ export default function App() {
       </header>
 
       <main className="relative min-h-0 min-w-0 overflow-hidden bg-surface-0">
-        {surface === 'dsh' ? (
+        {workspaceProfile === 'coding' && surface === 'dsh' ? (
           <SurfaceErrorBoundary label="ND Harness" resetKey={surface} onError={notify}>
             <DshCodingSurface active inspectOverlayVisible={inspectOverlayVisible} state={dshView} onNotify={notify} />
           </SurfaceErrorBoundary>
@@ -1069,6 +1554,29 @@ export default function App() {
               <div className="h-full w-px bg-border-strong" />
             </Separator>
             <Panel className="relative min-h-0 min-w-0 overflow-hidden bg-surface-0" minSize={WORKSPACE_MIN_PX}>
+              <section aria-hidden={view !== 'home'} className={cn('absolute inset-0 overflow-hidden', view === 'home' ? 'block' : 'hidden')}>
+                <SurfaceErrorBoundary label="Home" resetKey={`home:${homeState?.notes.length ?? 0}`} onError={notify}>
+                  {homeState ? (
+                    <HomeView
+                      state={homeState}
+                      busy={homeBusy}
+                      onError={notify}
+                      onChanged={refreshHome}
+                      onCaptureScreen={homeCaptureScreen}
+                      onCaptureArea={openLocalAreaCapture}
+                      onCopyCapture={(captureId) => runHomeCaptureAction('capture-copy', captureId)}
+                      onExportCapture={(captureId) => runHomeCaptureAction('capture-export', captureId)}
+                      onAskWithCapture={askWithCapture}
+                      onOpenChat={(sessionId) => {
+                        switchToWorkbench('agent')
+                        void sessionId
+                      }}
+                      onStartChat={(prompt) => startContextChat(prompt?.trim() || 'Hello ND — this is my personal space.', { kind: 'personal' })}
+                    />
+                  ) : null}
+                </SurfaceErrorBoundary>
+              </section>
+
               <section aria-hidden={view !== 'company'} className={cn('absolute inset-0 overflow-hidden', view === 'company' ? 'block' : 'hidden')}>
                 <SurfaceErrorBoundary label="Company" resetKey={`${companyView}:${company?.id ?? ''}:${project?.id ?? ''}`} onError={notify}>
                   <OrganizationDashboard workspace={workspace} onOpenDeepSeek={() => switchToWorkbench('agent')} onAskAgent={askAgent} onError={notify} companyView={companyView} onCompanyViewChange={setCompanyView} />
@@ -1207,6 +1715,17 @@ export default function App() {
                   onSelectSubTab={(subTab) => setSettingsSubTabs((current) => ({ ...current, general: subTab }))}
                   capabilitySubTab={settingsSubTabs.capabilities}
                   onSelectCapabilitySubTab={(subTab) => setSettingsSubTabs((current) => ({ ...current, capabilities: subTab }))}
+                  extensionsExtra={ndExtensions ? (
+                    <ExtensionPackagesCard
+                      state={ndExtensions}
+                      organization={orgState}
+                      contexts={extensionContextOptions}
+                      onError={notify}
+                      onChanged={async () => {
+                        setNdExtensions(await window.ndDsh.ndExtensions.state())
+                      }}
+                    />
+                  ) : null}
                 />
               </SurfaceErrorBoundary>
             </Suspense>
@@ -1216,6 +1735,41 @@ export default function App() {
     )}
       </main>
 
+      {!isFloatOverlay ? (
+        <QuickLauncher
+          open={quickLauncherOpen}
+          onOpenChange={setQuickLauncherOpen}
+          organization={orgState}
+          currentUrl={browserState?.url}
+          onOpenKanban={() => {
+            setCompanyView('workspace')
+            switchToWorkbench('company')
+          }}
+          onOpenAgent={() => switchToWorkbench('agent')}
+          onActivateProject={launcherActivateProject}
+          onSwitchCompany={launcherSwitchCompany}
+          onCreateTask={launcherCreateTask}
+          contexts={extensionContextOptions}
+          activeContextId={launcherContextId}
+          contextLabel={describeContextForUi(activeLauncherContext(), orgState)}
+          onSelectContext={setLauncherContextId}
+          extensionCommands={extensionCommands}
+          onRunExtensionCommand={(command, text) => runExtensionCommand(command, text)}
+          onQuickNote={launcherQuickNote}
+          onAskAgent={(text) => {
+            const context = activeLauncherContext()
+            if (context.kind === 'personal') void startContextChat(text, context)
+            else askAgent(text)
+          }}
+          onCaptureScreen={() => startAppInspect('full', undefined, 'external').then(() => undefined)}
+          onOpenCaptureTools={() => {
+            setInspectScope('external')
+            return window.ndDsh.window?.setFloatMode(true).then(() => undefined)
+          }}
+          onCaptureClipboard={() => captureClipboardToNote()}
+          onCaptureUrl={(url) => launcherQuickNote(url, ['capture', 'url'])}
+        />
+      ) : null}
       <RuntimePrompts onError={notify} />
       {pendingPick ? (
         <div role="dialog" aria-label="Picked element" className="fixed right-4 bottom-[46px] z-[150] flex w-[300px] flex-col gap-2 rounded-[10px] border border-border-strong bg-surface-1 p-3 shadow-[0_14px_40px_rgba(0,0,0,0.5)]">
@@ -1349,9 +1903,17 @@ export default function App() {
           initialMode={captureOverlay.mode}
           scope={inspectScope}
           onCapture={async ({ mode, rect }) => {
+            if (localCaptureIntent) {
+              setLocalCaptureIntent(false)
+              await homeCaptureArea(rect)
+              return
+            }
             startAppInspect(mode === 'area' ? 'area' : 'annotate', rect)
           }}
-          onClose={closeCaptureOverlay}
+          onClose={() => {
+            setLocalCaptureIntent(false)
+            void closeCaptureOverlay()
+          }}
         />
       ) : null}
       <Toaster position="bottom-right" duration={5000} />

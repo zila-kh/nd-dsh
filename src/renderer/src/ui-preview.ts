@@ -33,6 +33,7 @@ import {
 import type { DesignDesktopApi, DesignFreeformState, DesignProjectState } from '../../shared/design'
 import type { OrganizationDesktopApi, OrganizationMutation, OrganizationSnapshot } from '../../shared/organization'
 import type { WorkflowPluginsDesktopApi } from '../../shared/workflow-plugins'
+import type { WorkspaceProfile } from '../../shared/workspace-profile'
 
 type Listener<T> = (value: T) => void
 
@@ -197,6 +198,7 @@ let browserPlatform: BrowserPlatformState = {
 }
 
 let theme: ThemeState = { mode: 'system', effective: matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark' }
+let workspaceProfile: WorkspaceProfile = 'general'
 
 let providers: ModelProvider[] = [
   { id: 'openai-prod', name: 'OpenAI', enabled: true, baseUrl: 'https://api.openai.com/v1', apiFormat: 'openai-responses', apiKey: '', hasApiKey: true, models: [{ id: 'gpt-5.6', context: '256k' }] },
@@ -583,9 +585,57 @@ const desktopApi: DesktopApi = {
     openExternal: async (url) => { window.open(url, '_blank', 'noopener,noreferrer') },
     onState: browserEvents.on,
   },
+  ndExtensions: {
+    state: async () => ({ packages: [], activations: [], grants: [], audit: [], pendingApprovals: [] }),
+    installLocal: async () => null,
+    installFromPath: async () => previewExtensionsState(),
+    update: async () => previewExtensionsState(),
+    rollback: async () => previewExtensionsState(),
+    uninstall: async () => previewExtensionsState(),
+    setActivation: async () => previewExtensionsState(),
+    setSetting: async () => previewExtensionsState(),
+    revokeGrant: async () => previewExtensionsState(),
+    commands: async () => [],
+    invoke: async () => ({ ok: false, error: { code: 'unavailable' as const, message: 'Extension actions are unavailable in preview mode.' } }),
+    loadView: async (extensionId, viewId, context) => ({ extensionId, viewId, title: 'Preview view', kind: 'list' as const, context, rows: [], actions: [] }),
+    approve: async () => ({ ok: false, error: { code: 'unavailable' as const, message: 'Extension actions are unavailable in preview mode.' } }),
+    deny: async () => undefined,
+    onChanged: () => () => undefined,
+  },
+  home: {
+    state: async () => previewHomeState(),
+    createNote: async () => previewHomeState(),
+    updateNote: async () => previewHomeState(),
+    deleteNote: async () => previewHomeState(),
+    searchNotes: async () => [],
+    captureScreen: async () => ({ captureId: 'preview-capture', width: 0, height: 0, displayLabel: '0×0', data: '' }),
+    captureArea: async () => null,
+    readCapture: async () => null,
+    deleteCapture: async () => previewHomeState(),
+    attachCapture: async () => previewHomeState(),
+    ensureChat: async (context) => ({
+      chatId: 'preview-chat',
+      title: 'Personal chat',
+      context,
+      workDir: '/preview/nd-home/chats/preview-chat/work',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }),
+    bindChat: async (chatId, sessionId) => ({
+      chatId,
+      sessionId,
+      title: 'Personal chat',
+      context: { kind: 'personal' as const },
+      workDir: `/preview/nd-home/chats/${chatId}/work`,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }),
+    setChatTitle: async () => previewHomeState(),
+    revealStorage: async () => undefined,
+    onChanged: () => () => undefined,
+  },
   browserCompanion: {
-    state: async () => browserCompanion,
-    acquireLease: async (connectionId, tabId, ownerId, scope) => {
+    state: async () => browserCompanion,    acquireLease: async (connectionId, tabId, ownerId, scope) => {
       const lease: BrowserTabLease = { id: `preview-lease-${tabId}`, connectionId, tabId, ownerId, ...(scope ? { scope } : {}), acquiredAt: Date.now() }
       browserCompanion = { ...browserCompanion, leases: [...browserCompanion.leases, lease] }
       browserCompanionEvents.emit(browserCompanion)
@@ -742,6 +792,10 @@ const desktopApi: DesktopApi = {
     state: async () => ({ surface: 'workbench', view: { ready: false, loading: false, title: 'UI preview', visible: false } }),
     set: async (surface) => ({ surface, view: { ready: false, loading: false, title: 'UI preview', visible: false } }),
     onChanged: () => () => undefined,
+  },
+  workspaceProfile: {
+    get: async () => workspaceProfile,
+    set: async (profile) => { workspaceProfile = profile; return workspaceProfile },
   },
   dshView: {
     setBounds: async () => undefined,
@@ -912,4 +966,17 @@ function mutateOrganization(mutation: OrganizationMutation): OrganizationSnapsho
   else if (mutation.type === 'policy.set') organization = { ...organization, policies: [...organization.policies.filter((item) => item.companyId !== mutation.companyId || item.action !== mutation.action), { id, companyId: mutation.companyId, action: mutation.action, effect: mutation.effect, description: mutation.description ?? '' }] }
   organizationEvents.emit(organization)
   return organization
+}
+
+function previewExtensionsState() {
+  return { packages: [], activations: [], grants: [], audit: [], pendingApprovals: [] }
+}
+
+function previewHomeState() {
+  return {
+    storageRoot: '/preview/nd-home',
+    notes: [],
+    captures: [],
+    chats: [],
+  }
 }

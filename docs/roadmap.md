@@ -1,6 +1,6 @@
 # ND-DSH roadmap
 
-This roadmap is ordered by release risk. ND-DSH is coding-first; broader business-company templates come after the software-company loop is reliable.
+This roadmap is ordered by release risk. ND is evolving into a local-first extensible AI work desktop: **General** is the broad everyday workspace, **Coding** is a specialization, and the existing company/software-delivery loop remains a first-class capability rather than the product boundary.
 
 ## Shipped foundation
 
@@ -223,6 +223,28 @@ This section is superseded and expanded by PRD 0005.
 - Per-origin privacy controls, trusted tab leases, normalized actions and company policy.
 
 Success criterion: a software team can implement, debug, visually verify, review, and ship a normal application change without leaving ND-DSH, while agents can use either the built-in browser or an explicitly connected real-Chrome profile through the same governed browser capability.
+
+## P1 — ND Extensions and Personal Home
+
+- PRD: [0006-nd-extensions-and-personal-home.md](prd/0006-nd-extensions-and-personal-home.md) — **implemented locally 2026-09-27**; automated layers green, operator manual gate and the agent-side MCP bridge remain (see [the QA gate](qa/nd-extensions-home-manual.md)). Global native extension packages (tools, skills, commands, views, workflows) with explicit personal/company/project contexts, one trusted invocation broker with context-bound grants, and ND Home personal notes/captures/chat that work before any company or project exists.
+- Task set 0035–0043: [0035](tasks/0035-extension-context-and-scope-contracts.md) → [0036](tasks/0036-extension-invocation-and-permissions.md) → [0037](tasks/0037-nd-home-personal-storage-and-chat.md) / [0038](tasks/0038-extension-packages-and-lifecycle.md) → [0039](tasks/0039-extension-launcher-and-native-views.md) → [0040](tasks/0040-daily-essentials-extension.md) / [0041](tasks/0041-project-workflow-extension-pilot.md) → [0042](tasks/0042-extension-sdk-and-authoring-guide.md) → [0043](tasks/0043-extension-home-validation-and-release.md) — implemented locally (unit/integration/E2E recorded); the operator manual pass is pending.
+- Proving packages: Daily Essentials (personal daily commands) and Project Workflow (project-scoped, existing read-only Mirror semantics preserved).
+- Global installation is availability, not data access: every invocation carries exactly one authorized context. Marketplace publishing, arbitrary extension panels, and an OS sandbox for external MCP executables stay out of v1.
+
+## P1 — General and Coding workspace profiles
+
+- PRD: [0007-general-and-coding-workspaces.md](prd/0007-general-and-coding-workspaces.md).
+- Task: [0044-general-coding-workspace-profile.md](tasks/0044-general-coding-workspace-profile.md) — first vertical slice on `feat/general-coding-workspace-profile`.
+- **General / Coding is presentation and authoring scope, not execution state.** Switching profiles never pauses companies, tasks, agents, schedules, or extension activity.
+- ND Extensions are shared by both profiles. Future OS integrations must extend the existing permission broker rather than grant arbitrary Electron/Node/shell authority.
+
+## P1 — Command registry and governed native extensions
+
+- PRD: [0008-command-registry-native-extensions.md](prd/0008-command-registry-native-extensions.md).
+- Task: [0045-command-registry-native-wallpaper.md](tasks/0045-command-registry-native-wallpaper.md) — first ActionSource-style registry and native capability proof.
+- Core/context/capture/extension/project/company commands feed one ND-owned registry used by both launcher surfaces.
+- Wallpaper Manager proves a user-facing native extension without arbitrary plugin authority: Personal-only `os.wallpaper.write`, an ND-owned picker, fixed no-shell OS adapters, and broker/audit/approval enforcement.
+- Future widgets/window/process/desktop capabilities extend this registry + permission broker rather than creating a second unrestricted plugin runtime.
 
 ## P1 — ND Skills and MCP control plane
 

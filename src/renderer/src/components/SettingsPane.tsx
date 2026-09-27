@@ -6,6 +6,7 @@ import { MonitorIcon, MoonIcon, SunIcon } from './Icons'
 import { BridgePill } from './bridge-pill'
 import { CapabilitySettings } from './CapabilitySettings'
 import { EngineSettings } from './EngineSettings'
+import { QuickLauncherShortcutSettings } from './QuickLauncherShortcutSettings'
 import { ExtensionSettings } from './ExtensionSettings'
 import { ModelSettings } from './ModelSettings'
 import { PresetSettings } from './PresetSettings'
@@ -44,6 +45,8 @@ interface SettingsPaneProps {
   onSelectSubTab?: (subTab: GeneralSubTab) => void
   capabilitySubTab?: CapabilitySubTab
   onSelectCapabilitySubTab?: (subTab: CapabilitySubTab) => void
+  /** ND extension packages management, rendered above the agent-capability catalog. */
+  extensionsExtra?: React.ReactNode
 }
 
 const TABS: { id: SettingsTab; label: string }[] = [
@@ -51,7 +54,7 @@ const TABS: { id: SettingsTab; label: string }[] = [
   { id: 'appearance', label: 'Appearance' },
   { id: 'models', label: 'Models' },
   { id: 'capabilities', label: 'Capabilities' },
-  { id: 'extensions', label: 'Plugins' },
+  { id: 'extensions', label: 'Extensions' },
   { id: 'engines', label: 'Coding engines' },
   { id: 'presets', label: 'Agent presets' },
 ]
@@ -84,6 +87,7 @@ export function SettingsPane({
   onSelectSubTab,
   capabilitySubTab,
   onSelectCapabilitySubTab,
+  extensionsExtra,
 }: SettingsPaneProps) {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null)
   const [pathDraft, setPathDraft] = useState('')
@@ -242,7 +246,10 @@ export function SettingsPane({
             {...(onSelectCapabilitySubTab !== undefined ? { onSelectSubTab: onSelectCapabilitySubTab } : {})}
           />
         ) : tab === 'extensions' ? (
-          <ExtensionSettings onError={onError} />
+          <div className="min-h-0 overflow-auto px-[26px] pb-[42px] pt-1.5">
+            {extensionsExtra ? <div className="mb-6 mt-3">{extensionsExtra}</div> : null}
+            <ExtensionSettings onError={onError} />
+          </div>
         ) : tab === 'engines' ? (
           <EngineSettings onError={onError} />
         ) : tab === 'presets' ? (
@@ -376,6 +383,8 @@ export function SettingsPane({
                         ) : null}
                       </div>
                     </SettingsSection>
+
+                    <QuickLauncherShortcutSettings onError={onError} />
 
                     <SettingsSection title="Product architecture">
                       <div className="space-y-1.5">

@@ -62,6 +62,10 @@ export class HarnessService {
   private onEvent?: (frame: DshEventFrame) => void
   private onGatewayReady?: (url: string) => void
   private readonly eventHub: SessionEventHub
+  /** Durable runtime sessions keep their own cwd even when the selected project changes. */
+  private readonly sessionCwdById = new Map<string, string>()
+  private extraVisibleSessionIds: (() => ReadonlySet<string>) | undefined
+  private sessionCwdGuard: ((cwd: string) => boolean) | undefined
 
   constructor(
     private readonly workspace: WorkspaceService,
@@ -97,6 +101,16 @@ export class HarnessService {
     await this.eventHub.rehydrate()
   }
 
+  /** ND Home personal chats stay listed even though their cwd is ND-managed storage. */
+  setExtraVisibleSessionIds(provider: (() => ReadonlySet<string>) | undefined): void {
+    this.extraVisibleSessionIds = provider
+  }
+
+  /** Admit exact auxiliary roots ND owns, such as organization task worktrees. */
+  setSessionCwdGuard(guard: ((cwd: string) => boolean) | undefined): void {
+    this.sessionCwdGuard = guard
+  }
+
   /** Consume the user's cancellation intent for one session exactly once. */
   consumeCanceledSession(sessionId: string): boolean {
     return this.canceledSessions.delete(sessionId)
@@ -118,7 +132,10 @@ export class HarnessService {
     // effect on the next prompt/session. Durable Harness sessions survive the
     // transparent runtime restart.
     const gateway = await this.ensureStarted(true)
-    const sessionId = options?.sessionId?.trim() || this.activeSessionId || await this.createSession()
+    const sessionId = options?.sessionId?.trim() || this.activeSessionId || await this.createSession(options?.workspaceCwd)
+    const requestedCwd = options?.workspaceCwd?.trim()
+    if (requestedCwd) this.bindSessionCwd(sessionId, requestedCwd)
+    const sessionCwd = requestedCwd ?? this.sessionCwdById.get(sessionId) ?? this.workspace.state().root
     this.activeSessionId = sessionId
     this.canceledSessions.delete(sessionId)
     // Adopt the session's live journal before admitting the turn, so every
@@ -153,7 +170,7 @@ export class HarnessService {
     // Each staged pick may carry a cropped element screenshot; both the text
     // context block and those images join the turn's content.
     const stagedElements = this.externalElements.consumeAll()
-    const workspacePrompt = appendWorkspaceContext(cleaned, this.workspace.state())
+    const workspacePrompt = appendWorkspaceContext(cleaned, this.workspace.state(), sessionCwd)
     const browserPrompt = selectedUiTarget || selectedAnnotation
       ? attachUiContext(workspacePrompt, selectedUiTarget, selectedAnnotation)
       : workspacePrompt
@@ -206,13 +223,15 @@ export class HarnessService {
   }
 
   /** Create a session on the workspace root (the deployment default preset applies). */
-  async createSession(): Promise<string> {
+  async createSession(cwd?: string): Promise<string> {
     this.workspace.assertUsable()
     const gateway = await this.ensureStarted(true)
-    const { result } = await this.rpcWithRecovery(gateway, 'session.create', { cwd: this.workspace.state().root })
+    const target = cwd?.trim() || this.workspace.state().root
+    const { result } = await this.rpcWithRecovery(gateway, 'session.create', { cwd: target })
     if (!result.ok) throw new Error(rpcFailureMessage('session.create', result))
     const sessionId = (result.value as { sessionId?: unknown } | undefined)?.sessionId
     if (typeof sessionId !== 'string') throw new Error('session.create returned no session id')
+    this.adoptSessionCwd(sessionId, target)
     this.activeSessionId = sessionId
     this.updateStatus(this.statusValue.state === 'running' ? 'running' : 'ready')
     return sessionId
@@ -255,6 +274,13 @@ export class HarnessService {
       }
     }
     const { result } = await this.rpcWithRecovery(started, method, payload)
+    if (method === 'session.create' && result.ok) {
+      const sessionId = (result.value as { sessionId?: unknown } | undefined)?.sessionId
+      const requestedCwd = (payload as { cwd?: unknown } | undefined)?.cwd
+      if (typeof sessionId === 'string') {
+        this.adoptSessionCwd(sessionId, typeof requestedCwd === 'string' && requestedCwd.trim() ? requestedCwd : this.workspace.state().root)
+      }
+    }
     if (method === 'session.history') return sanitizeHistoryResult(result)
     if (method === 'session.list') return this.annotateArchivedSessions(result)
     if (method === 'session.models' && result.ok && result.value && typeof result.value === 'object') {
@@ -277,9 +303,45 @@ export class HarnessService {
    */
   private async annotateArchivedSessions(result: GatewayRpcResult): Promise<GatewayRpcResult> {
     if (!result.ok) return result
+    this.adoptListedSessionCwds(result.value)
     const archivedIds = await this.sessionArchive.archivedIds()
     const workspaceRoot = this.workspace.state().root
-    return { ...result, value: scopeSessionListPayload(result.value, workspaceRoot, archivedIds, this.runningSessions) }
+    const extraVisibleIds = this.extraVisibleSessionIds?.()
+    return {
+      ...result,
+      value: scopeSessionListPayload(
+        result.value,
+        workspaceRoot,
+        archivedIds,
+        this.runningSessions,
+        extraVisibleIds,
+        this.sessionCwdGuard,
+      ),
+    }
+  }
+
+  private bindSessionCwd(sessionId: string, cwd: string): void {
+    const existing = this.sessionCwdById.get(sessionId)
+    if (existing && !sameSessionCwd(existing, cwd)) {
+      throw new Error('Harness session changed its ND-bound workspace; create a new session instead of re-rooting this one')
+    }
+    this.adoptSessionCwd(sessionId, cwd)
+  }
+
+  private adoptSessionCwd(sessionId: string, cwd: string): void {
+    const cleaned = cwd.trim()
+    if (sessionId && cleaned) this.sessionCwdById.set(sessionId, cleaned)
+  }
+
+  private adoptListedSessionCwds(value: unknown): void {
+    const items = (value as { items?: unknown } | undefined)?.items
+    if (!Array.isArray(items)) return
+    for (const item of items) {
+      if (!item || typeof item !== 'object') continue
+      const sessionId = (item as { sessionId?: unknown }).sessionId
+      const cwd = (item as { cwd?: unknown }).cwd
+      if (typeof sessionId === 'string' && typeof cwd === 'string') this.adoptSessionCwd(sessionId, cwd)
+    }
   }
 
   /** Boot the runtime eagerly. */
@@ -718,6 +780,14 @@ export class HarnessService {
     this.statusValue = this.computeStatus(state, error)
     this.onStatusChanged?.(this.status())
   }
+}
+
+function sameSessionCwd(left: string, right: string): boolean {
+  const normalize = (value: string): string => {
+    const normalized = value.trim().replaceAll('\\', '/').replace(/\/+$/, '')
+    return process.platform === 'win32' || /^[a-z]:\//i.test(normalized) ? normalized.toLowerCase() : normalized
+  }
+  return normalize(left) === normalize(right)
 }
 
 function providerRequiresCredential(provider: { baseUrl: string } | undefined): boolean {
