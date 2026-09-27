@@ -95,7 +95,7 @@ export class ExtensionPackageStore {
     if (permissionIssues.length > 0) {
       throw new Error(`Invalid built-in extension package: ${permissionIssues.map((issue) => issue.message).join('; ')}`)
     }
-    const existing = this.value.packages.find((item) => item.normalized.id === normalized.id)
+    const existing = this.value.packages.find((item) => item.manifest.id === normalized.id)
     const snapshotDir = this.snapshotDir(normalized.id, normalized.version)
     await fs.mkdir(snapshotDir, { recursive: true })
     await fs.writeFile(
@@ -104,7 +104,7 @@ export class ExtensionPackageStore {
       'utf8',
     )
     if (existing) {
-      const previousVersion = existing.normalized.version === normalized.version ? existing.previousVersion : existing.normalized.version
+      const previousVersion = existing.manifest.version === normalized.version ? existing.previousVersion : existing.manifest.version
       existing.manifest = normalized
       existing.source = { kind: 'builtin', location: 'nd' }
       existing.updatedAt = Date.now()
