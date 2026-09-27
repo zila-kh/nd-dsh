@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
@@ -73,6 +74,7 @@ const requiredSkips = [
 const allExecutedPassed = results.filter((row) => row.status !== 'not-run').every((row) => row.status === 'pass')
 const releaseCompleteAutomated = allExecutedPassed && requiredSkips.length === 0 && results.every((row) => row.status === 'pass')
 
+const artifact = resolvePackagedArtifact()
 const report = {
   schemaVersion: 1,
   kind: 'nd-beta-automated-release-evidence',
@@ -81,6 +83,7 @@ const report = {
     version: packageJson.version,
     commit,
     branch,
+    artifact,
   },
   environment: {
     platform: process.platform,
@@ -120,6 +123,21 @@ console.log(`\nReceipt: ${reportPath}`)
 console.log(`Automated release status: ${report.status.toUpperCase()}`)
 
 process.exitCode = releaseCompleteAutomated ? 0 : 1
+
+function resolvePackagedArtifact() {
+  if (process.platform !== 'win32' || skipPackage) return null
+  const dist = join(root, 'dist')
+  if (!existsSync(dist)) return null
+  const name = readdirSync(dist).find((entry) => /^ND-DSH-.+-private-beta-.+\.exe$/i.test(entry))
+  if (!name) return null
+  const path = join(dist, name)
+  const sha256 = createHash('sha256').update(readFileSync(path)).digest('hex')
+  return {
+    file: name,
+    sha256,
+    identity: `${name}#sha256:${sha256}`,
+  }
+}
 
 function stage(layer, name, script) {
   return { layer, name, script }
