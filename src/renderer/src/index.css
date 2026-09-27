@@ -547,7 +547,16 @@ body.float-mode,
 
 /* Launcher popup window (#/launcher): the frameless transparent window shows
    only the quick launcher card floating over the user's current app, so the
-   modal backdrop is dropped and the card cannot exceed the window bounds. */
+   page background is dropped entirely (mirroring float-mode) and the modal
+   backdrop is removed. */
+html.launcher-popup-mode,
+body.launcher-popup-mode,
+#root.launcher-popup-mode,
+.launcher-popup-mode {
+  background: transparent !important;
+  background-color: transparent !important;
+  overflow: visible !important;
+}
 .launcher-popup-mode [data-slot="dialog-overlay"] {
   display: none;
 }
