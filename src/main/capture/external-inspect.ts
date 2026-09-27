@@ -60,6 +60,28 @@ export function externalCdpPort(): number {
   return Number.isInteger(parsed) && parsed >= 1_024 && parsed < 65_536 ? parsed : DEFAULT_EXTERNAL_CDP_PORT
 }
 
+/**
+ * A loopback /json/list endpoint is not enough by itself: Chromium returns the
+ * debugger WebSocket URL inside that response. Refuse any advertised socket
+ * that could route ND to another machine.
+ */
+export function assertLoopbackDebuggerUrl(value: string): URL {
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    throw new Error('External app debugger returned an invalid WebSocket URL')
+  }
+  if (parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') {
+    throw new Error('External app debugger WebSocket URL must use ws/wss')
+  }
+  const hostname = parsed.hostname.toLowerCase()
+  if (hostname !== '127.0.0.1' && hostname !== 'localhost' && hostname !== '::1') {
+    throw new Error('External app debugger WebSocket must remain on loopback')
+  }
+  return parsed
+}
+
 interface CdpTargetInfo {
   id: string
   type: string
@@ -90,8 +112,9 @@ class CdpConnection {
   }
 
   static async open(webSocketDebuggerUrl: string): Promise<CdpConnection> {
+    const safeUrl = assertLoopbackDebuggerUrl(webSocketDebuggerUrl)
     return new Promise((resolve, reject) => {
-      const socket = new WebSocket(webSocketDebuggerUrl)
+      const socket = new WebSocket(safeUrl.toString())
       const fail = () => reject(new Error('Could not attach to the external app debugger socket'))
       socket.addEventListener('open', () => resolve(new CdpConnection(socket)), { once: true })
       socket.addEventListener('error', fail, { once: true })
