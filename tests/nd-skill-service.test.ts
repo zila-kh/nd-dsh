@@ -92,7 +92,7 @@ describe('ND catalog and explicit invocation', () => {
   it('resolves known Harness skills once and leaves unknown native skills untouched', async () => {
     const f = await fixture()
     const harness = { status: () => ({}), run: vi.fn(async () => ({ sessionId: 'h' })) }
-    const router = new EngineSessionRouter(harness as never, {} as never, f.workspace as never)
+    const router = new EngineSessionRouter(harness as never, { ownsSession: () => false } as never, f.workspace as never)
     router.setSkillService(f.service)
     await router.run('/review text')
     expect((harness.run.mock.calls[0] as unknown as [string])[0]).toMatch(/^ND explicit skill/)
@@ -109,7 +109,7 @@ describe('ND catalog and explicit invocation', () => {
         : { ok: true }),
       run: vi.fn(async () => ({ sessionId: 'task-session' })),
     }
-    const router = new EngineSessionRouter(harness as never, {} as never, f.workspace as never)
+    const router = new EngineSessionRouter(harness as never, { ownsSession: () => false } as never, f.workspace as never)
     router.setWorktreeGuard((cwd) => cwd === taskRoot)
     router.setSkillService(f.service)
 

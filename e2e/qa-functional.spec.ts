@@ -140,7 +140,7 @@ test('QA: Settings surfaces are accessible', async () => {
   await expect(page).toHaveURL(/#\/settings\?tab=general$/)
 
   // Verify settings section tabs are visible (they use role=tab)
-  for (const tab of ['General', 'Appearance', 'Models', 'Capabilities', 'Plugins', 'Coding engines', 'Agent presets']) {
+  for (const tab of ['General', 'Appearance', 'Models', 'Capabilities', 'Extensions', 'Coding engines', 'Agent presets']) {
     await expect(page.getByRole('tab', { name: tab })).toBeVisible()
   }
 

@@ -27,7 +27,7 @@ export function buildSessionTree(sessions: readonly SessionSummary[]): SessionTr
     if (!node) continue
     const parentId = session.origin === 'subagent' ? session.parentSessionId : undefined
     const parent = parentId ? nodes.get(parentId) : undefined
-    if (!parent || parent === node || hasParentCycle(session.sessionId, parentId, nodes)) {
+    if (!parentId || !parent || parent === node || hasParentCycle(session.sessionId, parentId, nodes)) {
       roots.push(node)
       continue
     }
@@ -47,7 +47,7 @@ function hasParentCycle(
   while (cursor) {
     if (seen.has(cursor)) return true
     seen.add(cursor)
-    const next = nodes.get(cursor)?.session
+    const next: SessionSummary | undefined = nodes.get(cursor)?.session
     cursor = next?.origin === 'subagent' ? next.parentSessionId : undefined
   }
   return false

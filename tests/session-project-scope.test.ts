@@ -33,7 +33,7 @@ describe('isSessionInProjectScope', () => {
 
 describe('filterSessionsInProjectScope', () => {
   it('filters harness and engine session listings down to the active project', () => {
-    const items = ['sess-plan-dfdf', 'sess-personal', 'sess-plan-ndf', 'sess-engine-ndf'].map(session)
+    const items = ['sess-plan-dfdf', 'sess-personal', 'sess-plan-ndf', 'sess-engine-ndf'].map((sessionId) => session(sessionId))
     expect(filterSessionsInProjectScope(items, 'project-dfdf', sessionProjects).map((item) => item.sessionId)).toEqual([
       'sess-plan-dfdf',
       'sess-personal',
@@ -56,17 +56,17 @@ describe('filterSessionsInProjectScope', () => {
   })
 
   it('keeps an ordinary fork globally visible when it has no run attribution', () => {
-    const items = [
-      session('sess-plan-ndf'),
-      session('sess-fork-ndf', 'sess-plan-ndf', undefined),
-    ]
+    // session() defaults origin to 'subagent' when a parent is given, and an
+    // explicit undefined would re-trigger that default, so build the fork here.
+    const fork = { sessionId: 'sess-fork-ndf', parentSessionId: 'sess-plan-ndf' }
+    const items = [session('sess-plan-ndf'), fork]
     expect(filterSessionsInProjectScope(items, 'project-dfdf', sessionProjects).map((item) => item.sessionId)).toEqual([
       'sess-fork-ndf',
     ])
   })
 
   it('returns the full listing unchanged when no project is active', () => {
-    const items = ['sess-plan-dfdf', 'sess-plan-ndf'].map(session)
+    const items = ['sess-plan-dfdf', 'sess-plan-ndf'].map((sessionId) => session(sessionId))
     expect(filterSessionsInProjectScope(items, undefined, sessionProjects)).toEqual(items)
   })
 })

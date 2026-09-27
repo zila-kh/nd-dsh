@@ -1,7 +1,7 @@
-import type { NdContext } from '../../../shared/nd-context'
-import { contextKey } from '../../../shared/nd-context'
-import type { NdCommandView } from '../../../shared/nd-invocations'
-import type { OrganizationSnapshot } from '../../../shared/organization'
+import type { NdContext } from '../../../shared/nd-context.js'
+import { contextKey } from '../../../shared/nd-context.js'
+import type { NdCommandView } from '../../../shared/nd-invocations.js'
+import type { OrganizationSnapshot } from '../../../shared/organization.js'
 
 export interface ContextOption {
   id: string
