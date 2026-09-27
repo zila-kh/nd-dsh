@@ -750,6 +750,7 @@ export interface DesktopApi {
     moveFloatWindow(deltaX: number, deltaY: number): Promise<void>
     setCaptureOverlay?(active: boolean): Promise<{ width: number; height: number }>
     onFloatMode?(listener: (enabled: boolean) => void): () => void
+    onQuickLauncher?(listener: () => void): () => void
   }
 }
 
@@ -761,6 +762,7 @@ export const IPC = {
   windowMoveFloatWindow: 'window:move-float-window',
   windowSetCaptureOverlay: 'window:set-capture-overlay',
   windowFloatModeEvent: 'window:float-mode-event',
+  windowQuickLauncherEvent: 'window:quick-launcher-event',
   browserState: 'browser:state',
   browserSetBounds: 'browser:set-bounds',
   browserSetVisible: 'browser:set-visible',
