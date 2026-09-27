@@ -1263,7 +1263,7 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
   const renderSessionNode = (node: SessionTreeNode, depth = 0): ReactNode => {
     const session = node.session
     const childCount = countSessionDescendants(node)
-    const runningChildren = countRunningSessionDescendants(node)
+    const runningChildren = countRunningSessionDescendants(node, busySessions)
     const collapsed = collapsedSessionParents.has(session.sessionId)
     const hasChildren = childCount > 0
     const summary = hasChildren
@@ -2191,9 +2191,11 @@ function countSessionDescendants(node: SessionTreeNode): number {
   return node.children.reduce((count, child) => count + 1 + countSessionDescendants(child), 0)
 }
 
-function countRunningSessionDescendants(node: SessionTreeNode): number {
+function countRunningSessionDescendants(node: SessionTreeNode, busySessions: ReadonlySet<string>): number {
   return node.children.reduce(
-    (count, child) => count + (child.session.running ? 1 : 0) + countRunningSessionDescendants(child),
+    (count, child) => count
+      + (child.session.running || busySessions.has(child.session.sessionId) ? 1 : 0)
+      + countRunningSessionDescendants(child, busySessions),
     0,
   )
 }
