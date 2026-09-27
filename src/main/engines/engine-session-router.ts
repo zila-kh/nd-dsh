@@ -213,7 +213,7 @@ export class EngineSessionRouter {
       const result = await this.harness.gatewayRpc('session.list')
       const items = (result.value as { items?: Array<{ sessionId?: string; cwd?: string }> } | undefined)?.items
       const session = items?.find((item) => item.sessionId === options?.sessionId)
-      if (!result.ok || !session?.cwd || !sessionInWorkspace(this.workspace.state().root, session.cwd)) throw new Error('Skill session does not belong to the active workspace')
+      if (!result.ok || !session?.cwd || !this.sessionRootAllowed(session.cwd)) throw new Error('Skill session does not belong to the active workspace')
     }
     let routedPrompt = this.extensions
       ? await this.extensions.decoratePrompt(skill?.prompt ?? prompt, requested, providerId)
