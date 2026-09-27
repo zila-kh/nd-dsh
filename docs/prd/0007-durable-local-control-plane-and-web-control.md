@@ -130,7 +130,40 @@ Use optimistic record versions for collaborative mutation. Stale updates should 
 
 CRDT is deferred to document-style collaborative editing where it actually helps; policy, approval, task and budget state stays transactional.
 
-## 10. Local Web security
+
+## 10. Protected ND product Web surface
+
+Local Web Control and the future ND Cloud customer UI may share product components, but the embedded ND customer Web surface must not be implemented as an ordinary agent-controllable browser tab.
+
+The current built-in browser profile is a general browsing/automation target. Introduce a separate protected product surface for ND customer Web, conceptually:
+
+```text
+NdCloudAppController
+  partition: persist:nd-cloud-app
+  allowed origins: ND customer Web/auth origins only
+  agent browser routing: disabled
+  CDP automation exposure: disabled
+```
+
+The normal browser remains:
+
+```text
+BrowserController
+  partition: persist:nd-dsh-browser
+  general browsing
+  agent-visible/agent-controllable under existing browser policy
+```
+
+The protected AppView is a product UI container, not a third authority. All local mutations still enter the same typed `NdControlPlane` path.
+
+The local Web UI should be designed so the same Company/Kanban/Needs You/Agents components can later use either:
+
+- a local `NdClient` backed by loopback HTTP/WS; or
+- a cloud `NdClient` backed by ND Cloud APIs/remote-host relay.
+
+No cloud account is required for the local transport.
+
+## 11. Local Web security
 
 Initial Web Control:
 
@@ -145,7 +178,7 @@ Initial Web Control:
 - no raw generic privileged RPC;
 - complete policy/audit path remains authoritative.
 
-## 11. Migration safety
+## 12. Migration safety
 
 Before importing current company state, create an existing organization snapshot.
 
@@ -162,7 +195,7 @@ validate JSON
 
 Failure leaves the existing JSON authority untouched.
 
-## 12. Validation
+## 13. Validation
 
 Three layers remain mandatory:
 
@@ -170,13 +203,15 @@ Three layers remain mandatory:
 2. E2E — real ND + normal Chromium, Desktop/Web cross-update, reconnect/restart, parallel work;
 3. human QA — operate a real project primarily from Web while Desktop is minimized.
 
-## 13. Open questions for deep review
+## 14. Open questions for deep review
 
 - exact `nd-store` Rust/TypeScript boundary;
 - first schema shape and migration ownership;
 - whether comments/activity need separate append-only storage;
 - blob layout and backup retention;
 - local Web URL/port lifecycle;
+- protected AppView controller/session-partition lifecycle;
+- exact origin allowlist and external-link handoff policy;
 - how much renderer UI can be shared before an `NdClient` refactor becomes too broad;
 - whether Web Control ships before or after SQLite migration;
 - exact compatibility period for JSON authority.
