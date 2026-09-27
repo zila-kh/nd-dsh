@@ -29,6 +29,8 @@ The profile setter must not pause/cancel organization work, stop agent sessions,
 
 - Unit coverage for the shared profile contract.
 - Electron smoke starts fresh in General, verifies coding-only controls are hidden, then switches to Coding and verifies ND/DSH + QA.
+- Reload regression coverage proves a persisted Coding profile keeps a direct `#/qa` route instead of being redirected by the renderer's initial loading state.
+- General-mode smoke proves the main-process guard rejects a direct DSH activation request and switching back to Coding restores ND/workbench.
 - Coding QA E2E explicitly selects Coding.
 - Local `pnpm typecheck`, `pnpm test` and relevant Electron E2E are required before merge because GitHub Actions are parked.
 
