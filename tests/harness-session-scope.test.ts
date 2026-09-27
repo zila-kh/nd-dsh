@@ -24,6 +24,23 @@ describe('scopeSessionListPayload', () => {
     expect(scoped.items[0]).toMatchObject({ sessionId: 'sess-linky', cwd: linky })
   })
 
+  it('preserves runtime lineage fields used by the subagent tree', () => {
+    const parent = session('sess-parent', linky)
+    const child = {
+      ...session('sess-child', linky),
+      parentSessionId: 'sess-parent',
+      origin: 'subagent',
+    }
+    const scoped = scopeSessionListPayload({ items: [parent, child] }, linky, new Set()) as {
+      items: Array<Record<string, unknown>>
+    }
+    expect(scoped.items[1]).toMatchObject({
+      sessionId: 'sess-child',
+      parentSessionId: 'sess-parent',
+      origin: 'subagent',
+    })
+  })
+
   it('stamps the ND archive flag only on surviving rows', () => {
     const value = {
       items: [
