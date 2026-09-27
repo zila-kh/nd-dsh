@@ -81,7 +81,7 @@ export class ExtensionPackageStore {
   /**
    * Snapshot one ND-maintained package. Built-ins ship with ND and are
    * registered at startup; they follow the same validation and snapshot path
-   * as third-party packages so both proving packages exercise one contract.
+   * as third-party packages so every proving package exercises one contract.
    */
   async registerBuiltin(manifest: NdExtensionManifest): Promise<void> {
     await this.load()
