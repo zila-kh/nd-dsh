@@ -18,6 +18,7 @@ import type {
 import { ANTIGRAVITY_ENGINE_ID, CHATGPT_WEB_ENGINE_ID, CODEX_CLI_ENGINE_ID, ND_HARNESS_ENGINE_ID, ZCODE_CLI_ENGINE_ID } from '../../../shared/coding-engines'
 import { DisplayGroup, groupEntries, parseFileChanges, toolPreview, type ContextBlock } from '../../../shared/chat-grouping'
 import { filterSessionsInProjectScope, isSessionInProjectScope } from '../../../shared/session-project-scope'
+import { buildSessionTree, type SessionTreeNode } from '../../../shared/session-tree'
 import type { SettingsTab } from '../lib/settings-route'
 import { splitAssistantSegments, type ReviewVerdict } from '../../../shared/structured-output'
 import type { ProjectPlanInput } from '../../../shared/organization'
@@ -132,6 +133,7 @@ function fileMentionTag(relativePath: string): string {
 
 export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollapsed, sessionProjectScope, projects, onSelectProject, onError, onOpenSettings, onOpenFile, onOpenLink, externalPrompt, onExternalPromptConsumed, elementAttachmentVersion, onGitEditableChange }: ChatPanelProps) {
   const [sessions, setSessions] = useState<SessionSummary[]>([])
+  const [collapsedSessionParents, setCollapsedSessionParents] = useState<Set<string>>(new Set())
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [terminalOpen, setTerminalOpen] = useState(false)
   const [threads, setThreads] = useState<Record<string, ThreadEntry[]>>({})
@@ -321,6 +323,11 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
     ),
     [engineSessions, showArchived, activeProjectId, sessionProjects],
   )
+  const visibleHarnessSessions = useMemo(
+    () => visibleSessions.filter((session) => !session.blank || session.sessionId === activeSessionId),
+    [visibleSessions, activeSessionId],
+  )
+  const sessionTree = useMemo(() => buildSessionTree(visibleHarnessSessions), [visibleHarnessSessions])
   const archiveableIds = useMemo(
     () => showArchived ? [] : archiveableVisibleSessionIds(visibleSessions, visibleEngineSessions, activeSessionId),
     [showArchived, visibleSessions, visibleEngineSessions, activeSessionId],
@@ -1259,6 +1266,56 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
     return cleanThreadTitle(typeof title === 'string' ? title : undefined)
   }
 
+  const renderSessionNode = (node: SessionTreeNode, depth = 0): ReactNode => {
+    const session = node.session
+    const childCount = countSessionDescendants(node)
+    const runningChildren = countRunningSessionDescendants(node)
+    const collapsed = collapsedSessionParents.has(session.sessionId)
+    const hasChildren = childCount > 0
+    const summary = hasChildren
+      ? runningChildren > 0
+        ? `${runningChildren}/${childCount} active`
+        : `${childCount} subagent${childCount === 1 ? '' : 's'}`
+      : sessionTime(session)
+
+    return (
+      <div key={session.sessionId}>
+        <div className="flex min-w-0 items-center gap-0.5" style={{ paddingLeft: Math.min(depth, 6) * 10 }}>
+          {hasChildren ? (
+            <button
+              type="button"
+              className="flex size-5 shrink-0 items-center justify-center rounded text-faint transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-3"
+              aria-label={collapsed ? 'Expand subagents' : 'Collapse subagents'}
+              title={collapsed ? 'Expand subagents' : 'Collapse subagents'}
+              onClick={() => setCollapsedSessionParents((current) => {
+                const next = new Set(current)
+                if (next.has(session.sessionId)) next.delete(session.sessionId)
+                else next.add(session.sessionId)
+                return next
+              })}
+            >
+              {collapsed ? <ChevronRightIcon /> : <ChevronDownIcon />}
+            </button>
+          ) : depth > 0 ? <span className="size-5 shrink-0" /> : null}
+          <div className="min-w-0 flex-1">
+            <SessionCard
+              active={activeSessionId === session.sessionId}
+              busy={busySessions.has(session.sessionId) || Boolean(session.running) || runningChildren > 0}
+              title={sessionTitle(session)}
+              time={summary}
+              engineChip={session.origin === 'subagent' ? 'subagent' : undefined}
+              cardTitle={session.origin === 'subagent' ? 'Subagent session' : hasChildren ? 'Main agent session with subagents' : undefined}
+              archived={session.archived === true}
+              onToggleArchive={() => void setSessionArchived(session.sessionId, session.archived !== true)}
+              onClick={() => selectSession(session)}
+            />
+          </div>
+        </div>
+        {!collapsed && node.children.map((child) => renderSessionNode(child, depth + 1))}
+      </div>
+    )
+  }
+
   return (
     <div className="flex h-full w-full min-h-0 min-w-0 flex-1 flex-row overflow-hidden">
       <aside className={cn('flex h-full min-h-0 w-[185px] shrink-0 grow-0 basis-[185px] flex-col overflow-hidden border-r border-border-soft bg-sidebar', sessionsCollapsed && 'hidden')}>
@@ -1373,18 +1430,7 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
               <div className="px-0.5 py-2 text-[10px]/[1.5] text-faint">{showArchived ? 'No archived chats' : 'No sessions yet'}</div>
             ) : (
               <>
-                {visibleSessions.filter((session) => !session.blank || session.sessionId === activeSessionId).map((session) => (
-                  <SessionCard
-                    key={session.sessionId}
-                    active={activeSessionId === session.sessionId}
-                    busy={busySessions.has(session.sessionId) || Boolean(session.running)}
-                    title={sessionTitle(session)}
-                    time={sessionTime(session)}
-                    archived={session.archived === true}
-                    onToggleArchive={() => void setSessionArchived(session.sessionId, session.archived !== true)}
-                    onClick={() => selectSession(session)}
-                  />
-                ))}
+                {sessionTree.map((node) => renderSessionNode(node))}
                 {visibleEngineSessions.map((session) => (
                   <SessionCard
                     key={session.sessionId}
@@ -2144,6 +2190,17 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
         onError={onError}
       />
     </div>
+  )
+}
+
+function countSessionDescendants(node: SessionTreeNode): number {
+  return node.children.reduce((count, child) => count + 1 + countSessionDescendants(child), 0)
+}
+
+function countRunningSessionDescendants(node: SessionTreeNode): number {
+  return node.children.reduce(
+    (count, child) => count + (child.session.running ? 1 : 0) + countRunningSessionDescendants(child),
+    0,
   )
 }
 
