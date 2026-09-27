@@ -37,7 +37,24 @@ They may share packages but should have separate:
 
 Do not ship the admin UI as a hidden route inside the normal customer application.
 
-## 3. ND Admin capabilities
+
+## 3. Desktop customer sessions never become Admin sessions
+
+ND Desktop customer sign-in and the protected customer Cloud AppView authenticate only to the customer-facing ND Cloud security domain.
+
+They must not:
+
+- mint staff/admin cookies;
+- carry admin scopes;
+- silently reuse a customer/Desktop session at `admin.*`;
+- expose a hidden admin route inside the customer Web bundle;
+- auto-login ND staff into Admin merely because the same person uses ND Desktop.
+
+ND Admin requires its own staff authentication ceremony, expected to include stronger controls such as staff SSO and MFA after deep review.
+
+This remains true even when a user account belongs to an ND employee. Customer-product authority and ND-operator authority are different principals.
+
+## 4. ND Admin capabilities
 
 Potential internal surfaces:
 
@@ -56,7 +73,7 @@ Potential internal surfaces:
 
 Admin authorization is always enforced server-side.
 
-## 4. Entitlement model
+## 5. Entitlement model
 
 The entitlement service should unlock hosted capabilities such as:
 
@@ -84,7 +101,7 @@ local capability exists by product contract
 cloud entitlement adds hosted capability
 ```
 
-## 5. Extension registry
+## 6. Extension registry
 
 PRD 0006 keeps local installation free and defers marketplace/review/billing. This PRD owns that future hosted layer.
 
@@ -112,7 +129,7 @@ Visibility candidates:
 
 Local folder/Git installation remains available without cloud.
 
-## 6. Extension moderation
+## 7. Extension moderation
 
 Admin workflow should support:
 
@@ -126,7 +143,7 @@ Admin workflow should support:
 
 A registry disable action must affect registry delivery, not silently delete already-installed local user data.
 
-## 7. Customer controls versus ND controls
+## 8. Customer controls versus ND controls
 
 Customer controls include:
 
@@ -148,7 +165,7 @@ ND internal controls include:
 
 These must remain separate permission domains.
 
-## 8. Privacy/support boundary
+## 9. Privacy/support boundary
 
 Default Admin surfaces should favor metadata:
 
@@ -163,7 +180,7 @@ Do not make private project content casually browseable by ND staff.
 
 Any future content-access support workflow should require narrow, time-bound, audited authorization.
 
-## 9. Audit
+## 10. Audit
 
 Every sensitive admin action should record:
 
@@ -177,13 +194,13 @@ Every sensitive admin action should record:
 
 Admin audit records should be append-only from the application point of view.
 
-## 10. Feature rollout
+## 11. Feature rollout
 
 Cloud feature rollout may support cohorts/percentages for hosted features, but it cannot remove functionality promised as free local core.
 
 Feature rollout and subscription entitlement are related but distinct concepts.
 
-## 11. Recommended cloud repository shape
+## 12. Recommended cloud repository shape
 
 ```text
 nd-cloud/
@@ -206,7 +223,7 @@ nd-cloud/
 
 This is a draft architecture recommendation, not an implementation commitment.
 
-## 12. Validation
+## 13. Validation
 
 Three layers:
 
@@ -214,9 +231,10 @@ Three layers:
 2. E2E — customer cannot access admin, admin role separation, extension moderation, plan grant/revoke, hosted feature gating;
 3. human QA/security review — staff workflows, support access, incident disable/rollback drills.
 
-## 13. Open questions for deep review
+## 14. Open questions for deep review
 
 - staff identity/SSO/MFA;
+- hard separation between customer identity provider/client and staff/admin identity;
 - billing provider;
 - marketplace payment/revenue share;
 - package signing model;
