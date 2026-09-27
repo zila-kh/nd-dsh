@@ -85,29 +85,39 @@ export class ExtensionPackageStore {
    */
   async registerBuiltin(manifest: NdExtensionManifest): Promise<void> {
     await this.load()
-    const existing = this.value.packages.find((item) => item.manifest.id === manifest.id)
-    const snapshotDir = this.snapshotDir(manifest.id, manifest.version)
+    const validated = validateNdExtensionManifest(manifest)
+    if (!validated.ok) {
+      const summary = validated.issues.slice(0, 5).map((issue) => `${issue.path || 'manifest'}: ${issue.message}`).join('; ')
+      throw new Error(`Invalid built-in extension package: ${summary}`)
+    }
+    const normalized = validated.manifest
+    const permissionIssues = manifestPermissionIssues(normalized)
+    if (permissionIssues.length > 0) {
+      throw new Error(`Invalid built-in extension package: ${permissionIssues.map((issue) => issue.message).join('; ')}`)
+    }
+    const existing = this.value.packages.find((item) => item.normalized.id === normalized.id)
+    const snapshotDir = this.snapshotDir(normalized.id, normalized.version)
     await fs.mkdir(snapshotDir, { recursive: true })
     await fs.writeFile(
       join(snapshotDir, ND_EXTENSION_MANIFEST_FILENAME),
-      `${JSON.stringify(manifest, null, 2)}\n`,
+      `${JSON.stringify(normalized, null, 2)}\n`,
       'utf8',
     )
     if (existing) {
-      const previousVersion = existing.manifest.version === manifest.version ? existing.previousVersion : existing.manifest.version
-      existing.manifest = manifest
+      const previousVersion = existing.normalized.version === normalized.version ? existing.previousVersion : existing.normalized.version
+      existing.manifest = normalized
       existing.source = { kind: 'builtin', location: 'nd' }
       existing.updatedAt = Date.now()
       if (previousVersion === undefined) delete existing.previousVersion
       else existing.previousVersion = previousVersion
-      if (!existing.versions.includes(manifest.version)) existing.versions.push(manifest.version)
+      if (!existing.versions.includes(normalized.version)) existing.versions.push(normalized.version)
     } else {
       this.value.packages.push({
-        manifest,
+        manifest: normalized,
         source: { kind: 'builtin', location: 'nd' },
         installedAt: Date.now(),
         updatedAt: Date.now(),
-        versions: [manifest.version],
+        versions: [normalized.version],
       })
     }
     await this.persist()
