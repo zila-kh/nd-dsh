@@ -4,7 +4,16 @@
 /// <reference lib="dom" />
 
 import { expect, test } from '@playwright/test'
+import type { WorkspaceState } from '../src/shared/contracts.js'
 import { closeApp, createWorkspaceDir, e2eModelConfig, E2E_PROVIDER_NAME, launchApp, type LaunchedApp } from './fixtures.js'
+
+// The evaluate callbacks below run in the renderer with the trusted preload
+// attached; declare only the narrow surface these probes touch.
+type RendererWindow = {
+  ndDsh: {
+    workspace: { state(): Promise<WorkspaceState> }
+  }
+}
 
 test.describe.configure({ mode: 'serial' })
 
@@ -150,7 +159,12 @@ test('QA: Settings surfaces are accessible', async () => {
 
 test('QA: Copy diagnostics works through the real Settings UI without leaking workspace identity', async () => {
   const { page } = launched
-  const workspace = await page.evaluate(async () => await window.ndDsh.workspace.state())
+  const workspace = await page.evaluate(async () => {
+    // This callback runs in the renderer, so the trusted preload API is only
+    // reachable through `window` here; module-scope helpers do not exist there.
+    const api = window as unknown as RendererWindow
+    return await api.ndDsh.workspace.state()
+  })
 
   await page.getByRole('navigation', { name: 'ND-DSH navigation' }).getByTitle('Settings').click()
   await page.getByRole('tablist', { name: 'General sub-tabs' }).getByRole('tab', { name: 'About', exact: true }).click()
