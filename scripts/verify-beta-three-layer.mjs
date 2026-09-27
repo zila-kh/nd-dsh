@@ -65,8 +65,15 @@ if (automatedReceipt) {
   if (automatedReceipt.kind !== 'nd-beta-automated-release-evidence') errors.push('automated receipt kind is invalid')
   if (automatedReceipt.status !== 'pass') errors.push('automated receipt status must be "pass"')
   if (automatedReceipt.release?.commit !== evidence.release?.commit) errors.push('automated receipt commit must match release.commit')
-  if (!isText(automatedReceipt.release?.artifact?.identity)) errors.push('automated receipt must identify the packaged artifact')
-  else if (automatedReceipt.release.artifact.identity !== evidence.release?.artifact) errors.push('automated receipt artifact must match release.artifact')
+  const packagedArtifact = automatedReceipt.release?.artifact
+  if (!isText(packagedArtifact?.file)) errors.push('automated receipt must name the packaged artifact file')
+  if (!/^[0-9a-f]{64}$/i.test(String(packagedArtifact?.sha256 ?? ''))) errors.push('automated receipt artifact sha256 must be 64 hex characters')
+  const expectedArtifactIdentity = isText(packagedArtifact?.file) && /^[0-9a-f]{64}$/i.test(String(packagedArtifact?.sha256 ?? ''))
+    ? packagedArtifact.file + '#sha256:' + packagedArtifact.sha256
+    : ''
+  if (!isText(packagedArtifact?.identity)) errors.push('automated receipt must identify the packaged artifact')
+  else if (packagedArtifact.identity !== expectedArtifactIdentity) errors.push('automated receipt artifact identity must match file + sha256')
+  else if (packagedArtifact.identity !== evidence.release?.artifact) errors.push('automated receipt artifact must match release.artifact')
 }
 const soakReceipt = readReceipt(evidence.releaseChecks?.soak24h?.summaryPath, 'releaseChecks.soak24h.summaryPath')
 if (soakReceipt) {
