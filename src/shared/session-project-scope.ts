@@ -8,8 +8,10 @@
  * that attribution on top of the raw listing.
  *
  * Sessions with no run attribution are personal/manual chats and stay visible
- * in every project. With no active project (standalone workspace) nothing is
- * filtered.
+ * in every project. Subagent sessions inherit the attribution of their parent
+ * session, so a child of Project A cannot leak into Project B just because the
+ * child itself has no organization run row. With no active project (standalone
+ * workspace) nothing is filtered.
  */
 export function isSessionInProjectScope(
   sessionId: string,
@@ -21,10 +23,38 @@ export function isSessionInProjectScope(
   return projectId === undefined || projectId === activeProjectId
 }
 
-export function filterSessionsInProjectScope<T extends { sessionId: string }>(
+export function filterSessionsInProjectScope<T extends { sessionId: string; parentSessionId?: string }>(
   items: readonly T[],
   activeProjectId: string | undefined,
   sessionProjects: Readonly<Record<string, string>>,
 ): T[] {
-  return items.filter((item) => isSessionInProjectScope(item.sessionId, activeProjectId, sessionProjects))
+  if (!activeProjectId) return [...items]
+  const byId = new Map(items.map((item) => [item.sessionId, item]))
+  const resolvedProjects = new Map<string, string | undefined>()
+
+  const projectFor = (sessionId: string, trail = new Set<string>()): string | undefined => {
+    if (resolvedProjects.has(sessionId)) return resolvedProjects.get(sessionId)
+    const direct = sessionProjects[sessionId]
+    if (direct !== undefined) {
+      resolvedProjects.set(sessionId, direct)
+      return direct
+    }
+    if (trail.has(sessionId)) return undefined
+    const item = byId.get(sessionId)
+    const parentId = item?.parentSessionId
+    if (!parentId) {
+      resolvedProjects.set(sessionId, undefined)
+      return undefined
+    }
+    const nextTrail = new Set(trail)
+    nextTrail.add(sessionId)
+    const inherited = projectFor(parentId, nextTrail)
+    resolvedProjects.set(sessionId, inherited)
+    return inherited
+  }
+
+  return items.filter((item) => {
+    const projectId = projectFor(item.sessionId)
+    return projectId === undefined || projectId === activeProjectId
+  })
 }
