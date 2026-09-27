@@ -158,7 +158,11 @@ export class OrganizationOrchestrator {
     this.lastProgressAt.set(sessionId, run.startedAt)
     try {
       const prompt = appendBrowserAccess(pmPrompt(context), sessionId, this.browserAccess)
-      await this.harness.run(prompt, { sessionId, ...modelOpts })
+      await this.harness.run(prompt, {
+        sessionId,
+        ...modelOpts,
+        ...(context.project.workspacePath ? { workspaceCwd: context.project.workspacePath } : {}),
+      })
     } catch (cause) {
       const active = await this.store.runBySession(sessionId)
       if (active) await this.store.completeRun(run.id, undefined, errorMessage(cause)).catch(() => undefined)
@@ -296,8 +300,13 @@ export class OrganizationOrchestrator {
     try {
       await this.store.markExecution(context.task.id, target.sessionId)
       const browserPrompt = appendBrowserAccess(prompt, target.sessionId, this.browserAccess)
-      if (this.engineRuns) await this.engineRuns.run(browserPrompt, { sessionId: target.sessionId, ...modelOpts })
-      else await this.harness.run(browserPrompt, { sessionId: target.sessionId, ...modelOpts })
+      const runOptions = {
+        sessionId: target.sessionId,
+        ...modelOpts,
+        ...(workspaceRoot ? { workspaceCwd: workspaceRoot } : {}),
+      }
+      if (this.engineRuns) await this.engineRuns.run(browserPrompt, runOptions)
+      else await this.harness.run(browserPrompt, runOptions)
     } catch (cause) {
       const message = errorMessage(cause)
       const queued = await this.handleExecutionFailure(run, message)
@@ -535,7 +544,12 @@ export class OrganizationOrchestrator {
         sessionId,
         this.browserAccess,
       )
-      await this.harness.run(prompt, { sessionId, ...modelOpts })
+      const reviewWorkspaceRoot = taskWorktree?.root ?? context.project.workspacePath
+      await this.harness.run(prompt, {
+        sessionId,
+        ...modelOpts,
+        ...(reviewWorkspaceRoot ? { workspaceCwd: reviewWorkspaceRoot } : {}),
+      })
     } catch (cause) {
       const active = await this.store.runBySession(sessionId)
       if (active) {
