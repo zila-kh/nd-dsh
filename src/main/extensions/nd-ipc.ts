@@ -480,7 +480,7 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): void {
       title: 'Choose desktop wallpaper',
       properties: ['openFile'],
       filters: [
-        { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp'] },
+        { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'bmp'] },
       ],
     })
     if (result.canceled || result.filePaths.length !== 1) return { changed: false }
