@@ -210,6 +210,60 @@ PRD 0006 intentionally deferred marketplace publishing/review/billing; this draf
 7. Sync is not a second source of truth: conflicts are resolved through defined version/revision rules.
 8. Cloud features unlock additional hosted capabilities; they do not revoke the local core.
 
+
+## Desktop identity and protected Cloud AppView
+
+ND Desktop may offer an optional ND product sign-in for cloud-backed features. This identity is separate from coding-engine/provider accounts such as Codex, Antigravity, GitHub, or model-provider credentials.
+
+Draft flow:
+
+```text
+ND Desktop
+    │
+    ▼
+NdAccountService
+    │ OAuth/OIDC + PKCE
+    ▼
+ND Cloud Identity
+    │
+    ├── access/session state kept out of React
+    ├── refresh credential protected by OS secure storage when available
+    └── device identity enrolled for sync/remote control
+```
+
+After Desktop sign-in, the customer Web experience may open inside ND without a second login prompt. Do not pass access/refresh tokens in URLs, localStorage, preload payloads, or renderer state. Electron main should request a short-lived, single-use Web session bootstrap from ND Cloud; the protected Web surface exchanges it for a normal secure HttpOnly customer session.
+
+The embedded customer Web surface is **not** a normal ND browser tab. The current built-in browser is intentionally agent-controllable and uses the persistent `persist:nd-dsh-browser` profile. Customer Web should use a separate product surface and Electron session partition such as:
+
+```text
+BrowserController
+  persist:nd-dsh-browser
+  general browsing + agent control
+
+NdCloudAppController
+  persist:nd-cloud-app
+  ND customer Web only
+  no agent CDP/browser routing
+```
+
+The Cloud AppView should be restricted to approved ND customer origins. Links outside those origins open in the normal ND browser or system browser according to policy.
+
+The same Company/Kanban/Needs You/Agents Web UX may later support two transports:
+
+```text
+Local mode
+Web UI -> localhost ND Control Gateway -> ND Host
+
+Cloud mode
+Web UI -> ND Cloud API -> synced state / connected ND Host
+```
+
+Local Kanban and core company operation continue to work while signed out or offline.
+
+Desktop sign-out revokes/clears the ND Cloud session, device session as appropriate, secure refresh credential, protected AppView cookies/storage and cloud realtime connections. It must not delete local companies, projects, knowledge, tasks, extensions, repositories, or other free-local product data.
+
+Desktop customer identity never grants or bootstraps an ND Admin session. Admin remains a separate staff-only authentication boundary.
+
 ## Draft PRD split
 
 - **PRD 0007 — Durable Local Control Plane and Web Control**
