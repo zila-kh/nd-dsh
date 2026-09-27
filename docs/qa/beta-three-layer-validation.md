@@ -114,6 +114,8 @@ The command writes:
 e2e-results/beta-automated-<timestamp>/beta-automated-summary.json
 ```
 
+On Windows PASS, `release.artifact.identity` inside that JSON is the exact portable filename plus SHA-256 (`<file>#sha256:<64-hex>`). Copy that exact identity into the final evidence `release.artifact`; do not type a different build name manually.
+
 If it says PARTIAL or FAIL, do not continue to GO. The runner deliberately returns non-zero when Windows package evidence, live tests, benchmarks, or any required stage is skipped.
 
 ### Fast reruns during fixing
@@ -283,7 +285,7 @@ Fill:
 - `summary.p0Open = 0`;
 - `summary.p1CoreOpen = 0`;
 - Unit/E2E/Human PASS + evidence for every beta-exposed feature;
-- `releaseChecks.automated.summaryPath` -> the real `beta-automated-summary.json`; the gate reads it, requires `status: pass`, and requires its commit to equal `release.commit`;
+- `releaseChecks.automated.summaryPath` -> the real `beta-automated-summary.json`; the gate reads it, requires `status: pass`, requires its commit to equal `release.commit`, and requires its packaged SHA-256 artifact identity to equal `release.artifact`;
 - `releaseChecks.packagedCleanMachine` -> human clean-machine result and `artifact` exactly equal to `release.artifact`; the final gate rejects evidence from another build;
 - `releaseChecks.browserCompanionChrome` -> Chrome receipt/human result;
 - `releaseChecks.failureDrills` -> human evidence for network loss, nd-core interruption, unwritable data path and disk-pressure behavior;
