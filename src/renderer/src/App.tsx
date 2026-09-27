@@ -141,7 +141,11 @@ export default function App() {
   const [browserState, setBrowserState] = useState<BrowserState | null>(null)
   const [harnessStatus, setHarnessStatus] = useState<HarnessStatus | null>(null)
   const [surface, setSurface] = useState<DshSurface>('workbench')
-  const [workspaceProfile, setWorkspaceProfile] = useState<WorkspaceProfile>('general')
+  // Unknown until the trusted main-process preference is loaded. Do not assume
+  // General here: doing so would redirect an existing Coding user's deep link
+  // (for example #/qa) before their persisted profile arrives.
+  const [workspaceProfile, setWorkspaceProfile] = useState<WorkspaceProfile | null>(null)
+  const [workspaceProfilePending, setWorkspaceProfilePending] = useState(false)
   const [dshView, setDshView] = useState<DshViewState | null>(null)
   const [selectedFile, setSelectedFile] = useState<WorkspaceFile | null>(null)
   const [openFileTabs, setOpenFileTabs] = useState<WorkspaceFile[]>([])
@@ -658,15 +662,15 @@ export default function App() {
   }
 
   const selectWorkspaceProfile = (next: WorkspaceProfile): void => {
-    if (next === workspaceProfile) return
-    const previous = workspaceProfile
-    setWorkspaceProfile(next)
+    if (workspaceProfilePending || next === workspaceProfile) return
+    // Commit in main before changing renderer-visible scope. This keeps the
+    // Coding-only DSH button from becoming clickable before the persisted
+    // profile guard has accepted Coding.
+    setWorkspaceProfilePending(true)
     void window.ndDsh.workspaceProfile.set(next)
       .then(setWorkspaceProfile)
-      .catch((cause) => {
-        setWorkspaceProfile(previous)
-        notify(errorMessage(cause))
-      })
+      .catch((cause) => notify(errorMessage(cause)))
+      .finally(() => setWorkspaceProfilePending(false))
   }
 
   useEffect(() => {
@@ -1279,8 +1283,9 @@ export default function App() {
                   key={profile}
                   type="button"
                   aria-pressed={workspaceProfile === profile}
+                  disabled={workspaceProfile === null || workspaceProfilePending}
                   className={cn(
-                    'grid h-[22px] min-w-[52px] place-items-center rounded-md border px-2 text-[9px] font-extrabold tracking-[0.06em] transition-[color,background-color,border-color,box-shadow]',
+                    'grid h-[22px] min-w-[52px] place-items-center rounded-md border px-2 text-[9px] font-extrabold tracking-[0.06em] transition-[color,background-color,border-color,box-shadow] disabled:cursor-not-allowed disabled:opacity-55',
                     workspaceProfile === profile
                       ? 'border-primary/25 bg-primary/12 text-primary shadow-[0_1px_3px_rgba(0,0,0,0.2)]'
                       : 'border-transparent text-faint hover:bg-accent hover:text-foreground',
