@@ -6,8 +6,8 @@ This folder mixes dated evidence with operator manuals; only the first is a snap
 - [`beta-three-layer-validation.md`](beta-three-layer-validation.md) — current Beta Stable operator handoff: Unit + E2E + Human evidence, with a machine-checked release record.
 - [`beta-three-layer-evidence.example.json`](beta-three-layer-evidence.example.json) — copyable evidence template consumed by `pnpm beta:gate`.
 - [`manual-beta-real-world.md`](manual-beta-real-world.md), [`agent-capabilities-manual.md`](agent-capabilities-manual.md), [`token-saver-manual.md`](token-saver-manual.md) — operator-facing manuals; check them against current behavior before relying on them.
-- [`quick-launcher-manual.md`](quick-launcher-manual.md) — PR #55 three-layer launcher gate: deterministic unit contracts, real Electron E2E, and Windows manual P0/P1 checks.
-- [`nd-extensions-home-manual.md`](nd-extensions-home-manual.md) — PRD 0006 extensions/ND Home gate: unit + integration + Electron E2E recorded locally 2026-09-27; operator manual P0/P1 pass and the agent-side bridge remain.
+- [`quick-launcher-manual.md`](quick-launcher-manual.md) — PR #55 three-layer launcher gate: deterministic unit contracts, real Electron E2E, and Windows manual P0/P1 checks. Its manual rows supply the Human layer for the `quick-launcher` beta feature row.
+- [`nd-extensions-home-manual.md`](nd-extensions-home-manual.md) — PRD 0006 extensions/ND Home gate: unit + integration + Electron E2E recorded locally 2026-09-27; operator manual P0/P1 pass and the agent-side bridge remain. Its manual rows supply the Human layer for the `native-extensions` and `nd-home` beta feature rows.
 
 Current validation evidence lives in dated task records (`docs/tasks/`, `docs/tasks/done/`) and their plans:
 

@@ -54,6 +54,11 @@ All other company/project state and writable task-workspace ownership must still
 - browser download policy now has focused unit coverage for direct user downloads and agent pause/allow/deny/fail-closed behavior;
 - provider retry configuration explicitly pins bounded retry classes including `RATE_LIMIT`, so upstream default changes cannot silently remove the beta contract;
 - Models UI explicitly states that provider credentials are desktop-profile scoped for supervised Private Beta;
+- the surfaces merged from `main` after this branch forked (Quick Launcher, ND Extensions + governed native host, ND Home, General/Coding workspace profiles) are now first-class beta-exposed rows, so the RC gate covers features a tester actually sees. Their existing manual gates — [quick-launcher-manual.md](quick-launcher-manual.md) (M-01…M-27) and [nd-extensions-home-manual.md](nd-extensions-home-manual.md) — supply the Human layer for those rows.
+
+### Known limitation on the extensions row
+
+The extensions/native-host **agent-side bridge is deferred**: run credentials, per-action approval, revocation and expiry exist and are unit-tested, but no coding engine can invoke ND native host methods in a built app yet. The `native-extensions` row therefore covers the user-initiated surface (install/activate/rollback, grants, policy enforcement, real wallpaper) only. Do not record the agent-invokes-native-host acceptance bullet as demonstrable in the Human evidence.
 
 ## Required feature evidence map
 
@@ -73,6 +78,10 @@ Use these rows when filling the committed evidence template. Unit/E2E references
 | `budget-entitlement` | compute/usage/token-saver/tool-routing tests | budget status is understandable and unrelated work is not silently blocked |
 | `terminal-filesystem` | terminal/core/path tests + packaged terminal/Git smoke | cancellation, paths, permissions and terminal recovery in the packaged app |
 | `diagnostics-observability` | diagnostics/redaction tests + Settings copy-diagnostics E2E | copied report is useful but contains no secret/private project identity |
+| `quick-launcher` | `tests/quick-launcher.test.ts`, `e2e/quick-launcher.spec.ts` | global hotkey over/minimized behind another app, popup toggle/focus return, external screen/area capture + annotation, clipboard/URL capture, no orphan process after quit |
+| `native-extensions` | `tests/nd-extension-package.test.ts`, `tests/nd-extension-lifecycle.test.ts`, `tests/nd-invocation-broker.test.ts`, `tests/wallpaper-native.test.ts`, `pnpm ext:validate --builtins`, `e2e/nd-home-extensions.spec.ts` | user-authored package install/activate/rollback, deny-wins org policy, grant/revocation, real Windows wallpaper change. The **agent-side native-host bridge is deliberately deferred**: no coding engine can invoke ND native host methods yet, so do not record that acceptance bullet as demonstrable |
+| `nd-home` | `tests/nd-extension-lifecycle.test.ts` (Home notes/captures/chats, managed folder, corrupt-record quarantine), `tests/harness-session-scope.test.ts`, `e2e/nd-home-extensions.spec.ts` | ND Home usable before any company exists; personal notes/captures/chats persist and stay out of active-workspace listings |
+| `workspace-profiles` | `tests/workspace-profile.test.ts`, `e2e/smoke.spec.ts` (General ↔ Coding shell) | switching General/Coding is understandable and correctly scoped; unsupported actions refuse with clear wording |
 
 The evidence file intentionally uses exactly these IDs. `tests/verify-beta-three-layer.test.ts` now checks that the template and final gate cannot drift apart.
 

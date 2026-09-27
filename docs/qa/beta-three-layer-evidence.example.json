@@ -250,6 +250,86 @@
         "recordedAt": "",
         "evidence": []
       }
+    },
+    {
+      "id": "quick-launcher",
+      "name": "Quick Launcher, global popup and external capture",
+      "severity": "P1",
+      "betaExposed": true,
+      "unit": {
+        "status": "pending",
+        "evidence": []
+      },
+      "e2e": {
+        "status": "pending",
+        "evidence": []
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "native-extensions",
+      "name": "ND Extensions packages and governed native host",
+      "severity": "P1",
+      "betaExposed": true,
+      "unit": {
+        "status": "pending",
+        "evidence": []
+      },
+      "e2e": {
+        "status": "pending",
+        "evidence": []
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "nd-home",
+      "name": "ND Home personal notes, captures and chats",
+      "severity": "P1",
+      "betaExposed": true,
+      "unit": {
+        "status": "pending",
+        "evidence": []
+      },
+      "e2e": {
+        "status": "pending",
+        "evidence": []
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "workspace-profiles",
+      "name": "General and Coding workspace profiles",
+      "severity": "P1",
+      "betaExposed": true,
+      "unit": {
+        "status": "pending",
+        "evidence": []
+      },
+      "e2e": {
+        "status": "pending",
+        "evidence": []
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
     }
   ],
   "scenarioRuns": {

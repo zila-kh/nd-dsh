@@ -1,7 +1,7 @@
 # Beta release readiness — execution plan
 
-> Updated: 2026-09-27  
-> Basis: current `main` plus beta-hardening changes on `feat/beta-release-stability-plan-2026-09-27`. Last fully attested baseline is 2026-09-26; the new hardening changes remain **local-PC validation pending**.  
+> Updated: 2026-09-28  
+> Basis: current `main` plus beta-hardening changes on `feat/beta-release-stability-plan-2026-09-27` (synced with `main` at `1cc7939`). Last fully attested baseline is 2026-09-26; the new hardening changes remain **local-PC validation pending**.  
 > Goal: get ND-DSH to a **Beta Stable** release candidate without requiring every planned feature to be finished. Beta-exposed features must be predictable, recoverable, scoped correctly, and diagnosable.
 
 ## Release labels
@@ -173,6 +173,8 @@ Minimum matrix:
 - [ ] Restart ND during the run.
 - [ ] Create at least one rework/reviewer-fail path.
 - [ ] Create at least one Git conflict/refusal path.
+- [ ] Use the Quick Launcher (global popup and in-app) for at least one real task and one note capture.
+- [ ] Install/activate one user-authored extension package and perform one governed native action (wallpaper).
 
 For each scenario record: PASS / FAIL, app commit, artifact hash/name, provider/engine, and any issue number.
 

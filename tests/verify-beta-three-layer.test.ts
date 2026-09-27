@@ -20,6 +20,10 @@ const requiredFeatureIds = [
   'budget-entitlement',
   'terminal-filesystem',
   'diagnostics-observability',
+  'quick-launcher',
+  'native-extensions',
+  'nd-home',
+  'workspace-profiles',
 ] as const
 
 afterEach(async () => {

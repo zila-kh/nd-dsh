@@ -34,6 +34,10 @@ const REQUIRED_BETA_FEATURE_IDS = [
   'budget-entitlement',
   'terminal-filesystem',
   'diagnostics-observability',
+  'quick-launcher',
+  'native-extensions',
+  'nd-home',
+  'workspace-profiles',
 ]
 
 if (evidence.schemaVersion !== 1) errors.push('schemaVersion must be 1')
