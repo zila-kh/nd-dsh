@@ -246,9 +246,10 @@ export interface HarnessRunOptions {
   image?: HarnessRunImage
   permissionMode?: string
   /**
-   * Working directory for a session this run creates. Defaults to the active
-   * workspace; ND Home passes its managed per-chat folder. A path alone is not
-   * a sandbox — it only bounds what the engine treats as the project root.
+   * Exact working directory for this session/turn. It is used when a session
+   * is created and keeps the trusted prompt metadata aligned with an existing
+   * task worktree or ND Home chat directory. Defaults to the active workspace.
+   * A path alone is not a sandbox — higher-level workspace policy owns safety.
    */
   workspaceCwd?: string
 }
