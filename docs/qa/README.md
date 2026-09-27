@@ -3,6 +3,8 @@
 This folder mixes dated evidence with operator manuals; only the first is a snapshot.
 
 - [`beta-v1-handoff.md`](beta-v1-handoff.md) — **historical (2026-08-28, PR #12).** Its CI baseline predates the Rust runtime migration, the unified browser platform, and the decision to park Actions; do not treat it as current verification. Kept for audit context.
+- [`beta-three-layer-validation.md`](beta-three-layer-validation.md) — current Beta Stable operator handoff: Unit + E2E + Human evidence, with a machine-checked release record.
+- [`beta-three-layer-evidence.example.json`](beta-three-layer-evidence.example.json) — copyable evidence template consumed by `pnpm beta:gate`.
 - [`manual-beta-real-world.md`](manual-beta-real-world.md), [`agent-capabilities-manual.md`](agent-capabilities-manual.md), [`token-saver-manual.md`](token-saver-manual.md) — operator-facing manuals; check them against current behavior before relying on them.
 
 Current validation evidence lives in dated task records (`docs/tasks/`, `docs/tasks/done/`) and their plans:
