@@ -57,7 +57,99 @@ ND starts and operates from local state. If cloud is unavailable:
 
 Only cloud-backed capabilities degrade.
 
-## 5. Sync architecture
+
+## 5. ND Desktop account and device identity
+
+ND product identity is separate from coding-engine/provider accounts.
+
+Desktop should own an `NdAccountService` in the trusted main process. Draft login flow:
+
+```text
+User -> Sign in to ND
+Desktop main -> OAuth/OIDC + PKCE + state/nonce
+ND Identity -> callback/deep-link/loopback completion
+Desktop main -> authenticated ND account
+```
+
+Security rules:
+
+- customer access/refresh tokens are never exposed to React;
+- no auth tokens in URL query strings;
+- no auth tokens in renderer localStorage;
+- refresh credentials use OS secure storage when a secure backend is available;
+- if secure persistence is unavailable, fail honestly or keep only bounded in-memory session state according to the final security review;
+- coding-engine/provider credentials remain separate.
+
+Signing in may enroll the installation as an ND device with metadata such as device ID, label, platform, ND version, public-key/device credential, last-seen state and enabled cloud capabilities.
+
+## 6. Automatic customer-Web session handoff
+
+After Desktop login, opening Company/Kanban/Needs You/Agents inside the protected ND customer Web surface should not require a second interactive login.
+
+Preferred flow:
+
+```text
+Desktop main (already authenticated)
+    │
+    ├── request one-time short-lived Web bootstrap
+    ▼
+ND Cloud session broker
+    │
+    ▼
+protected ND Cloud AppView
+    │
+    ├── exchange bootstrap
+    └── receive Secure + HttpOnly customer session cookie
+```
+
+The bootstrap is single-use, narrowly scoped, short-lived and never logged. The Web page receives a normal customer session, not the Desktop refresh credential.
+
+The embedded customer Web runs in a dedicated Electron session partition such as `persist:nd-cloud-app`. It must not share cookies/storage with the agent-controllable built-in browser profile.
+
+The protected AppView is not registered as a normal browser automation target and is not available to agent-browser/CDP routing. Agents needing company/task data use typed ND APIs under their own scoped authority instead of inheriting the human user's Web cookie.
+
+External links leave the protected AppView and open in the normal ND browser or system browser according to ND policy.
+
+## 7. Local/offline behavior
+
+Sign-in never becomes a prerequisite for local Kanban, company state, knowledge, agents, Git, browser, terminal or local Web Control.
+
+The customer Web UI may eventually share components across:
+
+```text
+local transport -> localhost Control Gateway -> ND Host
+cloud transport -> ND Cloud -> synced state / connected ND Host
+```
+
+Cloud outage or sign-out only degrades hosted features.
+
+## 8. Tenant/company/device binding
+
+A local company must not be implicitly attached to a cloud tenant merely because it is active in Desktop.
+
+Persist an explicit sync binding between:
+
+- local company/project identity;
+- cloud tenant;
+- cloud company/project identity;
+- sync state/revision.
+
+Tenant switching in customer Web must respect those bindings and never reinterpret a local active company as cloud authorization.
+
+## 9. Logout and revocation
+
+Desktop logout should:
+
+1. revoke/expire the ND customer refresh session as supported;
+2. revoke or disable the device session as appropriate;
+3. erase the protected local refresh credential;
+4. clear `persist:nd-cloud-app` customer cookies/site data as required;
+5. close cloud sync/realtime channels;
+6. leave all local companies/projects/tasks/knowledge/extensions/repositories untouched.
+
+Remote device revocation should make future cloud commands/sync fail closed while preserving local-only operation.
+
+## 10. Sync architecture
 
 ```text
 Local ND Store
@@ -75,7 +167,7 @@ ND Cloud Sync
 
 Do not open a local database over Dropbox/network shares for multiple writers.
 
-## 6. Realtime/remote control
+## 11. Realtime/remote control
 
 A connected ND host establishes an authenticated outbound channel to ND Cloud.
 
@@ -91,7 +183,7 @@ No cloud command may bypass:
 - evidence/review gates;
 - credential boundaries.
 
-## 7. Sync scope
+## 12. Sync scope
 
 Sync candidates:
 
@@ -117,7 +209,7 @@ Off/never by default:
 
 Personal content may be explicitly promoted into a company/project/task record.
 
-## 8. Conflict model
+## 13. Conflict model
 
 Use entity versions/revisions and ordered sync cursors.
 
@@ -125,7 +217,7 @@ Transactions that conflict should surface a clear conflict state instead of sile
 
 Task/policy/approval state remains server-transactional. CRDT is not required for v1 sync.
 
-## 9. Customer Web
+## 14. Customer Web
 
 Primary surfaces may include:
 
@@ -146,7 +238,7 @@ Primary surfaces may include:
 
 Remote source editing is not a v1 requirement. The Web portal controls ND work and reads approved synced state.
 
-## 10. Hosted data boundary
+## 15. Hosted data boundary
 
 Customer data remains tenant-isolated.
 
@@ -160,7 +252,7 @@ Future support access to customer content must require:
 - least privilege;
 - audit receipt.
 
-## 11. Infrastructure draft
+## 16. Infrastructure draft
 
 Initial preference:
 
@@ -170,13 +262,13 @@ Initial preference:
 - WebSocket/SSE service for client updates;
 - add Redis only when measured fanout/cache needs justify it.
 
-## 12. Monetization principle
+## 17. Monetization principle
 
 Charge for hosted value/cost, not artificial local limitations.
 
 Free local functionality must not be remotely disabled by subscription state.
 
-## 13. Validation
+## 18. Validation
 
 Three layers:
 
@@ -184,10 +276,13 @@ Three layers:
 2. E2E — two devices + customer Web + offline edits + reconnect + conflict paths;
 3. human QA — real multi-device project operation for an extended session.
 
-## 14. Open questions for deep review
+## 19. Open questions for deep review
 
 - cloud repository/framework selection;
-- account/auth provider;
+- account/auth provider and OAuth/OIDC redirect/deep-link strategy;
+- secure Desktop token/session persistence policy by OS;
+- Web session bootstrap TTL, audience and replay protection;
+- protected AppView partition lifecycle/origin policy;
 - exact pricing/retention;
 - sync encryption design;
 - object-storage limits;
