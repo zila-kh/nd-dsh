@@ -31,6 +31,7 @@ const stages = [
   stage('e2e', 'explicit 3 companies x 2 projects matrix', 'e2e:beta:matrix'),
   ...(skipLive ? [] : [stage('e2e', 'live-model production journey + model stress', 'e2e:prod')]),
   ...(skipBenchmarks ? [] : [
+    stage('evidence', 'built-in browser cookie/storage/download runtime proof', 'bench:browser-runtime'),
     stage('evidence', 'ND Core contract benchmark', 'bench:contract'),
     stage('evidence', 'agent-task committed baseline check', 'bench:tasks:check'),
   ]),
