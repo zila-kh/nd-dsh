@@ -75,7 +75,7 @@ export function assertLoopbackDebuggerUrl(value: string): URL {
   if (parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') {
     throw new Error('External app debugger WebSocket URL must use ws/wss')
   }
-  const hostname = parsed.hostname.toLowerCase()
+  const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '')
   if (hostname !== '127.0.0.1' && hostname !== 'localhost' && hostname !== '::1') {
     throw new Error('External app debugger WebSocket must remain on loopback')
   }
