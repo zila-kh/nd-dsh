@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import {
   Building2,
   Camera,
@@ -12,10 +12,14 @@ import {
   StickyNote,
 } from 'lucide-react'
 import type { OrganizationSnapshot } from '../../../shared/organization'
-import type { NdContext } from '../../../shared/nd-context'
 import type { NdCommandView } from '../../../shared/nd-invocations'
-import { commandSearchText, type ContextOption } from '../lib/nd-context-model'
-import { compactLauncherText, recentLauncherProjects } from '../lib/quick-launcher-model'
+import type { ContextOption } from '../lib/nd-context-model'
+import {
+  DEFAULT_LAUNCHER_COMMAND_REGISTRY,
+  launcherCommandGroups,
+  type LauncherCommandIcon,
+  type LauncherCommandItem,
+} from '../lib/command-registry'
 import {
   CommandDialog,
   CommandEmpty,
@@ -53,6 +57,25 @@ interface Props {
   onCaptureUrl(url: string): void | Promise<void>
 }
 
+function launcherIcon(command: LauncherCommandItem): ReactNode {
+  if (command.sourceId === 'core.context' && command.shortcut === 'Active') return <Check />
+  const icons: Record<LauncherCommandIcon, ReactNode> = {
+    task: <ListTodo />,
+    note: <StickyNote />,
+    agent: <MessageSquare />,
+    context: <Building2 />,
+    kanban: <ListTodo />,
+    'capture-screen': <Camera />,
+    'capture-tools': <MonitorUp />,
+    clipboard: <Clipboard />,
+    link: <FolderOpen />,
+    extension: <Puzzle />,
+    project: <FolderOpen />,
+    company: <Building2 />,
+  }
+  return icons[command.icon]
+}
+
 export function QuickLauncher({
   open,
   onOpenChange,
@@ -81,13 +104,40 @@ export function QuickLauncher({
   const projects = organization?.projects ?? []
   const activeCompany = companies.find((item) => item.id === organization?.activeCompanyId) ?? companies[0]
   const activeProject = projects.find((item) => item.id === organization?.activeProjectId)
-  const recentProjects = useMemo(() => recentLauncherProjects(projects), [projects])
-  const text = query.trim()
 
-  const closeAndRun = (action: () => void | Promise<void>): void => {
+  const commands = DEFAULT_LAUNCHER_COMMAND_REGISTRY.list({
+    query,
+    organization,
+    ...(currentUrl ? { currentUrl } : {}),
+    contexts,
+    ...(activeContextId ? { activeContextId } : {}),
+    extensionCommands,
+    actions: {
+      selectContext: (id) => onSelectContext?.(id),
+      openKanban: onOpenKanban,
+      openAgent: onOpenAgent,
+      activateProject: onActivateProject,
+      switchCompany: onSwitchCompany,
+      createTask: onCreateTask,
+      quickNote: onQuickNote,
+      askAgent: onAskAgent,
+      captureScreen: onCaptureScreen,
+      openCaptureTools: onOpenCaptureTools,
+      captureClipboard: onCaptureClipboard,
+      captureUrl: onCaptureUrl,
+      runExtension: (command, typed) => onRunExtensionCommand?.(command, typed),
+    },
+  })
+  const groups = launcherCommandGroups(commands)
+
+  const closeAndRun = (command: LauncherCommandItem): void => {
+    if (command.closeOnRun === false) {
+      void Promise.resolve(command.run())
+      return
+    }
     setQuery('')
     onOpenChange(false)
-    void Promise.resolve(action())
+    void Promise.resolve(command.run())
   }
 
   const handleOpenChange = (next: boolean): void => {
@@ -100,7 +150,7 @@ export function QuickLauncher({
       open={open}
       onOpenChange={handleOpenChange}
       title="ND Quick Launcher"
-      description="Jump to daily ND actions, projects, companies, and external capture."
+      description="Search one registry of ND, company, project, and extension commands."
       className="top-[42%] max-w-[680px] rounded-xl border-border-strong bg-surface-1/98 shadow-[0_28px_90px_rgba(0,0,0,0.58)] backdrop-blur-xl"
       showCloseButton={false}
     >
@@ -111,151 +161,30 @@ export function QuickLauncher({
         placeholder="Search ND or type something to capture…"
       />
       <CommandList className="max-h-[430px]">
-        <CommandEmpty>No matching ND action.</CommandEmpty>
+        <CommandEmpty>No matching ND command.</CommandEmpty>
 
-        {text ? (
-          <CommandGroup heading="Use what you typed">
-            <CommandItem
-              value={`task ${text}`}
-              onSelect={() => closeAndRun(() => onCreateTask(text))}
-            >
-              <ListTodo />
-              <span className="min-w-0 flex-1 truncate">Create task · {compactLauncherText(text)}</span>
-              <CommandShortcut>Task</CommandShortcut>
-            </CommandItem>
-            <CommandItem
-              value={`note ${text}`}
-              onSelect={() => closeAndRun(() => onQuickNote(text))}
-            >
-              <StickyNote />
-              <span className="min-w-0 flex-1 truncate">Quick note · {compactLauncherText(text)}</span>
-              <CommandShortcut>Note</CommandShortcut>
-            </CommandItem>
-            <CommandItem
-              value={`ask agent ${text}`}
-              onSelect={() => closeAndRun(() => onAskAgent(text))}
-            >
-              <MessageSquare />
-              <span className="min-w-0 flex-1 truncate">Ask agent · {compactLauncherText(text)}</span>
-              <CommandShortcut>Agent</CommandShortcut>
-            </CommandItem>
-          </CommandGroup>
-        ) : null}
-
-        {contexts.length > 0 ? (
-          <CommandGroup heading="Context">
-            {contexts.map((option) => (
-              <CommandItem
-                key={option.id}
-                value={`context ${option.label} ${option.detail}`}
-                onSelect={() => onSelectContext?.(option.id)}
-              >
-                {option.id === activeContextId ? <Check /> : <Building2 />}
-                <span className="min-w-0 flex-1 truncate">{option.label}</span>
-                <CommandShortcut>{option.id === activeContextId ? 'Active' : option.detail}</CommandShortcut>
-              </CommandItem>
-            ))}
-          </CommandGroup>
-        ) : null}
-
-        <CommandGroup heading="Quick actions">
-          <CommandItem value="open kanban work board tasks" onSelect={() => closeAndRun(onOpenKanban)}>
-            <ListTodo />
-            <span>Open Kanban</span>
-            <CommandShortcut>Board</CommandShortcut>
-          </CommandItem>
-          <CommandItem value="ask agent chat workbench" onSelect={() => closeAndRun(onOpenAgent)}>
-            <MessageSquare />
-            <span>Ask Agent</span>
-            <CommandShortcut>Agent</CommandShortcut>
-          </CommandItem>
-        </CommandGroup>
-
-        <CommandSeparator />
-
-        <CommandGroup heading="Capture">
-          <CommandItem value="capture external screen screenshot" onSelect={() => closeAndRun(onCaptureScreen)}>
-            <Camera />
-            <span>Capture External Screen</span>
-            <CommandShortcut>3s</CommandShortcut>
-          </CommandItem>
-          <CommandItem value="external capture tools area annotate inspect" onSelect={() => closeAndRun(onOpenCaptureTools)}>
-            <MonitorUp />
-            <span>External Capture Tools</span>
-            <CommandShortcut>Area · Annotate</CommandShortcut>
-          </CommandItem>
-          <CommandItem value="capture clipboard text paste" onSelect={() => closeAndRun(onCaptureClipboard)}>
-            <Clipboard />
-            <span>Capture Clipboard</span>
-          </CommandItem>
-          {currentUrl ? (
-            <CommandItem value={`capture current url link ${currentUrl}`} onSelect={() => closeAndRun(() => onCaptureUrl(currentUrl))}>
-              <FolderOpen />
-              <span className="min-w-0 flex-1 truncate">Capture Current URL</span>
-              <CommandShortcut className="max-w-[230px] truncate normal-case tracking-normal">{currentUrl}</CommandShortcut>
-            </CommandItem>
-          ) : null}
-        </CommandGroup>
-
-        {extensionCommands.length > 0 ? (
-          <>
-            <CommandSeparator />
-            <CommandGroup heading="Extensions">
-              {extensionCommands.map((command) => (
+        {groups.map((group, index) => (
+          <div key={group.group}>
+            {index > 0 ? <CommandSeparator /> : null}
+            <CommandGroup heading={group.group}>
+              {group.items.map((command) => (
                 <CommandItem
-                  key={`${command.extensionId}:${command.contributionId}`}
-                  value={`extension ${commandSearchText(command)}`}
-                  onSelect={() => closeAndRun(() => onRunExtensionCommand?.(command, text))}
+                  key={`${command.sourceId}:${command.id}`}
+                  value={command.searchText}
+                  onSelect={() => closeAndRun(command)}
                 >
-                  <Puzzle />
+                  {launcherIcon(command)}
                   <span className="min-w-0 flex-1 truncate">{command.title}</span>
-                  <CommandShortcut>{command.extensionId.replace(/^nd\./, '')}</CommandShortcut>
+                  {command.shortcut ? (
+                    <CommandShortcut className={command.id === 'capture-url' ? 'max-w-[230px] truncate normal-case tracking-normal' : undefined}>
+                      {command.shortcut}
+                    </CommandShortcut>
+                  ) : null}
                 </CommandItem>
               ))}
             </CommandGroup>
-          </>
-        ) : null}
-
-        {recentProjects.length > 0 ? (
-          <>
-            <CommandSeparator />
-            <CommandGroup heading="Recent projects">
-              {recentProjects.map((project) => {
-                const company = companies.find((item) => item.id === project.companyId)
-                return (
-                  <CommandItem
-                    key={project.id}
-                    value={`project ${project.name} ${company?.name ?? ''} ${project.objective}`}
-                    onSelect={() => closeAndRun(() => onActivateProject(project.id))}
-                  >
-                    <FolderOpen />
-                    <span className="min-w-0 flex-1 truncate">{project.name}</span>
-                    <CommandShortcut>{company?.name ?? 'Project'}</CommandShortcut>
-                  </CommandItem>
-                )
-              })}
-            </CommandGroup>
-          </>
-        ) : null}
-
-        {companies.length > 0 ? (
-          <>
-            <CommandSeparator />
-            <CommandGroup heading="Companies">
-              {companies.map((company) => (
-                <CommandItem
-                  key={company.id}
-                  value={`company ${company.name} ${company.mission}`}
-                  onSelect={() => closeAndRun(() => onSwitchCompany(company.id))}
-                >
-                  <Building2 />
-                  <span className="min-w-0 flex-1 truncate">{company.name}</span>
-                  <CommandShortcut>{company.id === activeCompany?.id ? 'Active' : 'Switch'}</CommandShortcut>
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </>
-        ) : null}
+          </div>
+        ))}
       </CommandList>
 
       <div className="flex items-center justify-between gap-3 border-t border-border-soft px-3 py-2 text-[10px] text-faint">
