@@ -40,8 +40,8 @@ export type NdExtensionPermission = (typeof ND_EXTENSION_PERMISSIONS)[number]
 
 /**
  * Allowlisted native host methods. Each maps to one trusted main-process
- * handler; `sensitive` marks reads that always need an explicit user gesture
- * when the caller is an agent rather than the person at the keyboard.
+ * handler; `sensitive` marks reads or consequential OS effects that always
+ * need an explicit user grant when the caller is an agent.
  */
 export interface NdHostMethodDescriptor {
   id: string
