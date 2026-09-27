@@ -224,6 +224,13 @@ This section is superseded and expanded by PRD 0005.
 
 Success criterion: a software team can implement, debug, visually verify, review, and ship a normal application change without leaving ND-DSH, while agents can use either the built-in browser or an explicitly connected real-Chrome profile through the same governed browser capability.
 
+## P1 — ND Extensions and Personal Home
+
+- PRD: [0006-nd-extensions-and-personal-home.md](prd/0006-nd-extensions-and-personal-home.md) — **implemented locally 2026-09-27**; automated layers green, operator manual gate and the agent-side MCP bridge remain (see [the QA gate](qa/nd-extensions-home-manual.md)). Global native extension packages (tools, skills, commands, views, workflows) with explicit personal/company/project contexts, one trusted invocation broker with context-bound grants, and ND Home personal notes/captures/chat that work before any company or project exists.
+- Task set 0035–0043: [0035](tasks/0035-extension-context-and-scope-contracts.md) → [0036](tasks/0036-extension-invocation-and-permissions.md) → [0037](tasks/0037-nd-home-personal-storage-and-chat.md) / [0038](tasks/0038-extension-packages-and-lifecycle.md) → [0039](tasks/0039-extension-launcher-and-native-views.md) → [0040](tasks/0040-daily-essentials-extension.md) / [0041](tasks/0041-project-workflow-extension-pilot.md) → [0042](tasks/0042-extension-sdk-and-authoring-guide.md) → [0043](tasks/0043-extension-home-validation-and-release.md) — implemented locally (unit/integration/E2E recorded); the operator manual pass is pending.
+- Proving packages: Daily Essentials (personal daily commands) and Project Workflow (project-scoped, existing read-only Mirror semantics preserved).
+- Global installation is availability, not data access: every invocation carries exactly one authorized context. Marketplace publishing, arbitrary extension panels, and an OS sandbox for external MCP executables stay out of v1.
+
 ## P1 — ND Skills and MCP control plane
 
 ND should own reusable capability definitions even when an engine implements the protocol.

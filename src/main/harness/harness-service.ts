@@ -62,6 +62,7 @@ export class HarnessService {
   private onEvent?: (frame: DshEventFrame) => void
   private onGatewayReady?: (url: string) => void
   private readonly eventHub: SessionEventHub
+  private extraVisibleSessionIds: (() => ReadonlySet<string>) | undefined
 
   constructor(
     private readonly workspace: WorkspaceService,
@@ -97,6 +98,11 @@ export class HarnessService {
     await this.eventHub.rehydrate()
   }
 
+  /** ND Home personal chats stay listed even though their cwd is ND-managed storage. */
+  setExtraVisibleSessionIds(provider: (() => ReadonlySet<string>) | undefined): void {
+    this.extraVisibleSessionIds = provider
+  }
+
   /** Consume the user's cancellation intent for one session exactly once. */
   consumeCanceledSession(sessionId: string): boolean {
     return this.canceledSessions.delete(sessionId)
@@ -118,7 +124,7 @@ export class HarnessService {
     // effect on the next prompt/session. Durable Harness sessions survive the
     // transparent runtime restart.
     const gateway = await this.ensureStarted(true)
-    const sessionId = options?.sessionId?.trim() || this.activeSessionId || await this.createSession()
+    const sessionId = options?.sessionId?.trim() || this.activeSessionId || await this.createSession(options?.workspaceCwd)
     this.activeSessionId = sessionId
     this.canceledSessions.delete(sessionId)
     // Adopt the session's live journal before admitting the turn, so every
@@ -206,10 +212,11 @@ export class HarnessService {
   }
 
   /** Create a session on the workspace root (the deployment default preset applies). */
-  async createSession(): Promise<string> {
+  async createSession(cwd?: string): Promise<string> {
     this.workspace.assertUsable()
     const gateway = await this.ensureStarted(true)
-    const { result } = await this.rpcWithRecovery(gateway, 'session.create', { cwd: this.workspace.state().root })
+    const target = cwd?.trim() || this.workspace.state().root
+    const { result } = await this.rpcWithRecovery(gateway, 'session.create', { cwd: target })
     if (!result.ok) throw new Error(rpcFailureMessage('session.create', result))
     const sessionId = (result.value as { sessionId?: unknown } | undefined)?.sessionId
     if (typeof sessionId !== 'string') throw new Error('session.create returned no session id')
@@ -279,7 +286,8 @@ export class HarnessService {
     if (!result.ok) return result
     const archivedIds = await this.sessionArchive.archivedIds()
     const workspaceRoot = this.workspace.state().root
-    return { ...result, value: scopeSessionListPayload(result.value, workspaceRoot, archivedIds, this.runningSessions) }
+    const extraVisibleIds = this.extraVisibleSessionIds?.()
+    return { ...result, value: scopeSessionListPayload(result.value, workspaceRoot, archivedIds, this.runningSessions, extraVisibleIds) }
   }
 
   /** Boot the runtime eagerly. */

@@ -20,12 +20,19 @@ export function scopeSessionListPayload(
   workspaceRoot: string,
   archivedIds: ReadonlySet<string>,
   runningIds?: ReadonlySet<string>,
+  /**
+   * Sessions that belong to the user outside the active workspace. ND Home
+   * personal chats run in a managed per-chat folder, so they stay visible in
+   * the sidebar as their own bound context instead of disappearing.
+   */
+  extraVisibleIds?: ReadonlySet<string>,
 ): unknown {
   const raw = (value as { items?: unknown } | undefined)?.items
   if (!Array.isArray(raw)) return value
   const items = raw
     .filter((item): item is { sessionId: string } => {
       if (!isSessionLike(item)) return false
+      if (extraVisibleIds?.has(item.sessionId)) return true
       return sessionInWorkspace(workspaceRoot, (item as { cwd?: unknown }).cwd)
     })
     .map((item) => {

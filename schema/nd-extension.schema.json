@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nd-dsh.local/schema/nd-extension.schema.json",
+  "title": "ND extension package manifest (nd.extension/1)",
+  "description": "Validated by src/shared/extension-package.ts (the runtime installer and `node scripts/validate-nd-extension.mjs` share those rules). Contributions may only reference the allowlisted ND host methods.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol", "id", "name", "description", "version", "apiVersion", "contexts", "contributions"],
+  "properties": {
+    "protocol": { "const": "nd.extension/1" },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{1,127}$",
+      "description": "Package-qualified identity; contribution ids must be unique inside the package."
+    },
+    "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "description": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?$" },
+    "apiVersion": { "const": 1 },
+    "contexts": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "enum": ["personal", "company", "project"] },
+      "description": "Default contexts. Contributions may narrow these but never widen them."
+    },
+    "permissions": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "notes.read",
+          "notes.write",
+          "capture.screen",
+          "capture.area",
+          "capture.read",
+          "clipboard.read",
+          "clipboard.write",
+          "browser.navigate",
+          "browser.openExternal",
+          "os.launch",
+          "chat.start",
+          "workflow.read"
+        ]
+      }
+    },
+    "settings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "title", "type"],
+        "properties": {
+          "key": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9._-]{0,63}$" },
+          "title": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "type": { "enum": ["string", "boolean", "number"] },
+          "default": { "type": ["string", "boolean", "number"] },
+          "description": { "type": "string", "maxLength": 500 }
+        }
+      }
+    },
+    "executable": {
+      "description": "Executable transport for tool contributions. Installation never executes it; executable trust is granted separately at activation.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "command", "args"],
+      "properties": {
+        "kind": { "const": "mcp-stdio" },
+        "command": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "args": { "type": "array", "maxItems": 64, "items": { "type": "string", "maxLength": 4096 } },
+        "env": {
+          "type": "object",
+          "description": "Maps a child variable name to a parent environment-variable NAME. Secret values are never stored in manifests.",
+          "additionalProperties": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }
+        }
+      }
+    },
+    "contributions": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "title", "toolName"],
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string", "maxLength": 128 },
+              "description": { "type": "string", "maxLength": 500 },
+              "toolName": { "type": "string", "maxLength": 128 },
+              "contexts": { "type": "array", "items": { "enum": ["personal", "company", "project"] } }
+            }
+          }
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "title", "instructions"],
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string", "maxLength": 128 },
+              "description": { "type": "string", "maxLength": 500 },
+              "instructions": { "type": "string", "maxLength": 16000 },
+              "contexts": { "type": "array", "items": { "enum": ["personal", "company", "project"] } }
+            }
+          }
+        },
+        "commands": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "title", "host"],
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string", "maxLength": 128 },
+              "description": { "type": "string", "maxLength": 500 },
+              "keywords": { "type": "array", "maxItems": 32, "items": { "type": "string", "maxLength": 64 } },
+              "contexts": { "type": "array", "items": { "enum": ["personal", "company", "project"] } },
+              "host": { "$ref": "#/$defs/hostMethod" },
+              "startsAgent": { "type": "boolean" }
+            }
+          }
+        },
+        "views": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "title", "host", "itemTitleKey"],
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string", "maxLength": 128 },
+              "description": { "type": "string", "maxLength": 500 },
+              "kind": { "enum": ["list", "detail"] },
+              "host": { "$ref": "#/$defs/hostMethod" },
+              "itemTitleKey": { "type": "string", "maxLength": 64 },
+              "itemBodyKey": { "type": "string", "maxLength": 64 },
+              "contexts": { "type": "array", "items": { "enum": ["personal", "company", "project"] } },
+              "actions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["id", "title", "host"],
+                  "properties": {
+                    "id": { "type": "string" },
+                    "title": { "type": "string", "maxLength": 128 },
+                    "host": { "$ref": "#/$defs/hostMethod" }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "workflows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "title", "pluginId"],
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string", "maxLength": 128 },
+              "description": { "type": "string", "maxLength": 500 },
+              "pluginId": { "type": "string", "maxLength": 128 },
+              "contexts": { "type": "array", "items": { "enum": ["personal", "company", "project"] } }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "hostMethod": {
+      "enum": [
+        "note.create",
+        "note.search",
+        "note.open",
+        "note.delete",
+        "capture.screen",
+        "capture.area",
+        "capture.list",
+        "capture.copy",
+        "capture.export",
+        "clipboard.read",
+        "clipboard.write",
+        "browser.openUrl",
+        "browser.search",
+        "browser.openExternal",
+        "os.openTarget",
+        "chat.ask",
+        "workflow.list",
+        "workflow.refresh"
+      ]
+    }
+  }
+}

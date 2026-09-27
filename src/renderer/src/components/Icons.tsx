@@ -89,3 +89,4 @@ export const CrosshairIcon = (props: IconProps) => (
     <circle cx="12" cy="12" r="1" />
   </IconBase>
 )
+export const HomeIcon = (props: IconProps) => <IconBase {...props}><path d="m3 10.5 9-7 9 7" /><path d="M5.5 9.5V20h13V9.5" /><path d="M10 20v-5.5h4V20" /></IconBase>

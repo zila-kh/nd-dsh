@@ -4,6 +4,8 @@ This folder mixes dated evidence with operator manuals; only the first is a snap
 
 - [`beta-v1-handoff.md`](beta-v1-handoff.md) — **historical (2026-08-28, PR #12).** Its CI baseline predates the Rust runtime migration, the unified browser platform, and the decision to park Actions; do not treat it as current verification. Kept for audit context.
 - [`manual-beta-real-world.md`](manual-beta-real-world.md), [`agent-capabilities-manual.md`](agent-capabilities-manual.md), [`token-saver-manual.md`](token-saver-manual.md) — operator-facing manuals; check them against current behavior before relying on them.
+- [`quick-launcher-manual.md`](quick-launcher-manual.md) — PR #55 three-layer launcher gate: deterministic unit contracts, real Electron E2E, and Windows manual P0/P1 checks.
+- [`nd-extensions-home-manual.md`](nd-extensions-home-manual.md) — PRD 0006 extensions/ND Home gate: unit + integration + Electron E2E recorded locally 2026-09-27; operator manual P0/P1 pass and the agent-side bridge remain.
 
 Current validation evidence lives in dated task records (`docs/tasks/`, `docs/tasks/done/`) and their plans:
 
