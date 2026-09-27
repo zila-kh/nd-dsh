@@ -19,11 +19,7 @@ import { BrowserDownloadManager } from '../src/main/browser/browser-download-man
 
 const dirs: string[] = []
 
-class FakeSession extends EventEmitter {
-  removeListener(event: string, listener: (...args: unknown[]) => void): this {
-    return super.removeListener(event, listener)
-  }
-}
+class FakeSession extends EventEmitter {}
 
 class FakeDownloadItem extends EventEmitter {
   paused = false
