@@ -228,6 +228,7 @@ export function validateNdExtensionManifest(value: unknown): NdManifestValidatio
   const settings = settingFields(record.settings, issues)
 
   const contributions = contributionsValue(record.contributions, contexts, issues)
+  validateHostContexts(contributions, issues)
 
   const executable = executableValue(record.executable, contributions, issues)
 
@@ -472,6 +473,35 @@ function contributionsValue(
     issues.push({ path: 'contributions', message: 'a package must contribute at least one tool, skill, command, view, or workflow' })
   }
   return result
+}
+
+function validateHostContexts(contributions: NdPackageContributions, issues: NdValidationIssue[]): void {
+  for (const [index, command] of contributions.commands.entries()) {
+    const descriptor = ndHostMethod(command.host)
+    if (!descriptor) continue
+    const unsupported = command.contexts.filter((kind) => !descriptor.contexts.includes(kind))
+    if (unsupported.length > 0) {
+      issues.push({
+        path: `contributions.commands[${index}].contexts`,
+        message: `${command.host} supports only: ${descriptor.contexts.join(', ')}`,
+      })
+    }
+  }
+
+  for (const [index, view] of contributions.views.entries()) {
+    const hosts = [view.host, ...view.actions.map((action) => action.host)]
+    for (const host of hosts) {
+      const descriptor = ndHostMethod(host)
+      if (!descriptor) continue
+      const unsupported = view.contexts.filter((kind) => !descriptor.contexts.includes(kind))
+      if (unsupported.length > 0) {
+        issues.push({
+          path: `contributions.views[${index}].contexts`,
+          message: `${host} supports only: ${descriptor.contexts.join(', ')}`,
+        })
+      }
+    }
+  }
 }
 
 function executableValue(
