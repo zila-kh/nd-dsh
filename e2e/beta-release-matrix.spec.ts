@@ -1,5 +1,6 @@
 /// <reference lib="dom" />
 
+import { rm } from 'node:fs/promises'
 import { expect, test } from '@playwright/test'
 import type { OrganizationDesktopApi, OrganizationSnapshot } from '../src/shared/organization.js'
 import { closeApp, createWorkspaceDir, launchApp, type LaunchedApp } from './fixtures.js'
@@ -17,6 +18,7 @@ const MATRIX = [
 test.describe.configure({ mode: 'serial' })
 
 let launched: LaunchedApp
+const workspaceDirs: string[] = []
 let retainedUserData = ''
 const rendererErrors: string[] = []
 
@@ -47,6 +49,7 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   await closeApp(launched).catch(() => undefined)
+  await Promise.all(workspaceDirs.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
 })
 
 test('release matrix keeps 3 companies x 2 projects isolated across switching and restart', async () => {
@@ -59,6 +62,7 @@ test('release matrix keeps 3 companies x 2 projects isolated across switching an
 
     for (const projectName of row.projects) {
       const workspacePath = await createWorkspaceDir()
+      workspaceDirs.push(workspacePath)
       snapshot = await mutate({
         type: 'project.create',
         companyId: company!.id,
