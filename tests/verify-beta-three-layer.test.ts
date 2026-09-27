@@ -36,9 +36,33 @@ describe('verify-beta-three-layer', () => {
     expect(result.stderr).toContain('human.tester must be a non-empty string')
   })
 
+  it('fails when a mandatory release proof is missing or the soak is shorter than 24 hours', async () => {
+    const evidence = makeEvidence()
+    evidence.releaseChecks.automated.status = 'pending'
+    evidence.releaseChecks.soak24h.durationMinutes = 60
+
+    const evidencePath = await writeEvidence(evidence)
+    const result = spawnSync(process.execPath, [scriptPath, evidencePath], { encoding: 'utf8' })
+
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('releaseChecks.automated.status must be "pass"')
+    expect(result.stderr).toContain('durationMinutes must be at least 1440')
+  })
+
+  it('requires a meaningful sample before accepting a 99 percent scenario target', async () => {
+    const evidence = makeEvidence()
+    evidence.scenarioRuns = { passed: 20, total: 20, targetPassRate: 0.99, minimumRuns: 20 }
+
+    const evidencePath = await writeEvidence(evidence)
+    const result = spawnSync(process.execPath, [scriptPath, evidencePath], { encoding: 'utf8' })
+
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('99%+ scenario target requires at least 100 recorded runs')
+  })
+
   it('fails when repeated scenario reliability is below the configured target', async () => {
     const evidence = makeEvidence()
-    evidence.scenarioRuns = { passed: 94, total: 100, targetPassRate: 0.95 }
+    evidence.scenarioRuns = { passed: 94, total: 100, targetPassRate: 0.95, minimumRuns: 20 }
 
     const evidencePath = await writeEvidence(evidence)
     const result = spawnSync(process.execPath, [scriptPath, evidencePath], { encoding: 'utf8' })
@@ -91,10 +115,36 @@ function makeEvidence() {
         },
       },
     ],
+    releaseChecks: {
+      automated: {
+        status: 'pass',
+        evidence: ['e2e-results/beta-automated-test/beta-automated-summary.json'],
+      },
+      packagedCleanMachine: {
+        status: 'pass',
+        tester: 'release-owner',
+        recordedAt: '2026-09-27T12:35:00+07:00',
+        evidence: ['clean Windows VM packaged journey PASS'],
+      },
+      browserCompanionChrome: {
+        status: 'pass',
+        tester: 'release-owner',
+        recordedAt: '2026-09-27T12:40:00+07:00',
+        evidence: ['e2e:companion:chrome PASS'],
+      },
+      soak24h: {
+        status: 'pass',
+        durationMinutes: 1440,
+        tester: 'release-owner',
+        recordedAt: '2026-09-28T12:45:00+07:00',
+        evidence: ['e2e-results/beta-soak/beta-soak-test.json'],
+      },
+    },
     scenarioRuns: {
       passed: 19,
       total: 20,
       targetPassRate: 0.95,
+      minimumRuns: 20,
     },
     humanDecision: {
       status: 'go',
