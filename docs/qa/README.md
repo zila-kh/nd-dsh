@@ -4,6 +4,7 @@ This folder mixes dated evidence with operator manuals; only the first is a snap
 
 - [`beta-v1-handoff.md`](beta-v1-handoff.md) — **historical (2026-08-28, PR #12).** Its CI baseline predates the Rust runtime migration, the unified browser platform, and the decision to park Actions; do not treat it as current verification. Kept for audit context.
 - [`manual-beta-real-world.md`](manual-beta-real-world.md), [`agent-capabilities-manual.md`](agent-capabilities-manual.md), [`token-saver-manual.md`](token-saver-manual.md) — operator-facing manuals; check them against current behavior before relying on them.
+- [`quick-launcher-manual.md`](quick-launcher-manual.md) — PR #55 three-layer launcher gate: deterministic unit contracts, real Electron E2E, and Windows manual P0/P1 checks.
 
 Current validation evidence lives in dated task records (`docs/tasks/`, `docs/tasks/done/`) and their plans:
 
