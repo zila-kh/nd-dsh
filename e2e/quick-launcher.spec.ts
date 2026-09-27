@@ -9,6 +9,14 @@ type OrganizationWindow = typeof globalThis & {
   ndDshOrganization: OrganizationDesktopApi
 }
 
+type LauncherDesktopWindow = typeof globalThis & {
+  ndDsh: {
+    window?: {
+      toggleLauncherPopup?(): Promise<{ visible: boolean }>
+    }
+  }
+}
+
 test.describe.configure({ mode: 'serial' })
 
 let launched: LaunchedApp
@@ -183,7 +191,7 @@ test('launcher popup window toggles like Raycast and creates a task without open
   const { page } = launched
 
   const popupPromise = launched.app.waitForEvent('window')
-  await page.evaluate(() => window.ndDsh.window?.toggleLauncherPopup?.())
+  await page.evaluate(() => (globalThis as LauncherDesktopWindow).ndDsh.window?.toggleLauncherPopup?.())
   const popup = await popupPromise
   await expect.poll(() => popup.url()).toContain('#/launcher')
 
@@ -205,10 +213,10 @@ test('launcher popup window toggles like Raycast and creates a task without open
 
   // The picked action closes the popup; the same toggle opens it again and a
   // second press hides it — the Raycast show/hide contract.
-  const reopenToggle = await page.evaluate(() => window.ndDsh.window?.toggleLauncherPopup?.())
+  const reopenToggle = await page.evaluate(() => (globalThis as LauncherDesktopWindow).ndDsh.window?.toggleLauncherPopup?.())
   expect(reopenToggle?.visible).toBe(true)
   await expect(dialog).toBeVisible()
-  const closeToggle = await page.evaluate(() => window.ndDsh.window?.toggleLauncherPopup?.())
+  const closeToggle = await page.evaluate(() => (globalThis as LauncherDesktopWindow).ndDsh.window?.toggleLauncherPopup?.())
   expect(closeToggle?.visible).toBe(false)
 
   expect(rendererErrors).toEqual([])
