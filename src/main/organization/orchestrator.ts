@@ -299,7 +299,9 @@ export class OrganizationOrchestrator {
 
     try {
       await this.store.markExecution(context.task.id, target.sessionId)
-      const browserPrompt = appendBrowserAccess(prompt, target.sessionId, this.browserAccess)
+      // The shared engine router owns browser-token injection in production.
+      // The direct-Harness fallback has no router, so only that path injects here.
+      const browserPrompt = this.engineRuns ? prompt : appendBrowserAccess(prompt, target.sessionId, this.browserAccess)
       const runOptions = {
         sessionId: target.sessionId,
         ...modelOpts,
