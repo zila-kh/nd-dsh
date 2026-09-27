@@ -177,7 +177,52 @@ Git is currently resolved from the OS/PATH in some packaged flows. If the clean 
 
 Record tester/date/evidence under `releaseChecks.packagedCleanMachine`.
 
-## 4. Run the 24-hour soak
+## 4. Run destructive/failure drills on a disposable RC environment
+
+Use a disposable Windows VM/test profile. Do not perform disk-pressure or permission drills on a machine containing important data.
+
+### Network/provider interruption
+
+1. Start a real agent task using a configured provider.
+2. Disable the VM network adapter or otherwise remove network access.
+3. Confirm the task does not become falsely completed.
+4. Confirm the failure is classified as retryable/actionable rather than an auth/config success.
+5. Restore network and retry/continue.
+6. Confirm project/worktree state remains understandable and no duplicate task result appears.
+
+### nd-core interruption during active work
+
+1. Start a task that owns a real worker/process.
+2. In the disposable VM, terminate the ND Core process while the task is active.
+3. Confirm managed descendants are cleaned up rather than left as zombies.
+4. Reopen/continue ND.
+5. Confirm persisted running work is reconciled as interrupted/failed/retryable — never silently completed.
+6. Confirm the workspace still contains only explainable task output and the human checkout was not cleaned.
+
+The automated Windows forced-core-crash smoke covers process-tree cleanup; this Human drill covers what the user actually sees after interruption.
+
+### Unwritable data path
+
+1. In a disposable test profile, create a folder the current test user cannot write to (use Windows folder permissions/UI rather than modifying a production ND folder).
+2. Launch a test instance with `ND_DSH_USER_DATA_DIR` pointed at that folder.
+3. Confirm startup/state persistence fails clearly and does not claim successful durable writes.
+4. Restore permissions/use a fresh writable path and confirm ND can start again.
+
+### Disk-pressure / failed-write behavior
+
+Use only a disposable VM or deliberately small test volume; do **not** fill your normal system disk.
+
+1. Run ND user data/workspace on the constrained test volume.
+2. Reduce free space until a state/log/artifact write can fail safely.
+3. Confirm the previous durable organization state remains recoverable where the atomic-write/backup contract applies.
+4. Confirm ND surfaces an actionable failure instead of reporting completion.
+5. Free space and restart; confirm the project can be inspected/recovered without editing ND internal state manually.
+
+Record tester/date and concise PASS/FAIL evidence under `releaseChecks.failureDrills`.
+
+---
+
+## 5. Run the 24-hour soak
 
 The soak is skipped during normal `pnpm e2e`; only this dedicated command enables it.
 
@@ -207,7 +252,7 @@ e2e-results/beta-soak/beta-soak-<timestamp>.json
 
 The final release gate refuses `durationMinutes < 1440`. Review the start/mid/end memory/process samples manually as well; the numeric threshold is a guardrail, not proof that every leak is impossible.
 
-## 5. Human real-world layer
+## 6. Human real-world layer
 
 Run [manual-beta-real-world.md](manual-beta-real-world.md) against the same RC. At minimum manually cover:
 
@@ -224,7 +269,7 @@ Run [manual-beta-real-world.md](manual-beta-real-world.md) against the same RC. 
 
 The automated 3x2 matrix proves deterministic ownership. The human layer must still judge whether the UI makes that ownership and recovery understandable.
 
-## 6. Build the final evidence record
+## 7. Build the final evidence record
 
 Copy the template:
 
@@ -239,15 +284,16 @@ Fill:
 - `summary.p1CoreOpen = 0`;
 - Unit/E2E/Human PASS + evidence for every beta-exposed feature;
 - `releaseChecks.automated.summaryPath` -> the real `beta-automated-summary.json`; the gate reads it, requires `status: pass`, and requires its commit to equal `release.commit`;
-- `releaseChecks.packagedCleanMachine` -> human clean-machine result;
+- `releaseChecks.packagedCleanMachine` -> human clean-machine result and `artifact` exactly equal to `release.artifact`; the final gate rejects evidence from another build;
 - `releaseChecks.browserCompanionChrome` -> Chrome receipt/human result;
+- `releaseChecks.failureDrills` -> human evidence for network loss, nd-core interruption, unwritable data path and disk-pressure behavior;
 - `releaseChecks.soak24h.summaryPath` -> the real soak JSON; the gate reads it and requires `status: pass` + `requestedMinutes >= 1440`;
 - repeated scenario totals;
 - final human release decision.
 
 Default repeated-scenario threshold remains 95% with at least 20 recorded runs. If you set a target of 99% or higher, the gate requires at least **100 recorded runs** so “99%” is not claimed from a tiny sample.
 
-## 7. Run the final gate
+## 8. Run the final gate
 
 ```powershell
 corepack pnpm beta:gate -- docs/qa/beta-three-layer-evidence-beta1.json
@@ -276,7 +322,8 @@ Check:
 - [ ] no required stage was skipped;
 - [ ] exact packaged artifact identified;
 - [ ] real Chrome PASS;
-- [ ] clean-machine PASS;
+- [ ] clean-machine PASS against the exact `release.artifact`;
+- [ ] network/core-kill/unwritable-data/disk-pressure failure drills PASS;
 - [ ] soak >= 1440 minutes PASS;
 - [ ] 0 P0;
 - [ ] 0 core P1;
