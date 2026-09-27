@@ -14,6 +14,7 @@ import {
   ANTIGRAVITY_ENGINE_ID,
   CHATGPT_WEB_ENGINE_ID,
   CLAUDE_CODE_CLI_ENGINE_ID,
+  CODEX_ENGINE_ID,
   CODEX_CLI_ENGINE_ID,
   CURSOR_CLI_ENGINE_ID,
   ND_HARNESS_ENGINE_ID,
@@ -186,6 +187,7 @@ export class EngineSessionRouter {
     const requested = options?.sessionId
       ? this.engineForSession(options.sessionId)
       : options?.engineId ?? ND_HARNESS_ENGINE_ID
+    if (!options?.sessionId) this.assertKnownEngine(requested)
     const providerId = requested === ND_HARNESS_ENGINE_ID
       ? options?.provider ?? this.harness.status().provider
       : undefined
@@ -317,6 +319,7 @@ export class EngineSessionRouter {
    * worktrees; interactive chat keeps the active workspace default.
    */
   async createSession(engineId: string, cwd?: string): Promise<{ sessionId: string; engineId: string }> {
+    this.assertKnownEngine(engineId)
     const direct = this.directEngines.get(engineId)
     if (direct) {
       const workspaceDirect = this.isWorkspaceDirectEngine(engineId)
@@ -477,6 +480,16 @@ export class EngineSessionRouter {
     const zcode = this.zcode
     if (!zcode || zcode.listSessions().some((session) => session.running)) return
     await zcode.close()
+  }
+
+  private assertKnownEngine(engineId: string): void {
+    if (
+      engineId === ND_HARNESS_ENGINE_ID
+      || engineId === CODEX_ENGINE_ID
+      || engineId === CHATGPT_WEB_ENGINE_ID
+      || this.directEngines.has(engineId)
+    ) return
+    throw new Error(`Unknown coding engine: ${engineId}`)
   }
 
   private isWorkspaceDirectEngine(engineId: string): boolean {
