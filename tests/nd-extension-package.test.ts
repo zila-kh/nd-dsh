@@ -13,7 +13,7 @@ import {
   requiredPermissionsForManifest,
   validateNdExtensionManifest,
 } from '../src/shared/extension-package.js'
-import { BUILTIN_EXTENSION_PACKAGES, DAILY_ESSENTIALS_MANIFEST, PROJECT_WORKFLOW_MANIFEST, defaultActivationContexts } from '../src/shared/builtin-extension-packages.js'
+import { BUILTIN_EXTENSION_PACKAGES, DAILY_ESSENTIALS_MANIFEST, PROJECT_WORKFLOW_MANIFEST, WALLPAPER_MANAGER_MANIFEST, defaultActivationContexts } from '../src/shared/builtin-extension-packages.js'
 
 describe('ND contexts', () => {
   it('accepts personal without any company or project id', () => {
@@ -57,7 +57,21 @@ describe('extension package manifests', () => {
 
   it('activates only personal contexts by default for built-ins that support Personal', () => {
     expect(defaultActivationContexts(DAILY_ESSENTIALS_MANIFEST)).toEqual(['personal'])
+    expect(defaultActivationContexts(WALLPAPER_MANAGER_MANIFEST)).toEqual(['personal'])
     expect(defaultActivationContexts(PROJECT_WORKFLOW_MANIFEST)).toEqual([])
+  })
+
+
+  it('keeps native wallpaper control personal-only and permission-scoped', () => {
+    expect(WALLPAPER_MANAGER_MANIFEST.contexts).toEqual(['personal'])
+    expect(WALLPAPER_MANAGER_MANIFEST.permissions).toEqual(['os.wallpaper.write'])
+    expect(WALLPAPER_MANAGER_MANIFEST.contributions.commands).toEqual([
+      expect.objectContaining({
+        id: 'choose-wallpaper',
+        host: 'os.wallpaper.chooseAndSet',
+        contexts: ['personal'],
+      }),
+    ])
   })
 
   it('keeps Project Workflow project-only', () => {
