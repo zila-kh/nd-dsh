@@ -1,7 +1,7 @@
 # Task 0045 — Command registry + governed native wallpaper extension
 
 > Owner: ND launcher + extensions  
-> Status: implementation complete on `feat/magibar-command-native-extensions`; execution validation pending  
+> Status: implementation + static review complete; local-agent handoff ready; execution validation pending  
 > Priority: P1  
 > PRD: [0008 — Command Registry and Governed Native Extensions](../prd/0008-command-registry-native-extensions.md)  
 > Depends on: PRD 0006 extensions/Home and PRD 0007 General/Coding workspace profiles
@@ -31,6 +31,12 @@ Ship the first Magibar-inspired **architecture pattern**, not a clone: one Actio
 - Company/Project contexts cannot invoke the wallpaper host method.
 - Agent invocation requires explicit approval/grant.
 - The registry does not execute extension code; it adapts broker-provided command descriptors.
+
+## Handoff
+
+- Local validation handoff: [General/Coding + Command Registry + Native Extensions](../plan/general-coding-native-extensions-local-validation-handoff.md)
+- Validate/merge PR #58 first, then PR #59.
+- Do not mark merge-ready until the handoff's executable and Windows manual gates are recorded.
 
 ## Required validation before merge
 
