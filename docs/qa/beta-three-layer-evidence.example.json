@@ -115,12 +115,38 @@
   "scenarioRuns": {
     "passed": 0,
     "total": 0,
-    "targetPassRate": 0.95
+    "targetPassRate": 0.95,
+    "minimumRuns": 20
   },
   "humanDecision": {
     "status": "no-go",
     "owner": "",
     "recordedAt": "",
     "notes": "A human release owner changes this to go only after reviewing all three layers."
+  },
+  "releaseChecks": {
+    "automated": {
+      "status": "pending",
+      "evidence": []
+    },
+    "packagedCleanMachine": {
+      "status": "pending",
+      "tester": "",
+      "recordedAt": "",
+      "evidence": []
+    },
+    "browserCompanionChrome": {
+      "status": "pending",
+      "tester": "",
+      "recordedAt": "",
+      "evidence": []
+    },
+    "soak24h": {
+      "status": "pending",
+      "durationMinutes": 0,
+      "tester": "",
+      "recordedAt": "",
+      "evidence": []
+    }
   }
 }
