@@ -104,6 +104,11 @@ const api: DesktopApi = {
       ipcRenderer.on(IPC.windowFloatModeEvent, handler)
       return () => ipcRenderer.removeListener(IPC.windowFloatModeEvent, handler)
     },
+    onQuickLauncher: (listener) => {
+      const handler = () => listener()
+      ipcRenderer.on(IPC.windowQuickLauncherEvent, handler)
+      return () => ipcRenderer.removeListener(IPC.windowQuickLauncherEvent, handler)
+    },
   },
   providers: {
     list: () => ipcRenderer.invoke(IPC.providersList),
