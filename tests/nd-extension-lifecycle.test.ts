@@ -96,6 +96,14 @@ describe('ExtensionPackageStore lifecycle', () => {
     expect(await store.manifestForVersion('nd.sample', '1.0.0')).toMatchObject({ id: 'nd.sample' })
   })
 
+  it('validates built-in packages through the same runtime rules before snapshotting', async () => {
+    const store = new ExtensionPackageStore(root)
+    const invalid = structuredClone(DAILY_ESSENTIALS_MANIFEST)
+    invalid.permissions = []
+    await expect(store.registerBuiltin(invalid)).rejects.toThrow(/Invalid built-in extension package/)
+    expect(await store.activeManifest(invalid.id)).toBeUndefined()
+  })
+
   it('refuses to uninstall ND-maintained packages but removes third-party snapshots', async () => {
     const store = new ExtensionPackageStore(root)
     await store.registerBuiltin(DAILY_ESSENTIALS_MANIFEST)
