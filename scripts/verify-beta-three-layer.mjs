@@ -31,6 +31,15 @@ requireText(evidence.release?.recordedAt, 'release.recordedAt')
 requireZero(evidence.summary?.p0Open, 'summary.p0Open')
 requireZero(evidence.summary?.p1CoreOpen, 'summary.p1CoreOpen')
 
+requireReleaseCheck(evidence.releaseChecks?.automated, 'releaseChecks.automated')
+requireHumanReleaseCheck(evidence.releaseChecks?.packagedCleanMachine, 'releaseChecks.packagedCleanMachine')
+requireHumanReleaseCheck(evidence.releaseChecks?.browserCompanionChrome, 'releaseChecks.browserCompanionChrome')
+requireHumanReleaseCheck(evidence.releaseChecks?.soak24h, 'releaseChecks.soak24h')
+const soakMinutes = evidence.releaseChecks?.soak24h?.durationMinutes
+if (typeof soakMinutes !== 'number' || !Number.isFinite(soakMinutes) || soakMinutes < 24 * 60) {
+  errors.push('releaseChecks.soak24h.durationMinutes must be at least 1440')
+}
+
 if (!Array.isArray(evidence.features) || evidence.features.length === 0) {
   errors.push('features must contain the beta-exposed release matrix')
 } else {
@@ -66,9 +75,17 @@ if (!Array.isArray(evidence.features) || evidence.features.length === 0) {
 const passed = evidence.scenarioRuns?.passed
 const total = evidence.scenarioRuns?.total
 const target = evidence.scenarioRuns?.targetPassRate ?? 0.95
+const minimumRuns = evidence.scenarioRuns?.minimumRuns ?? 20
 if (!Number.isInteger(passed) || passed < 0) errors.push('scenarioRuns.passed must be a non-negative integer')
 if (!Number.isInteger(total) || total <= 0) errors.push('scenarioRuns.total must be a positive integer')
 if (typeof target !== 'number' || target <= 0 || target > 1) errors.push('scenarioRuns.targetPassRate must be > 0 and <= 1')
+if (!Number.isInteger(minimumRuns) || minimumRuns < 1) errors.push('scenarioRuns.minimumRuns must be a positive integer')
+if (Number.isInteger(total) && Number.isInteger(minimumRuns) && total < minimumRuns) {
+  errors.push(`scenarioRuns.total ${total} is below minimumRuns ${minimumRuns}`)
+}
+if (typeof target === 'number' && target >= 0.99 && Number.isInteger(total) && total < 100) {
+  errors.push('a 99%+ scenario target requires at least 100 recorded runs')
+}
 if (Number.isInteger(passed) && Number.isInteger(total) && total > 0 && passed > total) {
   errors.push('scenarioRuns.passed cannot exceed scenarioRuns.total')
 }
@@ -91,9 +108,23 @@ const exposedCount = evidence.features.filter((feature) => feature?.betaExposed 
 console.log('Beta 3-layer gate: PASS')
 console.log(`- release: ${evidence.release.version} @ ${evidence.release.commit}`)
 console.log(`- beta-exposed features: ${exposedCount} / ${exposedCount} passed Unit + E2E + Human`)
-console.log(`- repeated scenario pass rate: ${formatPercent(passRate)} (${passed}/${total})`)
+console.log(`- repeated scenario pass rate: ${formatPercent(passRate)} (${passed}/${total}; minimum ${minimumRuns})`)
+console.log(`- release checks: automated + clean-machine + Chrome + 24h soak passed`)
 console.log(`- P0 open: 0; core P1 open: 0`)
 console.log(`- human release owner: ${evidence.humanDecision.owner}`)
+
+function requireReleaseCheck(check, path) {
+  if (check?.status !== 'pass') errors.push(`${path}.status must be "pass"`)
+  if (!Array.isArray(check?.evidence) || check.evidence.length === 0 || check.evidence.some((item) => !isText(item))) {
+    errors.push(`${path}.evidence must contain at least one evidence reference`)
+  }
+}
+
+function requireHumanReleaseCheck(check, path) {
+  requireReleaseCheck(check, path)
+  requireText(check?.tester, `${path}.tester`)
+  requireText(check?.recordedAt, `${path}.recordedAt`)
+}
 
 function requireZero(value, path) {
   if (!Number.isInteger(value) || value !== 0) errors.push(`${path} must be 0`)
