@@ -10,6 +10,7 @@ type OrganizationWindow = typeof globalThis & {
   ndDshOrganization: OrganizationDesktopApi
 }
 
+const RUN_SOAK = process.env.ND_DSH_RUN_SOAK === '1'
 const SOAK_MINUTES = boundedNumber(process.env.ND_DSH_SOAK_MINUTES, 5, 1, 24 * 60)
 const SAMPLE_SECONDS = boundedNumber(process.env.ND_DSH_SOAK_SAMPLE_SECONDS, 30, 5, 10 * 60)
 const MAX_GROWTH_MB = boundedNumber(process.env.ND_DSH_SOAK_MAX_GROWTH_MB, 512, 64, 4096)
@@ -23,6 +24,8 @@ const MATRIX = [
 ] as const
 
 let launched: LaunchedApp
+
+test.skip(!RUN_SOAK, 'Run through corepack pnpm e2e:beta:soak; normal E2E must not start the long soak.')
 
 async function state(): Promise<OrganizationSnapshot> {
   return await launched.page.evaluate(async () => {
