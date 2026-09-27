@@ -44,7 +44,7 @@ describe('LauncherCommandRegistry', () => {
       query: 'ship it',
       organization,
       currentUrl: 'https://example.com',
-      contexts: [{ id: 'personal', label: 'Personal', detail: 'Personal' }],
+      contexts: [{ id: 'personal', label: 'Personal', detail: 'Personal', context: { kind: 'personal' } }],
       activeContextId: 'personal',
       extensionCommands: [{
         extensionId: 'nd.wallpaper-manager',
