@@ -1,7 +1,7 @@
 # Task 0044 — General / Coding workspace profile
 
 > Owner: ND desktop + extensions  
-> Status: implementation complete on `feat/general-coding-workspace-profile`; validation pending  
+> Status: implementation complete; local automated validation green on `b3d16a8` (2026-09-28); manual smoke scenarios pending operator  
 > Priority: P1  
 > PRD: [0007 — General and Coding Workspace Profiles](../prd/0007-general-and-coding-workspaces.md)
 
