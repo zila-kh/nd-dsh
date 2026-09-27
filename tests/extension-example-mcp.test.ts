@@ -56,6 +56,40 @@ describe('Counter MCP example', () => {
     expect(tools.map((tool) => tool.name)).toEqual(['counter_get', 'counter_add', 'counter_reset'])
   })
 
+  it('contains a broken MCP child and the extension control plane remains usable afterwards', async () => {
+    const { catalog, state } = await fixture()
+    const broken = JSON.parse(await (await import('node:fs/promises')).readFile(catalog, 'utf8')) as { extensions: AgentExtensionManifest[] }
+    broken.extensions[0] = {
+      ...broken.extensions[0]!,
+      runtime: {
+        kind: 'mcp-stdio',
+        command: process.execPath,
+        args: ['-e', 'process.exit(23)'],
+        env: {},
+      },
+    }
+    await writeFile(catalog, JSON.stringify({ version: 1, extensions: broken.extensions }, null, 2) + '\n', 'utf8')
+
+    await expect(invoke(catalog, state, ['list', 'example-counter-mcp', 'codex-cli'])).rejects.toThrow()
+
+    // Repair only the child runtime configuration. A failed child must not
+    // corrupt the catalog/state or require an ND/app restart before the next
+    // extension request can succeed.
+    broken.extensions[0] = {
+      ...broken.extensions[0]!,
+      runtime: {
+        kind: 'mcp-stdio',
+        command: process.execPath,
+        args: [server],
+        env: {},
+      },
+    }
+    await writeFile(catalog, JSON.stringify({ version: 1, extensions: broken.extensions }, null, 2) + '\n', 'utf8')
+
+    const tools = await invoke(catalog, state, ['list', 'example-counter-mcp', 'codex-cli']) as Array<{ name: string }>
+    expect(tools.map((tool) => tool.name)).toEqual(['counter_get', 'counter_add', 'counter_reset'])
+  })
+
   it('runs reset, +3, +4, get through the real MCP child process', async () => {
     const { catalog, state } = await fixture()
     // The example MCP process itself is intentionally stateless between proxy
