@@ -1,7 +1,7 @@
 # Beta release readiness — execution plan
 
 > Updated: 2026-09-27  
-> Basis: current `main` plus the current standing recorded in [beta-release-gate.md](beta-release-gate.md), updated 2026-09-26.  
+> Basis: current `main` plus beta-hardening changes on `feat/beta-release-stability-plan-2026-09-27`. Last fully attested baseline is 2026-09-26; the new hardening changes remain **local-PC validation pending**.  
 > Goal: get ND-DSH to a **Beta Stable** release candidate without requiring every planned feature to be finished. Beta-exposed features must be predictable, recoverable, scoped correctly, and diagnosable.
 
 ## Release labels
@@ -77,23 +77,24 @@ These are the highest-risk gaps from the current gate.
 
 #### 1A. Product-level pre-push secret scan
 
-- [ ] Move secret detection out of the audit-only E2E driver and into the real Git push boundary.
-- [ ] Block a push containing a confirmed credential/token/private key.
-- [ ] Provide a clear refusal message and safe remediation path.
-- [ ] Negative test: known fake secrets are blocked.
-- [ ] Positive test: normal source pushes are unaffected.
+- [x] Implemented in the real `GitService.push()` and `pushBranch()` boundary.
+- [x] High-confidence credential/token/private-key formats and committed sensitive credential files are blocked before network mutation.
+- [x] Refusal reports filenames only; secret values are not copied into Git output/logs.
+- [x] Positive/negative tests added.
+- [ ] Fresh local RC execution still required.
 
 #### 1B. Provider credential scope
 
-- [ ] Decide the beta contract: project/environment-scoped credentials are preferred for the existing multi-company model.
-- [ ] Ensure one company/project cannot silently resolve another project's credential.
-- [ ] If full per-project/env storage is not ready, make the global scope explicit in UI/docs and disable any UI that implies stronger isolation.
-- [ ] Add positive + negative cross-company/project tests.
+- [x] Private Beta contract decided: provider API keys are **desktop-global operator resources**, not company/project tenant secrets.
+- [x] The limitation is explicit in the RC handoff; one ND desktop must stay inside one trusted operator/security domain.
+- [ ] True company/project/environment secret isolation remains future runtime/gateway work; the shared Harness currently consumes one global ProviderStore runtime config.
+- [ ] Do not claim mutually-untrusted tenant credential isolation until that boundary changes.
 
 #### 1C. Explicit local transport boundary tests
 
-- [ ] Add a direct test that browser/CDP/native-host control is loopback/local-only.
-- [ ] Confirm logs/diagnostics never export raw provider credentials or browser secrets.
+- [x] `pnpm verify` now fails if Electron CDP is not explicitly bound to `127.0.0.1`.
+- [x] Diagnostics/redaction tests remain in place and the real Settings Copy diagnostics UI now has E2E privacy coverage.
+- [ ] Fresh local RC execution still required.
 
 **Exit:** no known secret-leak or wrong-scope credential path.
 
@@ -144,15 +145,15 @@ Negative cases:
 
 Keep this focused; do not add unrelated features.
 
-- [ ] Provider HTTP 429 / rate-limit backoff test.
-- [ ] Sidecar kill/restart/backoff test during real work.
-- [ ] Internet disconnect/reconnect drill.
-- [ ] Invalid/unwritable data directory and disk-full-style failure drill.
-- [ ] Browser download + cookie/storage behavior test for whichever parts are exposed in beta.
-- [ ] MCP crash/misconfiguration test proving the session remains usable.
-- [ ] Workflow-template UI create/edit/rerun test if that UI is beta-exposed.
-- [ ] UI long-chat + multi-agent stress test for progressive freeze/memory growth.
-- [ ] Diagnostics export smoke with secret redaction.
+- [x] Explicit HTTP 429 / rate-limit transient classification + regression test added.
+- [x] Windows forced-nd-core-crash descendant cleanup is required by `beta:automated`; restart reconciliation remains covered by existing organization recovery/effect-journal tests.
+- [ ] Human network disconnect/reconnect drill on the packaged RC.
+- [ ] Human invalid/unwritable data-directory / disk-full-style drill on the packaged RC.
+- [x] Real Electron browser runtime spike covers cookie set/read/clear + a real download and is now required by `beta:automated`.
+- [x] MCP child-failure containment test proves a broken child does not corrupt the control plane and a repaired next request works; interactive-session UX remains a Human check.
+- [ ] Workflow-template UI create/edit/rerun: disable/mark experimental for beta if this surface is not fully exposed/tested.
+- [x] Soak harness continuously checks renderer liveness, process count and memory growth; a real 24-hour run is still required.
+- [x] Settings → About → Copy diagnostics E2E added with clipboard privacy assertions.
 
 **Exit:** every beta-exposed subsystem has at least one failure-path proof.
 
@@ -164,7 +165,7 @@ Run the RC like a real user, not only a test fixture.
 
 Minimum matrix:
 
-- [ ] **3 companies × 2 projects each**.
+- [x] **3 companies × 2 projects each** deterministic E2E harness implemented; Human/live RC execution still required.
 - [ ] At least 2 different provider/model routes.
 - [ ] At least 2 coding engines where locally available.
 - [ ] Parallel work in at least 2 projects at the same time.
@@ -181,7 +182,7 @@ For each scenario record: PASS / FAIL, app commit, artifact hash/name, provider/
 
 ### Phase 5 — 24-hour soak
 
-Run the packaged RC for 24 hours with periodic real tasks.
+The dedicated `e2e:beta:soak` harness is implemented. Run it on the RC machine for 24 hours; the final gate rejects evidence below 1440 minutes.
 
 Check:
 
@@ -203,18 +204,17 @@ Take diagnostics at start, midpoint, and end.
 
 ### Phase 6 — Private Beta release decision
 
-Before sending the build to beta users:
+Before sending the build to beta users, run the single automated release gate on Windows:
 
 ```sh
-corepack pnpm verify
-corepack pnpm typecheck
-corepack pnpm test
-corepack pnpm core:test
-corepack pnpm build
-corepack pnpm e2e
+corepack pnpm beta:automated
 ```
 
-Also require the clean-machine packaged E2E and soak evidence above.
+Then require real Chrome Companion, clean-machine packaged E2E, the 24-hour soak, Human scenarios, and finally:
+
+```sh
+corepack pnpm beta:gate -- docs/qa/beta-three-layer-evidence-<rc>.json
+```
 
 Release only when:
 
