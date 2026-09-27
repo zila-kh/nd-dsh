@@ -57,7 +57,8 @@
     "beta:gate": "node scripts/verify-beta-three-layer.mjs",
     "e2e:beta:matrix": "playwright test e2e/beta-release-matrix.spec.ts",
     "e2e:beta:soak": "node scripts/run-beta-soak.mjs",
-    "release:smoke:packaged": "node scripts/packaged-runtime-smoke.mjs"
+    "release:smoke:packaged": "node scripts/packaged-runtime-smoke.mjs",
+    "beta:automated": "node scripts/run-beta-automated.mjs"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
