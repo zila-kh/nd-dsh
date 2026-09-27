@@ -1,9 +1,8 @@
 /**
- * ND-maintained extension packages. Both proving packages go through the same
- * manifest validation, snapshot, activation, and invocation path as any
- * third-party package: Daily Essentials proves personal daily use with zero
- * companies or projects, and Project Workflow proves that global installation
- * can coexist with project-scoped contributions.
+ * ND-maintained proving packages go through the same manifest validation,
+ * snapshot, activation, and invocation path as third-party packages. Daily
+ * Essentials proves personal daily use, Wallpaper Manager proves a governed
+ * native OS capability, and Project Workflow proves project-scoped use.
  */
 
 import { ND_EXTENSION_API_VERSION, ND_EXTENSION_PROTOCOL, type NdExtensionManifest } from './extension-package.js'
