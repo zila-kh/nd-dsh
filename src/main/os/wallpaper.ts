@@ -85,7 +85,7 @@ export async function setDesktopWallpaper(imagePath: string, platform: NodeJS.Pl
   for (const command of wallpaperCommands(platform, imagePath)) {
     try {
       await execFileAsync(command.file, command.args, {
-        env: command.env,
+        ...(command.env ? { env: command.env } : {}),
         windowsHide: true,
         timeout: 15_000,
         maxBuffer: 512 * 1024,
