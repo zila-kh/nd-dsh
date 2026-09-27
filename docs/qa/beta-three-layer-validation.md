@@ -49,6 +49,32 @@ All other company/project state and writable task-workspace ownership must still
 - Windows forced-nd-core-crash cleanup in the packaged release stage;
 - configurable Electron soak harness with process/memory/state samples and JSON receipt;
 - final three-layer gate that rejects a soak shorter than 24 hours.
+- bounded ND Core restart policy is now explicit and regression-tested (one automatic restart, then fail closed until a stable reset window);
+- external-app CDP inspection now validates the **advertised debugger WebSocket** is loopback-only in both the main-process picker and packaged MCP bridge;
+- browser download policy now has focused unit coverage for direct user downloads and agent pause/allow/deny/fail-closed behavior;
+- provider retry configuration explicitly pins bounded retry classes including `RATE_LIMIT`, so upstream default changes cannot silently remove the beta contract;
+- Models UI explicitly states that provider credentials are desktop-profile scoped for supervised Private Beta;
+
+## Required feature evidence map
+
+Use these rows when filling the committed evidence template. Unit/E2E references below are starting points; the Human column must be completed by a real tester on the exact RC.
+
+| Required feature id | Automated evidence to review | Human focus |
+| --- | --- | --- |
+| `core-agent-flow` | organization orchestrator/reliability tests, full Playwright, `e2e:prod` | idea/task -> worker -> verify -> independent review -> result |
+| `company-project-isolation` | portfolio tests + `e2e:beta:matrix` | switch among 3×2 portfolio while work/state remains understandable |
+| `parallel-agent-worktree` | execution coordinator, task-worktree, parallel reliability tests | concurrent tasks never overwrite/clean another task or human checkout |
+| `git-worktree-secret-safety` | GitService push/branch secret-block tests + worktree tests | inspect real refusal/error and Git diff/state before any push |
+| `credential-security-boundaries` | provider secret preservation, env scrub, approval/redaction tests, loopback CDP tests | OS secure storage + desktop-global provider-key limitation is clear |
+| `persistence-recovery` | snapshot/recovery/effect-journal tests + restart E2E | close/crash/reopen; no false completion or corrupted ownership |
+| `provider-failure-handling` | provider runtime/ping/reliability tests incl. RATE_LIMIT + live model run | network loss, provider outage, missing/bad credential wording/retry |
+| `browser-platform` | browser leases/policy/download tests, runtime benchmark, Chrome companion E2E | real permission dialog, screenshot toolbar requirement, recovery |
+| `mcp-skills-failure-containment` | extension runtime/router/example MCP recovery tests | break one MCP runtime and confirm the surrounding ND session remains usable |
+| `budget-entitlement` | compute/usage/token-saver/tool-routing tests | budget status is understandable and unrelated work is not silently blocked |
+| `terminal-filesystem` | terminal/core/path tests + packaged terminal/Git smoke | cancellation, paths, permissions and terminal recovery in the packaged app |
+| `diagnostics-observability` | diagnostics/redaction tests + Settings copy-diagnostics E2E | copied report is useful but contains no secret/private project identity |
+
+The evidence file intentionally uses exactly these IDs. `tests/verify-beta-three-layer.test.ts` now checks that the template and final gate cannot drift apart.
 
 ## 0. Prepare the exact RC
 
