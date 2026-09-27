@@ -72,6 +72,17 @@ describe('session-scoped cancellation', () => {
   })
 })
 
+describe('engine route admission', () => {
+  it('fails closed instead of silently routing an unknown engine through Harness', async () => {
+    const { router, harness } = fixture()
+
+    await expect(router.run('hello', { engineId: 'missing-engine' })).rejects.toThrow(/Unknown coding engine/)
+    await expect(router.createSession('missing-engine')).rejects.toThrow(/Unknown coding engine/)
+    expect(harness.run).not.toHaveBeenCalled()
+    expect(harness.gatewayRpc).not.toHaveBeenCalled()
+  })
+})
+
 describe('direct engine workspace context', () => {
   it.each(['antigravity', 'codex-cli', 'zcode-cli', 'pi-coding', 'cursor-cli', 'claude-code-cli'])('routes the catalog and selected model for %s', async (engineId) => {
     const { router, run } = fixture()
