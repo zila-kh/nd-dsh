@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -91,7 +91,7 @@ describe('verify-beta-three-layer', () => {
     const evidence = makeEvidence()
     const evidencePath = await writeEvidence(evidence)
     const directory = evidence.releaseChecks.automated.summaryPath
-    const receipt = JSON.parse(await (await import('node:fs/promises')).readFile(directory, 'utf8')) as {
+    const receipt = JSON.parse(await readFile(directory, 'utf8')) as {
       release: { artifact: { identity: string } }
     }
     receipt.release.artifact.identity = 'different.exe#sha256:bad'
