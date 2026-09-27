@@ -1,6 +1,6 @@
 /// <reference lib="dom" />
 
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import type { OrganizationDesktopApi, OrganizationSnapshot } from '../src/shared/organization.js'
@@ -24,8 +24,7 @@ const MATRIX = [
 ] as const
 
 let launched: LaunchedApp
-
-test.skip(!RUN_SOAK, 'Run through corepack pnpm e2e:beta:soak; normal E2E must not start the long soak.')
+const workspaceDirs: string[] = []
 
 async function state(): Promise<OrganizationSnapshot> {
   return await launched.page.evaluate(async () => {
@@ -41,9 +40,11 @@ async function mutate(input: Parameters<OrganizationDesktopApi['mutate']>[0]): P
 
 test.afterAll(async () => {
   await closeApp(launched).catch(() => undefined)
+  await Promise.all(workspaceDirs.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
 })
 
 test('beta soak keeps one Electron lifetime stable while switching a 3x2 portfolio', async () => {
+  test.skip(!RUN_SOAK, 'Run through corepack pnpm e2e:beta:soak; normal E2E must not start the long soak.')
   test.setTimeout(SOAK_MS + 180_000)
   launched = await launchApp()
 
@@ -53,6 +54,7 @@ test('beta soak keeps one Electron lifetime stable while switching a 3x2 portfol
     const company = snapshot.companies.find((item) => item.name === row.company)!
     for (const projectName of row.projects) {
       const workspacePath = await createWorkspaceDir()
+      workspaceDirs.push(workspacePath)
       snapshot = await mutate({
         type: 'project.create',
         companyId: company.id,
