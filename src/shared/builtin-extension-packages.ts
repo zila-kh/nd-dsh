@@ -10,6 +10,7 @@ import { ND_EXTENSION_API_VERSION, ND_EXTENSION_PROTOCOL, type NdExtensionManife
 
 export const DAILY_ESSENTIALS_ID = 'nd.daily-essentials'
 export const PROJECT_WORKFLOW_ID = 'nd.project-workflow'
+export const WALLPAPER_MANAGER_ID = 'nd.wallpaper-manager'
 
 export const DAILY_ESSENTIALS_MANIFEST: NdExtensionManifest = {
   protocol: ND_EXTENSION_PROTOCOL,
@@ -90,6 +91,34 @@ export const DAILY_ESSENTIALS_MANIFEST: NdExtensionManifest = {
   },
 }
 
+export const WALLPAPER_MANAGER_MANIFEST: NdExtensionManifest = {
+  protocol: ND_EXTENSION_PROTOCOL,
+  id: WALLPAPER_MANAGER_ID,
+  name: 'Wallpaper Manager',
+  description: 'A native desktop extension that changes the host OS wallpaper through ND’s permission broker.',
+  version: '1.0.0',
+  apiVersion: ND_EXTENSION_API_VERSION,
+  contexts: ['personal'],
+  permissions: ['os.wallpaper.write'],
+  settings: [],
+  contributions: {
+    tools: [],
+    skills: [],
+    commands: [
+      {
+        id: 'choose-wallpaper',
+        title: 'Choose wallpaper',
+        description: 'Pick an image and set it as the desktop wallpaper.',
+        host: 'os.wallpaper.chooseAndSet',
+        contexts: ['personal'],
+        keywords: ['wallpaper', 'desktop', 'background', 'image'],
+      },
+    ],
+    views: [],
+    workflows: [],
+  },
+}
+
 export const PROJECT_WORKFLOW_MANIFEST: NdExtensionManifest = {
   protocol: ND_EXTENSION_PROTOCOL,
   id: PROJECT_WORKFLOW_ID,
@@ -131,6 +160,7 @@ export const PROJECT_WORKFLOW_MANIFEST: NdExtensionManifest = {
 
 export const BUILTIN_EXTENSION_PACKAGES: readonly NdExtensionManifest[] = [
   DAILY_ESSENTIALS_MANIFEST,
+  WALLPAPER_MANAGER_MANIFEST,
   PROJECT_WORKFLOW_MANIFEST,
 ]
 
