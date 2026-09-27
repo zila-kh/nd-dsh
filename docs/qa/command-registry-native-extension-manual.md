@@ -19,7 +19,7 @@ The repository currently keeps GitHub Actions parked; do not translate static re
 - Open the global launcher in Personal context.
 - Verify **Choose wallpaper** appears under Extensions.
 - Run it and cancel the file picker: no wallpaper change and no error.
-- Run it again and choose a PNG/JPEG/WebP/BMP.
+- Run it again and choose a PNG/JPEG/BMP.
 - Verify the desktop wallpaper changes.
 - Switch the launcher to a Company or Project context and verify the command is absent.
 - Verify Settings → Extensions shows Wallpaper Manager as a Personal extension with `os.wallpaper.write`.
