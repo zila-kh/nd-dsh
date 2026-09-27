@@ -33,6 +33,7 @@ import {
 import type { DesignDesktopApi, DesignFreeformState, DesignProjectState } from '../../shared/design'
 import type { OrganizationDesktopApi, OrganizationMutation, OrganizationSnapshot } from '../../shared/organization'
 import type { WorkflowPluginsDesktopApi } from '../../shared/workflow-plugins'
+import type { WorkspaceProfile } from '../../shared/workspace-profile'
 
 type Listener<T> = (value: T) => void
 
@@ -197,6 +198,7 @@ let browserPlatform: BrowserPlatformState = {
 }
 
 let theme: ThemeState = { mode: 'system', effective: matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark' }
+let workspaceProfile: WorkspaceProfile = 'general'
 
 let providers: ModelProvider[] = [
   { id: 'openai-prod', name: 'OpenAI', enabled: true, baseUrl: 'https://api.openai.com/v1', apiFormat: 'openai-responses', apiKey: '', hasApiKey: true, models: [{ id: 'gpt-5.6', context: '256k' }] },
@@ -790,6 +792,10 @@ const desktopApi: DesktopApi = {
     state: async () => ({ surface: 'workbench', view: { ready: false, loading: false, title: 'UI preview', visible: false } }),
     set: async (surface) => ({ surface, view: { ready: false, loading: false, title: 'UI preview', visible: false } }),
     onChanged: () => () => undefined,
+  },
+  workspaceProfile: {
+    get: async () => workspaceProfile,
+    set: async (profile) => { workspaceProfile = profile; return workspaceProfile },
   },
   dshView: {
     setBounds: async () => undefined,
