@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { Fragment, useState, type ReactNode } from 'react'
 import {
   Building2,
   Camera,
@@ -164,7 +164,7 @@ export function QuickLauncher({
         <CommandEmpty>No matching ND command.</CommandEmpty>
 
         {groups.map((group, index) => (
-          <div key={group.group}>
+          <Fragment key={group.group}>
             {index > 0 ? <CommandSeparator /> : null}
             <CommandGroup heading={group.group}>
               {group.items.map((command) => (
@@ -183,7 +183,7 @@ export function QuickLauncher({
                 </CommandItem>
               ))}
             </CommandGroup>
-          </div>
+          </Fragment>
         ))}
       </CommandList>
 
