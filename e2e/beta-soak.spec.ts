@@ -108,7 +108,7 @@ test('beta soak keeps one Electron lifetime stable while switching a 3x2 portfol
 
     const metrics = await launched.app.evaluate(({ app }) => app.getAppMetrics().map((metric) => ({
       pid: metric.pid,
-      workingSetSize: metric.memory.workingSetSize,
+      workingSetSize: metric.memory?.workingSetSize ?? 0,
     })))
     const totalWorkingSetMb = metrics.reduce((sum, metric) => sum + metric.workingSetSize, 0) / 1024
     samples.push({
