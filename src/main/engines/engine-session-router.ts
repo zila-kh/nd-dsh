@@ -198,6 +198,10 @@ export class EngineSessionRouter {
       ? directTarget?.listSessions().find((item) => item.sessionId === requestedSessionId)?.cwd
       : undefined
     const boundSessionCwd = requestedSessionId ? this.workspaceRootBySession.get(requestedSessionId) : undefined
+    const requestedRunCwd = options?.workspaceCwd?.trim()
+    if (boundSessionCwd && requestedRunCwd && !sameWorkspaceRoot(boundSessionCwd, requestedRunCwd)) {
+      throw new Error('Run requested a different workspace than the ND-bound session; create a new session instead of re-rooting this one')
+    }
     if (boundSessionCwd && engineSessionCwd && !sameWorkspaceRoot(boundSessionCwd, engineSessionCwd)) {
       throw new Error('Direct engine changed the ND-bound task workspace; create a new session instead of re-rooting this one')
     }
@@ -309,7 +313,7 @@ export class EngineSessionRouter {
     if (this.chatGptWeb?.listSessions().some((session) => session.running)) {
       throw new Error('ND Harness and ChatGPT Web share the visible browser. Finish the active ChatGPT Web turn before starting ND Harness.')
     }
-    const harnessCwd = options?.workspaceCwd?.trim() ?? sessionCwd
+    const harnessCwd = sessionCwd ?? requestedRunCwd
     return this.harness.run(optimizedPrompt, harnessCwd ? { ...options, workspaceCwd: harnessCwd } : options)
   }
 
