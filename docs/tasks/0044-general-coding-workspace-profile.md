@@ -1,7 +1,7 @@
 # Task 0044 — General / Coding workspace profile
 
 > Owner: ND desktop + extensions  
-> Status: implementation on `feat/general-coding-workspace-profile`; validation pending  
+> Status: implementation complete on `feat/general-coding-workspace-profile`; validation pending  
 > Priority: P1  
 > PRD: [0007 — General and Coding Workspace Profiles](../prd/0007-general-and-coding-workspaces.md)
 
