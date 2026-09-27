@@ -37,6 +37,16 @@ describe('verify-beta-three-layer', () => {
     expect(result.stdout).toContain('clean-machine + Chrome + failure drills + 24h soak passed')
   })
 
+  it('keeps the committed evidence template aligned with every required beta feature id', async () => {
+    const templatePath = fileURLToPath(new URL('../docs/qa/beta-three-layer-evidence.example.json', import.meta.url))
+    const template = JSON.parse(await readFile(templatePath, 'utf8')) as {
+      features: Array<{ id: string; betaExposed: boolean }>
+      scenarioRuns: { targetPassRate: number; minimumRuns: number }
+    }
+    expect(template.features.filter((feature) => feature.betaExposed).map((feature) => feature.id)).toEqual([...requiredFeatureIds])
+    expect(template.scenarioRuns).toMatchObject({ targetPassRate: 0.99, minimumRuns: 100 })
+  })
+
   it('fails when the human layer is not actually completed', async () => {
     const evidence = makeEvidence()
     evidence.features[0]!.human.status = 'pending'
