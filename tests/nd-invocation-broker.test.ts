@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { DAILY_ESSENTIALS_MANIFEST, PROJECT_WORKFLOW_MANIFEST } from '../src/shared/builtin-extension-packages.js'
+import { DAILY_ESSENTIALS_MANIFEST, PROJECT_WORKFLOW_MANIFEST, WALLPAPER_MANAGER_MANIFEST } from '../src/shared/builtin-extension-packages.js'
 import { ExtensionPackageStore } from '../src/main/extensions/package-store.js'
 import { InvocationStateStore } from '../src/main/extensions/invocation-state.js'
 import { NativeHostRegistry } from '../src/main/extensions/native-host.js'
@@ -32,13 +32,14 @@ beforeEach(async () => {
   host = new NativeHostRegistry()
   calls = []
   policyEffect = 'allow'
-  for (const method of ['note.create', 'note.search', 'capture.screen', 'clipboard.read', 'workflow.list'] as const) {
+  for (const method of ['note.create', 'note.search', 'capture.screen', 'clipboard.read', 'workflow.list', 'os.wallpaper.chooseAndSet'] as const) {
     host.register(method, async (input, context) => {
       calls.push({ host: method, input, contextKey: context.context.kind })
       return { ok: true, method }
     })
   }
   await packages.registerBuiltin(DAILY_ESSENTIALS_MANIFEST)
+  await packages.registerBuiltin(WALLPAPER_MANAGER_MANIFEST)
   await packages.registerBuiltin(PROJECT_WORKFLOW_MANIFEST)
   broker = new InvocationBroker({ packages, state, host, organization })
 })
@@ -73,6 +74,41 @@ describe('InvocationBroker authorization', () => {
     await state.setActivation(PROJECT_WORKFLOW_MANIFEST.id, project, true)
     expect((await broker.commands(personal)).map((command) => command.extensionId)).not.toContain(PROJECT_WORKFLOW_MANIFEST.id)
     expect((await broker.commands(project)).map((command) => command.extensionId)).toContain(PROJECT_WORKFLOW_MANIFEST.id)
+  })
+
+  it('keeps wallpaper personal and requires an explicit agent approval', async () => {
+    await state.setActivation(WALLPAPER_MANAGER_MANIFEST.id, personal, true)
+
+    const user = await broker.invoke({
+      extensionId: WALLPAPER_MANAGER_MANIFEST.id,
+      contributionId: 'choose-wallpaper',
+      contributionKind: 'command',
+      context: personal,
+      caller: 'user',
+      input: {},
+    })
+    expect(user.ok).toBe(true)
+    expect(calls.at(-1)?.host).toBe('os.wallpaper.chooseAndSet')
+
+    const agent = await broker.invoke({
+      extensionId: WALLPAPER_MANAGER_MANIFEST.id,
+      contributionId: 'choose-wallpaper',
+      contributionKind: 'command',
+      context: personal,
+      caller: 'agent',
+      input: {},
+    })
+    expect(agent).toMatchObject({ ok: false, error: { code: 'approval-required' } })
+
+    const wrongContext = await broker.invoke({
+      extensionId: WALLPAPER_MANAGER_MANIFEST.id,
+      contributionId: 'choose-wallpaper',
+      contributionKind: 'command',
+      context: company,
+      caller: 'user',
+      input: {},
+    })
+    expect(wrongContext).toMatchObject({ ok: false, error: { code: 'denied' } })
   })
 
   it('denies an unknown package or contribution', async () => {
