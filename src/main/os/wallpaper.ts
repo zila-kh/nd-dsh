@@ -1,6 +1,5 @@
 import { execFile } from 'node:child_process'
 import { access } from 'node:fs/promises'
-import { pathToFileURL } from 'node:url'
 import { win32 } from 'node:path'
 import process from 'node:process'
 import { promisify } from 'node:util'
@@ -63,7 +62,7 @@ export function wallpaperCommands(
   }
 
   if (platform === 'linux') {
-    const uri = pathToFileURL(imagePath).href
+    const uri = gnomeFileUri(imagePath)
     return [
       {
         file: 'gsettings',
@@ -102,4 +101,10 @@ export async function setDesktopWallpaper(imagePath: string, platform: NodeJS.Pl
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/** GNOME wants a POSIX file URI; build it without host-platform path semantics. */
+function gnomeFileUri(path: string): string {
+  const absolute = path.startsWith('/') ? path : `/${path}`
+  return `file://${absolute.split('/').map(encodeURIComponent).join('/')}`
 }

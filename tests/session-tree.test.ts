@@ -33,10 +33,10 @@ describe('buildSessionTree', () => {
   })
 
   it('does not misclassify an ordinary fork as a subagent', () => {
-    const tree = buildSessionTree([
-      session('main'),
-      session('fork', 'main', false, undefined),
-    ])
+    // session() defaults origin to 'subagent' when a parent is given, and an
+    // explicit undefined would re-trigger that default, so build the fork here.
+    const fork: SessionSummary = { sessionId: 'fork', updatedAt: 1, running: false, blank: false, parentSessionId: 'main' }
+    const tree = buildSessionTree([session('main'), fork])
     expect(tree.map((node) => node.session.sessionId)).toEqual(['main', 'fork'])
     expect(tree[0]?.children).toHaveLength(0)
   })

@@ -2210,8 +2210,8 @@ function SessionCard({ active, busy, title, time, engineChip, cardTitle, archive
   busy: boolean
   title: string
   time: string
-  engineChip?: string
-  cardTitle?: string
+  engineChip?: string | undefined
+  cardTitle?: string | undefined
   archived?: boolean
   onToggleArchive(): void
   onClick(): void
