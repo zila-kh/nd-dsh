@@ -338,6 +338,10 @@ const api: DesktopApi = {
       return () => ipcRenderer.removeListener(IPC.surfaceChangedEvent, handler)
     },
   },
+  workspaceProfile: {
+    get: () => ipcRenderer.invoke(IPC.workspaceProfileGet),
+    set: (profile) => ipcRenderer.invoke(IPC.workspaceProfileSet, profile),
+  },
   dshView: {
     setBounds: (bounds) => ipcRenderer.invoke(IPC.dshViewSetBounds, bounds),
     setVisible: (visible) => ipcRenderer.invoke(IPC.dshViewSetVisible, visible),
