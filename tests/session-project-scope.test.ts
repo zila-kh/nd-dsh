@@ -8,8 +8,8 @@ const sessionProjects = {
   'sess-engine-ndf': 'project-ndf',
 }
 
-function session(sessionId: string): { sessionId: string } {
-  return { sessionId }
+function session(sessionId: string, parentSessionId?: string): { sessionId: string; parentSessionId?: string } {
+  return { sessionId, ...(parentSessionId ? { parentSessionId } : {}) }
 }
 
 describe('isSessionInProjectScope', () => {
@@ -37,6 +37,19 @@ describe('filterSessionsInProjectScope', () => {
     expect(filterSessionsInProjectScope(items, 'project-dfdf', sessionProjects).map((item) => item.sessionId)).toEqual([
       'sess-plan-dfdf',
       'sess-personal',
+    ])
+  })
+
+  it('inherits project attribution for subagent sessions from their parent', () => {
+    const items = [
+      session('sess-plan-dfdf'),
+      session('sess-child-dfdf', 'sess-plan-dfdf'),
+      session('sess-plan-ndf'),
+      session('sess-child-ndf', 'sess-plan-ndf'),
+    ]
+    expect(filterSessionsInProjectScope(items, 'project-dfdf', sessionProjects).map((item) => item.sessionId)).toEqual([
+      'sess-plan-dfdf',
+      'sess-child-dfdf',
     ])
   })
 
