@@ -1,0 +1,126 @@
+{
+  "schemaVersion": 1,
+  "release": {
+    "version": "0.1.0-beta.1",
+    "commit": "REPLACE_WITH_RC_COMMIT_SHA",
+    "artifact": "REPLACE_WITH_PACKAGED_ARTIFACT_NAME_OR_HASH",
+    "recordedAt": "2026-09-27T00:00:00+07:00"
+  },
+  "summary": {
+    "p0Open": 0,
+    "p1CoreOpen": 0
+  },
+  "features": [
+    {
+      "id": "core-agent-flow",
+      "name": "Company -> project -> plan -> worker -> verify -> review -> Git/result",
+      "severity": "P0",
+      "betaExposed": true,
+      "unit": {
+        "status": "pending",
+        "evidence": []
+      },
+      "e2e": {
+        "status": "pending",
+        "evidence": []
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "company-project-isolation",
+      "name": "Multi-company and multi-project isolation",
+      "severity": "P0",
+      "betaExposed": true,
+      "unit": {
+        "status": "pending",
+        "evidence": []
+      },
+      "e2e": {
+        "status": "pending",
+        "evidence": []
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "git-worktree-secret-safety",
+      "name": "Git/worktree safety and secret blocking",
+      "severity": "P0",
+      "betaExposed": true,
+      "unit": {
+        "status": "pending",
+        "evidence": []
+      },
+      "e2e": {
+        "status": "pending",
+        "evidence": []
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "persistence-recovery",
+      "name": "Persistence, restart, crash recovery and task reconciliation",
+      "severity": "P0",
+      "betaExposed": true,
+      "unit": {
+        "status": "pending",
+        "evidence": []
+      },
+      "e2e": {
+        "status": "pending",
+        "evidence": []
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "provider-browser-mcp-failures",
+      "name": "Provider, browser and MCP failure handling",
+      "severity": "P1",
+      "betaExposed": true,
+      "unit": {
+        "status": "pending",
+        "evidence": []
+      },
+      "e2e": {
+        "status": "pending",
+        "evidence": []
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    }
+  ],
+  "scenarioRuns": {
+    "passed": 0,
+    "total": 0,
+    "targetPassRate": 0.95
+  },
+  "humanDecision": {
+    "status": "no-go",
+    "owner": "",
+    "recordedAt": "",
+    "notes": "A human release owner changes this to go only after reviewing all three layers."
+  }
+}
