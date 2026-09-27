@@ -2,13 +2,14 @@ import { describe, expect, it } from 'vitest'
 import type { SessionSummary } from '../src/shared/contracts.js'
 import { buildSessionTree } from '../src/shared/session-tree.js'
 
-function session(sessionId: string, parentSessionId?: string, running = false): SessionSummary {
+function session(sessionId: string, parentSessionId?: string, running = false, origin: SessionSummary['origin'] = parentSessionId ? 'subagent' : undefined): SessionSummary {
   return {
     sessionId,
     updatedAt: 1,
     running,
     blank: false,
-    ...(parentSessionId ? { parentSessionId, origin: 'subagent' as const } : {}),
+    ...(parentSessionId ? { parentSessionId } : {}),
+    ...(origin ? { origin } : {}),
   }
 }
 
@@ -29,6 +30,15 @@ describe('buildSessionTree', () => {
   it('keeps an orphan visible instead of hiding it', () => {
     const tree = buildSessionTree([session('orphan', 'missing-parent')])
     expect(tree.map((node) => node.session.sessionId)).toEqual(['orphan'])
+  })
+
+  it('does not misclassify an ordinary fork as a subagent', () => {
+    const tree = buildSessionTree([
+      session('main'),
+      session('fork', 'main', false, undefined),
+    ])
+    expect(tree.map((node) => node.session.sessionId)).toEqual(['main', 'fork'])
+    expect(tree[0]?.children).toHaveLength(0)
   })
 
   it('fails soft on cyclic parent links', () => {
