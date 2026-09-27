@@ -29,6 +29,11 @@ import { ScreenshotDropdown } from './components/ScreenshotDropdown'
 import { QuickLauncher } from './components/QuickLauncher'
 import { cn } from './lib/utils'
 import { fileAccent } from './lib/file-accents'
+import {
+  buildLauncherMemoryMutation,
+  buildLauncherTaskMutation,
+  isQuickLauncherKey,
+} from './lib/quick-launcher-model'
 import { pickSelfElement } from './lib/self-element-picker'
 import {
   capabilitySubTabFromLocation,
@@ -188,7 +193,7 @@ export default function App() {
   useEffect(() => {
     if (isFloatOverlay) return
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== 'k') return
+      if (!isQuickLauncherKey(event)) return
       event.preventDefault()
       setQuickLauncherOpen((open) => !open)
     }
@@ -686,16 +691,8 @@ export default function App() {
       notify('Choose a company and project before creating a task.')
       return
     }
-    const title = text.split(/\r?\n/)[0]?.trim().slice(0, 120) || 'Launcher task'
     try {
-      await window.ndDshOrganization.mutate({
-        type: 'task.create',
-        companyId: company.id,
-        projectId: project.id,
-        title,
-        description: text,
-        acceptanceCriteria: ['Requested outcome is implemented and verified.'],
-      })
+      await window.ndDshOrganization.mutate(buildLauncherTaskMutation(company.id, project.id, text))
       setCompanyView('workspace')
       switchToWorkbench('company')
       toast('Task created from ND Quick Launcher.')
@@ -709,16 +706,8 @@ export default function App() {
       notify('Choose a company before saving a note.')
       return
     }
-    const title = text.split(/\r?\n/)[0]?.trim().slice(0, 80) || 'Quick note'
     try {
-      await window.ndDshOrganization.mutate({
-        type: 'memory.add',
-        companyId: company.id,
-        ...(project ? { projectId: project.id } : {}),
-        title,
-        content: text,
-        tags,
-      })
+      await window.ndDshOrganization.mutate(buildLauncherMemoryMutation(company.id, project?.id, text, tags))
       toast(project ? `Note saved to ${project.name}.` : `Note saved to ${company.name}.`)
     } catch (cause) {
       notify(errorMessage(cause))
