@@ -1,5 +1,5 @@
 import 'dotenv/config'
-import { app, BrowserWindow, crashReporter, dialog, Menu, type MenuItemConstructorOptions } from 'electron'
+import { app, BrowserWindow, crashReporter, dialog, globalShortcut, Menu, type MenuItemConstructorOptions } from 'electron'
 import { createServer } from 'node:net'
 import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
@@ -120,13 +120,19 @@ try {
   console.warn('Native crash reporting is unavailable:', error)
 }
 
+function showQuickLauncher(): void {
+  const window = mainWindow
+  if (!window || window.isDestroyed()) return
+  if (window.isMinimized()) window.restore()
+  window.show()
+  window.setAlwaysOnTop(true)
+  window.focus()
+  window.setAlwaysOnTop(false)
+  window.webContents.send(IPC.windowQuickLauncherEvent)
+}
+
 app.on('second-instance', () => {
-  if (!mainWindow) return
-  if (mainWindow.isMinimized()) mainWindow.restore()
-  mainWindow.show()
-  mainWindow.setAlwaysOnTop(true)
-  mainWindow.focus()
-  mainWindow.setAlwaysOnTop(false)
+  showQuickLauncher()
 })
 
 async function createWindow(cdpPort: number): Promise<void> {
@@ -703,11 +709,19 @@ if (hasSingleInstanceLock) {
     await app.whenReady()
     markStartup('app-ready')
     await createWindow(cdpPort)
+    const quickLauncherRegistered = globalShortcut.register('CommandOrControl+Shift+Space', showQuickLauncher)
+    if (!quickLauncherRegistered) {
+      console.warn('ND Quick Launcher global shortcut is unavailable: CommandOrControl+Shift+Space')
+    }
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) void createWindow(cdpPort).catch(reportFatalStartupError)
     })
   })().catch(reportFatalStartupError)
 }
+
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll()
+})
 
 app.on('before-quit', (event) => {
   if (shutdownStarted) return
