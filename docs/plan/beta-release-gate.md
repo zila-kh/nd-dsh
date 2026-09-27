@@ -12,8 +12,26 @@ Beta Stable is declared when, on the release candidate build:
 
 1. **0 P0** — crash, data loss, security leak, wrong-company/project execution.
 2. **0 known P1** in the core workflow — create project → agent work → review → git/result.
-3. **≥95% repeated E2E pass rate** on the main beta scenarios.
-4. Non-core incomplete features stay **Beta/Experimental behind a feature flag**.
+3. **Every beta-exposed feature passes all three layers: Unit + E2E + Human.**
+4. **≥95% repeated scenario pass rate** on the main beta scenarios. A 99% target may be configured for a larger repeated-run sample; do not present it as a literal probability that the product is bug-free.
+5. The exact packaged artifact passes the release journey, not only the source checkout.
+6. Non-core incomplete features stay **Beta/Experimental behind a feature flag**.
+
+## Three-layer release rule
+
+The release gate now uses three independent validation layers:
+
+- **Layer 1 — Unit:** deterministic rules, isolation, safety, recovery and failure-handling behavior.
+- **Layer 2 — E2E:** the real Electron/Rust/provider/Git/browser integration, including packaged-app journeys.
+- **Layer 3 — Human:** a real tester checks usability, state truthfulness, recovery, desktop behavior and failures that automation can miss.
+
+No beta-exposed feature can be declared ready by only one or two layers. Human evidence must include the tester and date; an agent must not fabricate the Human PASS.
+
+The machine-readable evidence template is [beta-three-layer-evidence.example.json](../qa/beta-three-layer-evidence.example.json), the operator handoff is [beta-three-layer-validation.md](../qa/beta-three-layer-validation.md), and the local gate is:
+
+```sh
+corepack pnpm beta:gate -- docs/qa/beta-three-layer-evidence-<rc>.json
+```
 
 ## Checklist legend
 
