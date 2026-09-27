@@ -147,6 +147,26 @@ test('QA: Settings surfaces are accessible', async () => {
   expect(rendererErrors).toEqual([])
 })
 
+test('QA: Copy diagnostics works through the real Settings UI without leaking workspace identity', async () => {
+  const { page } = launched
+  const workspace = await page.evaluate(async () => await window.ndDsh.workspace.state())
+
+  await page.getByRole('navigation', { name: 'ND-DSH navigation' }).getByTitle('Settings').click()
+  await page.getByRole('tablist', { name: 'General sub-tabs' }).getByRole('tab', { name: 'About', exact: true }).click()
+  const copy = page.getByRole('button', { name: 'Copy diagnostics', exact: true })
+  await expect(copy).toBeVisible()
+  await copy.click()
+  await expect(page.getByRole('button', { name: 'Copied', exact: true })).toBeVisible()
+
+  const report = await launched.app.evaluate(({ clipboard }) => clipboard.readText())
+  expect(report).toContain('ND-DSH Beta Diagnostics')
+  expect(report).toContain('Privacy: credentials, session ids, workspace paths, project names, and current browser URLs are intentionally omitted.')
+  expect(report).not.toContain(workspace.root)
+  if (workspace.projectId) expect(report).not.toContain(workspace.projectId)
+  if (workspace.projectName) expect(report).not.toContain(workspace.projectName)
+  expect(rendererErrors).toEqual([])
+})
+
 test('QA: Design surface loads', async () => {
   const { page } = launched
 
