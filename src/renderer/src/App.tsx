@@ -1309,7 +1309,7 @@ export default function App() {
           onCreateTask={launcherCreateTask}
           onQuickNote={launcherQuickNote}
           onAskAgent={(text) => askAgent(text)}
-          onCaptureScreen={() => startAppInspect('full', undefined, 'external')}
+          onCaptureScreen={() => startAppInspect('full', undefined, 'external').then(() => undefined)}
           onOpenCaptureTools={() => {
             setInspectScope('external')
             return window.ndDsh.window?.setFloatMode(true).then(() => undefined)

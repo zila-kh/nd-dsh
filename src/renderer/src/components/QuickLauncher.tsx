@@ -26,7 +26,7 @@ interface Props {
   open: boolean
   onOpenChange(open: boolean): void
   organization: OrganizationSnapshot | null
-  currentUrl?: string
+  currentUrl?: string | undefined
   onOpenKanban(): void
   onOpenAgent(): void
   onActivateProject(projectId: string): void | Promise<void>
@@ -97,7 +97,6 @@ export function QuickLauncher({
         {text ? (
           <CommandGroup heading="Use what you typed">
             <CommandItem
-              forceMount
               value={`task ${text}`}
               onSelect={() => closeAndRun(() => onCreateTask(text))}
             >
@@ -106,7 +105,6 @@ export function QuickLauncher({
               <CommandShortcut>Task</CommandShortcut>
             </CommandItem>
             <CommandItem
-              forceMount
               value={`note ${text}`}
               onSelect={() => closeAndRun(() => onQuickNote(text))}
             >
@@ -115,7 +113,6 @@ export function QuickLauncher({
               <CommandShortcut>Note</CommandShortcut>
             </CommandItem>
             <CommandItem
-              forceMount
               value={`ask agent ${text}`}
               onSelect={() => closeAndRun(() => onAskAgent(text))}
             >

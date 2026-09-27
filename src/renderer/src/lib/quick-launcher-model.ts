@@ -1,4 +1,4 @@
-import type { OrganizationMutation, Project } from '../../../shared/organization'
+import type { OrganizationMutation, Project } from '../../../shared/organization.js'
 
 export interface QuickLauncherKeyLike {
   key: string
