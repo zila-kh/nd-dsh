@@ -92,9 +92,10 @@ describe('verify-beta-three-layer', () => {
     const evidencePath = await writeEvidence(evidence)
     const directory = evidence.releaseChecks.automated.summaryPath
     const receipt = JSON.parse(await readFile(directory, 'utf8')) as {
-      release: { artifact: { identity: string } }
+      release: { artifact: { file: string; sha256: string; identity: string } }
     }
-    receipt.release.artifact.identity = 'different.exe#sha256:bad'
+    receipt.release.artifact.file = 'different.exe'
+    receipt.release.artifact.identity = 'different.exe#sha256:' + receipt.release.artifact.sha256
     await writeFile(directory, JSON.stringify(receipt), 'utf8')
 
     const result = spawnSync(process.execPath, [scriptPath, evidencePath], { encoding: 'utf8' })
@@ -205,7 +206,7 @@ function makeEvidence() {
       },
       packagedCleanMachine: {
         status: 'pass',
-        artifact: 'ND-DSH-beta.exe#sha256:test',
+        artifact: 'ND-DSH-beta.exe#sha256:' + 'a'.repeat(64),
         tester: 'release-owner',
         recordedAt: '2026-09-27T12:35:00+07:00',
         evidence: ['clean Windows VM packaged journey PASS'],
