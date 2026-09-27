@@ -99,6 +99,28 @@ describe('ND catalog and explicit invocation', () => {
     await router.run('/native text')
     expect(harness.run).toHaveBeenLastCalledWith('/native text', undefined)
   })
+  it('allows an explicit Harness skill inside an ND-owned task worktree', async () => {
+    const f = await fixture()
+    const taskRoot = join(f.root, '..', '.nd-dsh-worktrees', 'task-1')
+    const harness = {
+      status: () => ({}),
+      gatewayRpc: vi.fn(async (method: string) => method === 'session.list'
+        ? { ok: true, value: { items: [{ sessionId: 'task-session', cwd: taskRoot }] } }
+        : { ok: true }),
+      run: vi.fn(async () => ({ sessionId: 'task-session' })),
+    }
+    const router = new EngineSessionRouter(harness as never, {} as never, f.workspace as never)
+    router.setWorktreeGuard((cwd) => cwd === taskRoot)
+    router.setSkillService(f.service)
+
+    await router.run('/review task', { sessionId: 'task-session', workspaceCwd: taskRoot })
+
+    expect(harness.run).toHaveBeenCalledWith(expect.stringContaining('Canonical review instructions'), {
+      sessionId: 'task-session',
+      workspaceCwd: taskRoot,
+    })
+  })
+
   it('rejects direct cross-project session before skill injection', async () => {
     const f = await fixture()
     const direct = { ownsSession: () => true, listSessions: () => [{ sessionId: 's', cwd: join(f.root, '..', 'other') }], run: vi.fn() }
