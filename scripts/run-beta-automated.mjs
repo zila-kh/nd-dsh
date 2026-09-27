@@ -37,6 +37,7 @@ const stages = [
   ]),
   ...(process.platform === 'win32' && !skipPackage ? [
     stage('artifact', 'Windows portable release build', 'dist:win:portable'),
+    stage('artifact', 'forced nd-core crash cleans managed descendants', 'release:smoke:core-crash'),
     stage('artifact', 'packaged runtime/core/terminal/Git smoke', 'release:smoke:packaged'),
   ] : []),
 ]
