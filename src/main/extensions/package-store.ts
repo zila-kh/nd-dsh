@@ -75,6 +75,10 @@ export class ExtensionPackageStore {
     const parsed = JSON.parse(await fs.readFile(file, 'utf8')) as unknown
     const validated = validateNdExtensionManifest(parsed)
     if (!validated.ok) throw new Error(`Installed package ${extensionId}@${version} failed re-validation`)
+    const permissionIssues = manifestPermissionIssues(validated.manifest)
+    if (permissionIssues.length > 0) {
+      throw new Error(`Installed package ${extensionId}@${version} failed permission re-validation`)
+    }
     return validated.manifest
   }
 
@@ -253,7 +257,7 @@ export class ExtensionPackageStore {
       for (const item of record.packages) {
         const candidate = item as Record<string, unknown>
         const validated = validateNdExtensionManifest(candidate.manifest)
-        if (!validated.ok) continue
+        if (!validated.ok || manifestPermissionIssues(validated.manifest).length > 0) continue
         const source = candidate.source as NdPackageSourceView | undefined
         if (!source || typeof source.location !== 'string' || typeof source.kind !== 'string') continue
         packages.push({
