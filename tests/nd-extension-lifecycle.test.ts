@@ -96,6 +96,19 @@ describe('ExtensionPackageStore lifecycle', () => {
     expect(await store.manifestForVersion('nd.sample', '1.0.0')).toMatchObject({ id: 'nd.sample' })
   })
 
+  it('rejects a persisted snapshot whose declared permissions no longer cover its hosts', async () => {
+    await writePackage(sourceRoot, SAMPLE)
+    const store = new ExtensionPackageStore(root)
+    await store.installFromDirectory(sourceRoot)
+
+    const snapshotPath = join(root, 'packages', 'nd.sample', '1.0.0', 'nd-extension.json')
+    const tampered = JSON.parse(await readFile(snapshotPath, 'utf8')) as Record<string, unknown>
+    tampered.permissions = []
+    await writeFile(snapshotPath, JSON.stringify(tampered, null, 2), 'utf8')
+
+    await expect(store.manifestForVersion('nd.sample', '1.0.0')).rejects.toThrow(/permission re-validation/)
+  })
+
   it('validates built-in packages through the same runtime rules before snapshotting', async () => {
     const store = new ExtensionPackageStore(root)
     const invalid = structuredClone(DAILY_ESSENTIALS_MANIFEST)
