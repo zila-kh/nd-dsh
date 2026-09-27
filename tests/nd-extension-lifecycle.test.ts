@@ -124,6 +124,22 @@ describe('ExtensionPackageStore lifecycle', () => {
     expect(await store.activeManifest(DAILY_ESSENTIALS_MANIFEST.id)).toBeTruthy()
   })
 
+  it('drops a persisted package index entry with a permission gap on reload', async () => {
+    await writePackage(sourceRoot, SAMPLE)
+    const store = new ExtensionPackageStore(root)
+    await store.installFromDirectory(sourceRoot)
+
+    const indexPath = join(root, 'nd-extensions.json')
+    const index = JSON.parse(await readFile(indexPath, 'utf8')) as {
+      packages: Array<{ manifest: Record<string, unknown> }>
+    }
+    index.packages[0]!.manifest.permissions = []
+    await writeFile(indexPath, JSON.stringify(index, null, 2), 'utf8')
+
+    const reloaded = new ExtensionPackageStore(root)
+    expect(await reloaded.list()).toEqual([])
+  })
+
   it('reloads installed packages from disk with the same active version', async () => {
     await writePackage(sourceRoot, SAMPLE)
     const store = new ExtensionPackageStore(root)
