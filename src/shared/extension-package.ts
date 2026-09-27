@@ -479,7 +479,7 @@ function validateHostContexts(contributions: NdPackageContributions, issues: NdV
   for (const [index, command] of contributions.commands.entries()) {
     const descriptor = ndHostMethod(command.host)
     if (!descriptor) continue
-    const unsupported = command.contexts.filter((kind) => !descriptor.contexts.includes(kind))
+    const unsupported = command.contexts.filter((kind) => !(descriptor.contexts as readonly NdContextKind[]).includes(kind))
     if (unsupported.length > 0) {
       issues.push({
         path: `contributions.commands[${index}].contexts`,
@@ -493,7 +493,7 @@ function validateHostContexts(contributions: NdPackageContributions, issues: NdV
     for (const host of hosts) {
       const descriptor = ndHostMethod(host)
       if (!descriptor) continue
-      const unsupported = view.contexts.filter((kind) => !descriptor.contexts.includes(kind))
+      const unsupported = view.contexts.filter((kind) => !(descriptor.contexts as readonly NdContextKind[]).includes(kind))
       if (unsupported.length > 0) {
         issues.push({
           path: `contributions.views[${index}].contexts`,
