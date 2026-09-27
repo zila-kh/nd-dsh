@@ -46,7 +46,7 @@ ND task
   -> integration
 ```
 
-Direct workspace-engine sessions are immutable with respect to their ND-bound root. If an adapter later reports a different cwd, the session router fails closed instead of silently moving the worker to the base checkout. Multiple ZCode native sessions can share one app-server while retaining separate task workspaces.
+Direct workspace-engine sessions are immutable with respect to their ND-bound root. If an adapter later reports a different cwd, the session router fails closed instead of silently moving the worker to the base checkout. The per-turn ND workspace metadata uses that exact bound root too, so a task worktree never receives a prompt claiming the base checkout is its working directory. Harness sessions retain the same cwd contract across runtime refreshes. Multiple ZCode native sessions can share one app-server while retaining separate task workspaces.
 
 ## Current engines
 
@@ -149,6 +149,7 @@ The delegated Codex one-shot path does not expose an ND human-approval stream; i
 
 - Production renderer fails closed when trusted desktop bridges are missing; no mock runtime is installed.
 - Engine capability claims are conservative.
+- Unknown coding-engine ids fail closed at the shared router instead of silently falling back to Harness.
 - Employee engine assignments are durable and validated before organization runs start.
 - Codex stays fail-closed by default: delegated runs never ask, direct unattended runs use the `never` policy, and only interactive `codex-cli` threads can request a human approval.
 - Main-process organization approvals respect company policy before reaching the renderer.
