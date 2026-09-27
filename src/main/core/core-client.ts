@@ -28,6 +28,18 @@ const DEFAULT_MAX_OUTSTANDING_REQUEST_BYTES = 64 * 1024 * 1024
 const DEFAULT_MAX_QUEUED_REQUEST_BYTES = 32 * 1024 * 1024
 const RESERVED_CONTROL_REQUEST_SLOTS = 32
 const RESERVED_CONTROL_REQUEST_BYTES = 8 * 1024 * 1024
+
+export const CORE_RESTART_MAX_ATTEMPTS = 1
+export const CORE_RESTART_DELAY_MS = 100
+export const CORE_RESTART_STABLE_RESET_MS = 30_000
+
+export function coreRestartPolicy(attempts: number): { restart: boolean; delayMs?: number } {
+  const normalized = Number.isFinite(attempts) ? Math.max(0, Math.floor(attempts)) : CORE_RESTART_MAX_ATTEMPTS
+  return normalized < CORE_RESTART_MAX_ATTEMPTS
+    ? { restart: true, delayMs: CORE_RESTART_DELAY_MS }
+    : { restart: false }
+}
+
 const CONTROL_METHODS = new Set([
   'core.cancel',
   'process.cancel',
@@ -416,7 +428,8 @@ export class CoreClient {
     this.options.onUnexpectedExit?.(code, signal)
     this.emitSyntheticEvent('core.exit', 'high', { code, signal })
 
-    if (this.restartAttempts >= 1) {
+    const restartPolicy = coreRestartPolicy(this.restartAttempts)
+    if (!restartPolicy.restart) {
       this.unavailableReason = 'ND Core crashed again before the recovery window became stable. Restart ND-DSH to restore native services.'
       this.options.log?.('[nd-core] restart budget exhausted; native services are unavailable.')
       return
@@ -430,7 +443,7 @@ export class CoreClient {
         this.unavailableReason = 'ND Core automatic restart failed: ' + message
         this.options.log?.('[nd-core] restart failed: ' + message)
       })
-    }, 100)
+    }, restartPolicy.delayMs ?? CORE_RESTART_DELAY_MS)
   }
 
   private armStableRestartReset(generation: number, child: ChildProcessWithoutNullStreams): void {
@@ -441,7 +454,7 @@ export class CoreClient {
       this.restartAttempts = 0
       this.unavailableReason = undefined
       this.options.log?.('[nd-core] recovery remained stable; automatic restart budget reset.')
-    }, 30_000)
+    }, CORE_RESTART_STABLE_RESET_MS)
     this.restartResetTimer.unref()
   }
 

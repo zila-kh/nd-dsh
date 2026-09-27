@@ -133,6 +133,8 @@ describe('beta execution reliability', () => {
   it('classifies transient provider failures without retrying auth or deterministic failures', () => {
     expect(isRetryableExecutionFailure('Provider returned 502 Bad Gateway')).toBe(true)
     expect(isRetryableExecutionFailure('gateway-unreachable: ECONNRESET')).toBe(true)
+    expect(isRetryableExecutionFailure('HTTP 429 Too Many Requests')).toBe(true)
+    expect(isRetryableExecutionFailure('rate_limit: quota temporarily exhausted')).toBe(true)
     expect(isRetryableExecutionFailure('401 unauthorized invalid api key')).toBe(false)
     expect(isRetryableExecutionFailure('Machine verification failed: tests red')).toBe(false)
     expect(isRetryableExecutionFailure('Project workspace has uncommitted human changes')).toBe(false)

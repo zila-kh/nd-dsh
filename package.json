@@ -57,7 +57,18 @@
     "browser:verify": "corepack pnpm browser:host:test && corepack pnpm typecheck && corepack pnpm test -- browser-companion",
     "bench:browser-runtime": "node benchmarks/browser-runtime-spike.mjs",
     "bench:browser-platform": "corepack pnpm core:build:dev && corepack pnpm build && node benchmarks/unified-browser-platform.mjs",
-    "browser:platform:test": "corepack pnpm typecheck && corepack pnpm vitest run tests/unified-browser-leases.test.ts tests/browser-policy-classification.test.ts tests/browser-history-store.test.ts tests/browser-access-tokens.test.ts"
+    "browser:platform:test": "corepack pnpm typecheck && corepack pnpm vitest run tests/unified-browser-leases.test.ts tests/browser-policy-classification.test.ts tests/browser-history-store.test.ts tests/browser-access-tokens.test.ts",
+    "beta:gate": "node scripts/verify-beta-three-layer.mjs",
+    "e2e:beta:matrix": "playwright test e2e/beta-release-matrix.spec.ts",
+    "e2e:beta:soak": "node scripts/run-beta-soak.mjs",
+    "release:smoke:packaged": "node scripts/packaged-runtime-smoke.mjs",
+    "beta:automated": "node scripts/run-beta-automated.mjs",
+    "release:smoke:core-crash": "node benchmarks/windows-core-crash-cleanup.mjs",
+    "beta:unit": "corepack pnpm verify && corepack pnpm typecheck && corepack pnpm test && corepack pnpm core:test && corepack pnpm browser:host:test",
+    "beta:e2e": "corepack pnpm build && corepack pnpm e2e && corepack pnpm e2e:prod:user",
+    "beta:artifact": "corepack pnpm dist:win:portable && node scripts/packaged-runtime-smoke.mjs",
+    "beta:soak": "corepack pnpm e2e:beta:soak",
+    "beta:preflight": "corepack pnpm beta:unit && corepack pnpm beta:e2e"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",

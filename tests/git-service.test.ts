@@ -359,15 +359,46 @@ describe('GitService actions', () => {
     expect(fake.argsOf('checkout', '-b')).toBeUndefined()
   })
 
-  it('pushes a clean chat branch and verifies the remote head', async () => {
-    fake.script = cleanSessionBranchScript()
+  it('pushes a clean chat branch and verifies the remote head after a clean secret scan', async () => {
+    fake.script = [
+      { match: ['ls-tree'], stdout: 'src/index.ts\n.env.example\n' },
+      { match: ['grep'], exitCode: 1 },
+      ...cleanSessionBranchScript(),
+    ]
     const service = createService(fake)
     await service.refresh()
 
     await service.pushBranch('origin', 'nd/chat-test')
 
+    expect(fake.argsOf('ls-tree')).toBeDefined()
+    expect(fake.argsOf('grep')).toBeDefined()
     expect(fake.argsOf('push', '--set-upstream')).toEqual(['push', '--set-upstream', 'origin', 'nd/chat-test'])
     expect(fake.calls.filter((call) => call.args.includes('ls-remote'))).toHaveLength(2)
+  })
+
+  it('blocks a chat branch before network mutation when committed secret material is detected', async () => {
+    fake.script = [
+      { match: ['ls-tree'], stdout: 'src/index.ts\n' },
+      { match: ['grep'], stdout: 'HEAD:src/config.ts\n' },
+      ...cleanSessionBranchScript(),
+    ]
+    const service = createService(fake)
+
+    await expect(service.pushBranch('origin', 'nd/chat-test')).rejects.toThrow(/secret material/i)
+    expect(fake.argsOf('push', '--set-upstream')).toBeUndefined()
+    expect(fake.argsOf('fetch')).toBeUndefined()
+  })
+
+  it('blocks committed sensitive credential files but allows explicit templates', async () => {
+    fake.script = [
+      { match: ['ls-tree'], stdout: '.env.example\nconfig/.env.production\nsrc/index.ts\n' },
+      ...cleanSessionBranchScript(),
+    ]
+    const service = createService(fake)
+
+    await expect(service.pushBranch('origin', 'nd/chat-test')).rejects.toThrow(/sensitive credential files/i)
+    expect(fake.argsOf('grep')).toBeUndefined()
+    expect(fake.argsOf('push', '--set-upstream')).toBeUndefined()
   })
 
   it('fast-forwards a stale local chat branch before pushing', async () => {
@@ -442,8 +473,13 @@ describe('GitService actions', () => {
     expect(fake.argsOf('merge')).toBeUndefined()
   })
 
-  it('pushes and pulls through the repository root', async () => {
-    fake.script = repositoryScript()
+  it('pushes and pulls through the repository root only from a clean, scanned tree', async () => {
+    fake.script = [
+      { match: ['status'], stdout: '' },
+      { match: ['ls-tree'], stdout: 'src/index.ts\n.env.example\n' },
+      { match: ['grep'], exitCode: 1 },
+      ...repositoryScript().filter((entry) => entry.match[0] !== 'status'),
+    ]
     const service = createService(fake)
     await service.refresh()
 
@@ -452,6 +488,19 @@ describe('GitService actions', () => {
 
     await service.pull()
     expect(fake.argsOf('pull')).toEqual(['pull', '--ff-only'])
+  })
+
+  it('blocks the normal push path when the committed tree contains a secret', async () => {
+    fake.script = [
+      { match: ['status'], stdout: '' },
+      { match: ['ls-tree'], stdout: 'src/config.ts\n' },
+      { match: ['grep'], stdout: 'HEAD:src/config.ts\n' },
+      ...repositoryScript().filter((entry) => entry.match[0] !== 'status'),
+    ]
+    const service = createService(fake)
+
+    await expect(service.push()).rejects.toThrow(/secret material/i)
+    expect(fake.calls.filter((call) => call.args[0] === 'push')).toHaveLength(0)
   })
 
   it('returns unified diff text for a path', async () => {

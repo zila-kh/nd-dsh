@@ -12,6 +12,11 @@ import { runVerification } from '../src/main/organization/verification-evidence.
 const exec = promisify(execFile)
 const temporary: string[] = []
 
+// Git materialises committed content using the host's line endings, so a merge
+// assertion must not depend on the machine's core.autocrlf setting.
+const readTextNormalized = async (path: string): Promise<string> =>
+  (await readFile(path, 'utf8')).replace(/\r\n/g, '\n')
+
 afterEach(async () => {
   await Promise.all(temporary.splice(0).map((path) => rm(path, {
     recursive: true,
@@ -282,7 +287,7 @@ describe('Real-World Autonomous Loop Verification', () => {
     // First task integrates cleanly
     const integratedA = await worktreeManager.integrate(repoPath, 'task-conflict-a')
     expect(integratedA.merged).toBe(true)
-    expect(await readFile(join(repoPath, 'shared.txt'), 'utf8')).toBe('Option A\n')
+    expect(await readTextNormalized(join(repoPath, 'shared.txt'))).toBe('Option A\n')
 
     // Second task encounters a conflict and must FAIL CLOSED
     await expect(worktreeManager.integrate(repoPath, 'task-conflict-b')).rejects.toThrow()
@@ -290,7 +295,7 @@ describe('Real-World Autonomous Loop Verification', () => {
     // The main branch remains uncorrupted (clean git status)
     const status = (await exec('git', ['status', '--porcelain'], { cwd: repoPath })).stdout.trim()
     expect(status).toBe('')
-    expect(await readFile(join(repoPath, 'shared.txt'), 'utf8')).toBe('Option A\n')
+    expect(await readTextNormalized(join(repoPath, 'shared.txt'))).toBe('Option A\n')
 
     // Task worktree B remains intact for rework/rebasing
     expect(await readFile(join(worktreeB!.root, 'shared.txt'), 'utf8')).toBe('Option B\n')

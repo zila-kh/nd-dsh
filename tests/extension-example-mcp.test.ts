@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
@@ -52,6 +52,40 @@ async function invoke(catalog: string, state: string, args: string[]) {
 describe('Counter MCP example', () => {
   it('discovers its real MCP tool contract through the universal proxy', async () => {
     const { catalog, state } = await fixture()
+    const tools = await invoke(catalog, state, ['list', 'example-counter-mcp', 'codex-cli']) as Array<{ name: string }>
+    expect(tools.map((tool) => tool.name)).toEqual(['counter_get', 'counter_add', 'counter_reset'])
+  })
+
+  it('contains a broken MCP child and the extension control plane remains usable afterwards', async () => {
+    const { catalog, state } = await fixture()
+    const broken = JSON.parse(await readFile(catalog, 'utf8')) as { extensions: AgentExtensionManifest[] }
+    broken.extensions[0] = {
+      ...broken.extensions[0]!,
+      runtime: {
+        kind: 'mcp-stdio',
+        command: process.execPath,
+        args: ['-e', 'process.exit(23)'],
+        env: {},
+      },
+    }
+    await writeFile(catalog, JSON.stringify({ version: 1, extensions: broken.extensions }, null, 2) + '\n', 'utf8')
+
+    await expect(invoke(catalog, state, ['list', 'example-counter-mcp', 'codex-cli'])).rejects.toThrow()
+
+    // Repair only the child runtime configuration. A failed child must not
+    // corrupt the catalog/state or require an ND/app restart before the next
+    // extension request can succeed.
+    broken.extensions[0] = {
+      ...broken.extensions[0]!,
+      runtime: {
+        kind: 'mcp-stdio',
+        command: process.execPath,
+        args: [server],
+        env: {},
+      },
+    }
+    await writeFile(catalog, JSON.stringify({ version: 1, extensions: broken.extensions }, null, 2) + '\n', 'utf8')
+
     const tools = await invoke(catalog, state, ['list', 'example-counter-mcp', 'codex-cli']) as Array<{ name: string }>
     expect(tools.map((tool) => tool.name)).toEqual(['counter_get', 'counter_add', 'counter_reset'])
   })

@@ -18,6 +18,7 @@ target/
 .nd-dsh/
 artifacts/
 .pnpm-store/
+.npm-cache/
 
 # Keep project skills tracked while ignoring local DSH runtime state.
 .dsh/*

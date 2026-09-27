@@ -1,39 +1,265 @@
-# Beta release readiness — gap list and order of work
+# Beta release readiness — execution plan
 
-> Updated: 2026-09-24 · Basis: full-tree review at `feat/real-user-prod-e2e` (`e276974`)
-> Purpose: one ordered checklist of what stands between the current tree and a stable **Public Beta**, and what remains for **GA** after that. Roadmap context and gate definitions: [roadmap.md](../roadmap.md) ("Public Beta P0", "Release labels"). The per-area gate checklist with current coverage standing lives in [beta-release-gate.md](beta-release-gate.md).
+> Updated: 2026-09-28  
+> Basis: current `main` plus beta-hardening changes on `feat/beta-release-stability-plan-2026-09-27` (synced with `main` at `1cc7939`). Last fully attested baseline is 2026-09-26; the new hardening changes remain **local-PC validation pending**.  
+> Goal: get ND-DSH to a **Beta Stable** release candidate without requiring every planned feature to be finished. Beta-exposed features must be predictable, recoverable, scoped correctly, and diagnosable.
 
-## Where the tree stands (2026-09-24)
+## Release labels
 
-- Every locally-runnable gate is green: `verify`, `typecheck`, unit tests (841 passed / 8 skipped), Rust `core:test` (fmt + clippy `-D warnings` + tests), full Playwright sweep (44 passed), `e2e:prod:user` real-user production journey (19/19 gates, incl. restart), portable Windows build + packaged runtime smoke + forced-core-crash cleanup proof, `bench:contract` 9/9, `bench:tasks:check` 136/0, budgets inside the committed baseline classes.
-- Code-level hygiene: zero TODO/FIXME/stub markers in `src/`; `crates/` markers are test-only. Renderer fails closed; credentials are write-only from the renderer.
-- Open task board: [blocked-0004](../tasks/blocked-0004-windows-release-validation.md) (runner-only release validation), [wip-0019](../tasks/wip-0019-browser-companion-mvp.md) (real-Chrome smoke remaining), [wip-0034](../tasks/wip-0034-rust-decision-kernel.md) (Laya/Jev shadow remaining; Rust kernel intentionally **not** default yet).
-- CI is parked as `.github-bk/` (operator decision to conserve compute): all green evidence above is locally attested, not runner-attested.
+### Private / supervised beta
 
-## Beta gate (P0) — ordered
+May be released to a small invited group when the **Beta Stable gate** below passes. Local/manual release evidence is acceptable while GitHub Actions remains parked, as long as the exact RC commit, machine, commands, and results are recorded.
 
-1. **Restore CI** — rename `.github-bk/` back to `.github/`. Operator call on compute cost; nothing else unblocks runner-attested evidence. The first run also discharges two of blocked-0004's three runner criteria (`validate` + `windows-package` reaching packaging/smoke) and should be the first real attempt of the `performance-evidence` bundle, filling `artifact.ciRun` in the committed baseline. **Accept:** green `validate` and `windows-package`; blocked-0004 exit criteria checked.
-2. **Merge `feat/real-user-prod-e2e`** — 2 commits ahead of `main`: the real-user production journey driver plus the signal-killed runtime-child fix it exposed (`src/main/harness/harness-service.ts`). All gates green locally on this tree.
-3. **Real-Chrome companion smoke** — **done 2026-09-24.** Scripted as `corepack pnpm e2e:companion:chrome` (`e2e/companion-chrome-smoke.mjs` driver + `src/main/perf/companion-chrome-smoke.ts` in-app harness): real Chrome with the unpacked extension, native host registered under the real extension id, per-origin grant through the side panel, then 15 checked steps against the live connection (connection/tabs/target selection, snapshot, password redaction, attach, second-writer rejection, click/fill/press/scroll, navigate/reload plus back/forward over user history, stale-ref rejection, permission refusal on an ungranted origin, built-in unaffected, disconnect/reconnect lease revocation). Evidence: `e2e-results/companion-chrome-2026-09-24T18-0x/companion-chrome-smoke.json` — 15 pass, 1 documented skip. The skip and the user-history-only back/forward rule are Chrome constraints of the `tabs`+`scripting` model, recorded in [wip-0019](../tasks/wip-0019-browser-companion-mvp.md); the grant needs one human answer to Chrome's native permission dialog (the driver waits for it and a desktop agent can answer it).
-4. **Clean-machine offline runtime proof** (roadmap §1) — the packaged app resolves Git from `PATH` (`src/main/git/git-cli.ts:495` falls back to `'git'`) and CLI-engine shims fall back to a PATH `node` when nothing is shipped beside them (`src/main/engines/agent-cli/agent-cli-support.ts:70`). Decide and implement bundle-vs-require for Git (portable Git distribution is the likely answer) and verify the app starts and runs the real agent runtime **offline on a machine with no dev tooling** (clean Windows VM). **Accept:** roadmap §1 success criterion demonstrated; any deferred bundle documented as an explicit OS prerequisite on the beta download page.
-5. **Third-party license notices** — **implemented 2026-09-24.** `scripts/gen-third-party-notices.mjs` (`pnpm notices:generate`, run automatically by `release:stage`) writes `.release/THIRD_PARTY_NOTICES.nd-dsh.md`: direct npm runtime deps with license ids, the crates.io dependency closure of `nd-core`/`nd-browser-host` from `cargo metadata` (77 crates, all permissively licensed), and the bundled components table (Harness, agent-browser, ND Pencil, the vscode-derived Source Control panel, Electron, Chromium). It ships as `THIRD_PARTY_NOTICES.nd-dsh.md` via electron-builder `extraResources`; `release:verify` fails when it is missing, does not name every direct dependency, omits a bundled component, or when a redistributed root's license input is absent (harness `LICENSE`/`THIRD_PARTY_NOTICES.md`, agent-browser, ND Pencil, `vendor/openpencil.LICENSE`, `vendor/vscode-git.LICENSE`, Electron/Chromium notices). Proven with a doctored-file negative test. Optional follow-up: assert the file lands in the packaged artifact after electron-builder runs.
-6. **Installed-app E2E** (roadmap §3) — extend `scripts/packaged-runtime-smoke.mjs` toward the full journey against the packaged artifact: create company/project → PM plan → worker edits fixture → reviewer pass → project 100% → close/reopen with organization + engine assignment + sessions surviving. Add the negative list (cancellation, crash/restart recovery, missing engine, corrupted primary organization state, rejected policy approval, missing credentials). **Accept:** source-build success is no longer the only proof an artifact works.
-7. **Docs/QA hygiene** — **done 2026-09-24.** `docs/qa/README.md` now indexes the folder (which files are historical evidence vs operator manuals) and `beta-v1-handoff.md` carries a superseded banner pointing at the current dated evidence. (README status, the task board 0020–0030 archive, and this document were synced in the same pass.)
+### Public beta
 
-## Public beta distribution (immediately after the gate)
+Requires the Private Beta gate plus signed distribution, update/rollback proof, and runner-attested Windows release evidence. GitHub Actions can remain parked until this phase.
 
-8. **Windows code signing** — choose certificate/Azure Trusted Signing, wire `electron-builder.yml` `win` signing, version metadata, and uninstall behavior. Unsigned binaries are the hard stop for anything beyond hand-delivered copies.
-9. **Update channel** — electron-builder publish config plus staged update verification; updates must never replace user organization/session state (roadmap §2 acceptance).
-10. **Beta page limits** — document supported OS, provider, and engine limits for the release label per the roadmap's release-label policy.
+## Current standing
 
-## Toward GA (not beta blockers)
+The core product is already in a strong position:
 
-11. **Rust decision kernel default** — wip-0034's live Laya/Jev shadow comparison is the last gate before promoting the Rust kernel over the TypeScript default. Skipping it for beta is safe (TS kernel remains default by design).
-12. **Policy/action normalization** (roadmap §4) — normalized ND action envelope wired into `OrganizationApprovalGate` for browser external writes, deployments, remote Git mutations, destructive data actions; durable audit receipts. Pre-GA by definition.
-13. **Engine onboarding and health** (roadmap §5) — Codex installed/authenticated/project-trust health checks surfaced before a user assigns an unavailable engine.
+- Core company/project/task/agent workflow is covered by unit + E2E tests.
+- Multi-company/project isolation, task worktrees, parallel execution, persistence/recovery, terminal/filesystem boundaries, and compute-budget accounting have strong automated coverage.
+- The latest gate record reports `pnpm typecheck` clean and **855 passed / 8 skipped** unit tests on the 2026-09-26 validation tree.
+- The 2026-09-24 full local attestation already covered Rust `core:test`, full Playwright, real-user production E2E, portable Windows packaging, packaged runtime smoke, forced-core-crash cleanup, and benchmark budget checks.
+- Real-Chrome Browser Companion smoke is recorded green.
+- Laya/Rust decision-kernel live validation is recorded; Rust remains opt-in, so promoting it to default is **not** a beta blocker.
+- Third-party notice generation/verification is implemented.
 
-## Known limitations to document, not block on
+The remaining work is mostly **release hardening and real-artifact evidence**, not another feature round.
 
-- Codex threads are in-memory per app run; persistent Codex sessions are honestly reported unavailable (`README.md` "Current coding engines").
-- Manual chats are global until explicit Global/Company/Project/Task chat scoping ships.
-- CI parked ⇒ release evidence stays locally attested until item 1 lands.
+## Beta Stable gate
+
+Declare the RC Beta Stable only when all are true:
+
+1. **0 P0** — no known crash/data-loss/security/wrong-company-or-project defects.
+2. **0 known P1** in the core path: create company/project → plan → worker → review → Git/result → restart/recover.
+3. **Every beta-exposed feature has Unit PASS + E2E PASS + Human PASS** in the RC evidence record.
+4. **≥95% repeated scenario pass rate** for the beta scenarios on the RC. Teams targeting 99% may set the evidence threshold to 0.99 once enough repeated runs exist to make that number useful.
+5. All beta-exposed features are either:
+   - verified and enabled, or
+   - clearly marked Experimental / disabled behind a feature flag.
+6. The exact packaged artifact, not only the source checkout, passes the release journey.
+7. A rollback/recovery path is documented before users receive the build.
+8. A human release owner explicitly records the final GO decision.
+
+The three-layer evidence workflow is defined in [beta-three-layer-validation.md](../qa/beta-three-layer-validation.md) and machine-checked with `corepack pnpm beta:gate -- <evidence.json>`.
+
+## Ordered execution plan
+
+### Phase 0 — Freeze the RC scope
+
+**Goal:** stop adding risk while validation runs.
+
+- [ ] Create one RC branch/tag candidate from current `main`.
+- [ ] No new feature work on the RC; only P0/P1 fixes and release-test changes.
+- [ ] List beta-exposed features and explicitly disable unfinished/experimental surfaces.
+- [ ] Record exact app version, commit SHA, Windows version, Node/pnpm/Rust versions, and test machine.
+
+**Exit:** everyone tests the same immutable RC candidate.
+
+### Phase 0.5 — Create the three-layer evidence matrix
+
+- [ ] Copy `docs/qa/beta-three-layer-evidence.example.json` to an RC-specific evidence file.
+- [ ] List every beta-exposed feature as its own row.
+- [ ] Map existing Unit evidence to each row.
+- [ ] Map existing E2E evidence to each row.
+- [ ] Leave Human as pending until a real tester runs the scenario.
+- [ ] Keep Experimental/disabled features out of beta exposure rather than marking untested behavior ready.
+
+**Exit:** every beta-exposed feature has an explicit Unit / E2E / Human owner and evidence slot.
+
+---
+
+### Phase 1 — Close the security/scope blockers
+
+These are the highest-risk gaps from the current gate.
+
+#### 1A. Product-level pre-push secret scan
+
+- [x] Implemented in the real `GitService.push()` and `pushBranch()` boundary.
+- [x] High-confidence credential/token/private-key formats and committed sensitive credential files are blocked before network mutation.
+- [x] Refusal reports filenames only; secret values are not copied into Git output/logs.
+- [x] Positive/negative tests added.
+- [ ] Fresh local RC execution still required.
+
+#### 1B. Provider credential scope
+
+- [x] Private Beta contract decided: provider API keys are **desktop-global operator resources**, not company/project tenant secrets.
+- [x] The limitation is explicit in the RC handoff; one ND desktop must stay inside one trusted operator/security domain.
+- [ ] True company/project/environment secret isolation remains future runtime/gateway work; the shared Harness currently consumes one global ProviderStore runtime config.
+- [ ] Do not claim mutually-untrusted tenant credential isolation until that boundary changes.
+
+#### 1C. Explicit local transport boundary tests
+
+- [x] `pnpm verify` now fails if Electron CDP is not explicitly bound to `127.0.0.1`.
+- [x] Diagnostics/redaction tests remain in place and the real Settings Copy diagnostics UI now has E2E privacy coverage.
+- [ ] Fresh local RC execution still required.
+
+**Exit:** no known secret-leak or wrong-scope credential path.
+
+---
+
+### Phase 2 — Prove the packaged app on a clean machine
+
+#### 2A. Clean-machine offline runtime
+
+On a clean Windows VM with no development tooling:
+
+- [ ] Install/run the exact RC artifact.
+- [ ] Verify ND Core, Harness/runtime, ND Pencil, browser host, and required CLI/runtime dependencies resolve.
+- [ ] Decide whether Git/Node are bundled or explicit beta prerequisites.
+- [ ] Start ND offline and confirm startup/recovery behavior is understandable.
+- [ ] Confirm no accidental dependency on the source checkout, pnpm store, Cargo target, or developer PATH.
+
+#### 2B. Installed-app E2E
+
+Run against the packaged artifact:
+
+- [ ] Create company + project.
+- [ ] Assign provider/model + coding engine.
+- [ ] PM creates work.
+- [ ] Worker edits a fixture project.
+- [ ] Machine verification runs.
+- [ ] Independent review passes.
+- [ ] Git/result is visible.
+- [ ] Close ND completely.
+- [ ] Reopen and verify company/project/tasks/assignments/evidence survive.
+
+Negative cases:
+
+- [ ] cancel a running task;
+- [ ] kill ND Core mid-task and reopen;
+- [ ] unavailable engine;
+- [ ] provider down / no network;
+- [ ] corrupted primary organization state;
+- [ ] rejected approval;
+- [ ] missing credential;
+- [ ] merge conflict.
+
+**Exit:** source-build success is no longer the only proof.
+
+---
+
+### Phase 3 — Close the remaining reliability gaps
+
+Keep this focused; do not add unrelated features.
+
+- [x] Explicit HTTP 429 / rate-limit transient classification + regression test added.
+- [x] Windows forced-nd-core-crash descendant cleanup is required by `beta:automated`; restart reconciliation remains covered by existing organization recovery/effect-journal tests.
+- [ ] Human network disconnect/reconnect drill on the packaged RC.
+- [ ] Human invalid/unwritable data-directory / disk-full-style drill on the packaged RC.
+- [x] Real Electron browser runtime spike covers cookie set/read/clear + a real download and is now required by `beta:automated`.
+- [x] MCP child-failure containment test proves a broken child does not corrupt the control plane and a repaired next request works; interactive-session UX remains a Human check.
+- [ ] Workflow-template UI create/edit/rerun: disable/mark experimental for beta if this surface is not fully exposed/tested.
+- [x] Soak harness continuously checks renderer liveness, process count and memory growth; a real 24-hour run is still required.
+- [x] Settings → About → Copy diagnostics E2E added with clipboard privacy assertions.
+
+**Exit:** every beta-exposed subsystem has at least one failure-path proof.
+
+---
+
+### Phase 4 — Real-world beta matrix
+
+Run the RC like a real user, not only a test fixture.
+
+Minimum matrix:
+
+- [x] **3 companies × 2 projects each** deterministic E2E harness implemented; Human/live RC execution still required.
+- [ ] At least 2 different provider/model routes.
+- [ ] At least 2 coding engines where locally available.
+- [ ] Parallel work in at least 2 projects at the same time.
+- [ ] Switch companies/projects while work remains active.
+- [ ] Restart ND during the run.
+- [ ] Create at least one rework/reviewer-fail path.
+- [ ] Create at least one Git conflict/refusal path.
+- [ ] Use the Quick Launcher (global popup and in-app) for at least one real task and one note capture.
+- [ ] Install/activate one user-authored extension package and perform one governed native action (wallpaper).
+
+For each scenario record: PASS / FAIL, app commit, artifact hash/name, provider/engine, and any issue number.
+
+**Exit:** ≥95% repeated scenario pass rate and no P0/P1 core defect.
+
+---
+
+### Phase 5 — 24-hour soak
+
+The dedicated `e2e:beta:soak` harness is implemented. Run it on the RC machine for 24 hours; the final gate rejects evidence below 1440 minutes.
+
+Check:
+
+- [ ] memory growth;
+- [ ] CPU while idle;
+- [ ] stuck/orphan workers;
+- [ ] duplicate task execution;
+- [ ] stale leases;
+- [ ] zombie CLI/sidecar/browser-host processes;
+- [ ] corrupted or missing organization state;
+- [ ] journal/recovery errors;
+- [ ] UI becoming progressively slower.
+
+Take diagnostics at start, midpoint, and end.
+
+**Exit:** no P0/P1 issue and no unexplained progressive degradation.
+
+---
+
+### Phase 6 — Private Beta release decision
+
+Before sending the build to beta users, run the single automated release gate on Windows:
+
+```sh
+corepack pnpm beta:automated
+```
+
+Then require real Chrome Companion, clean-machine packaged E2E, the 24-hour soak, Human scenarios, and finally:
+
+```sh
+corepack pnpm beta:gate -- docs/qa/beta-three-layer-evidence-<rc>.json
+```
+
+Release only when:
+
+- [ ] 0 P0.
+- [ ] 0 known P1 in the core workflow.
+- [ ] ≥95% repeated E2E/real-world pass rate.
+- [ ] security/scope blockers in Phase 1 are closed.
+- [ ] packaged clean-machine journey passes.
+- [ ] rollback/recovery instructions exist.
+- [ ] supported OS/providers/engines and known limitations are written for testers.
+
+If a non-core feature is the only failing area, disable it for the beta rather than delaying the whole core release.
+
+## Public Beta follow-up
+
+These are **not required for a small supervised hand-delivered beta**, but are required before broad public distribution:
+
+1. [ ] Restore `.github-bk/` → `.github/` and record runner-attested Windows release evidence from [blocked-0004](../tasks/blocked-0004-windows-release-validation.md).
+2. [ ] Windows code signing / trusted installer.
+3. [ ] Update channel with staged-update verification.
+4. [ ] Prove previous-version rollback while preserving company/project/user state.
+5. [ ] Publish supported OS/provider/engine matrix and beta limitations.
+
+## Explicit non-blockers for the first beta
+
+- Rust decision kernel becoming the default — keep the current stable default until separately promoted.
+- Broader non-coding company templates.
+- Extra engine adapters beyond the beta-supported matrix.
+- Arbitrary Chrome-extension parity beyond the documented Browser Companion/built-in browser contract.
+- Normalized cross-domain action policy beyond what is required for the beta-exposed actions; broader normalization remains pre-GA.
+
+## Release evidence folder
+
+For each RC, keep one evidence record under `docs/qa/` containing:
+
+- RC commit + artifact name/hash;
+- exact commands and pass/fail;
+- clean-machine result;
+- installed-app E2E result;
+- real-world matrix result;
+- soak result;
+- known limitations;
+- P0/P1 issue list;
+- final **GO / NO-GO** decision made by the human release owner.
+
+The detailed per-area coverage and open gaps remain authoritative in [beta-release-gate.md](beta-release-gate.md).
