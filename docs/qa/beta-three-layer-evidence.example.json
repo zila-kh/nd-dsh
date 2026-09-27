@@ -33,7 +33,27 @@
     },
     {
       "id": "company-project-isolation",
-      "name": "Multi-company and multi-project isolation",
+      "name": "Multi-company and multi-project ownership isolation",
+      "severity": "P0",
+      "betaExposed": true,
+      "unit": {
+        "status": "pending",
+        "evidence": []
+      },
+      "e2e": {
+        "status": "pending",
+        "evidence": []
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "parallel-agent-worktree",
+      "name": "Parallel agents, task leases, isolated worktrees and cancellation",
       "severity": "P0",
       "betaExposed": true,
       "unit": {
@@ -53,7 +73,27 @@
     },
     {
       "id": "git-worktree-secret-safety",
-      "name": "Git/worktree safety and secret blocking",
+      "name": "Git/worktree safety and committed-secret blocking",
+      "severity": "P0",
+      "betaExposed": true,
+      "unit": {
+        "status": "pending",
+        "evidence": []
+      },
+      "e2e": {
+        "status": "pending",
+        "evidence": []
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "credential-security-boundaries",
+      "name": "Credential, redaction, policy and local transport boundaries",
       "severity": "P0",
       "betaExposed": true,
       "unit": {
@@ -92,8 +132,108 @@
       }
     },
     {
-      "id": "provider-browser-mcp-failures",
-      "name": "Provider, browser and MCP failure handling",
+      "id": "provider-failure-handling",
+      "name": "Provider/model failure, retry, rate-limit and fallback handling",
+      "severity": "P1",
+      "betaExposed": true,
+      "unit": {
+        "status": "pending",
+        "evidence": []
+      },
+      "e2e": {
+        "status": "pending",
+        "evidence": []
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "browser-platform",
+      "name": "Built-in browser and Browser Companion safety/recovery",
+      "severity": "P1",
+      "betaExposed": true,
+      "unit": {
+        "status": "pending",
+        "evidence": []
+      },
+      "e2e": {
+        "status": "pending",
+        "evidence": []
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "mcp-skills-failure-containment",
+      "name": "MCP/skills malformed, timeout and child-failure containment",
+      "severity": "P1",
+      "betaExposed": true,
+      "unit": {
+        "status": "pending",
+        "evidence": []
+      },
+      "e2e": {
+        "status": "pending",
+        "evidence": []
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "budget-entitlement",
+      "name": "Compute budget, entitlement and usage accounting correctness",
+      "severity": "P1",
+      "betaExposed": true,
+      "unit": {
+        "status": "pending",
+        "evidence": []
+      },
+      "e2e": {
+        "status": "pending",
+        "evidence": []
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "terminal-filesystem",
+      "name": "Terminal, filesystem, path containment and process cleanup",
+      "severity": "P1",
+      "betaExposed": true,
+      "unit": {
+        "status": "pending",
+        "evidence": []
+      },
+      "e2e": {
+        "status": "pending",
+        "evidence": []
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "diagnostics-observability",
+      "name": "Privacy-safe diagnostics, receipts and actionable failure visibility",
       "severity": "P1",
       "betaExposed": true,
       "unit": {
@@ -127,7 +267,8 @@
   "releaseChecks": {
     "automated": {
       "status": "pending",
-      "evidence": []
+      "evidence": [],
+      "summaryPath": "e2e-results/beta-automated-<timestamp>/beta-automated-summary.json"
     },
     "packagedCleanMachine": {
       "status": "pending",
@@ -146,7 +287,8 @@
       "durationMinutes": 0,
       "tester": "",
       "recordedAt": "",
-      "evidence": []
+      "evidence": [],
+      "summaryPath": "e2e-results/beta-soak/beta-soak-<timestamp>.json"
     }
   }
 }
