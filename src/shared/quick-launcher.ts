@@ -5,6 +5,8 @@
  * persisted mode names and handoff targets.
  */
 
+import type { NdContext } from './nd-context.js'
+
 export type QuickLauncherShortcutMode = 'popup' | 'window-launcher' | 'window'
 
 export const QUICK_LAUNCHER_SHORTCUT_MODES: readonly QuickLauncherShortcutMode[] = [
@@ -48,16 +50,20 @@ export function resolveShortcutBehavior(mode: QuickLauncherShortcutMode): QuickL
  */
 export type LauncherHandoffTarget =
   | 'launcher'
+  | 'home'
   | 'kanban'
   | 'agent'
+  | 'browser'
   | 'capture-screen'
   | 'capture-tools'
   | 'capture-clipboard'
 
 export const LAUNCHER_HANDOFF_TARGETS: readonly LauncherHandoffTarget[] = [
   'launcher',
+  'home',
   'kanban',
   'agent',
+  'browser',
   'capture-screen',
   'capture-tools',
   'capture-clipboard',
@@ -65,4 +71,14 @@ export const LAUNCHER_HANDOFF_TARGETS: readonly LauncherHandoffTarget[] = [
 
 export function isLauncherHandoffTarget(value: unknown): value is LauncherHandoffTarget {
   return typeof value === 'string' && (LAUNCHER_HANDOFF_TARGETS as readonly string[]).includes(value)
+}
+
+/**
+ * A handoff may carry the context the popup was showing, so work started from
+ * Personal stays personal even when the main window has a project selected.
+ */
+export interface LauncherHandoff {
+  target: LauncherHandoffTarget
+  text?: string
+  context?: NdContext
 }

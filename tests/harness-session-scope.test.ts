@@ -51,4 +51,19 @@ describe('scopeSessionListPayload', () => {
     }
     expect(scoped.items.map((item) => item.sessionId)).toEqual(['real'])
   })
+
+  it('keeps ND Home personal chats visible even though their cwd is outside the workspace', () => {
+    const personal = join(tmpdir(), 'nd-home', 'chats', 'chat-1', 'work')
+    const value = {
+      items: [
+        session('sess-personal', personal),
+        session('sess-other', nimbus),
+        session('sess-workspace', linky),
+      ],
+    }
+    const scoped = scopeSessionListPayload(value, linky, new Set(), undefined, new Set(['sess-personal'])) as {
+      items: Array<Record<string, unknown>>
+    }
+    expect(scoped.items.map((item) => item.sessionId)).toEqual(['sess-personal', 'sess-workspace'])
+  })
 })

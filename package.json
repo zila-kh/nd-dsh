@@ -28,6 +28,7 @@
     "e2e:prod": "node scripts/e2e-prod.mjs",
     "e2e:models": "node e2e/beta-multimodel.mjs",
     "verify": "node scripts/verify.mjs && node scripts/verify-nd-pencil.mjs && node scripts/verify-vendor-vscode-git.mjs",
+    "ext:validate": "node scripts/validate-nd-extension.mjs",
     "release:stage": "node scripts/stage-release.mjs",
     "release:verify": "node scripts/verify-release.mjs",
     "notices:generate": "node scripts/gen-third-party-notices.mjs",

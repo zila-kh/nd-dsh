@@ -1,5 +1,6 @@
 import { BrowserWindow, screen, type Display } from 'electron'
 import { IPC } from '../shared/contracts.js'
+import type { NdContext } from '../shared/nd-context.js'
 import type { LauncherHandoffTarget } from '../shared/quick-launcher.js'
 
 const LAUNCHER_POPUP_WIDTH = 700
@@ -10,7 +11,7 @@ export interface LauncherPopupController {
   toggle(): void
   hide(): void
   /** Hide the popup, bring the full app window forward, and forward the picked action. */
-  handoff(target: LauncherHandoffTarget, text?: string): void
+  handoff(target: LauncherHandoffTarget, text?: string, context?: NdContext): void
   /** The popup window when it exists; used to admit its renderer to trusted desktop IPC. */
   window(): BrowserWindow | null
 }
@@ -108,7 +109,7 @@ export function createLauncherPopup(options: {
     if (popup && !popup.isDestroyed()) popup.hide()
   }
 
-  const handoff = (target: LauncherHandoffTarget, text?: string): void => {
+  const handoff = (target: LauncherHandoffTarget, text?: string, context?: NdContext): void => {
     hide()
     const main = getMainWindow()
     if (!main || main.isDestroyed()) return
@@ -117,7 +118,7 @@ export function createLauncherPopup(options: {
     main.setAlwaysOnTop(true)
     main.focus()
     main.setAlwaysOnTop(false)
-    main.webContents.send(IPC.windowLauncherHandoffEvent, target, text)
+    main.webContents.send(IPC.windowLauncherHandoffEvent, target, text, context)
   }
 
   return {

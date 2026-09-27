@@ -45,6 +45,8 @@ interface SettingsPaneProps {
   onSelectSubTab?: (subTab: GeneralSubTab) => void
   capabilitySubTab?: CapabilitySubTab
   onSelectCapabilitySubTab?: (subTab: CapabilitySubTab) => void
+  /** ND extension packages management, rendered above the agent-capability catalog. */
+  extensionsExtra?: React.ReactNode
 }
 
 const TABS: { id: SettingsTab; label: string }[] = [
@@ -52,7 +54,7 @@ const TABS: { id: SettingsTab; label: string }[] = [
   { id: 'appearance', label: 'Appearance' },
   { id: 'models', label: 'Models' },
   { id: 'capabilities', label: 'Capabilities' },
-  { id: 'extensions', label: 'Plugins' },
+  { id: 'extensions', label: 'Extensions' },
   { id: 'engines', label: 'Coding engines' },
   { id: 'presets', label: 'Agent presets' },
 ]
@@ -85,6 +87,7 @@ export function SettingsPane({
   onSelectSubTab,
   capabilitySubTab,
   onSelectCapabilitySubTab,
+  extensionsExtra,
 }: SettingsPaneProps) {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null)
   const [pathDraft, setPathDraft] = useState('')
@@ -243,7 +246,10 @@ export function SettingsPane({
             {...(onSelectCapabilitySubTab !== undefined ? { onSelectSubTab: onSelectCapabilitySubTab } : {})}
           />
         ) : tab === 'extensions' ? (
-          <ExtensionSettings onError={onError} />
+          <div className="min-h-0 overflow-auto px-[26px] pb-[42px] pt-1.5">
+            {extensionsExtra ? <div className="mb-6 mt-3">{extensionsExtra}</div> : null}
+            <ExtensionSettings onError={onError} />
+          </div>
         ) : tab === 'engines' ? (
           <EngineSettings onError={onError} />
         ) : tab === 'presets' ? (

@@ -4,10 +4,11 @@ import { CAPABILITIES_IPC, type CapabilityKind, type CapabilityProviderStatus, t
 import type { AppInspectArea, AppInspectMode, AppInspectOptions, BrowserBounds, DshSurface, HarnessRunOptions, InspectScope, ModelProvider, QaSuiteId, ThemeMode } from '../shared/contracts.js'
 import { IPC } from '../shared/contracts.js'
 import { EXTENSIONS_IPC } from '../shared/extensions.js'
-import type { OrganizationSnapshot } from '../shared/organization.js'
+import type { OrganizationMutation, OrganizationSnapshot } from '../shared/organization.js'
 import { USAGE_IPC, summarizeUsage, type UsageAttribution, type UsageScope, type UsageSummary } from '../shared/usage.js'
 import { WORKFLOW_PLUGINS_IPC } from '../shared/workflow-plugins.js'
 import { isLauncherHandoffTarget, isQuickLauncherShortcutMode } from '../shared/quick-launcher.js'
+import { asNdContext, isNdContext } from '../shared/nd-context.js'
 import type { LauncherPopupController } from './launcher-popup.js'
 import { projectRoot, presetSourceDir } from './app-paths.js'
 import { NdSkillService } from './skills/nd-skill-service.js'
@@ -25,6 +26,12 @@ import type { UsageLedger } from './usage/usage-ledger.js'
 import { registerExtensionIpc } from './extensions/ipc.js'
 import { ExtensionRouter } from './extensions/extension-router.js'
 import { ExtensionStore } from './extensions/extension-store.js'
+import { ExtensionPackageStore } from './extensions/package-store.js'
+import { InvocationStateStore } from './extensions/invocation-state.js'
+import { NativeHostRegistry } from './extensions/native-host.js'
+import { InvocationBroker } from './extensions/invocation-broker.js'
+import { registerNdExtensionIpc } from './extensions/nd-ipc.js'
+import { HomeStore } from './home/home-store.js'
 import type { GitService } from './git/git-service.js'
 import type { HarnessService } from './harness/harness-service.js'
 import type { ProviderStore } from './providers.js'
@@ -60,8 +67,12 @@ interface IpcDependencies {
   sessionArchive: SessionArchiveStore
   /** ND's durable token accounting, captured from the runtime event stream. */
   usageLedger: UsageLedger
-  /** Read-only organization state used to resolve project ownership for workflow plugins. */
-  organizationStore: { state(): Promise<OrganizationSnapshot> }
+  /** Organization state and mutations: ND extension notes and org policy checks run against the same store the UI uses. */
+  organizationStore: {
+    state(): Promise<OrganizationSnapshot>
+    mutate(mutation: OrganizationMutation): Promise<unknown>
+    policy(companyId: string, action: string): Promise<'allow' | 'ask' | 'deny'>
+  }
 }
 
 type Handler = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown | Promise<unknown>
@@ -198,6 +209,47 @@ export function registerIpc(deps: IpcDependencies): () => void {
   workflowPluginStore.setOnChanged((state) => {
     if (!deps.window.isDestroyed()) deps.window.webContents.send(WORKFLOW_PLUGINS_IPC.changedEvent, state)
   })
+
+  // PRD 0006 platform: ND Home personal storage plus the extension package,
+  // activation/grant, and invocation services. One broker serves launcher
+  // actions, rendered views, and agent gateways so authorization cannot drift
+  // between surfaces.
+  const userDataRoot = app.getPath('userData')
+  const homeStore = new HomeStore(join(userDataRoot, 'nd-home'))
+  const packageStore = new ExtensionPackageStore(join(userDataRoot, 'nd-extensions'))
+  const invocationState = new InvocationStateStore(userDataRoot)
+  const nativeHost = new NativeHostRegistry()
+  const invocationBroker = new InvocationBroker({
+    packages: packageStore,
+    state: invocationState,
+    host: nativeHost,
+    organization: deps.organizationStore,
+  })
+  const disposeNdExtensionIpc = registerNdExtensionIpc({
+    window: deps.window,
+    launcherPopup: () => deps.launcherPopup.window(),
+    home: homeStore,
+    packages: packageStore,
+    state: invocationState,
+    broker: invocationBroker,
+    host: nativeHost,
+    organization: deps.organizationStore,
+    browser: deps.browser,
+    workflow: workflowService,
+    onHomeChanged: () => { void syncHomeSessions() },
+  })
+  // Personal chats run outside the active workspace but must stay listed in the
+  // sidebar; keep the harness's visibility set in step with ND Home records.
+  const homeSessionIds = new Set<string>()
+  const syncHomeSessions = async (): Promise<void> => {
+    const state = await homeStore.state()
+    homeSessionIds.clear()
+    for (const chat of state.chats) {
+      if (chat.sessionId) homeSessionIds.add(chat.sessionId)
+    }
+  }
+  void syncHomeSessions().catch(() => undefined)
+  deps.harness.setExtraVisibleSessionIds(() => homeSessionIds)
 
   let floatWindow: BrowserWindow | null = null
 
@@ -350,9 +402,13 @@ export function registerIpc(deps: IpcDependencies): () => void {
   handleLauncherSurface(IPC.windowHideLauncherPopup, () => {
     deps.launcherPopup.hide()
   })
-  handleLauncherSurface(IPC.windowLauncherHandoff, (_event, target: unknown, text: unknown) => {
+  handleLauncherSurface(IPC.windowLauncherHandoff, (_event, target: unknown, text: unknown, context: unknown) => {
     if (!isLauncherHandoffTarget(target)) throw new Error(`Unknown launcher handoff target: ${String(target)}`)
-    deps.launcherPopup.handoff(target, typeof text === 'string' ? text : undefined)
+    deps.launcherPopup.handoff(
+      target,
+      typeof text === 'string' ? text : undefined,
+      isNdContext(context) ? asNdContext(context) : undefined,
+    )
   })
 
   handle(IPC.enginesList, () => deps.engines.list())
@@ -670,6 +726,7 @@ export function registerIpc(deps: IpcDependencies): () => void {
   return () => {
     extensionStore.setOnChanged(undefined)
     disposeExtensionIpc()
+    disposeNdExtensionIpc()
     workflowPluginStore.setOnChanged(undefined)
     disposeWorkflowIpc()
     for (const channel of channels) ipcMain.removeHandler(channel)
@@ -905,6 +962,10 @@ function asRunOptions(value: unknown): HarnessRunOptions {
   if (provider !== undefined && (typeof provider !== 'string' || !provider.trim() || provider.length > 256)) throw new Error('provider must be a short non-empty string')
   const model = record.model
   if (model !== undefined && (typeof model !== 'string' || !model.trim() || model.length > 256)) throw new Error('model must be a short non-empty string')
+  const workspaceCwd = record.workspaceCwd
+  if (workspaceCwd !== undefined && (typeof workspaceCwd !== 'string' || !workspaceCwd.trim() || workspaceCwd.length > 4_096)) {
+    throw new Error('workspaceCwd must be a short non-empty path')
+  }
   return {
     ...(typeof skillScope === 'string' ? { skillScope } : {}),
     ...(typeof skillSelectionId === 'string' ? { skillSelectionId } : {}),
@@ -912,6 +973,7 @@ function asRunOptions(value: unknown): HarnessRunOptions {
     ...(typeof engineId === 'string' ? { engineId: engineId.trim() } : {}),
     ...(typeof provider === 'string' ? { provider: provider.trim() } : {}),
     ...(typeof model === 'string' ? { model: model.trim() } : {}),
+    ...(typeof workspaceCwd === 'string' ? { workspaceCwd: workspaceCwd.trim() } : {}),
   }
 }
 

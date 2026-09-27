@@ -2,14 +2,19 @@ import { useMemo, useState } from 'react'
 import {
   Building2,
   Camera,
+  Check,
   Clipboard,
   FolderOpen,
   ListTodo,
   MessageSquare,
   MonitorUp,
+  Puzzle,
   StickyNote,
 } from 'lucide-react'
 import type { OrganizationSnapshot } from '../../../shared/organization'
+import type { NdContext } from '../../../shared/nd-context'
+import type { NdCommandView } from '../../../shared/nd-invocations'
+import { commandSearchText, type ContextOption } from '../lib/nd-context-model'
 import { compactLauncherText, recentLauncherProjects } from '../lib/quick-launcher-model'
 import {
   CommandDialog,
@@ -27,6 +32,14 @@ interface Props {
   onOpenChange(open: boolean): void
   organization: OrganizationSnapshot | null
   currentUrl?: string | undefined
+  /** Explicit context selector; the popup defaults to Personal, the in-app launcher to the current context. */
+  contexts?: ContextOption[]
+  activeContextId?: string
+  contextLabel?: string
+  onSelectContext?(id: string): void
+  /** Extension commands available in the selected context. */
+  extensionCommands?: NdCommandView[]
+  onRunExtensionCommand?(command: NdCommandView, typed: string): void | Promise<void>
   onOpenKanban(): void
   onOpenAgent(): void
   onActivateProject(projectId: string): void | Promise<void>
@@ -45,6 +58,12 @@ export function QuickLauncher({
   onOpenChange,
   organization,
   currentUrl,
+  contexts = [],
+  activeContextId,
+  contextLabel,
+  onSelectContext,
+  extensionCommands = [],
+  onRunExtensionCommand,
   onOpenKanban,
   onOpenAgent,
   onActivateProject,
@@ -123,6 +142,22 @@ export function QuickLauncher({
           </CommandGroup>
         ) : null}
 
+        {contexts.length > 0 ? (
+          <CommandGroup heading="Context">
+            {contexts.map((option) => (
+              <CommandItem
+                key={option.id}
+                value={`context ${option.label} ${option.detail}`}
+                onSelect={() => onSelectContext?.(option.id)}
+              >
+                {option.id === activeContextId ? <Check /> : <Building2 />}
+                <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                <CommandShortcut>{option.id === activeContextId ? 'Active' : option.detail}</CommandShortcut>
+              </CommandItem>
+            ))}
+          </CommandGroup>
+        ) : null}
+
         <CommandGroup heading="Quick actions">
           <CommandItem value="open kanban work board tasks" onSelect={() => closeAndRun(onOpenKanban)}>
             <ListTodo />
@@ -161,6 +196,25 @@ export function QuickLauncher({
             </CommandItem>
           ) : null}
         </CommandGroup>
+
+        {extensionCommands.length > 0 ? (
+          <>
+            <CommandSeparator />
+            <CommandGroup heading="Extensions">
+              {extensionCommands.map((command) => (
+                <CommandItem
+                  key={`${command.extensionId}:${command.contributionId}`}
+                  value={`extension ${commandSearchText(command)}`}
+                  onSelect={() => closeAndRun(() => onRunExtensionCommand?.(command, text))}
+                >
+                  <Puzzle />
+                  <span className="min-w-0 flex-1 truncate">{command.title}</span>
+                  <CommandShortcut>{command.extensionId.replace(/^nd\./, '')}</CommandShortcut>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </>
+        ) : null}
 
         {recentProjects.length > 0 ? (
           <>
@@ -206,7 +260,7 @@ export function QuickLauncher({
 
       <div className="flex items-center justify-between gap-3 border-t border-border-soft px-3 py-2 text-[10px] text-faint">
         <span className="truncate">
-          {activeCompany?.name ?? 'No company'}{activeProject ? ` · ${activeProject.name}` : ''}
+          {contextLabel ?? (activeCompany?.name ?? 'No company')}{activeProject && !contextLabel ? ` · ${activeProject.name}` : ''}
         </span>
         <span className="shrink-0 font-mono">↑↓ navigate · Enter run · Esc close</span>
       </div>

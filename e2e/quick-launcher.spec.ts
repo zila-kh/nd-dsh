@@ -123,7 +123,9 @@ test('Ctrl/Cmd+K opens the launcher and Escape returns to the same surface', asy
   const dialog = page.getByRole('dialog', { name: 'ND Quick Launcher' })
   await expect(dialog).toBeVisible()
   await expect(dialog.getByPlaceholder('Search ND or type something to capture…')).toBeFocused()
-  await expect(dialog.getByText(`${COMPANY_A} · ${PROJECT_A}`, { exact: true })).toBeVisible()
+  // The in-app launcher opens on the current company/project context; the
+  // selector and the footer both name it, so match either occurrence.
+  await expect(dialog.getByText(`${COMPANY_A} · ${PROJECT_A}`, { exact: true }).first()).toBeVisible()
 
   await page.keyboard.press('Escape')
   await expect(dialog).toHaveCount(0)
@@ -181,7 +183,7 @@ test('main-process launcher event switches recent project context and exposes ca
   await expect(dialog.getByText('Capture External Screen', { exact: true })).toBeVisible()
   await expect(dialog.getByText('External Capture Tools', { exact: true })).toBeVisible()
   await expect(dialog.getByText('Capture Clipboard', { exact: true })).toBeVisible()
-  await expect(dialog.getByText(`${COMPANY_B} · ${PROJECT_B}`, { exact: true })).toBeVisible()
+  await expect(dialog.getByText(`${COMPANY_B} · ${PROJECT_B}`, { exact: true }).first()).toBeVisible()
   await page.keyboard.press('Escape')
 
   expect(rendererErrors).toEqual([])
@@ -199,16 +201,30 @@ test('launcher popup window toggles like Raycast and creates a task without open
   await expect(dialog).toBeVisible()
   const popupInput = dialog.getByPlaceholder('Search ND or type something to capture…')
   await expect(popupInput).toBeFocused()
+
+  // The popup always opens on Personal: a typed task therefore needs an
+  // explicit project context first, and never inherits the window's active one.
+  await popupInput.fill('Launcher E2E popup task')
+  await dialog.getByText(/Create task · Launcher E2E popup task/).click()
+  await expect(popup.getByText('Tasks need a project context. Pick one in Context first.')).toBeVisible()
+  expect((await state()).tasks.find((item) => item.title === 'Launcher E2E popup task')).toBeUndefined()
+
+  // The picked action hides the popup, so reopen it, clear the query to reveal
+  // the Context group, and pick the project context everything else follows.
+  const contextLabel = `${COMPANY_B} · ${PROJECT_B}`
+  await page.evaluate(() => (globalThis as LauncherDesktopWindow).ndDsh.window?.toggleLauncherPopup?.())
+  await expect(dialog).toBeVisible()
+  await popupInput.fill('')
+  await dialog.getByText(contextLabel, { exact: true }).first().click()
   await popupInput.fill('Launcher E2E popup task')
   await dialog.getByText(/Create task · Launcher E2E popup task/).click()
 
   const snapshot = await state()
   const popupTask = snapshot.tasks.find((item) => item.title === 'Launcher E2E popup task')
-  // The popup mirrors the live organization state: the task lands in whatever
-  // company/project is active at capture time (earlier serial tests switched
-  // to Company B), and never in a stale or cross-company scope.
-  expect(popupTask?.companyId).toBe(snapshot.activeCompanyId)
-  expect(popupTask?.projectId).toBe(snapshot.activeProjectId)
+  // The task lands in the context the popup explicitly shows — Company B's
+  // Checkout Desk, not a stale scope and never cross-company.
+  expect(popupTask?.companyId).toBe(companyBId)
+  expect(popupTask?.projectId).toBe(projectBId)
   expect(popupTask?.acceptanceCriteria).toContain('Requested outcome is implemented and verified.')
 
   // The picked action closes the popup; the same toggle opens it again and a
