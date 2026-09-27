@@ -531,7 +531,7 @@ export class OrganizationStore {
 
   private createCompany(name: string, mission: string): void {
     const now = Date.now(); const id = randomUUID()
-    const company: Company = { id, name: clean(name), mission: clean(mission), autonomyLevel: 2, status: 'active', createdAt: now, updatedAt: now }
+    const company: Company = { id, name: clean(name), mission: clean(mission), autonomyLevel: 2, subagentMode: 'auto', status: 'active', createdAt: now, updatedAt: now }
     this.value.companies.push(company); this.value.activeCompanyId = id; delete this.value.activeProjectId
     const productRole = this.seedRole(id, 'Product Manager', 'Own outcomes, roadmaps, prioritization, delegation, risks, and acceptance.', 'Act as the company project manager. Convert goals into executable work and keep the organization aligned.', ['builtin:strategy', 'builtin:project-plan', 'builtin:task-breakdown', 'builtin:memory'])
     const engineerRole = this.seedRole(id, 'Software Engineer', 'Implement assigned project work safely and verify it.', 'Inspect the workspace, implement the assigned outcome, run relevant validation, and report concrete results.', ['builtin:implementation', 'builtin:qa', 'builtin:browser'])
@@ -548,7 +548,7 @@ export class OrganizationStore {
     this.activity(id, undefined, 'company.created', `Created ${company.name} with a default AI workforce and safety policy.`)
   }
 
-  private updateCompany(id: string, patch: Partial<Pick<Company, 'name' | 'mission' | 'autonomyLevel' | 'status'>>): void {
+  private updateCompany(id: string, patch: Partial<Pick<Company, 'name' | 'mission' | 'autonomyLevel' | 'subagentMode' | 'status'>>): void {
     const company = this.company(id); Object.assign(company, patch); company.name = clean(company.name); company.mission = clean(company.mission); company.updatedAt = Date.now()
   }
   private activateCompany(id: string): void { this.company(id); this.value.activeCompanyId = id; const project = this.value.projects.find((item) => item.companyId === id); if (project) this.value.activeProjectId = project.id; else delete this.value.activeProjectId }
