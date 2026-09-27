@@ -139,6 +139,20 @@ describe('direct engine workspace context', () => {
     })
   })
 
+  it('rejects a caller that tries to re-root an existing Harness session', async () => {
+    const { router, harness } = fixture()
+    const taskRoot = 'C:/projects/parent/.nd-dsh-worktrees/repo/task-bound'
+    const created = await router.createSession('nd-harness', taskRoot)
+    harness.run.mockClear()
+
+    await expect(router.run('wrong root', {
+      sessionId: created.sessionId,
+      workspaceCwd: 'C:/projects/parent/other-root',
+    })).rejects.toThrow(/different workspace than the ND-bound session/i)
+
+    expect(harness.run).not.toHaveBeenCalled()
+  })
+
   it('fails closed if a direct adapter reports a different cwd than the ND session binding', async () => {
     const { router, sessions } = fixture()
     const root = 'C:/projects/parent/.nd-dsh-worktrees/repo/task-a'
