@@ -87,6 +87,22 @@ describe('verify-beta-three-layer', () => {
     expect(result.stderr).toContain('packagedCleanMachine.artifact must match release.artifact')
   })
 
+  it('fails if automated evidence names another packaged artifact', async () => {
+    const evidence = makeEvidence()
+    const evidencePath = await writeEvidence(evidence)
+    const directory = evidence.releaseChecks.automated.summaryPath
+    const receipt = JSON.parse(await (await import('node:fs/promises')).readFile(directory, 'utf8')) as {
+      release: { artifact: { identity: string } }
+    }
+    receipt.release.artifact.identity = 'different.exe#sha256:bad'
+    await writeFile(directory, JSON.stringify(receipt), 'utf8')
+
+    const result = spawnSync(process.execPath, [scriptPath, evidencePath], { encoding: 'utf8' })
+
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('automated receipt artifact must match release.artifact')
+  })
+
   it('fails if automated evidence belongs to another commit', async () => {
     const evidencePath = await writeEvidence(makeEvidence(), { automatedCommit: 'different-commit' })
     const result = spawnSync(process.execPath, [scriptPath, evidencePath], { encoding: 'utf8' })
@@ -130,7 +146,14 @@ async function writeEvidence(
     schemaVersion: 1,
     kind: 'nd-beta-automated-release-evidence',
     status: 'pass',
-    release: { commit: options.automatedCommit ?? evidence.release.commit },
+    release: {
+      commit: options.automatedCommit ?? evidence.release.commit,
+      artifact: {
+        file: 'ND-DSH-beta.exe',
+        sha256: 'test',
+        identity: evidence.release.artifact,
+      },
+    },
   }), 'utf8')
   await writeFile(soak, JSON.stringify({
     schemaVersion: 1,
