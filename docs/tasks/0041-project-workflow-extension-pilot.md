@@ -2,7 +2,7 @@
 
 > Priority: P1
 > Owner: ND extensions
-> Status: planned — implementation deferred
+> Status: implemented locally 2026-09-27 — automated layers green; operator manual gate pending (docs/qa/nd-extensions-home-manual.md)
 > Depends on: 0038, 0039
 > PRD: [0006 — ND Extensions and Personal Home](../prd/0006-nd-extensions-and-personal-home.md)
 

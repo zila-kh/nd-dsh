@@ -1,7 +1,7 @@
 ---
 id: "0006"
 title: "ND Extensions and Personal Home"
-status: planned
+status: implemented-locally
 created: 2026-09-27
 ---
 
@@ -15,7 +15,12 @@ Add **ND Home**, a built-in personal space for chats, notes, captures, artifacts
 
 **Global installation is availability, not global data access.** An extension may work in Personal, Company A, or Company A → Project B, but each invocation has exactly one authorized context.
 
-Status: agreed product direction, implementation deferred. This PRD and its linked tasks do not claim that the proposed platform is implemented or validated.
+Status: implementation complete locally on 2026-09-27 (tasks 0035–0043). The
+automated layers are green and recorded in
+[`docs/qa/nd-extensions-home-manual.md`](../qa/nd-extensions-home-manual.md);
+the operator manual gate and the agent-side MCP bridge are the open items, and
+that document lists them explicitly. No claim beyond the recorded evidence is
+made here.
 
 ## 2. Current foundations and gaps
 
@@ -204,7 +209,9 @@ The pilot is unavailable in Personal and demonstrates that global installation c
 
 ## 12. Task backlog
 
-All tasks are planned; none is marked implemented.
+All tasks are implemented locally as of 2026-09-27; each task record carries
+its own status line, and validation evidence lives in the
+[extensions and Home QA gate](../qa/nd-extensions-home-manual.md).
 
 | Task | Deliverable | Depends on |
 | --- | --- | --- |

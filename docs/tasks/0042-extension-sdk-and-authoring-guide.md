@@ -2,7 +2,7 @@
 
 > Priority: P1
 > Owner: ND extensions
-> Status: planned — implementation deferred
+> Status: implemented locally 2026-09-27 — schema, TypeScript types, CLI validator (shared production rules), example package, and authoring guide recorded
 > Depends on: 0038, 0039, 0040, 0041
 > PRD: [0006 — ND Extensions and Personal Home](../prd/0006-nd-extensions-and-personal-home.md)
 

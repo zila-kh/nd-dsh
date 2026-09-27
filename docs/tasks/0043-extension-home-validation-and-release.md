@@ -2,7 +2,7 @@
 
 > Priority: P1
 > Owner: ND extensions
-> Status: planned — implementation deferred
+> Status: in progress 2026-09-27 — automated layers green (unit/integration/E2E/verify/build); operator manual pass pending (docs/qa/nd-extensions-home-manual.md)
 > Depends on: 0035, 0036, 0037, 0038, 0039, 0040, 0041, 0042
 > PRD: [0006 — ND Extensions and Personal Home](../prd/0006-nd-extensions-and-personal-home.md)
 
