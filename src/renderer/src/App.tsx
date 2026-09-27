@@ -26,6 +26,7 @@ import { ThemeToggle } from './components/ThemeToggle'
 import { TitlebarIconButton } from './components/titlebar-icon-button'
 import { CaptureOverlay, type CaptureOverlayMode } from './components/CaptureOverlay'
 import { ScreenshotDropdown } from './components/ScreenshotDropdown'
+import { QuickLauncher } from './components/QuickLauncher'
 import { cn } from './lib/utils'
 import { fileAccent } from './lib/file-accents'
 import { pickSelfElement } from './lib/self-element-picker'
@@ -145,6 +146,7 @@ export default function App() {
   const [pendingAppInspect, setPendingAppInspect] = useState<{ displayLabel: string; width: number; height: number; copiedToClipboard: boolean; scope: InspectScope; mode?: AppInspectMode } | null>(null)
   const [captureOverlay, setCaptureOverlay] = useState<{ active: boolean; mode: CaptureOverlayMode } | null>(null)
   const [floatDropdownOpen, setFloatDropdownOpen] = useState(false)
+  const [quickLauncherOpen, setQuickLauncherOpen] = useState(false)
   const inspectOverlayVisible = pendingPick !== null || pendingAppInspect !== null
   const [elementAttachmentVersion, setElementAttachmentVersion] = useState(0)
   const appInspectTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
@@ -176,6 +178,22 @@ export default function App() {
     return window.ndDsh.window?.onFloatMode?.((enabled) => {
       if (!isFloatOverlay || enabled) setInspectScope(enabled ? 'external' : 'self')
     })
+  }, [isFloatOverlay])
+
+  useEffect(() => {
+    if (isFloatOverlay) return
+    return window.ndDsh.window?.onQuickLauncher?.(() => setQuickLauncherOpen(true))
+  }, [isFloatOverlay])
+
+  useEffect(() => {
+    if (isFloatOverlay) return
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== 'k') return
+      event.preventDefault()
+      setQuickLauncherOpen((open) => !open)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
   }, [isFloatOverlay])
 
   useEffect(() => {
@@ -263,21 +281,22 @@ export default function App() {
   // target app), the trusted main process captures the screen, bridges the
   // screenshot into the ND chat session, and copies it to the clipboard.
   // In 'self' scope there is nothing to switch to, so capture immediately.
-  const startAppInspect = (mode: AppInspectMode = 'full', rect?: AppInspectArea): Promise<AppInspectResult | undefined> => {
+  const startAppInspect = (mode: AppInspectMode = 'full', rect?: AppInspectArea, scopeOverride?: InspectScope): Promise<AppInspectResult | undefined> => {
     if (appInspectCountdown !== null || appInspectInFlight) return Promise.resolve(undefined)
-    const selfScope = inspectScope === 'self'
+    const targetScope = scopeOverride ?? inspectScope
+    const selfScope = targetScope === 'self'
     let remaining = 3
     if (!selfScope && mode === 'full') setAppInspectCountdown(remaining)
     const fire = async (): Promise<AppInspectResult> => {
       setAppInspectInFlight(true)
       try {
-        const result = await window.ndDsh.capture.inspectApp(true, inspectScope, { mode, ...(rect !== undefined ? { rect } : {}) })
+        const result = await window.ndDsh.capture.inspectApp(true, targetScope, { mode, ...(rect !== undefined ? { rect } : {}) })
         setPendingAppInspect({
           displayLabel: result.displayLabel,
           width: result.width,
           height: result.height,
           copiedToClipboard: result.copiedToClipboard,
-          scope: inspectScope,
+          scope: targetScope,
           mode,
         })
         const prefix = mode === 'area'
@@ -660,6 +679,75 @@ export default function App() {
     void window.ndDshOrganization.mutate({ type: 'project.activate', id })
       .then(() => setFailedProjectIds((prev) => (prev.has(id) ? new Set([...prev].filter((value) => value !== id)) : prev)))
       .catch(() => setFailedProjectIds((prev) => new Set(prev).add(id)))
+  }
+
+  const launcherCreateTask = async (text: string): Promise<void> => {
+    if (!company || !project) {
+      notify('Choose a company and project before creating a task.')
+      return
+    }
+    const title = text.split(/\r?\n/)[0]?.trim().slice(0, 120) || 'Launcher task'
+    try {
+      await window.ndDshOrganization.mutate({
+        type: 'task.create',
+        companyId: company.id,
+        projectId: project.id,
+        title,
+        description: text,
+        acceptanceCriteria: ['Requested outcome is implemented and verified.'],
+      })
+      setCompanyView('workspace')
+      switchToWorkbench('company')
+      toast('Task created from ND Quick Launcher.')
+    } catch (cause) {
+      notify(errorMessage(cause))
+    }
+  }
+
+  const launcherQuickNote = async (text: string, tags: string[] = ['launcher', 'manual']): Promise<void> => {
+    if (!company) {
+      notify('Choose a company before saving a note.')
+      return
+    }
+    const title = text.split(/\r?\n/)[0]?.trim().slice(0, 80) || 'Quick note'
+    try {
+      await window.ndDshOrganization.mutate({
+        type: 'memory.add',
+        companyId: company.id,
+        ...(project ? { projectId: project.id } : {}),
+        title,
+        content: text,
+        tags,
+      })
+      toast(project ? `Note saved to ${project.name}.` : `Note saved to ${company.name}.`)
+    } catch (cause) {
+      notify(errorMessage(cause))
+    }
+  }
+
+  const launcherActivateProject = async (projectId: string): Promise<void> => {
+    const target = orgState?.projects.find((item) => item.id === projectId)
+    if (!target) return
+    try {
+      if (target.companyId !== orgState?.activeCompanyId) {
+        await window.ndDshOrganization.mutate({ type: 'company.activate', id: target.companyId })
+      }
+      await window.ndDshOrganization.mutate({ type: 'project.activate', id: projectId })
+      setCompanyView('workspace')
+      switchToWorkbench('company')
+    } catch (cause) {
+      notify(errorMessage(cause))
+    }
+  }
+
+  const launcherSwitchCompany = async (companyId: string): Promise<void> => {
+    try {
+      await window.ndDshOrganization.mutate({ type: 'company.activate', id: companyId })
+      setCompanyView('workspace')
+      switchToWorkbench('company')
+    } catch (cause) {
+      notify(errorMessage(cause))
+    }
   }
 
   const navItems: Array<{ id: ProductView; label: string; icon: ReactNode }> = [
@@ -1216,6 +1304,42 @@ export default function App() {
     )}
       </main>
 
+      {!isFloatOverlay ? (
+        <QuickLauncher
+          open={quickLauncherOpen}
+          onOpenChange={setQuickLauncherOpen}
+          organization={orgState}
+          currentUrl={browserState?.url}
+          onOpenKanban={() => {
+            setCompanyView('workspace')
+            switchToWorkbench('company')
+          }}
+          onOpenAgent={() => switchToWorkbench('agent')}
+          onActivateProject={launcherActivateProject}
+          onSwitchCompany={launcherSwitchCompany}
+          onCreateTask={launcherCreateTask}
+          onQuickNote={launcherQuickNote}
+          onAskAgent={(text) => askAgent(text)}
+          onCaptureScreen={() => startAppInspect('full', undefined, 'external')}
+          onOpenCaptureTools={() => {
+            setInspectScope('external')
+            return window.ndDsh.window?.setFloatMode(true).then(() => undefined)
+          }}
+          onCaptureClipboard={async () => {
+            try {
+              const text = (await navigator.clipboard.readText()).trim()
+              if (!text) {
+                notify('Clipboard does not contain text to capture.')
+                return
+              }
+              await launcherQuickNote(text, ['capture', 'clipboard'])
+            } catch (cause) {
+              notify(errorMessage(cause))
+            }
+          }}
+          onCaptureUrl={(url) => launcherQuickNote(url, ['capture', 'url'])}
+        />
+      ) : null}
       <RuntimePrompts onError={notify} />
       {pendingPick ? (
         <div role="dialog" aria-label="Picked element" className="fixed right-4 bottom-[46px] z-[150] flex w-[300px] flex-col gap-2 rounded-[10px] border border-border-strong bg-surface-1 p-3 shadow-[0_14px_40px_rgba(0,0,0,0.5)]">
