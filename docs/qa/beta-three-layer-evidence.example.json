@@ -274,7 +274,8 @@
       "status": "pending",
       "tester": "",
       "recordedAt": "",
-      "evidence": []
+      "evidence": [],
+      "artifact": "REPLACE_WITH_PACKAGED_ARTIFACT_NAME_OR_HASH"
     },
     "browserCompanionChrome": {
       "status": "pending",
@@ -289,6 +290,12 @@
       "recordedAt": "",
       "evidence": [],
       "summaryPath": "e2e-results/beta-soak/beta-soak-<timestamp>.json"
+    },
+    "failureDrills": {
+      "status": "pending",
+      "tester": "",
+      "recordedAt": "",
+      "evidence": []
     }
   }
 }
