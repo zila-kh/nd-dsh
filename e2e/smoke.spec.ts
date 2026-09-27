@@ -55,6 +55,19 @@ test('product shell boots in General and can enter the Coding workspace', async 
   await expect(navigation.getByTitle('QA')).toBeVisible()
 })
 
+test('persisted Coding keeps a QA deep link across renderer reload', async () => {
+  const { page } = launched
+  const navigation = page.getByRole('navigation', { name: 'ND-DSH navigation' })
+  await navigation.getByTitle('QA').click()
+  await expect(page).toHaveURL(/#\/qa$/)
+
+  await page.reload()
+  const profiles = page.getByRole('group', { name: 'Workspace profile' })
+  await expect(profiles.getByRole('button', { name: 'CODING', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page).toHaveURL(/#\/qa$/)
+  await expect(page.getByRole('heading', { name: 'Project checks', exact: true })).toBeVisible()
+})
+
 test('header segment switches between ND and DSH coding surfaces', async () => {
   const { page } = launched
   const codingSurface = page.getByRole('group', { name: 'Coding surface' })
