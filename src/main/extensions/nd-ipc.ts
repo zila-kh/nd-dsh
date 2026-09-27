@@ -13,6 +13,7 @@ import {
 import type { OrganizationMutation, OrganizationSnapshot } from '../../shared/organization.js'
 import { BUILTIN_EXTENSION_PACKAGES, defaultActivationContexts } from '../../shared/builtin-extension-packages.js'
 import { captureDisplayUnderPointer, captureScreenRegion } from '../capture/app-capture.js'
+import { setDesktopWallpaper } from '../os/wallpaper.js'
 import type { BrowserController } from '../browser/browser-controller.js'
 import type { WorkflowService } from '../workflows/workflow-service.js'
 import type { HomeStore } from '../home/home-store.js'
@@ -470,6 +471,22 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): void {
     const error = await shell.openPath(target)
     if (error) throw new Error(error)
     return { opened: true, path: target }
+  })
+
+  host.register('os.wallpaper.chooseAndSet', async () => {
+    // The extension never supplies a filesystem path. ND owns the native picker
+    // and passes the selected image directly to a fixed OS adapter.
+    const result = await dialog.showOpenDialog(deps.window, {
+      title: 'Choose desktop wallpaper',
+      properties: ['openFile'],
+      filters: [
+        { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'bmp'] },
+      ],
+    })
+    if (result.canceled || result.filePaths.length !== 1) return { changed: false }
+    const target = result.filePaths[0]!
+    await setDesktopWallpaper(target)
+    return { changed: true, path: target, platform: process.platform }
   })
 
   host.register('chat.ask', async (input, context) => {
