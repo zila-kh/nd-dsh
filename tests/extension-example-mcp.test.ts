@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
@@ -58,7 +58,7 @@ describe('Counter MCP example', () => {
 
   it('contains a broken MCP child and the extension control plane remains usable afterwards', async () => {
     const { catalog, state } = await fixture()
-    const broken = JSON.parse(await (await import('node:fs/promises')).readFile(catalog, 'utf8')) as { extensions: AgentExtensionManifest[] }
+    const broken = JSON.parse(await readFile(catalog, 'utf8')) as { extensions: AgentExtensionManifest[] }
     broken.extensions[0] = {
       ...broken.extensions[0]!,
       runtime: {
