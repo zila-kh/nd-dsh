@@ -2,7 +2,7 @@
 
 Status: PR #55 feature validation  
 Branch: `feat/quick-launcher-capture`  
-Scope: centered launcher, company/project switching, task/note/agent actions, clipboard/URL capture, and external screen capture entry points.
+Scope: centered launcher, Raycast-style global popup with toggle, three shortcut modes (popup / window+launcher / window-only), company/project switching, task/note/agent actions, clipboard/URL capture, and external screen capture entry points.
 
 ## Release rule
 
@@ -46,6 +46,9 @@ Required assertions:
 - Quick-note / clipboard / URL capture builds scoped `memory.add` mutations.
 - Company-only memory works when there is no active project.
 - Tag arrays are copied rather than retained by mutable reference.
+- Shortcut modes validate against the known set and default to `popup`.
+- Every mode resolves to a toggle-safe shortcut action.
+- Launcher handoff targets validate before the popup delegates to the full window.
 
 **Pass:** typecheck succeeds and every launcher unit test passes with no skipped test.
 
@@ -80,6 +83,7 @@ Required assertions:
 | E2E-06 | Select a recent project owned by another company | Active company and project switch together; no cross-company mismatch |
 | E2E-07 | Reopen launcher | External Screen, External Capture Tools, and Clipboard commands are visible |
 | E2E-08 | Whole spec | No renderer `pageerror` or console error is emitted |
+| E2E-09 | Toggle the launcher popup window twice and create a task from it | `#/launcher` window opens focused, the task persists, the picked action closes the popup, the next toggle reopens, and the one after hides it |
 
 **Pass:** all E2E rows green on one run from a clean build. Do not rerun a failure until green without first keeping the first failure/trace.
 
@@ -101,23 +105,33 @@ Before starting:
 
 | ID | Test | Steps | Expected |
 | --- | --- | --- | --- |
-| M-01 | Global hotkey from another app | Focus Chrome or VS Code → press `Ctrl+Shift+Space` | ND restores/focuses and launcher opens |
-| M-02 | Global hotkey while ND minimized | Minimize ND → press `Ctrl+Shift+Space` | ND restores once; no duplicate window |
-| M-03 | In-app hotkey | From Company, Agent, Design, QA, Settings press `Ctrl+K` | Same launcher opens from every surface |
-| M-04 | Return-to-work | Open launcher over each surface → `Esc` | Exact previous surface/context remains |
-| M-05 | Project isolation | Select project in another company | Both company + project switch correctly; no old-company board data leaks |
-| M-06 | Create task | Type real task request → Create task | One task only, correct company/project, correct full text |
-| M-07 | Quick note | Type note → Quick note | One memory entry only, correct scope/tags |
-| M-08 | Clipboard capture | Copy text in another app → launcher → Capture Clipboard | Text becomes memory; clipboard content is not altered unexpectedly |
-| M-09 | Empty/blocked clipboard | Clear clipboard or deny read permission → Capture Clipboard | Clear non-crashing message; no empty memory created |
-| M-10 | External full-screen capture | Launcher → Capture External Screen → switch to target app during countdown | Correct target screen is captured, sent to agent, and clipboard copy behavior matches UI |
-| M-11 | Area capture | Launcher → External Capture Tools → Select Area | Selected area only; dimensions/content are correct |
-| M-12 | Annotation | External Capture Tools → annotate target → confirm | Annotation reaches agent; app returns to usable ND state |
-| M-13 | Focus recovery | Complete/cancel external capture | ND/float overlay does not remain stuck, invisible, or always-on-top |
-| M-14 | URL capture | Open known URL in ND browser → Capture Current URL | Exact current URL becomes scoped memory |
-| M-15 | No duplicate action | Double-tap Enter/click around task/note selection | One durable record only |
-| M-16 | Restart durability | Create task/note, exit ND cleanly, reopen | Organization task/memory and active context persist |
-| M-17 | Shutdown | Use launcher/capture several times → quit ND | No orphan ND/Electron/capture process remains |
+| M-01 | Global hotkey shows the popup over another app | Focus Chrome or VS Code → press `Ctrl+Shift+Space` (default Popup mode) | Launcher card floats over the focused app with the input focused; the full ND window does **not** come forward |
+| M-02 | Global hotkey while ND minimized | Minimize ND → focus another app → press `Ctrl+Shift+Space` | Popup shows over the current app; ND stays minimized; no duplicate window |
+| M-03 | Same press toggles the popup off | Popup visible → press `Ctrl+Shift+Space` again | Popup hides; keyboard focus returns to the app you were in |
+| M-04 | Popup dismisses on focus loss | Popup open → click into Chrome/VS Code | Popup hides without showing the ND window |
+| M-05 | Escape dismisses the popup | Popup open → `Esc` | Popup hides |
+| M-06 | Handoff: Open Kanban from the popup | Popup → Open Kanban | ND window opens on the Company workspace board |
+| M-07 | Handoff: Ask agent with a typed prompt | Popup → type a question → Ask agent | ND window opens on the Agent surface with the typed prompt staged in chat |
+| M-08 | Popup task creation | Popup → type a real task → Create task | One task only, correct company/project, popup closes, ND window is not forced forward |
+| M-09 | Popup clipboard capture | Copy text in another app → popup → Capture Clipboard | Text becomes memory without opening the full ND window |
+| M-10 | Window + launcher mode | Settings → General → Runtime → pick **Window + launcher** → press shortcut | ND window opens with the launcher open; the next press closes the launcher dialog |
+| M-11 | Window only mode | Pick **Window only** → press shortcut while ND is unfocused | ND window focuses; pressing again while focused hides it |
+| M-12 | Mode persistence | Change mode → quit ND cleanly → reopen → press shortcut | The persisted mode is honored |
+| M-13 | In-app hotkey | From Company, Agent, Design, QA, Settings press `Ctrl+K` | Same launcher opens (and toggles closed) from every surface |
+| M-14 | Return-to-work | Open launcher over each surface → `Esc` | Exact previous surface/context remains |
+| M-15 | Project isolation | Select project in another company | Both company + project switch correctly; no old-company board data leaks |
+| M-16 | Create task (in-app) | Type real task request → Create task | One task only, correct company/project, correct full text |
+| M-17 | Quick note (in-app) | Type note → Quick note | One memory entry only, correct scope/tags |
+| M-18 | Clipboard capture (in-app) | Copy text in another app → launcher → Capture Clipboard | Text becomes memory; clipboard content is not altered unexpectedly |
+| M-19 | Empty/blocked clipboard | Clear clipboard or deny read permission → Capture Clipboard | Clear non-crashing message; no empty memory created |
+| M-20 | External full-screen capture | Launcher → Capture External Screen → switch to target app during countdown | Correct target screen is captured, sent to agent, and clipboard copy behavior matches UI |
+| M-21 | Area capture | Launcher → External Capture Tools → Select Area | Selected area only; dimensions/content are correct |
+| M-22 | Annotation | External Capture Tools → annotate target → confirm | Annotation reaches agent; app returns to usable ND state |
+| M-23 | Focus recovery | Complete/cancel external capture | ND/float overlay does not remain stuck, invisible, or always-on-top |
+| M-24 | URL capture | Open known URL in ND browser → Capture Current URL | Exact current URL becomes scoped memory |
+| M-25 | No duplicate action | Double-tap Enter/click around task/note selection | One durable record only |
+| M-26 | Restart durability | Create task/note, exit ND cleanly, reopen | Organization task/memory and active context persist |
+| M-27 | Shutdown | Use launcher/popup/capture several times → quit ND | No orphan ND/Electron/capture process remains |
 
 ### P1 — usability / polish
 
@@ -154,7 +168,7 @@ Use this small scorecard after the run:
 Commit:
 Layer 1 unit/typecheck: PASS / FAIL
 Layer 2 Electron E2E: PASS / FAIL
-Layer 3 manual P0: __ / 17 PASS
+Layer 3 manual P0: __ / 27 PASS
 Layer 3 manual P1: __ / 6 PASS
 Renderer errors: 0 / __
 Orphan processes after quit: 0 / __
@@ -163,4 +177,4 @@ Blockers:
 Evidence location:
 ```
 
-For PR #55, **READY** means Layers 1 and 2 are fully green and all **17 P0 manual checks** pass. P1 issues can be accepted only when they do not hide or weaken a P0 behavior.
+For PR #55, **READY** means Layers 1 and 2 are fully green and all **27 P0 manual checks** pass. P1 issues can be accepted only when they do not hide or weaken a P0 behavior.

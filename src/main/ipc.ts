@@ -7,6 +7,8 @@ import { EXTENSIONS_IPC } from '../shared/extensions.js'
 import type { OrganizationSnapshot } from '../shared/organization.js'
 import { USAGE_IPC, summarizeUsage, type UsageAttribution, type UsageScope, type UsageSummary } from '../shared/usage.js'
 import { WORKFLOW_PLUGINS_IPC } from '../shared/workflow-plugins.js'
+import { isLauncherHandoffTarget, isQuickLauncherShortcutMode } from '../shared/quick-launcher.js'
+import type { LauncherPopupController } from './launcher-popup.js'
 import { projectRoot, presetSourceDir } from './app-paths.js'
 import { NdSkillService } from './skills/nd-skill-service.js'
 import { capturePrimaryDisplay, captureSelfWindow } from './capture/app-capture.js'
@@ -39,6 +41,8 @@ interface IpcDependencies {
   window: BrowserWindow
   /** Preload script path, reused by the frameless float overlay window. */
   preloadPath: string
+  /** Frameless quick launcher popup; its renderer is admitted to launcher-only channels. */
+  launcherPopup: LauncherPopupController
   browser: BrowserController
   dshSurface: DshSurfaceController
   engines: CodingEngineRegistry
@@ -120,6 +124,20 @@ export function registerIpc(deps: IpcDependencies): () => void {
     ipcMain.handle(channel, async (event: IpcMainInvokeEvent, ...args: unknown[]) => {
       if (event.sender !== deps.window.webContents || event.senderFrame !== deps.window.webContents.mainFrame) {
         assertFloatOverlaySender(event, floatWindow)
+      }
+      return listener(event, ...args)
+    })
+    channels.push(channel)
+  }
+
+  // The launcher popup is likewise a separate sandboxed renderer on the same
+  // preload. Launcher channels accept the primary renderer or the popup's own
+  // main frame and nothing else.
+  const handleLauncherSurface = (channel: string, listener: Handler): void => {
+    ipcMain.removeHandler(channel)
+    ipcMain.handle(channel, async (event: IpcMainInvokeEvent, ...args: unknown[]) => {
+      if (event.sender !== deps.window.webContents || event.senderFrame !== deps.window.webContents.mainFrame) {
+        assertLauncherPopupSender(event, deps.launcherPopup.window())
       }
       return listener(event, ...args)
     })
@@ -311,6 +329,30 @@ export function registerIpc(deps: IpcDependencies): () => void {
     const dy = typeof deltaY === 'number' ? deltaY : 0
     const [currX = 0, currY = 0] = floatWindow.getPosition()
     floatWindow.setPosition(currX + Math.round(dx), currY + Math.round(dy))
+  })
+
+  // Quick launcher shortcut mode: read from the settings pane (primary
+  // renderer) and applied to the global shortcut handler in main/index.ts.
+  handle(IPC.windowQuickLauncherMode, () => deps.theme.quickLauncherMode())
+  handle(IPC.windowQuickLauncherModeSet, (_event, mode: unknown) => {
+    if (!isQuickLauncherShortcutMode(mode)) throw new Error(`Unknown quick launcher mode: ${String(mode)}`)
+    return deps.theme.setQuickLauncherMode(mode)
+  })
+
+  // Popup visibility and handoff: the popup renderer hides itself via Escape
+  // or a picked action; the primary renderer may also toggle the popup (tests,
+  // and any future in-app affordance for the Raycast-style surface).
+  handleLauncherSurface(IPC.windowToggleLauncherPopup, () => {
+    deps.launcherPopup.toggle()
+    const popup = deps.launcherPopup.window()
+    return { visible: popup !== null && popup.isVisible() }
+  })
+  handleLauncherSurface(IPC.windowHideLauncherPopup, () => {
+    deps.launcherPopup.hide()
+  })
+  handleLauncherSurface(IPC.windowLauncherHandoff, (_event, target: unknown, text: unknown) => {
+    if (!isLauncherHandoffTarget(target)) throw new Error(`Unknown launcher handoff target: ${String(target)}`)
+    deps.launcherPopup.handoff(target, typeof text === 'string' ? text : undefined)
   })
 
   handle(IPC.enginesList, () => deps.engines.list())
@@ -585,7 +627,9 @@ export function registerIpc(deps: IpcDependencies): () => void {
   handle(IPC.dshViewSetVisible, (_event, visible) => deps.dshSurface.setVisible(Boolean(visible)))
   handle(IPC.dshViewReload, () => deps.dshSurface.reload())
 
-  handle(IPC.themeState, () => deps.theme.state())
+  // Theme reads are admitted from the launcher popup too: it renders the same
+  // themed card chrome but never mutates the preference.
+  handleLauncherSurface(IPC.themeState, () => deps.theme.state())
   handle(IPC.themeSet, (_event, value) => deps.theme.set(asThemeMode(value)))
 
   handle(IPC.providersList, () => deps.providers.list())
@@ -641,6 +685,12 @@ function assertTrustedSender(event: IpcMainInvokeEvent, window: BrowserWindow): 
 function assertFloatOverlaySender(event: IpcMainInvokeEvent, floatWindow: BrowserWindow | null): void {
   if (!floatWindow || floatWindow.isDestroyed() || event.sender !== floatWindow.webContents || event.senderFrame !== floatWindow.webContents.mainFrame) {
     throw new Error('Rejected IPC from an untrusted float overlay frame')
+  }
+}
+
+function assertLauncherPopupSender(event: IpcMainInvokeEvent, popupWindow: BrowserWindow | null): void {
+  if (!popupWindow || popupWindow.isDestroyed() || event.sender !== popupWindow.webContents || event.senderFrame !== popupWindow.webContents.mainFrame) {
+    throw new Error('Rejected IPC from an untrusted launcher popup frame')
   }
 }
 

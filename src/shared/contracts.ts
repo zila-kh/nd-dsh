@@ -1,3 +1,5 @@
+import type { LauncherHandoffTarget, QuickLauncherShortcutMode } from './quick-launcher.js'
+
 export interface BrowserBounds {
   x: number
   y: number
@@ -751,6 +753,12 @@ export interface DesktopApi {
     setCaptureOverlay?(active: boolean): Promise<{ width: number; height: number }>
     onFloatMode?(listener: (enabled: boolean) => void): () => void
     onQuickLauncher?(listener: () => void): () => void
+    onLauncherHandoff?(listener: (target: LauncherHandoffTarget, text?: string) => void): () => void
+    quickLauncherMode?(): Promise<QuickLauncherShortcutMode>
+    setQuickLauncherMode?(mode: QuickLauncherShortcutMode): Promise<QuickLauncherShortcutMode>
+    toggleLauncherPopup?(): Promise<{ visible: boolean }>
+    hideLauncherPopup?(): Promise<void>
+    handoffLauncherPopup?(target: LauncherHandoffTarget, text?: string): Promise<void>
   }
 }
 
@@ -763,6 +771,12 @@ export const IPC = {
   windowSetCaptureOverlay: 'window:set-capture-overlay',
   windowFloatModeEvent: 'window:float-mode-event',
   windowQuickLauncherEvent: 'window:quick-launcher-event',
+  windowQuickLauncherMode: 'window:quick-launcher-mode',
+  windowQuickLauncherModeSet: 'window:quick-launcher-mode:set',
+  windowToggleLauncherPopup: 'window:toggle-launcher-popup',
+  windowHideLauncherPopup: 'window:hide-launcher-popup',
+  windowLauncherHandoff: 'window:launcher-handoff',
+  windowLauncherHandoffEvent: 'window:launcher-handoff-event',
   browserState: 'browser:state',
   browserSetBounds: 'browser:set-bounds',
   browserSetVisible: 'browser:set-visible',

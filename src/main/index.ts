@@ -10,6 +10,7 @@ import { IPC, type DshEventFrame } from '../shared/contracts.js'
 import { DESIGN_IPC } from '../shared/design.js'
 import { ORGANIZATION_IPC } from '../shared/organization.js'
 import { TERMINAL_IPC } from '../shared/terminal.js'
+import { resolveShortcutBehavior } from '../shared/quick-launcher.js'
 import { bundledResourceRoot, projectRoot } from './app-paths.js'
 import { BrowserController } from './browser/browser-controller.js'
 import { BrowserCompanionService } from './browser-companion/browser-companion-service.js'
@@ -45,6 +46,7 @@ import { ZcodeCliEngine } from './engines/zcode/zcode-cli-engine.js'
 import { GitService } from './git/git-service.js'
 import { HarnessService } from './harness/harness-service.js'
 import { registerIpc } from './ipc.js'
+import { createLauncherPopup } from './launcher-popup.js'
 import { setTaskMetricsRecorder, taskMetricsRecorder, TaskMetricsRecorder } from './metrics/task-metrics.js'
 import { OrganizationApprovalGate } from './organization/approval-gate.js'
 import { createDecisionSupportFromEnv } from './organization/decision-support-config.js'
@@ -108,6 +110,11 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) app.quit()
 
 const theme = new ThemeService()
+const LAUNCHER_PRELOAD_PATH = join(currentDirectory, '../preload/index.cjs')
+const launcherPopup = createLauncherPopup({
+  preloadPath: LAUNCHER_PRELOAD_PATH,
+  getMainWindow: () => mainWindow,
+})
 
 // Diagnostics exist before anything else can fail: a packaged build has no
 // console, so without this a startup crash leaves nothing to inspect.
@@ -120,7 +127,8 @@ try {
   console.warn('Native crash reporting is unavailable:', error)
 }
 
-function showQuickLauncher(): void {
+/** Bring the full app window forward with the in-app launcher open. */
+function showMainWindowAndOpenLauncher(): void {
   const window = mainWindow
   if (!window || window.isDestroyed()) return
   if (window.isMinimized()) window.restore()
@@ -131,8 +139,31 @@ function showQuickLauncher(): void {
   window.webContents.send(IPC.windowQuickLauncherEvent)
 }
 
+function showQuickLauncher(): void {
+  const behavior = resolveShortcutBehavior(theme.quickLauncherMode())
+  if (behavior.kind === 'toggle-popup') {
+    launcherPopup.toggle()
+    return
+  }
+  const window = mainWindow
+  if (!window || window.isDestroyed()) return
+  if (behavior.kind === 'toggle-window') {
+    if (window.isVisible() && window.isFocused() && !window.isMinimized()) {
+      window.hide()
+      return
+    }
+    if (window.isMinimized()) window.restore()
+    window.show()
+    window.setAlwaysOnTop(true)
+    window.focus()
+    window.setAlwaysOnTop(false)
+    return
+  }
+  showMainWindowAndOpenLauncher()
+}
+
 app.on('second-instance', () => {
-  showQuickLauncher()
+  showMainWindowAndOpenLauncher()
 })
 
 async function createWindow(cdpPort: number): Promise<void> {
@@ -353,7 +384,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   const qa = new QaService()
   activeQa = qa
   qa.setProjectRoot(workspace.state().root)
-  const disposeIpc = registerIpc({ window, preloadPath: preload, browser, dshSurface, engines, engineRouter, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, qa, sessionArchive, usageLedger, capabilities, organizationStore })
+  const disposeIpc = registerIpc({ window, preloadPath: preload, launcherPopup, browser, dshSurface, engines, engineRouter, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, qa, sessionArchive, usageLedger, capabilities, organizationStore })
   const disposeBrowserCompanionIpc = registerBrowserCompanionIpc(window, browserCompanion)
   const disposeBrowserPlatformIpc = registerBrowserPlatformIpc(window, browserPlatform)
   browserPlatform.setListener((state) => {
@@ -365,7 +396,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   })
   const disposeTerminalIpc = registerTerminalIpc(window, terminalManager)
   const disposeDesignIpc = registerDesignIpc(window, design, ndPencil)
-  const disposeOrganizationIpc = registerOrganizationIpc(window, organizationStore, organization, projectWorkspace, projectRuntime, executionCoordinator)
+  const disposeOrganizationIpc = registerOrganizationIpc(window, organizationStore, organization, projectWorkspace, projectRuntime, executionCoordinator, () => launcherPopup.window())
   mainWindow = window
   activeHarness = harness
   activeNdPencil = ndPencil
@@ -420,6 +451,8 @@ async function createWindow(cdpPort: number): Promise<void> {
   })
   theme.setOnChanged((state) => {
     if (!window.isDestroyed()) window.webContents.send(IPC.themeChangedEvent, state)
+    const popup = launcherPopup.window()
+    if (popup && !popup.isDestroyed()) popup.webContents.send(IPC.themeChangedEvent, state)
   })
   theme.setOnSurfaceChanged((surface) => {
     if (!window.isDestroyed()) window.webContents.send(IPC.surfaceChangedEvent, { surface, view: dshSurface.state() })

@@ -6,6 +6,7 @@ import { MonitorIcon, MoonIcon, SunIcon } from './Icons'
 import { BridgePill } from './bridge-pill'
 import { CapabilitySettings } from './CapabilitySettings'
 import { EngineSettings } from './EngineSettings'
+import { QuickLauncherShortcutSettings } from './QuickLauncherShortcutSettings'
 import { ExtensionSettings } from './ExtensionSettings'
 import { ModelSettings } from './ModelSettings'
 import { PresetSettings } from './PresetSettings'
@@ -376,6 +377,8 @@ export function SettingsPane({
                         ) : null}
                       </div>
                     </SettingsSection>
+
+                    <QuickLauncherShortcutSettings onError={onError} />
 
                     <SettingsSection title="Product architecture">
                       <div className="space-y-1.5">

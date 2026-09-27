@@ -34,6 +34,7 @@ import {
   buildLauncherTaskMutation,
   isQuickLauncherKey,
 } from './lib/quick-launcher-model'
+import type { LauncherHandoffTarget } from '../../shared/quick-launcher'
 import { pickSelfElement } from './lib/self-element-picker'
 import {
   capabilitySubTabFromLocation,
@@ -187,7 +188,17 @@ export default function App() {
 
   useEffect(() => {
     if (isFloatOverlay) return
-    return window.ndDsh.window?.onQuickLauncher?.(() => setQuickLauncherOpen(true))
+    // The global shortcut toggles: when the full window was just brought
+    // forward the dialog is closed and opens; when it is already open the
+    // same press dismisses it (Raycast-style toggle).
+    return window.ndDsh.window?.onQuickLauncher?.(() => setQuickLauncherOpen((open) => !open))
+  }, [isFloatOverlay])
+
+  const launcherHandoffRef = useRef<(target: LauncherHandoffTarget, text?: string) => void>(() => {})
+
+  useEffect(() => {
+    if (isFloatOverlay) return
+    return window.ndDsh.window?.onLauncherHandoff?.((target, text) => launcherHandoffRef.current(target, text))
   }, [isFloatOverlay])
 
   useEffect(() => {
@@ -738,6 +749,50 @@ export default function App() {
       notify(errorMessage(cause))
     }
   }
+
+  const captureClipboardToNote = async (): Promise<void> => {
+    try {
+      const text = (await navigator.clipboard.readText()).trim()
+      if (!text) {
+        notify('Clipboard does not contain text to capture.')
+        return
+      }
+      await launcherQuickNote(text, ['capture', 'clipboard'])
+    } catch (cause) {
+      notify(errorMessage(cause))
+    }
+  }
+
+  // Handoffs arrive from the launcher popup surface (a separate sandboxed
+  // renderer) after main brings this window forward. The ref keeps the
+  // subscription stable while the handler always sees the latest closures.
+  useEffect(() => {
+    launcherHandoffRef.current = (target, text) => {
+      switch (target) {
+        case 'launcher':
+          setQuickLauncherOpen(true)
+          return
+        case 'kanban':
+          setCompanyView('workspace')
+          switchToWorkbench('company')
+          return
+        case 'agent':
+          switchToWorkbench('agent')
+          if (text) askAgent(text)
+          return
+        case 'capture-screen':
+          void startAppInspect('full', undefined, 'external')
+          return
+        case 'capture-tools':
+          setInspectScope('external')
+          void window.ndDsh.window?.setFloatMode(true)
+          return
+        case 'capture-clipboard':
+          void captureClipboardToNote()
+          return
+      }
+    }
+  })
 
   const navItems: Array<{ id: ProductView; label: string; icon: ReactNode }> = [
     { id: 'company', label: 'Company', icon: <CompanyIcon /> },
@@ -1314,18 +1369,7 @@ export default function App() {
             setInspectScope('external')
             return window.ndDsh.window?.setFloatMode(true).then(() => undefined)
           }}
-          onCaptureClipboard={async () => {
-            try {
-              const text = (await navigator.clipboard.readText()).trim()
-              if (!text) {
-                notify('Clipboard does not contain text to capture.')
-                return
-              }
-              await launcherQuickNote(text, ['capture', 'clipboard'])
-            } catch (cause) {
-              notify(errorMessage(cause))
-            }
-          }}
+          onCaptureClipboard={() => captureClipboardToNote()}
           onCaptureUrl={(url) => launcherQuickNote(url, ['capture', 'url'])}
         />
       ) : null}

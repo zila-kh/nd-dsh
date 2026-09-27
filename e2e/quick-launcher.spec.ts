@@ -178,3 +178,38 @@ test('main-process launcher event switches recent project context and exposes ca
 
   expect(rendererErrors).toEqual([])
 })
+
+test('launcher popup window toggles like Raycast and creates a task without opening the main window', async () => {
+  const { page } = launched
+
+  const popupPromise = launched.app.waitForEvent('window')
+  await page.evaluate(() => window.ndDsh.window?.toggleLauncherPopup?.())
+  const popup = await popupPromise
+  await expect.poll(() => popup.url()).toContain('#/launcher')
+
+  const dialog = popup.getByRole('dialog', { name: 'ND Quick Launcher' })
+  await expect(dialog).toBeVisible()
+  const popupInput = dialog.getByPlaceholder('Search ND or type something to capture…')
+  await expect(popupInput).toBeFocused()
+  await popupInput.fill('Launcher E2E popup task')
+  await dialog.getByText(/Create task · Launcher E2E popup task/).click()
+
+  const snapshot = await state()
+  const popupTask = snapshot.tasks.find((item) => item.title === 'Launcher E2E popup task')
+  // The popup mirrors the live organization state: the task lands in whatever
+  // company/project is active at capture time (earlier serial tests switched
+  // to Company B), and never in a stale or cross-company scope.
+  expect(popupTask?.companyId).toBe(snapshot.activeCompanyId)
+  expect(popupTask?.projectId).toBe(snapshot.activeProjectId)
+  expect(popupTask?.acceptanceCriteria).toContain('Requested outcome is implemented and verified.')
+
+  // The picked action closes the popup; the same toggle opens it again and a
+  // second press hides it — the Raycast show/hide contract.
+  const reopenToggle = await page.evaluate(() => window.ndDsh.window?.toggleLauncherPopup?.())
+  expect(reopenToggle?.visible).toBe(true)
+  await expect(dialog).toBeVisible()
+  const closeToggle = await page.evaluate(() => window.ndDsh.window?.toggleLauncherPopup?.())
+  expect(closeToggle?.visible).toBe(false)
+
+  expect(rendererErrors).toEqual([])
+})

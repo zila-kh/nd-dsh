@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import process from 'node:process'
 import type { DshSurface, EffectiveTheme, ThemeMode, ThemeState } from '../shared/contracts.js'
+import { DEFAULT_QUICK_LAUNCHER_SHORTCUT_MODE, isQuickLauncherShortcutMode, type QuickLauncherShortcutMode } from '../shared/quick-launcher.js'
 
 const SETTINGS_FILE = 'settings.json'
 const DEFAULT_PERMISSION_MODE = 'workspace-write'
@@ -11,6 +12,7 @@ interface PersistedSettings {
   theme?: ThemeMode
   surface?: DshSurface
   permissionMode?: string
+  quickLauncherMode?: QuickLauncherShortcutMode
 }
 
 export const PERMISSION_MODES = ['read-only', 'workspace-write', 'danger-full-access'] as const
@@ -51,6 +53,7 @@ export class ThemeService {
   private mode: ThemeMode
   private surfaceValue: DshSurface
   private permissionModeValue: string
+  private quickLauncherModeValue: QuickLauncherShortcutMode
   private window: BrowserWindow | undefined
   private setViewBackground: ((color: string) => void) | undefined
   private onChanged: ((state: ThemeState) => void) | undefined
@@ -61,6 +64,7 @@ export class ThemeService {
     this.mode = this.readMode()
     this.surfaceValue = this.readSurface()
     this.permissionModeValue = process.env.ND_DSH_PERMISSION_MODE?.trim() || this.readPermissionMode()
+    this.quickLauncherModeValue = this.readQuickLauncherMode()
     nativeTheme.themeSource = this.mode
     nativeTheme.on('updated', () => this.emit())
   }
@@ -100,6 +104,17 @@ export class ThemeService {
       throw new Error(`Unknown permission mode: ${mode}`)
     }
     this.permissionModeValue = mode
+    this.persist()
+    return mode
+  }
+
+  quickLauncherMode(): QuickLauncherShortcutMode {
+    return this.quickLauncherModeValue
+  }
+
+  setQuickLauncherMode(mode: QuickLauncherShortcutMode): QuickLauncherShortcutMode {
+    if (!isQuickLauncherShortcutMode(mode)) throw new Error(`Unknown quick launcher mode: ${String(mode)}`)
+    this.quickLauncherModeValue = mode
     this.persist()
     return mode
   }
@@ -176,12 +191,23 @@ export class ThemeService {
     return DEFAULT_PERMISSION_MODE
   }
 
+  private readQuickLauncherMode(): QuickLauncherShortcutMode {
+    try {
+      const settings = JSON.parse(readFileSync(this.settingsPath, 'utf8')) as PersistedSettings
+      if (isQuickLauncherShortcutMode(settings.quickLauncherMode)) return settings.quickLauncherMode
+    } catch {
+      // Missing or unreadable settings fall back to the popup shortcut.
+    }
+    return DEFAULT_QUICK_LAUNCHER_SHORTCUT_MODE
+  }
+
   private persist(): void {
     try {
       const settings: PersistedSettings = {
         theme: this.mode,
         surface: this.surfaceValue,
         permissionMode: this.permissionModeValue,
+        quickLauncherMode: this.quickLauncherModeValue,
       }
       writeFileSync(this.settingsPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8')
     } catch (error) {

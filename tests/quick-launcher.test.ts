@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { Project } from '../src/shared/organization.js'
 import {
+  DEFAULT_QUICK_LAUNCHER_SHORTCUT_MODE,
+  isLauncherHandoffTarget,
+  isQuickLauncherShortcutMode,
+  resolveShortcutBehavior,
+} from '../src/shared/quick-launcher.js'
+import {
   buildLauncherMemoryMutation,
   buildLauncherTaskMutation,
   compactLauncherText,
@@ -88,5 +94,31 @@ describe('ND Quick Launcher model', () => {
       content: '',
       tags: ['launcher'],
     })
+  })
+})
+
+describe('ND Quick Launcher shortcut modes', () => {
+  it('defaults to the Raycast-style popup and validates persisted modes', () => {
+    expect(DEFAULT_QUICK_LAUNCHER_SHORTCUT_MODE).toBe('popup')
+    expect(isQuickLauncherShortcutMode('popup')).toBe(true)
+    expect(isQuickLauncherShortcutMode('window-launcher')).toBe(true)
+    expect(isQuickLauncherShortcutMode('window')).toBe(true)
+    expect(isQuickLauncherShortcutMode('fullscreen')).toBe(false)
+    expect(isQuickLauncherShortcutMode(undefined)).toBe(false)
+    expect(isQuickLauncherShortcutMode(42)).toBe(false)
+  })
+
+  it('maps each mode to a toggle-safe shortcut action', () => {
+    expect(resolveShortcutBehavior('popup')).toEqual({ kind: 'toggle-popup' })
+    expect(resolveShortcutBehavior('window-launcher')).toEqual({ kind: 'toggle-window-launcher' })
+    expect(resolveShortcutBehavior('window')).toEqual({ kind: 'toggle-window' })
+  })
+
+  it('validates handoff targets from the popup surface', () => {
+    expect(isLauncherHandoffTarget('kanban')).toBe(true)
+    expect(isLauncherHandoffTarget('agent')).toBe(true)
+    expect(isLauncherHandoffTarget('capture-clipboard')).toBe(true)
+    expect(isLauncherHandoffTarget('browser-history')).toBe(false)
+    expect(isLauncherHandoffTarget(undefined)).toBe(false)
   })
 })

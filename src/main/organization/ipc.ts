@@ -41,6 +41,7 @@ export function registerOrganizationIpc(
   projectWorkspace: ProjectWorkspaceCoordinator,
   projectRuntime?: ProjectRuntimeService,
   executionCoordinator?: ExecutionCoordinator,
+  extraTrustedWindow?: () => BrowserWindow | null,
 ): () => void {
   const channels: string[] = []
   const computeLedger = new ComputeLedger(join(app.getPath('userData'), 'compute-usage.jsonl'))
@@ -90,7 +91,7 @@ export function registerOrganizationIpc(
   const handle = (channel: string, listener: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown | Promise<unknown>): void => {
     ipcMain.removeHandler(channel)
     ipcMain.handle(channel, (event, ...args) => {
-      assertTrusted(event, window)
+      assertTrusted(event, window, extraTrustedWindow?.())
       return listener(event, ...args)
     })
     channels.push(channel)
@@ -476,8 +477,11 @@ function autopilotProjectId(mutation: OrganizationMutation, state: OrganizationS
   return project.id
 }
 
-function assertTrusted(event: IpcMainInvokeEvent, window: BrowserWindow): void {
-  if (window.isDestroyed() || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) throw new Error('Rejected organization IPC from an untrusted renderer frame')
+function assertTrusted(event: IpcMainInvokeEvent, window: BrowserWindow, extra?: BrowserWindow | null): void {
+  for (const candidate of [window, extra]) {
+    if (candidate && !candidate.isDestroyed() && event.sender === candidate.webContents && event.senderFrame === candidate.webContents.mainFrame) return
+  }
+  throw new Error('Rejected organization IPC from an untrusted renderer frame')
 }
 
 function asMutation(value: unknown): OrganizationMutation {
