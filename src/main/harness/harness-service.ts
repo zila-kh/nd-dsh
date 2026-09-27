@@ -268,6 +268,13 @@ export class HarnessService {
       }
     }
     const { result } = await this.rpcWithRecovery(started, method, payload)
+    if (method === 'session.create' && result.ok) {
+      const sessionId = (result.value as { sessionId?: unknown } | undefined)?.sessionId
+      const requestedCwd = (payload as { cwd?: unknown } | undefined)?.cwd
+      if (typeof sessionId === 'string') {
+        this.adoptSessionCwd(sessionId, typeof requestedCwd === 'string' && requestedCwd.trim() ? requestedCwd : this.workspace.state().root)
+      }
+    }
     if (method === 'session.history') return sanitizeHistoryResult(result)
     if (method === 'session.list') return this.annotateArchivedSessions(result)
     if (method === 'session.models' && result.ok && result.value && typeof result.value === 'object') {
