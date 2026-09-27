@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
-import { pickElementInExternalApp, type ExternalPick } from '../src/main/capture/external-inspect.js'
+import { assertLoopbackDebuggerUrl, pickElementInExternalApp, type ExternalPick } from '../src/main/capture/external-inspect.js'
 
 /**
  * The external inspector attaches to a loopback CDP endpoint over the global
@@ -125,6 +125,27 @@ describe('pickElementInExternalApp failure surfacing', () => {
     } finally {
       stub.restore()
     }
+  })
+
+
+  it('refuses a debugger WebSocket advertised on a non-loopback host', async () => {
+    const remoteTargetFetch = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => [{ id: 'page-1', type: 'page', title: 'Remote', webSocketDebuggerUrl: 'ws://10.0.0.8:9333/devtools/page/1' }],
+    })) as unknown as typeof fetch
+
+    const outcome = await pickElementInExternalApp(9333, remoteTargetFetch)
+    expect(outcome).toMatchObject({ kind: 'unreachable' })
+    if (outcome.kind === 'unreachable') expect(outcome.message).toMatch(/loopback/i)
+  })
+
+  it('accepts only loopback debugger socket hosts', () => {
+    expect(assertLoopbackDebuggerUrl('ws://127.0.0.1:9333/devtools/page/1').hostname).toBe('127.0.0.1')
+    expect(assertLoopbackDebuggerUrl('ws://localhost:9333/devtools/page/1').hostname).toBe('localhost')
+    expect(assertLoopbackDebuggerUrl('ws://[::1]:9333/devtools/page/1').hostname).toBe('[::1]')
+    expect(() => assertLoopbackDebuggerUrl('ws://example.com:9333/devtools/page/1')).toThrow(/loopback/i)
+    expect(() => assertLoopbackDebuggerUrl('https://127.0.0.1:9333/devtools/page/1')).toThrow(/ws\/wss/i)
   })
 
   it('returns unreachable when the debug port answers with no page target', async () => {
