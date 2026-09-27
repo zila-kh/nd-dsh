@@ -26,6 +26,8 @@ export interface LauncherCommandItem {
   title: string
   searchText: string
   shortcut?: string
+  /** Context switches stay open; normal actions close the launcher before running. */
+  closeOnRun?: boolean
   run(): void | Promise<void>
 }
 
@@ -152,6 +154,7 @@ const contextSource: LauncherCommandSource = {
         title: option.label,
         searchText: `context ${option.label} ${option.detail}`,
         shortcut: option.id === input.activeContextId ? 'Active' : option.detail,
+        closeOnRun: false,
         run: () => input.actions.selectContext(option.id),
       }),
     )
