@@ -21,12 +21,28 @@ try {
 
 const errors = []
 const featureIds = new Set()
+const REQUIRED_BETA_FEATURE_IDS = [
+  'core-agent-flow',
+  'company-project-isolation',
+  'parallel-agent-worktree',
+  'git-worktree-secret-safety',
+  'credential-security-boundaries',
+  'persistence-recovery',
+  'provider-failure-handling',
+  'browser-platform',
+  'mcp-skills-failure-containment',
+  'budget-entitlement',
+  'terminal-filesystem',
+  'diagnostics-observability',
+]
 
 if (evidence.schemaVersion !== 1) errors.push('schemaVersion must be 1')
 requireText(evidence.release?.version, 'release.version')
 requireText(evidence.release?.commit, 'release.commit')
 requireText(evidence.release?.artifact, 'release.artifact')
 requireText(evidence.release?.recordedAt, 'release.recordedAt')
+if (String(evidence.release?.commit ?? '').includes('REPLACE_')) errors.push('release.commit still contains a template placeholder')
+if (String(evidence.release?.artifact ?? '').includes('REPLACE_')) errors.push('release.artifact still contains a template placeholder')
 
 requireZero(evidence.summary?.p0Open, 'summary.p0Open')
 requireZero(evidence.summary?.p1CoreOpen, 'summary.p1CoreOpen')
@@ -38,6 +54,21 @@ requireHumanReleaseCheck(evidence.releaseChecks?.soak24h, 'releaseChecks.soak24h
 const soakMinutes = evidence.releaseChecks?.soak24h?.durationMinutes
 if (typeof soakMinutes !== 'number' || !Number.isFinite(soakMinutes) || soakMinutes < 24 * 60) {
   errors.push('releaseChecks.soak24h.durationMinutes must be at least 1440')
+}
+
+const automatedReceipt = readReceipt(evidence.releaseChecks?.automated?.summaryPath, 'releaseChecks.automated.summaryPath')
+if (automatedReceipt) {
+  if (automatedReceipt.kind !== 'nd-beta-automated-release-evidence') errors.push('automated receipt kind is invalid')
+  if (automatedReceipt.status !== 'pass') errors.push('automated receipt status must be "pass"')
+  if (automatedReceipt.release?.commit !== evidence.release?.commit) errors.push('automated receipt commit must match release.commit')
+}
+const soakReceipt = readReceipt(evidence.releaseChecks?.soak24h?.summaryPath, 'releaseChecks.soak24h.summaryPath')
+if (soakReceipt) {
+  if (soakReceipt.kind !== 'nd-beta-soak') errors.push('soak receipt kind is invalid')
+  if (soakReceipt.status !== 'pass') errors.push('soak receipt status must be "pass"')
+  if (typeof soakReceipt.requestedMinutes !== 'number' || soakReceipt.requestedMinutes < 24 * 60) {
+    errors.push('soak receipt requestedMinutes must be at least 1440')
+  }
 }
 
 if (!Array.isArray(evidence.features) || evidence.features.length === 0) {
@@ -70,6 +101,12 @@ if (!Array.isArray(evidence.features) || evidence.features.length === 0) {
     requireText(feature?.human?.tester, `${prefix}.human.tester`)
     requireText(feature?.human?.recordedAt, `${prefix}.human.recordedAt`)
   }
+}
+
+for (const id of REQUIRED_BETA_FEATURE_IDS) {
+  const feature = evidence.features?.find?.((item) => item?.id === id)
+  if (!feature) errors.push(`required beta feature is missing: ${id}`)
+  else if (feature.betaExposed !== true) errors.push(`required beta feature must remain betaExposed=true: ${id}`)
 }
 
 const passed = evidence.scenarioRuns?.passed
@@ -112,6 +149,19 @@ console.log(`- repeated scenario pass rate: ${formatPercent(passRate)} (${passed
 console.log(`- release checks: automated + clean-machine + Chrome + 24h soak passed`)
 console.log(`- P0 open: 0; core P1 open: 0`)
 console.log(`- human release owner: ${evidence.humanDecision.owner}`)
+
+function readReceipt(path, label) {
+  if (!isText(path)) {
+    errors.push(`${label} must be a non-empty path`)
+    return null
+  }
+  try {
+    return JSON.parse(readFileSync(resolve(process.cwd(), path), 'utf8'))
+  } catch (error) {
+    errors.push(`${label} could not be read: ${error instanceof Error ? error.message : String(error)}`)
+    return null
+  }
+}
 
 function requireReleaseCheck(check, path) {
   if (check?.status !== 'pass') errors.push(`${path}.status must be "pass"`)
