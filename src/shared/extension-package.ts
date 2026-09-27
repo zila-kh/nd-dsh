@@ -31,6 +31,7 @@ export const ND_EXTENSION_PERMISSIONS = [
   'browser.navigate',
   'browser.openExternal',
   'os.launch',
+  'os.wallpaper.write',
   'chat.start',
   'workflow.read',
 ] as const
@@ -39,8 +40,8 @@ export type NdExtensionPermission = (typeof ND_EXTENSION_PERMISSIONS)[number]
 
 /**
  * Allowlisted native host methods. Each maps to one trusted main-process
- * handler; `sensitive` marks reads that always need an explicit user gesture
- * when the caller is an agent rather than the person at the keyboard.
+ * handler; `sensitive` marks reads or consequential OS effects that always
+ * need an explicit user grant when the caller is an agent.
  */
 export interface NdHostMethodDescriptor {
   id: string
@@ -66,6 +67,7 @@ export const ND_HOST_METHODS = [
   { id: 'browser.search', title: 'Search the web', permission: 'browser.navigate', contexts: ['personal', 'company', 'project'], sensitive: false },
   { id: 'browser.openExternal', title: 'Open in the system browser', permission: 'browser.openExternal', contexts: ['personal', 'company', 'project'], sensitive: false },
   { id: 'os.openTarget', title: 'Open an app, file, or folder', permission: 'os.launch', contexts: ['personal', 'company', 'project'], sensitive: false },
+  { id: 'os.wallpaper.chooseAndSet', title: 'Choose and set desktop wallpaper', permission: 'os.wallpaper.write', contexts: ['personal'], sensitive: true },
   { id: 'chat.ask', title: 'Ask ND', permission: 'chat.start', contexts: ['personal', 'company', 'project'], sensitive: false },
   { id: 'workflow.list', title: 'Read repository tasks', permission: 'workflow.read', contexts: ['project'], sensitive: false },
   { id: 'workflow.refresh', title: 'Refresh repository tasks', permission: 'workflow.read', contexts: ['project'], sensitive: false },
@@ -226,6 +228,7 @@ export function validateNdExtensionManifest(value: unknown): NdManifestValidatio
   const settings = settingFields(record.settings, issues)
 
   const contributions = contributionsValue(record.contributions, contexts, issues)
+  validateHostContexts(contributions, issues)
 
   const executable = executableValue(record.executable, contributions, issues)
 
@@ -470,6 +473,35 @@ function contributionsValue(
     issues.push({ path: 'contributions', message: 'a package must contribute at least one tool, skill, command, view, or workflow' })
   }
   return result
+}
+
+function validateHostContexts(contributions: NdPackageContributions, issues: NdValidationIssue[]): void {
+  for (const [index, command] of contributions.commands.entries()) {
+    const descriptor = ndHostMethod(command.host)
+    if (!descriptor) continue
+    const unsupported = command.contexts.filter((kind) => !(descriptor.contexts as readonly NdContextKind[]).includes(kind))
+    if (unsupported.length > 0) {
+      issues.push({
+        path: `contributions.commands[${index}].contexts`,
+        message: `${command.host} supports only: ${descriptor.contexts.join(', ')}`,
+      })
+    }
+  }
+
+  for (const [index, view] of contributions.views.entries()) {
+    const hosts = [view.host, ...view.actions.map((action) => action.host)]
+    for (const host of hosts) {
+      const descriptor = ndHostMethod(host)
+      if (!descriptor) continue
+      const unsupported = view.contexts.filter((kind) => !(descriptor.contexts as readonly NdContextKind[]).includes(kind))
+      if (unsupported.length > 0) {
+        issues.push({
+          path: `contributions.views[${index}].contexts`,
+          message: `${host} supports only: ${descriptor.contexts.join(', ')}`,
+        })
+      }
+    }
+  }
 }
 
 function executableValue(

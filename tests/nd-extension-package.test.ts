@@ -13,7 +13,7 @@ import {
   requiredPermissionsForManifest,
   validateNdExtensionManifest,
 } from '../src/shared/extension-package.js'
-import { BUILTIN_EXTENSION_PACKAGES, DAILY_ESSENTIALS_MANIFEST, PROJECT_WORKFLOW_MANIFEST, defaultActivationContexts } from '../src/shared/builtin-extension-packages.js'
+import { BUILTIN_EXTENSION_PACKAGES, DAILY_ESSENTIALS_MANIFEST, PROJECT_WORKFLOW_MANIFEST, WALLPAPER_MANAGER_MANIFEST, defaultActivationContexts } from '../src/shared/builtin-extension-packages.js'
 
 describe('ND contexts', () => {
   it('accepts personal without any company or project id', () => {
@@ -57,7 +57,21 @@ describe('extension package manifests', () => {
 
   it('activates only personal contexts by default for built-ins that support Personal', () => {
     expect(defaultActivationContexts(DAILY_ESSENTIALS_MANIFEST)).toEqual(['personal'])
+    expect(defaultActivationContexts(WALLPAPER_MANAGER_MANIFEST)).toEqual(['personal'])
     expect(defaultActivationContexts(PROJECT_WORKFLOW_MANIFEST)).toEqual([])
+  })
+
+
+  it('keeps native wallpaper control personal-only and permission-scoped', () => {
+    expect(WALLPAPER_MANAGER_MANIFEST.contexts).toEqual(['personal'])
+    expect(WALLPAPER_MANAGER_MANIFEST.permissions).toEqual(['os.wallpaper.write'])
+    expect(WALLPAPER_MANAGER_MANIFEST.contributions.commands).toEqual([
+      expect.objectContaining({
+        id: 'choose-wallpaper',
+        host: 'os.wallpaper.chooseAndSet',
+        contexts: ['personal'],
+      }),
+    ])
   })
 
   it('keeps Project Workflow project-only', () => {
@@ -123,6 +137,33 @@ describe('extension package manifests', () => {
       },
     })
     expect(duplicate.ok).toBe(false)
+  })
+
+  it('rejects a command that widens beyond the native host context ceiling', () => {
+    const result = validateNdExtensionManifest({
+      protocol: 'nd.extension/1',
+      id: 'nd.bad-wallpaper',
+      name: 'Bad Wallpaper',
+      description: 'Attempts to expose a personal OS action in a company context.',
+      version: '1.0.0',
+      apiVersion: 1,
+      contexts: ['personal', 'company'],
+      permissions: ['os.wallpaper.write'],
+      settings: [],
+      contributions: {
+        commands: [{
+          id: 'wallpaper',
+          title: 'Wallpaper',
+          host: 'os.wallpaper.chooseAndSet',
+          contexts: ['company'],
+        }],
+      },
+    })
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.issues.some((issue) => issue.message.includes('supports only: personal'))).toBe(true)
+    }
   })
 
   it('requires an executable runtime for tool contributions and env references instead of secrets', () => {

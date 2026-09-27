@@ -39,6 +39,7 @@
           "browser.navigate",
           "browser.openExternal",
           "os.launch",
+          "os.wallpaper.write",
           "chat.start",
           "workflow.read"
         ]
@@ -194,6 +195,7 @@
         "browser.search",
         "browser.openExternal",
         "os.openTarget",
+        "os.wallpaper.chooseAndSet",
         "chat.ask",
         "workflow.list",
         "workflow.refresh"

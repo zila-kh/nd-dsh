@@ -267,6 +267,10 @@ export default function LauncherPopupApp(): React.ReactNode {
           if (value.opened) toast(`Opened ${String(value.path)}`)
           hidePopup()
           return
+        case 'os.wallpaper.chooseAndSet':
+          hidePopup()
+          if (value.changed) toast('Desktop wallpaper updated.')
+          return
         case 'browser.openExternal':
           hidePopup()
           toast('Opened in your system browser.')

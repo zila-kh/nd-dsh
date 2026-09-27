@@ -238,6 +238,14 @@ Success criterion: a software team can implement, debug, visually verify, review
 - **General / Coding is presentation and authoring scope, not execution state.** Switching profiles never pauses companies, tasks, agents, schedules, or extension activity.
 - ND Extensions are shared by both profiles. Future OS integrations must extend the existing permission broker rather than grant arbitrary Electron/Node/shell authority.
 
+## P1 — Command registry and governed native extensions
+
+- PRD: [0008-command-registry-native-extensions.md](prd/0008-command-registry-native-extensions.md).
+- Task: [0045-command-registry-native-wallpaper.md](tasks/0045-command-registry-native-wallpaper.md) — first ActionSource-style registry and native capability proof.
+- Core/context/capture/extension/project/company commands feed one ND-owned registry used by both launcher surfaces.
+- Wallpaper Manager proves a user-facing native extension without arbitrary plugin authority: Personal-only `os.wallpaper.write`, an ND-owned picker, fixed no-shell OS adapters, and broker/audit/approval enforcement.
+- Future widgets/window/process/desktop capabilities extend this registry + permission broker rather than creating a second unrestricted plugin runtime.
+
 ## P1 — ND Skills and MCP control plane
 
 ND should own reusable capability definitions even when an engine implements the protocol.
