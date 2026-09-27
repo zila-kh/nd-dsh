@@ -46,6 +46,7 @@ import {
 } from './lib/nd-context-model'
 import type { LauncherHandoffTarget } from '../../shared/quick-launcher'
 import type { NdContext } from '../../shared/nd-context'
+import type { WorkspaceProfile } from '../../shared/workspace-profile'
 import type {
   NdCaptureResultView,
   NdCommandView,
@@ -140,6 +141,11 @@ export default function App() {
   const [browserState, setBrowserState] = useState<BrowserState | null>(null)
   const [harnessStatus, setHarnessStatus] = useState<HarnessStatus | null>(null)
   const [surface, setSurface] = useState<DshSurface>('workbench')
+  // Unknown until the trusted main-process preference is loaded. Do not assume
+  // General here: doing so would redirect an existing Coding user's deep link
+  // (for example #/qa) before their persisted profile arrives.
+  const [workspaceProfile, setWorkspaceProfile] = useState<WorkspaceProfile | null>(null)
+  const [workspaceProfilePending, setWorkspaceProfilePending] = useState(false)
   const [dshView, setDshView] = useState<DshViewState | null>(null)
   const [selectedFile, setSelectedFile] = useState<WorkspaceFile | null>(null)
   const [openFileTabs, setOpenFileTabs] = useState<WorkspaceFile[]>([])
@@ -557,6 +563,7 @@ export default function App() {
         setSurface(state.surface)
         setDshView(state.view)
       }),
+      window.ndDsh.workspaceProfile.get().then(setWorkspaceProfile),
     ]).catch((cause) => notify(errorMessage(cause)))
 
     const offWorkspace = window.ndDsh.workspace.onState((next) => {
@@ -654,6 +661,22 @@ export default function App() {
     switchToWorkbench('settings')
   }
 
+  const selectWorkspaceProfile = (next: WorkspaceProfile): void => {
+    if (workspaceProfilePending || next === workspaceProfile) return
+    // Commit in main before changing renderer-visible scope. This keeps the
+    // Coding-only DSH button from becoming clickable before the persisted
+    // profile guard has accepted Coding.
+    setWorkspaceProfilePending(true)
+    void window.ndDsh.workspaceProfile.set(next)
+      .then(setWorkspaceProfile)
+      .catch((cause) => notify(errorMessage(cause)))
+      .finally(() => setWorkspaceProfilePending(false))
+  }
+
+  useEffect(() => {
+    if (workspaceProfile === 'general' && view === 'qa') setView('home')
+  }, [workspaceProfile, view])
+
   const selectTheme = (mode: ThemeMode): void => {
     void window.ndDsh.theme.set(mode).then(setTheme).catch((cause) => notify(errorMessage(cause)))
   }
@@ -749,7 +772,7 @@ export default function App() {
     ? (project ? (workspace?.projectName ?? project.name ?? workspace?.name ?? 'No workspace') : 'No project')
     : (workspace?.projectName ?? workspace?.name ?? 'No workspace')
 
-  const showGitControls = Boolean(
+  const showGitControls = workspaceProfile === 'coding' && Boolean(
     workspace?.root && (!orgState || (project && (!workspace.projectId || workspace.projectId === project.id)))
   )
 
@@ -1083,7 +1106,7 @@ export default function App() {
     }
   })
 
-  const navItems: Array<{ id: ProductView; label: string; icon: ReactNode }> = [
+  const allNavItems: Array<{ id: ProductView; label: string; icon: ReactNode }> = [
     { id: 'home', label: 'Home', icon: <HomeIcon /> },
     { id: 'company', label: 'Company', icon: <CompanyIcon /> },
     { id: 'agent', label: 'Agent', icon: <SparkIcon /> },
@@ -1091,6 +1114,9 @@ export default function App() {
     { id: 'qa', label: 'QA', icon: <QualityIcon /> },
     { id: 'settings', label: 'Settings', icon: <SettingsIcon /> },
   ]
+  const navItems = workspaceProfile === 'coding'
+    ? allNavItems
+    : allNavItems.filter((item) => item.id !== 'qa')
 
   if (inspectScope === 'external') {
     return (
@@ -1249,38 +1275,64 @@ export default function App() {
             <span className="grid size-6 shrink-0 place-items-center rounded-[7px] border border-primary/30 bg-primary/10 text-sm font-extrabold tracking-[0.08em] text-primary">ND</span>
             <div
               role="group"
-              aria-label="Coding surface"
+              aria-label="Workspace profile"
               className="app-no-drag flex h-7 shrink-0 items-center rounded-lg border border-border-soft bg-inset p-[2px] shadow-[inset_0_1px_2px_rgba(0,0,0,0.18)]"
             >
-              <button
-                type="button"
-                aria-pressed={surface === 'workbench'}
-                className={cn(
-                  'grid h-[22px] min-w-[32px] place-items-center rounded-md border px-1.5 text-[9px] font-extrabold tracking-[0.08em] transition-[color,background-color,border-color,box-shadow]',
-                  surface === 'workbench'
-                    ? 'border-primary/25 bg-primary/12 text-primary shadow-[0_1px_3px_rgba(0,0,0,0.2)]'
-                    : 'border-transparent text-faint hover:bg-accent hover:text-foreground',
-                )}
-                title="Use the ND coding workbench"
-                onClick={() => selectSurface('workbench')}
-              >
-                ND
-              </button>
-              <button
-                type="button"
-                aria-pressed={surface === 'dsh'}
-                className={cn(
-                  'grid h-[22px] min-w-[36px] place-items-center rounded-md border px-1.5 text-[9px] font-extrabold tracking-[0.08em] transition-[color,background-color,border-color,box-shadow]',
-                  surface === 'dsh'
-                    ? 'border-primary/25 bg-primary/12 text-primary shadow-[0_1px_3px_rgba(0,0,0,0.2)]'
-                    : 'border-transparent text-faint hover:bg-accent hover:text-foreground',
-                )}
-                title="Use the DSH coding surface"
-                onClick={() => selectSurface('dsh')}
-              >
-                DSH
-              </button>
+              {(['general', 'coding'] as const).map((profile) => (
+                <button
+                  key={profile}
+                  type="button"
+                  aria-pressed={workspaceProfile === profile}
+                  disabled={workspaceProfile === null || workspaceProfilePending}
+                  className={cn(
+                    'grid h-[22px] min-w-[52px] place-items-center rounded-md border px-2 text-[9px] font-extrabold tracking-[0.06em] transition-[color,background-color,border-color,box-shadow] disabled:cursor-not-allowed disabled:opacity-50',
+                    workspaceProfile === profile
+                      ? 'border-primary/25 bg-primary/12 text-primary shadow-[0_1px_3px_rgba(0,0,0,0.2)]'
+                      : 'border-transparent text-faint hover:bg-accent hover:text-foreground',
+                  )}
+                  title={profile === 'general' ? 'General workspace for everyday AI work and extensions' : 'Coding workspace with developer tools and coding surfaces'}
+                  onClick={() => selectWorkspaceProfile(profile)}
+                >
+                  {profile === 'general' ? 'GENERAL' : 'CODING'}
+                </button>
+              ))}
             </div>
+            {workspaceProfile === 'coding' ? (
+              <div
+                role="group"
+                aria-label="Coding surface"
+                className="app-no-drag flex h-7 shrink-0 items-center rounded-lg border border-border-soft bg-inset p-[2px] shadow-[inset_0_1px_2px_rgba(0,0,0,0.18)]"
+              >
+                <button
+                  type="button"
+                  aria-pressed={surface === 'workbench'}
+                  className={cn(
+                    'grid h-[22px] min-w-[32px] place-items-center rounded-md border px-1.5 text-[9px] font-extrabold tracking-[0.08em] transition-[color,background-color,border-color,box-shadow]',
+                    surface === 'workbench'
+                      ? 'border-primary/25 bg-primary/12 text-primary shadow-[0_1px_3px_rgba(0,0,0,0.2)]'
+                      : 'border-transparent text-faint hover:bg-accent hover:text-foreground',
+                  )}
+                  title="Use the ND coding workbench"
+                  onClick={() => selectSurface('workbench')}
+                >
+                  ND
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={surface === 'dsh'}
+                  className={cn(
+                    'grid h-[22px] min-w-[36px] place-items-center rounded-md border px-1.5 text-[9px] font-extrabold tracking-[0.08em] transition-[color,background-color,border-color,box-shadow]',
+                    surface === 'dsh'
+                      ? 'border-primary/25 bg-primary/12 text-primary shadow-[0_1px_3px_rgba(0,0,0,0.2)]'
+                      : 'border-transparent text-faint hover:bg-accent hover:text-foreground',
+                  )}
+                  title="Use the DSH coding surface"
+                  onClick={() => selectSurface('dsh')}
+                >
+                  DSH
+                </button>
+              </div>
+            ) : null}
             <div className="flex min-w-0 flex-col">
               <strong className="text-[15px] tracking-[0.06em] text-strong">ND-DSH</strong>
               <span className="overflow-hidden text-xs text-faint text-ellipsis whitespace-nowrap">
@@ -1455,7 +1507,7 @@ export default function App() {
       </header>
 
       <main className="relative min-h-0 min-w-0 overflow-hidden bg-surface-0">
-        {surface === 'dsh' ? (
+        {workspaceProfile === 'coding' && surface === 'dsh' ? (
           <SurfaceErrorBoundary label="ND Harness" resetKey={surface} onError={notify}>
             <DshCodingSurface active inspectOverlayVisible={inspectOverlayVisible} state={dshView} onNotify={notify} />
           </SurfaceErrorBoundary>

@@ -1,6 +1,6 @@
 # ND-DSH roadmap
 
-This roadmap is ordered by release risk. ND-DSH is coding-first; broader business-company templates come after the software-company loop is reliable.
+This roadmap is ordered by release risk. ND is evolving into a local-first extensible AI work desktop: **General** is the broad everyday workspace, **Coding** is a specialization, and the existing company/software-delivery loop remains a first-class capability rather than the product boundary.
 
 ## Shipped foundation
 
@@ -230,6 +230,13 @@ Success criterion: a software team can implement, debug, visually verify, review
 - Task set 0035–0043: [0035](tasks/0035-extension-context-and-scope-contracts.md) → [0036](tasks/0036-extension-invocation-and-permissions.md) → [0037](tasks/0037-nd-home-personal-storage-and-chat.md) / [0038](tasks/0038-extension-packages-and-lifecycle.md) → [0039](tasks/0039-extension-launcher-and-native-views.md) → [0040](tasks/0040-daily-essentials-extension.md) / [0041](tasks/0041-project-workflow-extension-pilot.md) → [0042](tasks/0042-extension-sdk-and-authoring-guide.md) → [0043](tasks/0043-extension-home-validation-and-release.md) — implemented locally (unit/integration/E2E recorded); the operator manual pass is pending.
 - Proving packages: Daily Essentials (personal daily commands) and Project Workflow (project-scoped, existing read-only Mirror semantics preserved).
 - Global installation is availability, not data access: every invocation carries exactly one authorized context. Marketplace publishing, arbitrary extension panels, and an OS sandbox for external MCP executables stay out of v1.
+
+## P1 — General and Coding workspace profiles
+
+- PRD: [0007-general-and-coding-workspaces.md](prd/0007-general-and-coding-workspaces.md).
+- Task: [0044-general-coding-workspace-profile.md](tasks/0044-general-coding-workspace-profile.md) — first vertical slice on `feat/general-coding-workspace-profile`.
+- **General / Coding is presentation and authoring scope, not execution state.** Switching profiles never pauses companies, tasks, agents, schedules, or extension activity.
+- ND Extensions are shared by both profiles. Future OS integrations must extend the existing permission broker rather than grant arbitrary Electron/Node/shell authority.
 
 ## P1 — ND Skills and MCP control plane
 
