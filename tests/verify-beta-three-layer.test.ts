@@ -150,7 +150,7 @@ async function writeEvidence(
       commit: options.automatedCommit ?? evidence.release.commit,
       artifact: {
         file: 'ND-DSH-beta.exe',
-        sha256: 'test',
+        sha256: 'a'.repeat(64),
         identity: evidence.release.artifact,
       },
     },
@@ -190,7 +190,7 @@ function makeEvidence() {
     release: {
       version: '0.1.0-beta.1',
       commit: '0123456789abcdef',
-      artifact: 'ND-DSH-beta.exe#sha256:test',
+      artifact: 'ND-DSH-beta.exe#sha256:' + 'a'.repeat(64),
       recordedAt: '2026-09-27T12:00:00+07:00',
     },
     summary: {
