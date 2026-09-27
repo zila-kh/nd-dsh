@@ -8,6 +8,7 @@ import type { OrganizationMutation, OrganizationSnapshot } from '../shared/organ
 import { USAGE_IPC, summarizeUsage, type UsageAttribution, type UsageScope, type UsageSummary } from '../shared/usage.js'
 import { WORKFLOW_PLUGINS_IPC } from '../shared/workflow-plugins.js'
 import { isLauncherHandoffTarget, isQuickLauncherShortcutMode } from '../shared/quick-launcher.js'
+import { isWorkspaceProfile } from '../shared/workspace-profile.js'
 import { asNdContext, isNdContext } from '../shared/nd-context.js'
 import type { LauncherPopupController } from './launcher-popup.js'
 import { projectRoot, presetSourceDir } from './app-paths.js'
@@ -682,6 +683,12 @@ export function registerIpc(deps: IpcDependencies): () => void {
   handle(IPC.dshViewSetBounds, (_event, value) => deps.dshSurface.setBounds(asBounds(value)))
   handle(IPC.dshViewSetVisible, (_event, visible) => deps.dshSurface.setVisible(Boolean(visible)))
   handle(IPC.dshViewReload, () => deps.dshSurface.reload())
+
+  handle(IPC.workspaceProfileGet, () => deps.theme.workspaceProfile())
+  handle(IPC.workspaceProfileSet, (_event, value: unknown) => {
+    if (!isWorkspaceProfile(value)) throw new Error(`Unknown workspace profile: ${String(value)}`)
+    return deps.theme.setWorkspaceProfile(value)
+  })
 
   // Theme reads are admitted from the launcher popup too: it renders the same
   // themed card chrome but never mutates the preference.
