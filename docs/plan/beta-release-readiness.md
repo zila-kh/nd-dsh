@@ -34,12 +34,16 @@ Declare the RC Beta Stable only when all are true:
 
 1. **0 P0** — no known crash/data-loss/security/wrong-company-or-project defects.
 2. **0 known P1** in the core path: create company/project → plan → worker → review → Git/result → restart/recover.
-3. **≥95% repeated E2E pass rate** for the beta scenarios on the RC.
-4. All beta-exposed features are either:
+3. **Every beta-exposed feature has Unit PASS + E2E PASS + Human PASS** in the RC evidence record.
+4. **≥95% repeated scenario pass rate** for the beta scenarios on the RC. Teams targeting 99% may set the evidence threshold to 0.99 once enough repeated runs exist to make that number useful.
+5. All beta-exposed features are either:
    - verified and enabled, or
    - clearly marked Experimental / disabled behind a feature flag.
-5. The exact packaged artifact, not only the source checkout, passes the release journey.
-6. A rollback/recovery path is documented before users receive the build.
+6. The exact packaged artifact, not only the source checkout, passes the release journey.
+7. A rollback/recovery path is documented before users receive the build.
+8. A human release owner explicitly records the final GO decision.
+
+The three-layer evidence workflow is defined in [beta-three-layer-validation.md](../qa/beta-three-layer-validation.md) and machine-checked with `corepack pnpm beta:gate -- <evidence.json>`.
 
 ## Ordered execution plan
 
@@ -53,6 +57,17 @@ Declare the RC Beta Stable only when all are true:
 - [ ] Record exact app version, commit SHA, Windows version, Node/pnpm/Rust versions, and test machine.
 
 **Exit:** everyone tests the same immutable RC candidate.
+
+### Phase 0.5 — Create the three-layer evidence matrix
+
+- [ ] Copy `docs/qa/beta-three-layer-evidence.example.json` to an RC-specific evidence file.
+- [ ] List every beta-exposed feature as its own row.
+- [ ] Map existing Unit evidence to each row.
+- [ ] Map existing E2E evidence to each row.
+- [ ] Leave Human as pending until a real tester runs the scenario.
+- [ ] Keep Experimental/disabled features out of beta exposure rather than marking untested behavior ready.
+
+**Exit:** every beta-exposed feature has an explicit Unit / E2E / Human owner and evidence slot.
 
 ---
 
