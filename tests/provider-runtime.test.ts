@@ -122,12 +122,15 @@ describe('provider runtime compiler', () => {
     expect(runtime.profiles['default-retries']?.retryPolicy).toEqual({
       mode: 'normal',
       maxRetries: 2,
+      retryableCodes: ['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT'],
       backoff: {
         initialDelayMs: 500,
         maxDelayMs: 3000,
         jitterRatio: 0.1,
       },
     })
+    // Harness maps HTTP 429 into RATE_LIMIT before evaluating this policy.
+    expect(runtime.profiles['default-retries']?.retryPolicy?.retryableCodes).toContain('RATE_LIMIT')
     expect(runtime.profiles['custom-retries']?.retryPolicy?.maxRetries).toBe(1)
     expect(runtime.profiles['zero-retries']?.retryPolicy?.maxRetries).toBe(0)
     expect(runtime.profiles['clamped-retries']?.retryPolicy?.maxRetries).toBe(5)
