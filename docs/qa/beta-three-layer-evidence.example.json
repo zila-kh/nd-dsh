@@ -13,7 +13,7 @@
   "features": [
     {
       "id": "core-agent-flow",
-      "name": "Company -> project -> plan -> worker -> verify -> review -> Git/result",
+      "name": "Core agent delivery flow",
       "severity": "P0",
       "betaExposed": true,
       "unit": {
@@ -33,7 +33,7 @@
     },
     {
       "id": "company-project-isolation",
-      "name": "Multi-company and multi-project ownership isolation",
+      "name": "Multi-company and multi-project isolation",
       "severity": "P0",
       "betaExposed": true,
       "unit": {
@@ -52,8 +52,8 @@
       }
     },
     {
-      "id": "parallel-agent-worktree",
-      "name": "Parallel agents, task leases, isolated worktrees and cancellation",
+      "id": "parallel-worktree-safety",
+      "name": "Parallel agents and isolated task worktrees",
       "severity": "P0",
       "betaExposed": true,
       "unit": {
@@ -72,8 +72,8 @@
       }
     },
     {
-      "id": "git-worktree-secret-safety",
-      "name": "Git/worktree safety and committed-secret blocking",
+      "id": "git-secret-safety",
+      "name": "Git push, worktree and committed-secret safety",
       "severity": "P0",
       "betaExposed": true,
       "unit": {
@@ -92,8 +92,8 @@
       }
     },
     {
-      "id": "credential-security-boundaries",
-      "name": "Credential, redaction, policy and local transport boundaries",
+      "id": "credential-provider-boundary",
+      "name": "Provider credential and trusted-process boundary",
       "severity": "P0",
       "betaExposed": true,
       "unit": {
@@ -132,8 +132,28 @@
       }
     },
     {
+      "id": "security-policy-redaction",
+      "name": "Security policy, approval and diagnostic redaction boundaries",
+      "severity": "P0",
+      "betaExposed": true,
+      "unit": {
+        "status": "pending",
+        "evidence": []
+      },
+      "e2e": {
+        "status": "pending",
+        "evidence": []
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
       "id": "provider-failure-handling",
-      "name": "Provider/model failure, retry, rate-limit and fallback handling",
+      "name": "Provider/model retry, rate-limit, auth and outage handling",
       "severity": "P1",
       "betaExposed": true,
       "unit": {
@@ -172,8 +192,8 @@
       }
     },
     {
-      "id": "mcp-skills-failure-containment",
-      "name": "MCP/skills malformed, timeout and child-failure containment",
+      "id": "mcp-skills-containment",
+      "name": "MCP/skills failure containment",
       "severity": "P1",
       "betaExposed": true,
       "unit": {
@@ -193,27 +213,7 @@
     },
     {
       "id": "budget-entitlement",
-      "name": "Compute budget, entitlement and usage accounting correctness",
-      "severity": "P1",
-      "betaExposed": true,
-      "unit": {
-        "status": "pending",
-        "evidence": []
-      },
-      "e2e": {
-        "status": "pending",
-        "evidence": []
-      },
-      "human": {
-        "status": "pending",
-        "tester": "",
-        "recordedAt": "",
-        "evidence": []
-      }
-    },
-    {
-      "id": "terminal-filesystem",
-      "name": "Terminal, filesystem, path containment and process cleanup",
+      "name": "Compute budget and entitlement correctness",
       "severity": "P1",
       "betaExposed": true,
       "unit": {
@@ -233,7 +233,7 @@
     },
     {
       "id": "diagnostics-observability",
-      "name": "Privacy-safe diagnostics, receipts and actionable failure visibility",
+      "name": "Diagnostics and observability",
       "severity": "P1",
       "betaExposed": true,
       "unit": {
@@ -255,14 +255,13 @@
   "scenarioRuns": {
     "passed": 0,
     "total": 0,
-    "targetPassRate": 0.95,
-    "minimumRuns": 20
+    "targetPassRate": 0.99
   },
   "humanDecision": {
     "status": "no-go",
     "owner": "",
     "recordedAt": "",
-    "notes": "A human release owner changes this to go only after reviewing all three layers."
+    "notes": "Target 99% repeated-scenario pass rate for the RC. Human GO only after reviewing Unit + E2E + Human evidence and the clean-machine/soak results."
   },
   "releaseChecks": {
     "automated": {
