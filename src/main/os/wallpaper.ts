@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { access } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
-import { join } from 'node:path'
+import { win32 } from 'node:path'
 import process from 'node:process'
 import { promisify } from 'node:util'
 
@@ -45,7 +45,7 @@ export function wallpaperCommands(
   if (platform === 'win32') {
     const systemRoot = env.SystemRoot || env.WINDIR || 'C:\\Windows'
     return [{
-      file: join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+      file: win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
       args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', WINDOWS_SCRIPT],
       env: { ...env, ND_WALLPAPER_PATH: imagePath },
     }]
