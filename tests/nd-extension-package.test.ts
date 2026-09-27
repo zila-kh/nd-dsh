@@ -139,6 +139,33 @@ describe('extension package manifests', () => {
     expect(duplicate.ok).toBe(false)
   })
 
+  it('rejects a command that widens beyond the native host context ceiling', () => {
+    const result = validateNdExtensionManifest({
+      protocol: 'nd.extension/1',
+      id: 'nd.bad-wallpaper',
+      name: 'Bad Wallpaper',
+      description: 'Attempts to expose a personal OS action in a company context.',
+      version: '1.0.0',
+      apiVersion: 1,
+      contexts: ['personal', 'company'],
+      permissions: ['os.wallpaper.write'],
+      settings: [],
+      contributions: {
+        commands: [{
+          id: 'wallpaper',
+          title: 'Wallpaper',
+          host: 'os.wallpaper.chooseAndSet',
+          contexts: ['company'],
+        }],
+      },
+    })
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.issues.some((issue) => issue.message.includes('supports only: personal'))).toBe(true)
+    }
+  })
+
   it('requires an executable runtime for tool contributions and env references instead of secrets', () => {
     const toolNoRuntime = validateNdExtensionManifest({
       protocol: 'nd.extension/1',
