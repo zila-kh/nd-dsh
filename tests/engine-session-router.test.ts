@@ -32,7 +32,23 @@ function fixture() {
     handlesApproval: () => false,
     respond: vi.fn(),
   }
-  const harness = { run: vi.fn(), stop: vi.fn(), gatewayRpc: vi.fn(async () => ({ ok: true })), status: () => ({}) }
+  let harnessCounter = 0
+  const harness = {
+    run: vi.fn(),
+    stop: vi.fn(),
+    createSession: vi.fn(async () => {
+      harnessCounter += 1
+      return `harness-${harnessCounter}`
+    }),
+    gatewayRpc: vi.fn(async (method: string) => {
+      if (method === 'session.create') {
+        harnessCounter += 1
+        return { ok: true, value: { sessionId: `harness-${harnessCounter}` } }
+      }
+      return { ok: true }
+    }),
+    status: () => ({}),
+  }
   const workspace = { state: () => workspaceState, assertUsable: vi.fn() }
   const router = new EngineSessionRouter(harness as never, direct as never, workspace as never, direct as never, undefined, direct as never, direct as never, direct as never, direct as never)
   return { router, run, workspace, harness, direct, sessions }
@@ -53,6 +69,17 @@ describe('session-scoped cancellation', () => {
     expect(direct.stop).toHaveBeenCalledExactlyOnceWith('session-1')
     expect(harness.gatewayRpc).not.toHaveBeenCalled()
     expect(harness.stop).not.toHaveBeenCalled()
+  })
+})
+
+describe('engine route admission', () => {
+  it('fails closed instead of silently routing an unknown engine through Harness', async () => {
+    const { router, harness } = fixture()
+
+    await expect(router.run('hello', { engineId: 'missing-engine' })).rejects.toThrow(/Unknown coding engine/)
+    await expect(router.createSession('missing-engine')).rejects.toThrow(/Unknown coding engine/)
+    expect(harness.run).not.toHaveBeenCalled()
+    expect(harness.gatewayRpc).not.toHaveBeenCalled()
   })
 })
 
@@ -90,6 +117,40 @@ describe('direct engine workspace context', () => {
 
     expect(run).toHaveBeenNthCalledWith(1, expect.any(String), { sessionId: codex.sessionId, cwd: codexRoot })
     expect(run).toHaveBeenNthCalledWith(2, expect.any(String), { sessionId: zcode.sessionId, cwd: zcodeRoot })
+    const codexPrompt = (run.mock.calls[0] as unknown as [string])[0]
+    const zcodePrompt = (run.mock.calls[1] as unknown as [string])[0]
+    expect(codexPrompt).toContain(`"workingDirectory": "${codexRoot}"`)
+    expect(zcodePrompt).toContain(`"workingDirectory": "${zcodeRoot}"`)
+    expect(codexPrompt).not.toContain(`"workingDirectory": "${workspaceState.root}"`)
+    expect(zcodePrompt).not.toContain(`"workingDirectory": "${workspaceState.root}"`)
+  })
+
+  it('carries an isolated Harness task root through to the Harness turn', async () => {
+    const { router, harness } = fixture()
+    const taskRoot = 'C:/projects/parent/.nd-dsh-worktrees/repo/task-harness'
+    const created = await router.createSession('nd-harness', taskRoot)
+
+    expect(harness.gatewayRpc).toHaveBeenCalledWith('session.create', { cwd: taskRoot })
+    await router.run('harness task', { sessionId: created.sessionId })
+
+    expect(harness.run).toHaveBeenCalledWith('harness task', {
+      sessionId: created.sessionId,
+      workspaceCwd: taskRoot,
+    })
+  })
+
+  it('rejects a caller that tries to re-root an existing Harness session', async () => {
+    const { router, harness } = fixture()
+    const taskRoot = 'C:/projects/parent/.nd-dsh-worktrees/repo/task-bound'
+    const created = await router.createSession('nd-harness', taskRoot)
+    harness.run.mockClear()
+
+    await expect(router.run('wrong root', {
+      sessionId: created.sessionId,
+      workspaceCwd: 'C:/projects/parent/other-root',
+    })).rejects.toThrow(/different workspace than the ND-bound session/i)
+
+    expect(harness.run).not.toHaveBeenCalled()
   })
 
   it('fails closed if a direct adapter reports a different cwd than the ND session binding', async () => {

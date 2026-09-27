@@ -76,7 +76,7 @@ async function fixture() {
   })
   const task = (await store.state()).tasks[0]!
   const harness = new FakeHarness()
-  return { store, project, task, harness }
+  return { store, company, project, task, harness }
 }
 
 describe('organization coding-engine routing', () => {
@@ -94,7 +94,43 @@ describe('organization coding-engine routing', () => {
     expect(harness.prompts[0]).toContain('Execution engine: Codex CLI')
     expect(harness.prompts[0]).toContain('subagent_codex')
     expect(harness.prompts[0]).toContain('Do not implement the requested code changes yourself')
+    expect(harness.prompts[0]).toContain('Subagent policy: AUTO')
     expect((await store.state()).tasks[0]?.status).toBe('in_progress')
+  })
+
+  it('can disable in-ticket subagents without disabling the normal Harness worker', async () => {
+    const { store, company, task, harness } = await fixture()
+    await store.mutate({ type: 'company.update', id: company.id, patch: { subagentMode: 'off' } })
+    const engines = {
+      assignedEngine: async () => ND_HARNESS_ENGINE_ID,
+      assertAvailable: () => descriptor(ND_HARNESS_ENGINE_ID),
+    }
+    const engineRuns = new FakeEngineRuns(harness)
+    const orchestrator = new OrganizationOrchestrator(store, harness as never, new FakeWorkspace() as never, engines as never, engineRuns as never)
+
+    await orchestrator.runTask(task.id)
+
+    expect(harness.prompts).toHaveLength(1)
+    expect(harness.prompts[0]).toContain('Subagent policy: OFF')
+    expect(harness.prompts[0]).toContain('Do not call subagent, delegation, swarm, or child-agent tools')
+    expect((await store.state()).tasks[0]?.status).toBe('in_progress')
+  })
+
+  it('fails closed when subagents are off but the selected engine requires delegated Codex', async () => {
+    const { store, company, task, harness } = await fixture()
+    await store.mutate({ type: 'company.update', id: company.id, patch: { subagentMode: 'off' } })
+    const engines = {
+      assignedEngine: async () => CODEX_ENGINE_ID,
+      assertAvailable: () => descriptor(CODEX_ENGINE_ID),
+    }
+    const orchestrator = new OrganizationOrchestrator(store, harness as never, new FakeWorkspace() as never, engines as never)
+
+    await expect(orchestrator.runTask(task.id)).rejects.toThrow(/Subagents are disabled.*delegated Codex/i)
+
+    expect(harness.prompts).toHaveLength(0)
+    const state = await store.state()
+    expect(state.tasks[0]?.status).toBe('ready')
+    expect(state.runs).toHaveLength(0)
   })
 
   it('executes directly on the Codex CLI engine when an employee is assigned to it', async () => {

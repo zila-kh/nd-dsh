@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { CodingEngineDescriptor, DshEventFrame } from '../../shared/contracts.js'
-import { ND_HARNESS_ENGINE_ID } from '../../shared/coding-engines.js'
-import type { OrganizationAgent, OrganizationRole, OrganizationRun, OrganizationRunReceipt, OrganizationTask, ProjectPlanInput } from '../../shared/organization.js'
+import { CODEX_ENGINE_ID, ND_HARNESS_ENGINE_ID } from '../../shared/coding-engines.js'
+import type { OrganizationAgent, OrganizationRole, OrganizationRun, OrganizationRunReceipt, OrganizationSubagentMode, OrganizationTask, ProjectPlanInput } from '../../shared/organization.js'
 import { parseFastActionPlan } from '../../shared/fast-action.js'
 import type { CodingEngineRegistry } from '../engines/coding-engine-registry.js'
 import type { EngineSessionRouter } from '../engines/engine-session-router.js'
@@ -158,7 +158,11 @@ export class OrganizationOrchestrator {
     this.lastProgressAt.set(sessionId, run.startedAt)
     try {
       const prompt = appendBrowserAccess(pmPrompt(context), sessionId, this.browserAccess)
-      await this.harness.run(prompt, { sessionId, ...modelOpts })
+      await this.harness.run(prompt, {
+        sessionId,
+        ...modelOpts,
+        ...(context.project.workspacePath ? { workspaceCwd: context.project.workspacePath } : {}),
+      })
     } catch (cause) {
       const active = await this.store.runBySession(sessionId)
       if (active) await this.store.completeRun(run.id, undefined, errorMessage(cause)).catch(() => undefined)
@@ -221,8 +225,9 @@ export class OrganizationOrchestrator {
       fastEscalationReason = 'Fast path is unavailable without ND Core and the durable action-audit sink.'
     }
 
-    const engine = await this.resolveTaskEngine(context.agent?.id, useFallbackRoute)
-    const prompt = workerPrompt(context, engine, attempt, taskWorktree)
+    const subagentMode = context.company.subagentMode ?? 'auto'
+    const engine = await this.resolveTaskEngine(context.agent?.id, useFallbackRoute, subagentMode)
+    const prompt = workerPrompt(context, engine, attempt, taskWorktree, subagentMode)
     let modelOpts = this.resolveAgentModel(context.agent, context.role)
     if (useFallbackRoute) {
       modelOpts = fallbackRoute!
@@ -295,9 +300,16 @@ export class OrganizationOrchestrator {
 
     try {
       await this.store.markExecution(context.task.id, target.sessionId)
-      const browserPrompt = appendBrowserAccess(prompt, target.sessionId, this.browserAccess)
-      if (this.engineRuns) await this.engineRuns.run(browserPrompt, { sessionId: target.sessionId, ...modelOpts })
-      else await this.harness.run(browserPrompt, { sessionId: target.sessionId, ...modelOpts })
+      // The shared engine router owns browser-token injection in production.
+      // The direct-Harness fallback has no router, so only that path injects here.
+      const browserPrompt = this.engineRuns ? prompt : appendBrowserAccess(prompt, target.sessionId, this.browserAccess)
+      const runOptions = {
+        sessionId: target.sessionId,
+        ...modelOpts,
+        ...(workspaceRoot ? { workspaceCwd: workspaceRoot } : {}),
+      }
+      if (this.engineRuns) await this.engineRuns.run(browserPrompt, runOptions)
+      else await this.harness.run(browserPrompt, runOptions)
     } catch (cause) {
       const message = errorMessage(cause)
       const queued = await this.handleExecutionFailure(run, message)
@@ -535,7 +547,12 @@ export class OrganizationOrchestrator {
         sessionId,
         this.browserAccess,
       )
-      await this.harness.run(prompt, { sessionId, ...modelOpts })
+      const reviewWorkspaceRoot = taskWorktree?.root ?? context.project.workspacePath
+      await this.harness.run(prompt, {
+        sessionId,
+        ...modelOpts,
+        ...(reviewWorkspaceRoot ? { workspaceCwd: reviewWorkspaceRoot } : {}),
+      })
     } catch (cause) {
       const active = await this.store.runBySession(sessionId)
       if (active) {
@@ -1285,7 +1302,7 @@ export class OrganizationOrchestrator {
     if (!project) throw new Error('Project not found')
   }
 
-  private async resolveTaskEngine(agentId: string | undefined, fallback: boolean): Promise<TaskEngine> {
+  private async resolveTaskEngine(agentId: string | undefined, fallback: boolean, subagentMode: OrganizationSubagentMode): Promise<TaskEngine> {
     if (!this.engines || fallback) {
       if (this.engines && fallback) {
         const descriptor = this.engines.assertAvailable(ND_HARNESS_ENGINE_ID)
@@ -1295,6 +1312,9 @@ export class OrganizationOrchestrator {
     }
     const engineId = await this.engines.assignedEngine(agentId)
     const descriptor = this.engines.assertAvailable(engineId)
+    if (subagentMode === 'off' && descriptor.id === CODEX_ENGINE_ID) {
+      throw new Error('Subagents are disabled for this company, but the delegated Codex engine requires subagent_codex. Use Codex CLI/direct or enable automatic subagents.')
+    }
     return {
       id: descriptor.id,
       name: descriptor.name,
@@ -1368,15 +1388,24 @@ function pmPrompt(context: Awaited<ReturnType<OrganizationStore['projectContext'
   return `You are the AI Product Manager for ${context.company.name}.\nMission: ${context.company.mission}\nProject: ${context.project.name}\nObjective: ${context.project.objective}\n\nCreate a practical delivery plan. Respect company/project isolation. Use the existing teams and roles when assigning work. Keep independent work parallel: use dependsOn only for real code/data ordering, never merely to serialize execution. Tests, docs, accessibility, i18n, fixtures and independent components should remain parallel when safe. For each task, declare advisory workScopes when the likely file area is known. Use evidenceKind "artifact" with relative artifactPaths for design, research, or document deliverables that should be verified by produced artifacts instead of a code test command. Return concise reasoning, then exactly one JSON object between <nd-dsh-plan> and </nd-dsh-plan>.\n\nSchema:\n<nd-dsh-plan>{"goal":{"title":"...","description":"..."},"milestones":[{"title":"...","description":"...","tasks":[{"title":"...","description":"...","priority":"medium","acceptanceCriteria":["..."],"dependsOn":["earlier task title"],"role":"Software Engineer","workScopes":["src/feature/**"],"evidenceKind":"code","artifactPaths":[]}]}],"memory":[{"title":"...","content":"...","tags":["plan"]}]}</nd-dsh-plan>\n\nAvailable roles:\n${roles}\nAvailable teams:\n${teams}\nKnown memory:\n${context.memory.map((item) => `- ${item.title}: ${item.content}`).join('\n') || '- none'}\nPolicies:\n${context.policies.map((item) => `- ${item.action}: ${item.effect}`).join('\n')}`
 }
 
-function workerPrompt(context: Awaited<ReturnType<OrganizationStore['taskContext']>>, engine: TaskEngine, attempt: number, worktree?: TaskWorktree): string {
+function workerPrompt(
+  context: Awaited<ReturnType<OrganizationStore['taskContext']>>,
+  engine: TaskEngine,
+  attempt: number,
+  worktree: TaskWorktree | undefined,
+  subagentMode: OrganizationSubagentMode,
+): string {
   const reviewFeedback = context.task.reviewSummary
     ? `\nPrevious independent review feedback:\n${context.task.reviewSummary}\nResolve every relevant issue before declaring the task complete.\n`
     : ''
   const engineInstructions = engine.workerInstructions ?? DEFAULT_WORKER_INSTRUCTIONS
+  const delegationInstructions = subagentMode === 'off'
+    ? '\nSubagent policy: OFF. Complete this ticket inside this worker. Do not call subagent, delegation, swarm, or child-agent tools and do not hand implementation to another agent. Independent ND review after execution is still allowed.\n'
+    : '\nSubagent policy: AUTO. Keep straightforward work inside this worker. Delegate only when a child agent materially helps with breadth or an explicitly selected execution engine requires it. You remain responsible for inspecting the result and validating the workspace.\n'
   const isolation = worktree
     ? `\nND task isolation: this session is already rooted at the dedicated worktree ${worktree.root}. Stay on branch ${worktree.branch}; do not switch worktrees/branches, push, merge into the project branch, or modify the base checkout. ND will checkpoint and integrate only after verification.\n`
     : ''
-  return `You are ${context.agent?.name ?? 'an AI worker'} acting as ${context.role?.name ?? 'Software Engineer'} inside company ${context.company.name}.\nCompany mission: ${context.company.mission}\nProject: ${context.project.name}\nObjective: ${context.project.objective}\nTask: ${context.task.title}\nExecution attempt: ${attempt}/${MAX_EXECUTION_ATTEMPTS}\nDescription: ${context.task.description}\nAcceptance criteria:\n${context.task.acceptanceCriteria.map((item) => `- ${item}`).join('\n')}${reviewFeedback}\nResponsibilities: ${context.role?.responsibility ?? 'Complete the assigned work.'}\nRole instructions: ${context.role?.systemPrompt ?? 'Execute carefully and verify the result.'}\nRelevant skills:\n${context.skills.map((item) => `- ${item.name}: ${item.instructions}`).join('\n')}\nRelevant memory:\n${context.memory.map((item) => `- ${item.title}: ${item.content}`).join('\n') || '- none'}\nPolicies:\n${context.policies.map((item) => `- ${item.action}: ${item.effect}`).join('\n')}${engineInstructions}${isolation}\nInspect before editing, run meaningful validation, and finish with a concise result summary for the independent reviewer.`
+  return `You are ${context.agent?.name ?? 'an AI worker'} acting as ${context.role?.name ?? 'Software Engineer'} inside company ${context.company.name}.\nCompany mission: ${context.company.mission}\nProject: ${context.project.name}\nObjective: ${context.project.objective}\nTask: ${context.task.title}\nExecution attempt: ${attempt}/${MAX_EXECUTION_ATTEMPTS}\nDescription: ${context.task.description}\nAcceptance criteria:\n${context.task.acceptanceCriteria.map((item) => `- ${item}`).join('\n')}${reviewFeedback}\nResponsibilities: ${context.role?.responsibility ?? 'Complete the assigned work.'}\nRole instructions: ${context.role?.systemPrompt ?? 'Execute carefully and verify the result.'}\nRelevant skills:\n${context.skills.map((item) => `- ${item.name}: ${item.instructions}`).join('\n')}\nRelevant memory:\n${context.memory.map((item) => `- ${item.title}: ${item.content}`).join('\n') || '- none'}\nPolicies:\n${context.policies.map((item) => `- ${item.action}: ${item.effect}`).join('\n')}${engineInstructions}${delegationInstructions}${isolation}\nInspect before editing, run meaningful validation, and finish with a concise result summary for the independent reviewer.`
 }
 
 function reviewPrompt(task: OrganizationTask, context: Awaited<ReturnType<OrganizationStore['taskContext']>>, worktree?: TaskWorktree, decisionSupport = ''): string {
