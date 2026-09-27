@@ -1,4 +1,5 @@
 import type { LauncherHandoffTarget, QuickLauncherShortcutMode } from './quick-launcher.js'
+import type { WorkspaceProfile } from './workspace-profile.js'
 
 export interface BrowserBounds {
   x: number
@@ -717,6 +718,11 @@ export interface DesktopApi {
     set(surface: DshSurface): Promise<SurfaceState>
     onChanged(listener: (state: SurfaceState) => void): () => void
   }
+  /** Human-facing workspace profile; never an execution/pause state. */
+  workspaceProfile: {
+    get(): Promise<WorkspaceProfile>
+    set(profile: WorkspaceProfile): Promise<WorkspaceProfile>
+  }
   dshView: {
     setBounds(bounds: BrowserBounds): Promise<void>
     setVisible(visible: boolean): Promise<void>
@@ -827,6 +833,8 @@ export const IPC = {
   surfaceState: 'surface:state',
   surfaceSet: 'surface:set',
   surfaceChangedEvent: 'surface:changed',
+  workspaceProfileGet: 'workspace-profile:get',
+  workspaceProfileSet: 'workspace-profile:set',
   dshViewSetBounds: 'dsh-view:set-bounds',
   dshViewSetVisible: 'dsh-view:set-visible',
   dshViewReload: 'dsh-view:reload',
