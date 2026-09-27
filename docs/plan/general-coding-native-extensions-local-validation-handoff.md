@@ -430,3 +430,15 @@ For each defect report:
 ### Remaining known issues
 
 List every blocker honestly. A skipped manual scenario is not PASS.
+
+---
+
+## Local validation record — 2026-09-28
+
+Validation ran after both PRs had already merged: PR #58 was on `main` (`2575336`) and PR #59 was on `feat/general-coding-workspace-profile` (`039d04e`), which `main` had not yet absorbed.
+
+- The parent branch was merged into local `main` (`b3d16a8`, tree-identical to the branch; 48 ahead / 0 behind `origin/main`).
+- Green gates: `verify`; `typecheck` (both projects — it was red before); focused vitest 69/69; built-in and example manifest validation; launcher E2E 4/4 after a fresh `pnpm build`; the full unit suite at 945 passed with only the known CRLF environmental failure and the live-CLI skips; `build`; `bench:tasks:check` (136 expectations, 0 deviations); the whole-app Electron sweep 52/52.
+- Repairs: `2cdbf99` (typecheck includes and `.js` specifiers, `session-tree` narrowing and annotation, `SessionCard` optional props, platform-independent GNOME file URI, session/skill test fixtures) and `9e963d6` (Settings tab "Plugins" → "Extensions" in three e2e specs).
+- The launcher E2E must run after a fresh `pnpm build`; against a stale `out/` the wallpaper command is legitimately absent.
+- Still owed: every manual smoke scenario above (Windows wallpaper effect, user-authored extension install/activate, agent approval), plus the macOS/GNOME live claims.

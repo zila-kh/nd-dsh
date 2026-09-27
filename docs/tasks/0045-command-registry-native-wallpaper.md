@@ -1,7 +1,7 @@
 # Task 0045 — Command registry + governed native wallpaper extension
 
 > Owner: ND launcher + extensions  
-> Status: implementation + static review complete; local-agent handoff ready; execution validation pending  
+> Status: implementation complete; local automated validation green on `b3d16a8` (2026-09-28); Windows/manual smoke scenarios pending operator  
 > Priority: P1  
 > PRD: [0008 — Command Registry and Governed Native Extensions](../prd/0008-command-registry-native-extensions.md)  
 > Depends on: PRD 0006 extensions/Home and PRD 0007 General/Coding workspace profiles
