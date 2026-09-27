@@ -8,10 +8,10 @@
  * that attribution on top of the raw listing.
  *
  * Sessions with no run attribution are personal/manual chats and stay visible
- * in every project. Subagent sessions inherit the attribution of their parent
- * session, so a child of Project A cannot leak into Project B just because the
- * child itself has no organization run row. With no active project (standalone
- * workspace) nothing is filtered.
+ * in every project. Only sessions explicitly marked as subagents inherit the
+ * attribution of their parent; an ordinary fork may carry parentSessionId too,
+ * but it remains a manual chat unless ND gives it its own run attribution.
+ * With no active project (standalone workspace) nothing is filtered.
  */
 export function isSessionInProjectScope(
   sessionId: string,
@@ -23,7 +23,7 @@ export function isSessionInProjectScope(
   return projectId === undefined || projectId === activeProjectId
 }
 
-export function filterSessionsInProjectScope<T extends { sessionId: string; parentSessionId?: string }>(
+export function filterSessionsInProjectScope<T extends { sessionId: string; parentSessionId?: string; origin?: 'subagent' }>(
   items: readonly T[],
   activeProjectId: string | undefined,
   sessionProjects: Readonly<Record<string, string>>,
@@ -41,7 +41,7 @@ export function filterSessionsInProjectScope<T extends { sessionId: string; pare
     }
     if (trail.has(sessionId)) return undefined
     const item = byId.get(sessionId)
-    const parentId = item?.parentSessionId
+    const parentId = item?.origin === 'subagent' ? item.parentSessionId : undefined
     if (!parentId) {
       resolvedProjects.set(sessionId, undefined)
       return undefined
