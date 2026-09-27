@@ -50,7 +50,11 @@ requireZero(evidence.summary?.p1CoreOpen, 'summary.p1CoreOpen')
 requireReleaseCheck(evidence.releaseChecks?.automated, 'releaseChecks.automated')
 requireHumanReleaseCheck(evidence.releaseChecks?.packagedCleanMachine, 'releaseChecks.packagedCleanMachine')
 requireHumanReleaseCheck(evidence.releaseChecks?.browserCompanionChrome, 'releaseChecks.browserCompanionChrome')
+requireHumanReleaseCheck(evidence.releaseChecks?.failureDrills, 'releaseChecks.failureDrills')
 requireHumanReleaseCheck(evidence.releaseChecks?.soak24h, 'releaseChecks.soak24h')
+if (evidence.releaseChecks?.packagedCleanMachine?.artifact !== evidence.release?.artifact) {
+  errors.push('releaseChecks.packagedCleanMachine.artifact must match release.artifact')
+}
 const soakMinutes = evidence.releaseChecks?.soak24h?.durationMinutes
 if (typeof soakMinutes !== 'number' || !Number.isFinite(soakMinutes) || soakMinutes < 24 * 60) {
   errors.push('releaseChecks.soak24h.durationMinutes must be at least 1440')
@@ -146,7 +150,7 @@ console.log('Beta 3-layer gate: PASS')
 console.log(`- release: ${evidence.release.version} @ ${evidence.release.commit}`)
 console.log(`- beta-exposed features: ${exposedCount} / ${exposedCount} passed Unit + E2E + Human`)
 console.log(`- repeated scenario pass rate: ${formatPercent(passRate)} (${passed}/${total}; minimum ${minimumRuns})`)
-console.log(`- release checks: automated + clean-machine + Chrome + 24h soak passed`)
+console.log(`- release checks: automated + clean-machine + Chrome + failure drills + 24h soak passed`)
 console.log(`- P0 open: 0; core P1 open: 0`)
 console.log(`- human release owner: ${evidence.humanDecision.owner}`)
 
