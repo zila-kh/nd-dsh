@@ -69,6 +69,28 @@ describe('scopeSessionListPayload', () => {
     expect(scoped.items.map((item) => item.sessionId)).toEqual(['real'])
   })
 
+  it('keeps exact ND-owned task worktrees visible even when they live beside the repository', () => {
+    const taskWorktree = join(linky, '..', '.nd-dsh-worktrees', 'repo', 'task-42')
+    const unrelated = join(linky, '..', 'other-repo')
+    const value = {
+      items: [
+        session('sess-task', taskWorktree),
+        session('sess-unrelated', unrelated),
+        session('sess-workspace', linky),
+      ],
+    }
+    const scoped = scopeSessionListPayload(
+      value,
+      linky,
+      new Set(),
+      undefined,
+      undefined,
+      (cwd) => cwd === taskWorktree,
+    ) as { items: Array<Record<string, unknown>> }
+
+    expect(scoped.items.map((item) => item.sessionId)).toEqual(['sess-task', 'sess-workspace'])
+  })
+
   it('keeps ND Home personal chats visible even though their cwd is outside the workspace', () => {
     const personal = join(tmpdir(), 'nd-home', 'chats', 'chat-1', 'work')
     const value = {
