@@ -65,6 +65,7 @@ export class HarnessService {
   /** Durable runtime sessions keep their own cwd even when the selected project changes. */
   private readonly sessionCwdById = new Map<string, string>()
   private extraVisibleSessionIds: (() => ReadonlySet<string>) | undefined
+  private sessionCwdGuard: ((cwd: string) => boolean) | undefined
 
   constructor(
     private readonly workspace: WorkspaceService,
@@ -103,6 +104,11 @@ export class HarnessService {
   /** ND Home personal chats stay listed even though their cwd is ND-managed storage. */
   setExtraVisibleSessionIds(provider: (() => ReadonlySet<string>) | undefined): void {
     this.extraVisibleSessionIds = provider
+  }
+
+  /** Admit exact auxiliary roots ND owns, such as organization task worktrees. */
+  setSessionCwdGuard(guard: ((cwd: string) => boolean) | undefined): void {
+    this.sessionCwdGuard = guard
   }
 
   /** Consume the user's cancellation intent for one session exactly once. */
@@ -301,7 +307,17 @@ export class HarnessService {
     const archivedIds = await this.sessionArchive.archivedIds()
     const workspaceRoot = this.workspace.state().root
     const extraVisibleIds = this.extraVisibleSessionIds?.()
-    return { ...result, value: scopeSessionListPayload(result.value, workspaceRoot, archivedIds, this.runningSessions, extraVisibleIds) }
+    return {
+      ...result,
+      value: scopeSessionListPayload(
+        result.value,
+        workspaceRoot,
+        archivedIds,
+        this.runningSessions,
+        extraVisibleIds,
+        this.sessionCwdGuard,
+      ),
+    }
   }
 
   private bindSessionCwd(sessionId: string, cwd: string): void {
