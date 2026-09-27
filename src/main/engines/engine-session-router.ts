@@ -108,7 +108,7 @@ export class EngineSessionRouter {
   }
   /** Logical engine ids for harness-backed sessions such as delegated Codex. */
   private readonly logicalEngineBySession = new Map<string, string>()
-  /** ND-owned immutable workspace binding for direct task/interactive sessions. */
+  /** ND-owned immutable workspace binding for routed task/interactive sessions. */
   private readonly workspaceRootBySession = new Map<string, string>()
   private readonly chatGptWeb: ChatGptWebEngine | undefined
   private readonly chatGptWebBrowser: BrowserController | undefined
