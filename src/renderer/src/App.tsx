@@ -1285,7 +1285,7 @@ export default function App() {
                   aria-pressed={workspaceProfile === profile}
                   disabled={workspaceProfile === null || workspaceProfilePending}
                   className={cn(
-                    'grid h-[22px] min-w-[52px] place-items-center rounded-md border px-2 text-[9px] font-extrabold tracking-[0.06em] transition-[color,background-color,border-color,box-shadow] disabled:cursor-not-allowed disabled:opacity-55',
+                    'grid h-[22px] min-w-[52px] place-items-center rounded-md border px-2 text-[9px] font-extrabold tracking-[0.06em] transition-[color,background-color,border-color,box-shadow] disabled:cursor-not-allowed disabled:opacity-50',
                     workspaceProfile === profile
                       ? 'border-primary/25 bg-primary/12 text-primary shadow-[0_1px_3px_rgba(0,0,0,0.2)]'
                       : 'border-transparent text-faint hover:bg-accent hover:text-foreground',
