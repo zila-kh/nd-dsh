@@ -8,8 +8,8 @@ const sessionProjects = {
   'sess-engine-ndf': 'project-ndf',
 }
 
-function session(sessionId: string, parentSessionId?: string): { sessionId: string; parentSessionId?: string } {
-  return { sessionId, ...(parentSessionId ? { parentSessionId } : {}) }
+function session(sessionId: string, parentSessionId?: string, origin: 'subagent' | undefined = parentSessionId ? 'subagent' : undefined): { sessionId: string; parentSessionId?: string; origin?: 'subagent' } {
+  return { sessionId, ...(parentSessionId ? { parentSessionId } : {}), ...(origin ? { origin } : {}) }
 }
 
 describe('isSessionInProjectScope', () => {
@@ -40,16 +40,28 @@ describe('filterSessionsInProjectScope', () => {
     ])
   })
 
-  it('inherits project attribution for subagent sessions from their parent', () => {
+  it('inherits project attribution for nested subagent sessions from their parent chain', () => {
     const items = [
       session('sess-plan-dfdf'),
       session('sess-child-dfdf', 'sess-plan-dfdf'),
+      session('sess-grandchild-dfdf', 'sess-child-dfdf'),
       session('sess-plan-ndf'),
       session('sess-child-ndf', 'sess-plan-ndf'),
     ]
     expect(filterSessionsInProjectScope(items, 'project-dfdf', sessionProjects).map((item) => item.sessionId)).toEqual([
       'sess-plan-dfdf',
       'sess-child-dfdf',
+      'sess-grandchild-dfdf',
+    ])
+  })
+
+  it('keeps an ordinary fork globally visible when it has no run attribution', () => {
+    const items = [
+      session('sess-plan-ndf'),
+      session('sess-fork-ndf', 'sess-plan-ndf', undefined),
+    ]
+    expect(filterSessionsInProjectScope(items, 'project-dfdf', sessionProjects).map((item) => item.sessionId)).toEqual([
+      'sess-fork-ndf',
     ])
   })
 
