@@ -165,6 +165,8 @@ export interface BrowserExtensionRecord {
   source?: BrowserExtensionSource | undefined
   storeId?: string | undefined
   publisher?: string | undefined
+  actionTitle?: string | undefined
+  actionPopup?: string | undefined
 }
 
 export interface BrowserExtensionCatalogItem {
@@ -217,6 +219,7 @@ export interface BrowserPlatformState {
   downloads: BrowserDownloadRecord[]
   extensions: BrowserExtensionRecord[]
   extensionCatalog: BrowserExtensionCatalogItem[]
+  extensionPopupId?: string | undefined
   browserUseEnabled: boolean
   developerMode: boolean
   credentials: BrowserCredentialSummary[]
@@ -244,6 +247,8 @@ export interface BrowserPlatformDesktopApi {
   setBrowserUseEnabled(enabled: boolean): Promise<BrowserPlatformState>
   installCatalogExtension(catalogId: string): Promise<BrowserExtensionRecord>
   openCatalogExtension(catalogId: string): Promise<BrowserTabDescriptor>
+  showExtensionPopup(extensionId: string): Promise<BrowserPlatformState>
+  closeExtensionPopup(): Promise<BrowserPlatformState>
   saveCredential(input: { origin: string; username: string; password: string; label?: string | undefined }): Promise<BrowserCredentialSummary>
   removeCredential(credentialId: string): Promise<boolean>
   autofillCredential(credentialId: string, targetId?: string, tabId?: string): Promise<{ ok: true; credentialId: string; username: string }>
@@ -272,6 +277,8 @@ export const BROWSER_PLATFORM_IPC = {
   browserUseEnabled: 'browser-platform:browser-use-enabled',
   installCatalogExtension: 'browser-platform:install-catalog-extension',
   openCatalogExtension: 'browser-platform:open-catalog-extension',
+  showExtensionPopup: 'browser-platform:show-extension-popup',
+  closeExtensionPopup: 'browser-platform:close-extension-popup',
   saveCredential: 'browser-platform:save-credential',
   removeCredential: 'browser-platform:remove-credential',
   autofillCredential: 'browser-platform:autofill-credential',
