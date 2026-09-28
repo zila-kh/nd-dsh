@@ -526,7 +526,7 @@ export function SettingsPane({
                                   </div>
                                   <div className="flex shrink-0 items-center gap-1.5">
                                     {item.installed ? (
-                                      <StatusChip good>Installed</StatusChip>
+                                      <StatusChip good>{item.installedSource === 'unpacked' ? 'Loaded package' : 'Installed'}</StatusChip>
                                     ) : (
                                       <SettingsButton onClick={() => {
                                         void window.ndDsh.browserPlatform.installCatalogExtension(item.id)
