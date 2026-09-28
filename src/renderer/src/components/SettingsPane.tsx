@@ -511,7 +511,7 @@ export function SettingsPane({
 
                             <div className="pt-1">
                               <strong className="block text-[10px] font-semibold text-strong">Built-in catalog</strong>
-                              <span className="text-[9px] text-faint">Catalog items run in the ND browser profile. A package must be bundled with the ND build before install.</span>
+                              <span className="text-[9px] text-faint">Catalog items run in the ND browser profile. ND can use a bundled package or an authorized unpacked directory you choose.</span>
                             </div>
                             {(browserPlatform?.extensionCatalog ?? [])
                               .filter((item) => {
