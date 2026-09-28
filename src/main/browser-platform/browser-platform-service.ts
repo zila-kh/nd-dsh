@@ -2,6 +2,7 @@ import { shell } from 'electron'
 import { join } from 'node:path'
 import type {
   BrowserCredentialSummary,
+  BrowserExtensionInstallPreview,
   BrowserExtensionRecord,
   BrowserPlatformState,
   BrowserSelection,
@@ -232,6 +233,13 @@ export class BrowserPlatformService {
     return true
   }
 
+  async previewExtension(path: string): Promise<BrowserExtensionInstallPreview> {
+    if (!this.extensions.developerMode()) {
+      throw new Error('Enable Browser extension Developer mode before loading an unpacked extension')
+    }
+    return this.extensions.preview(path)
+  }
+
   async installExtension(path: string): Promise<BrowserExtensionRecord> {
     if (!this.extensions.developerMode()) {
       throw new Error('Enable Browser extension Developer mode before loading an unpacked extension')
@@ -272,6 +280,10 @@ export class BrowserPlatformService {
     await this.extensions.setBrowserUseEnabled(enabled)
     await this.emit()
     return this.state()
+  }
+
+  async previewCatalogExtension(catalogId: string, selectedPath?: string): Promise<BrowserExtensionInstallPreview> {
+    return this.extensions.previewCatalog(catalogId, selectedPath)
   }
 
   async installCatalogExtension(catalogId: string, selectedPath?: string): Promise<BrowserExtensionRecord> {
