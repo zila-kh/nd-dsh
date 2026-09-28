@@ -190,7 +190,7 @@ export interface BrowserExtensionCatalogItem {
   description: string
   storeId?: string | undefined
   storeUrl?: string | undefined
-  packagePolicy: 'bundled' | 'verified-chrome-id'
+  packagePolicy: 'bundled' | 'reference-only'
   compatibility: 'experimental' | 'limited' | 'compatible'
   bundleAvailable: boolean
   installed: boolean
