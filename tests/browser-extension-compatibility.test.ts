@@ -35,6 +35,20 @@ describe('browser extension compatibility analyzer', () => {
     )
   })
 
+
+  it('marks click-only browser actions limited until ND hosts action.onClicked', () => {
+    const result = analyzeBrowserExtensionManifest({
+      manifest_version: 3,
+      name: 'Click action',
+      version: '1.0.0',
+      action: {
+        default_title: 'Run',
+      },
+    })
+    expect(result.status).toBe('limited')
+    expect(result.notes.join(' ')).toContain('chrome.action.onClicked')
+  })
+
   it('marks undocumented permission APIs limited', () => {
     const result = analyzeBrowserExtensionManifest({
       manifest_version: 3,
