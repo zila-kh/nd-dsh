@@ -7,7 +7,7 @@ import type {
   BrowserExtensionRecord,
   BrowserExtensionSource,
 } from '../../shared/browser-platform.js'
-import { analyzeBrowserExtensionManifest } from './browser-extension-compatibility.js'
+import { analyzeBrowserExtensionManifest, extensionIdFromManifestKey } from './browser-extension-compatibility.js'
 
 interface PersistedExtension {
   path: string
@@ -141,7 +141,14 @@ export class BrowserExtensionManager {
         `${definition.name} is not bundled in this ND build. Choose an authorized unpacked package to load it directly into the ND browser.`,
       )
     }
-    await readManifest(sourcePath)
+    const manifest = await readManifest(sourcePath)
+    const manifestKey = typeof manifest.key === 'string' ? manifest.key : undefined
+    const verifiedId = manifestKey ? extensionIdFromManifestKey(manifestKey) : undefined
+    if (verifiedId !== definition.storeId) {
+      throw new Error(
+        `${definition.name} package could not be verified as extension ${definition.storeId}. Use Load unpacked for unverified packages.`,
+      )
+    }
 
     for (const [id, record] of [...this.records]) {
       if (record.catalogId !== definition.id && record.storeId !== definition.storeId) continue
