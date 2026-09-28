@@ -30,11 +30,12 @@ Method 1 / Browser Companion remains available for users who explicitly want the
 
 The catalog may contain vendor extension references such as the official ChatGPT extension id for compatibility work, but ND must not redistribute proprietary Web Store packages without authorization.
 
-A catalog package is installable only when an authorized unpacked package is bundled under:
+A catalog package can be supplied in either of two ND-owned ways:
 
-`resources/browser-extensions/<catalog-id>/`
+- bundled under `resources/browser-extensions/<catalog-id>/`; or
+- chosen by the user as an authorized unpacked extension directory through ND's native folder picker.
 
-Opening a catalog listing opens it in a normal **ND built-in browser tab**, not the system browser.
+Neither path launches Chrome or imports a Chrome profile. Opening a catalog listing opens it in a normal **ND built-in browser tab**, not the system browser.
 
 ## Validation
 
