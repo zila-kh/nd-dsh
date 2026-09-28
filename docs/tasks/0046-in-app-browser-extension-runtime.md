@@ -29,14 +29,19 @@ Method 1 / Browser Companion remains available for users who explicitly want the
 
 ## Built-in catalog
 
-The catalog may contain vendor extension references such as the official ChatGPT extension id for compatibility work, but ND must not redistribute proprietary Web Store packages without authorization.
+Method 2 has a real first-party bundled reference extension:
 
-A catalog package can be supplied in either of two ND-owned ways:
+- **ND Browser Tools** — source under `resources/browser-extensions/nd-browser-tools/`, packaged as an Electron `extraResource`, and run only in `persist:nd-dsh-browser`.
+- It exercises the ND-hosted action popup, `chrome.storage.local`, active-tab lookup, and tab reload without Native Messaging or an external browser.
 
-- bundled under `resources/browser-extensions/<catalog-id>/`; or
-- chosen by the user as an authorized unpacked extension directory through ND's native folder picker.
+The catalog may also contain third-party compatibility references such as the official ChatGPT Chrome extension id. Those references are **not** the implementation of Method 2 and ND must not redistribute proprietary Web Store packages without authorization.
 
-Neither path launches Chrome or imports a Chrome profile. Vendor catalog packages must verify to the expected Chrome extension id from their manifest public key; an unverified folder can still be loaded through Developer mode, but ND will not label it as the vendor catalog item. Opening a catalog listing opens it in a normal **ND built-in browser tab**, not the system browser.
+Catalog package policies are explicit:
+
+- `bundled` — first-party/trusted package must ship with the ND build and cannot be replaced by an arbitrary user folder;
+- `verified-chrome-id` — a user-selected authorized unpacked package must prove the expected Chrome extension id from its manifest public key before ND labels it as that vendor entry.
+
+An unverified third-party folder can still be loaded through Developer mode as a generic unpacked extension, but ND will not label it as the vendor catalog item. Neither path launches Chrome or imports a Chrome profile. A third-party catalog listing opens in a normal **ND built-in browser tab**, not the system browser.
 
 ## Validation
 
