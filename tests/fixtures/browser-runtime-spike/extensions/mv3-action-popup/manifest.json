@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "ND Browser Runtime Spike MV3 Action Popup",
+  "version": "0.0.1",
+  "permissions": ["storage"],
+  "action": {
+    "default_title": "ND Popup Probe",
+    "default_popup": "popup.html"
+  }
+}
