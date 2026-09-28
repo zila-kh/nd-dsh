@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   analyzeBrowserExtensionManifest,
@@ -84,6 +86,16 @@ describe('browser extension compatibility analyzer', () => {
   })
 })
 
+
+describe('bundled ND browser extension', () => {
+  it('keeps the first-party Method 2 extension inside the supported subset', () => {
+    const path = resolve(process.cwd(), 'resources/browser-extensions/nd-browser-tools/manifest.json')
+    const manifest = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+    const result = analyzeBrowserExtensionManifest(manifest)
+    expect(result.status).toBe('compatible')
+    expect(result.notes.join(' ')).toContain('Action popup is hosted by ND')
+  })
+})
 
 describe('extension id verification', () => {
   it('derives Chrome extension ids from the manifest public key', () => {
