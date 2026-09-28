@@ -39,6 +39,7 @@ interface SettingsPaneProps {
   harness: HarnessStatus | null
   browser: BrowserState | null
   onError(message: string): void
+  onOpenBrowser(): void
   tab: SettingsTab
   onSelectTab(tab: SettingsTab): void
   subTab?: GeneralSubTab
@@ -81,6 +82,7 @@ export function SettingsPane({
   harness,
   browser,
   onError,
+  onOpenBrowser,
   tab,
   onSelectTab,
   subTab: propSubTab,
@@ -537,6 +539,7 @@ export function SettingsPane({
                                     )}
                                     <SettingsButton onClick={() => {
                                       void window.ndDsh.browserPlatform.openCatalogExtension(item.id)
+                                        .then(() => onOpenBrowser())
                                         .catch((cause) => onError(errorMessage(cause)))
                                     }}>
                                       View in ND browser
