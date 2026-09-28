@@ -91,7 +91,8 @@ try {
       extensionActionPopupPass: Boolean(
         capabilities.extensions.mv3ActionPopup?.popupLoaded
         && capabilities.extensions.mv3ActionPopup?.runtimeAvailable
-        && capabilities.extensions.mv3ActionPopup?.storageAvailable,
+        && capabilities.extensions.mv3ActionPopup?.storageAvailable
+        && capabilities.extensions.mv3ActionPopup?.tabsQueryAvailable,
       ),
       multiTabPass,
       credentialVaultPrimitiveAvailable: capabilities.runtime.safeStorageAvailable,
@@ -255,6 +256,7 @@ async function loadAndExerciseActionPopup(extensionPath, ses, hostWindow) {
     popupLoaded: false,
     runtimeAvailable: false,
     storageAvailable: false,
+    tabsQueryAvailable: false,
     removed: false,
     id: null,
     error: null,
@@ -271,11 +273,13 @@ async function loadAndExerciseActionPopup(extensionPath, ses, hostWindow) {
       const state = await view.webContents.executeJavaScript(`({
         runtime: document.documentElement.dataset.ndPopupRuntime || '',
         storage: document.documentElement.dataset.ndPopupStorage || '',
+        tabs: document.documentElement.dataset.ndPopupTabs || '',
         status: document.getElementById('status')?.textContent || ''
       })`)
       result.popupLoaded = state.status === 'ready'
       result.runtimeAvailable = state.runtime === 'ok'
       result.storageAvailable = state.storage === 'ok'
+      result.tabsQueryAvailable = state.tabs === 'ok'
     } finally {
       destroyView(view, hostWindow)
     }
