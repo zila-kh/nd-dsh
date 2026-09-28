@@ -38,6 +38,35 @@ export function StatusChip({ good, warn, neutral, children }: { good?: boolean |
   )
 }
 
+/** Shared on/off switch so every settings surface renders toggles the same way. */
+export function SettingsSwitch({ label, checked, disabled, onCheckedChange }: {
+  label: string
+  checked: boolean
+  disabled?: boolean
+  onCheckedChange(checked: boolean): void
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-label={label}
+      aria-checked={checked}
+      disabled={disabled}
+      className={cn(
+        'relative h-[20px] w-[34px] shrink-0 rounded-full border transition-colors',
+        checked ? 'border-primary bg-primary' : 'border-border-strong bg-secondary',
+        'disabled:pointer-events-none disabled:opacity-45',
+      )}
+      onClick={() => onCheckedChange(!checked)}
+    >
+      <span className={cn(
+        'absolute top-[2px] size-[14px] rounded-full bg-background shadow-sm transition-[left]',
+        checked ? 'left-[16px]' : 'left-[2px]',
+      )} />
+    </button>
+  )
+}
+
 export function SettingsButton({ active, className, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { active?: boolean | undefined }) {
   return (
     <button

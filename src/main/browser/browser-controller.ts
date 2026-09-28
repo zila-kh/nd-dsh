@@ -527,6 +527,10 @@ export class BrowserController {
     return this.downloads.cancel(downloadId)
   }
 
+  clearFinishedDownloads(): number {
+    return this.downloads.clearFinished()
+  }
+
   async snapshot(): Promise<unknown> {
     await this.ensureAgentReady()
     return this.agentBrowser.snapshot()

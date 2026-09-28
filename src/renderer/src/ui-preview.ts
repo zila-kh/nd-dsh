@@ -802,6 +802,7 @@ const desktopApi: DesktopApi = {
       return record
     },
     resolveApproval: async () => true,
+    clearFinishedDownloads: async () => 0,
     onChanged: browserPlatformEvents.on,
   },
   workspace: {

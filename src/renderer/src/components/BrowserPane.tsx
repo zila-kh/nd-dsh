@@ -4,6 +4,7 @@ import type { BrowserState } from '../../../shared/contracts'
 import { ArrowLeftIcon, ArrowRightIcon, CameraIcon, ContextIcon, ExternalIcon, PencilIcon, PuzzleIcon, ReloadIcon } from './Icons'
 import { BridgePill } from './bridge-pill'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
+import { SettingsSwitch } from './settings-primitives'
 import { cn } from '../lib/utils'
 import { useNativeViewOcclusion } from '../lib/use-native-view-occlusion'
 
@@ -12,6 +13,8 @@ interface BrowserPaneProps {
   state: BrowserState | null
   onSnapshot(result: string): void
   onError(message: string): void
+  /** Opens Settings → General → Browser, the canonical extension manager. */
+  onOpenSettings?(): void
 }
 
 const iconButtonClasses = cn(
@@ -26,7 +29,7 @@ const activeIconButtonClasses = cn(
   'disabled:pointer-events-none disabled:opacity-45 [&_svg]:size-[15px]',
 )
 
-export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneProps) {
+export function BrowserPane({ active, state, onSnapshot, onError, onOpenSettings }: BrowserPaneProps) {
   const occluded = useNativeViewOcclusion()
   const nativeViewVisible = active && !occluded
   const uiPreview = window.ndDshRuntimeMode === 'ui-preview'
@@ -339,46 +342,50 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
                       >
                         Open
                       </button>
-                    ) : (
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-label={`Enable ${extension.name}`}
-                        aria-checked={extension.enabled}
-                        className={cn(
-                          'relative h-[18px] w-[31px] shrink-0 rounded-full border transition-colors',
-                          extension.enabled ? 'border-primary bg-primary' : 'border-border-strong bg-secondary',
-                        )}
-                        onClick={() => void runBrowserAction(() =>
-                          window.ndDsh.browserPlatform.setExtensionEnabled(extension.id, !extension.enabled)
-                        )}
-                      >
-                        <span className={cn(
-                          'absolute top-[2px] size-[12px] rounded-full bg-background shadow-sm transition-[left]',
-                          extension.enabled ? 'left-[15px]' : 'left-[2px]',
-                        )} />
-                      </button>
-                    )}
+                    ) : null}
+                    <SettingsSwitch
+                      label={`Enable ${extension.name}`}
+                      checked={extension.enabled}
+                      onCheckedChange={(enabled) => {
+                        void runBrowserAction(() =>
+                          window.ndDsh.browserPlatform.setExtensionEnabled(extension.id, enabled)
+                        )
+                      }}
+                    />
                   </div>
                 ))
               )}
             </div>
-            <div className="flex items-center justify-between border-t border-border-soft px-3 py-2">
-              <span className="text-[8px] text-faint">
-                {platform?.developerMode ? 'Developer mode on' : 'Managed in Settings → Browser'}
+            <div className="flex items-center justify-between gap-2 border-t border-border-soft px-3 py-2">
+              <span className="min-w-0 truncate text-[8px] text-faint">
+                {platform?.developerMode ? 'Developer mode on' : ''}
               </span>
-              {platform?.developerMode ? (
-                <button
-                  type="button"
-                  className="rounded border border-border bg-secondary px-2 py-1 text-[8px] font-semibold text-soft hover:bg-accent"
-                  onClick={() => {
-                    setExtensionsMenuOpen(false)
-                    void runBrowserAction(() => window.ndDsh.browserPlatform.installExtension())
-                  }}
-                >
-                  Load unpacked
-                </button>
-              ) : null}
+              <div className="flex shrink-0 items-center gap-1.5">
+                {platform?.developerMode ? (
+                  <button
+                    type="button"
+                    className="rounded border border-border bg-secondary px-2 py-1 text-[8px] font-semibold text-soft hover:bg-accent"
+                    onClick={() => {
+                      setExtensionsMenuOpen(false)
+                      void runBrowserAction(() => window.ndDsh.browserPlatform.installExtension())
+                    }}
+                  >
+                    Load unpacked
+                  </button>
+                ) : null}
+                {onOpenSettings ? (
+                  <button
+                    type="button"
+                    className="rounded border border-border bg-secondary px-2 py-1 text-[8px] font-semibold text-soft hover:bg-accent"
+                    onClick={() => {
+                      setExtensionsMenuOpen(false)
+                      onOpenSettings()
+                    }}
+                  >
+                    Manage in Settings
+                  </button>
+                ) : null}
+              </div>
             </div>
           </PopoverContent>
         </Popover>

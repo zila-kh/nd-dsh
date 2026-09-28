@@ -233,6 +233,12 @@ export class BrowserPlatformService {
     return true
   }
 
+  clearFinishedDownloads(): number {
+    const removed = this.browser.clearFinishedDownloads()
+    if (removed > 0) void this.emit()
+    return removed
+  }
+
   async previewExtension(path: string): Promise<BrowserExtensionInstallPreview> {
     if (!this.extensions.developerMode()) {
       throw new Error('Enable Browser extension Developer mode before loading an unpacked extension')

@@ -256,6 +256,7 @@ export interface BrowserPlatformDesktopApi {
   cancelDownload(downloadId: string): Promise<boolean>
   openDownload(downloadId: string): Promise<boolean>
   revealDownload(downloadId: string): Promise<boolean>
+  clearFinishedDownloads(): Promise<number>
   installExtension(): Promise<BrowserExtensionRecord | null>
   setExtensionEnabled(extensionId: string, enabled: boolean): Promise<BrowserExtensionRecord[]>
   removeExtension(extensionId: string): Promise<BrowserExtensionRecord[]>
@@ -286,6 +287,7 @@ export const BROWSER_PLATFORM_IPC = {
   cancelDownload: 'browser-platform:cancel-download',
   openDownload: 'browser-platform:open-download',
   revealDownload: 'browser-platform:reveal-download',
+  clearFinishedDownloads: 'browser-platform:clear-finished-downloads',
   installExtension: 'browser-platform:install-extension',
   extensionEnabled: 'browser-platform:extension-enabled',
   removeExtension: 'browser-platform:remove-extension',

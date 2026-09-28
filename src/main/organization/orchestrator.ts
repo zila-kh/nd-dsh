@@ -15,6 +15,7 @@ import { TaskIntegrationConflictError, TaskWorktreeManager, type TaskWorktree } 
 import { formatVerificationEvidence, runArtifactVerification, runVerification, type VerificationProcessRuntime } from './verification-evidence.js'
 import { createCoreEvidenceCapturer, unavailableEvidenceCapturer, type WorkspaceEvidenceCapture, type WorkspaceEvidenceCapturer } from './worktree-evidence.js'
 import { RuntimeCapacityError, type ExecutionCoordinator, type RuntimeAvailability } from './execution-coordinator.js'
+import { normalizeProjectPlan } from './plan-normalizer.js'
 import { executePreparedFastPath, ND_FAST_PATH_ENGINE_ID, prepareFastPath, type FastPathAuditRecorder, type PreparedFastPath } from './fast-path.js'
 import { formatDecisionSupportForReviewer, formatDecisionSupportReceipt, type DecisionSupportReceipt } from './decision-support-contract.js'
 import type { DecisionSupportService } from './decision-support.js'
@@ -898,10 +899,11 @@ export class OrganizationOrchestrator {
 
   private async handlePlan(projectId: string, sessionId: string, text: string): Promise<void> {
     let plan: ProjectPlanInput | undefined
+    let adjustments: string[] = []
     try {
-      plan = extractTaggedJson<ProjectPlanInput>(text, 'nd-dsh-plan', ['goal', 'milestones'])
-      if (!plan) return
-      validatePlan(plan)
+      const extracted = extractTaggedJson<ProjectPlanInput>(text, 'nd-dsh-plan', ['goal', 'milestones'])
+      if (!extracted) return
+      ;({ plan, adjustments } = normalizeProjectPlan(extracted))
       this.structuredErrors.delete(sessionId)
     } catch (cause) {
       this.structuredErrors.set(sessionId, errorMessage(cause))
@@ -910,7 +912,7 @@ export class OrganizationOrchestrator {
     if (this.structuredInFlight.has(sessionId)) return
     this.structuredInFlight.add(sessionId)
     try {
-      await this.store.applyPlan(projectId, plan)
+      await this.store.applyPlan(projectId, plan, adjustments)
     } catch (cause) {
       this.structuredErrors.set(sessionId, `Failed to apply plan: ${errorMessage(cause)}`)
       throw cause
@@ -1549,44 +1551,6 @@ function extractTaggedJson<T>(text: string, tag: string, fallbackMarkers?: strin
 
   const sanitized = sanitizeJson(jsonObject)
   return JSON.parse(sanitized) as T
-}
-
-function validatePlan(plan: ProjectPlanInput): void {
-  if (!plan?.goal?.title?.trim() || !plan.goal.description?.trim() || !Array.isArray(plan.milestones) || plan.milestones.length === 0) throw new Error('Invalid ND-DSH project plan')
-  const tasks = plan.milestones.flatMap((milestone) => {
-    if (!milestone.title?.trim() || !Array.isArray(milestone.tasks) || milestone.tasks.length === 0) throw new Error('Every milestone needs a title and tasks')
-    return milestone.tasks
-  })
-  const titleMap = new Map<string, ProjectPlanInput['milestones'][number]['tasks'][number]>()
-  for (const task of tasks) {
-    const key = task.title.trim().toLowerCase()
-    if (!key) throw new Error('Every planned task needs a title')
-    if (titleMap.has(key)) throw new Error(`Duplicate planned task title: ${task.title}`)
-    titleMap.set(key, task)
-  }
-  const graph = new Map<string, string[]>()
-  for (const [key, task] of titleMap) {
-    const dependencies = (task.dependsOn ?? []).map((value) => value.trim().toLowerCase())
-    for (const dependency of dependencies) {
-      if (!titleMap.has(dependency)) throw new Error(`Unknown planned task dependency: ${dependency}`)
-      if (dependency === key) throw new Error(`Task cannot depend on itself: ${task.title}`)
-    }
-    if (task.workScopes !== undefined && (!Array.isArray(task.workScopes) || task.workScopes.some((value) => typeof value !== 'string' || !value.trim()))) throw new Error(`Invalid workScopes for planned task: ${task.title}`)
-    if (task.evidenceKind !== undefined && task.evidenceKind !== 'code' && task.evidenceKind !== 'artifact') throw new Error(`Invalid evidenceKind for planned task: ${task.title}`)
-    if (task.evidenceKind === 'artifact' && (!Array.isArray(task.artifactPaths) || task.artifactPaths.length === 0)) throw new Error(`Artifact planned task requires artifactPaths: ${task.title}`)
-    graph.set(key, dependencies)
-  }
-  const visiting = new Set<string>()
-  const visited = new Set<string>()
-  const visit = (key: string): void => {
-    if (visited.has(key)) return
-    if (visiting.has(key)) throw new Error(`Planned task dependency cycle detected at ${titleMap.get(key)?.title ?? key}`)
-    visiting.add(key)
-    for (const dependency of graph.get(key) ?? []) visit(dependency)
-    visiting.delete(key)
-    visited.add(key)
-  }
-  for (const key of graph.keys()) visit(key)
 }
 
 function delay(ms: number): Promise<void> {

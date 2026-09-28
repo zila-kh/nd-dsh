@@ -95,3 +95,6 @@ export const CrosshairIcon = (props: IconProps) => (
   </IconBase>
 )
 export const HomeIcon = (props: IconProps) => <IconBase {...props}><path d="m3 10.5 9-7 9 7" /><path d="M5.5 9.5V20h13V9.5" /><path d="M10 20v-5.5h4V20" /></IconBase>
+export const DownloadIcon = (props: IconProps) => (
+  <IconBase {...props}><path d="M12 3v11" /><path d="m7.5 10 4.5 4.5L16.5 10" /><path d="M4 17v2.25A1.75 1.75 0 0 0 5.75 21h12.5A1.75 1.75 0 0 0 20 19.25V17" /></IconBase>
+)

@@ -1690,6 +1690,11 @@ export default function App() {
                           state={browserState}
                           onSnapshot={() => notify('Browser snapshot captured from the live page.')}
                           onError={notify}
+                          onOpenSettings={() => {
+                            setSettingsTab('general')
+                            setSettingsSubTabs((current) => ({ ...current, general: 'browser' }))
+                            switchToWorkbench('settings')
+                          }}
                         />
                       </SurfaceErrorBoundary>
                     )}

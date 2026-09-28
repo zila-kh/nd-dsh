@@ -249,6 +249,7 @@ const api: DesktopApi = {
     cancelDownload: (downloadId: string) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.cancelDownload, downloadId) as Promise<boolean>,
     openDownload: (downloadId: string) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.openDownload, downloadId) as Promise<boolean>,
     revealDownload: (downloadId: string) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.revealDownload, downloadId) as Promise<boolean>,
+    clearFinishedDownloads: () => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.clearFinishedDownloads) as Promise<number>,
     installExtension: () => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.installExtension) as Promise<BrowserExtensionRecord | null>,
     setExtensionEnabled: (extensionId: string, enabled: boolean) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.extensionEnabled, extensionId, enabled) as Promise<BrowserExtensionRecord[]>,
     removeExtension: (extensionId: string) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.removeExtension, extensionId) as Promise<BrowserExtensionRecord[]>,

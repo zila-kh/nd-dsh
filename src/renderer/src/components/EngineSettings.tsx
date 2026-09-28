@@ -79,10 +79,6 @@ export function EngineSettings({ onError }: EngineSettingsProps) {
 
   return (
     <div className="min-h-0 overflow-auto px-[26px] pb-[42px] pt-1.5">
-      <TokenToolOptimizationSettings onError={onError} />
-      <TokenSaverSettings onError={onError} />
-      <GatewaySettings onError={onError} />
-
       <SettingsSection title="Coding engines">
         <div className="space-y-1.5">
           <SettingsRow>
@@ -167,6 +163,10 @@ export function EngineSettings({ onError }: EngineSettingsProps) {
           </SettingsRow>
         </div>
       </SettingsSection>
+
+      <TokenToolOptimizationSettings onError={onError} />
+      <TokenSaverSettings onError={onError} />
+      <GatewaySettings onError={onError} />
     </div>
   )
 }

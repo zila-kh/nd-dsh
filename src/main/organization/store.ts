@@ -83,7 +83,7 @@ export class OrganizationStore {
     return clone(this.value)
   }
 
-  async applyPlan(projectId: string, plan: ProjectPlanInput): Promise<void> {
+  async applyPlan(projectId: string, plan: ProjectPlanInput, adjustments: string[] = []): Promise<void> {
     await this.load()
     const project = this.project(projectId)
     const companyId = project.companyId
@@ -115,7 +115,10 @@ export class OrganizationStore {
     }
     for (const item of plan.memory ?? []) this.addMemory({ companyId, projectId, title: item.title, content: item.content, ...(item.tags ? { tags: item.tags } : {}), source: 'pm' })
     this.refreshProject(projectId)
-    this.activity(companyId, projectId, 'pm.plan', `AI PM created “${plan.goal.title}” with ${plan.milestones.length} milestone(s).`)
+    const repaired = adjustments.length
+      ? ` ND repaired ${adjustments.length} plan issue(s): ${adjustments.slice(0, 5).join(' ')}${adjustments.length > 5 ? ' …' : ''}`
+      : ''
+    this.activity(companyId, projectId, 'pm.plan', `AI PM created “${plan.goal.title}” with ${plan.milestones.length} milestone(s).${repaired}`)
     await this.save()
   }
 
@@ -675,7 +678,7 @@ export class OrganizationStore {
     const agent = input.assignedAgentId ? this.value.agents.find((item) => item.id === input.assignedAgentId) : this.pickAgent(input.companyId)
     if (agent?.teamId && !project.teamIds.includes(agent.teamId)) project.teamIds.push(agent.teamId)
     const now = Date.now()
-    this.value.tasks.push({ id: randomUUID(), companyId: input.companyId, projectId: input.projectId, title: clean(input.title), description: clean(input.description), acceptanceCriteria: input.acceptanceCriteria?.map(clean).filter(Boolean) ?? ['Requested outcome is implemented and verified.'], priority: input.priority ?? 'medium', status: 'backlog', dependsOn: input.dependsOn ?? [], ...(input.goalId ? { goalId: input.goalId } : {}), ...(input.milestoneId ? { milestoneId: input.milestoneId } : {}), ...(agent ? { assignedAgentId: agent.id } : {}), ...taskExecutionHints(input), createdAt: now, updatedAt: now })
+    this.value.tasks.push({ id: randomUUID(), companyId: input.companyId, projectId: input.projectId, title: clean(input.title), description: clean(input.description), acceptanceCriteria: input.acceptanceCriteria?.map(clean).filter(Boolean) ?? ['Requested outcome is implemented and verified.'], priority: input.priority ?? 'medium', status: 'backlog', dependsOn: input.dependsOn ?? [], ...(input.goalId ? { goalId: input.goalId } : {}), ...(input.milestoneId ? { milestoneId: input.milestoneId } : {}), ...(agent ? { assignedAgentId: agent.id } : {}), ...taskExecutionHints(input), ...(input.sourceScheduleId ? { sourceScheduleId: clean(input.sourceScheduleId) } : {}), createdAt: now, updatedAt: now })
     this.refreshProject(input.projectId)
   }
   private updateTask(id: string, patch: Extract<OrganizationMutation, { type: 'task.update' }>['patch']): void {

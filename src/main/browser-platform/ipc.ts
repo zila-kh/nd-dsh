@@ -43,6 +43,7 @@ export function registerBrowserPlatformIpc(
     service.openDownload(asString(downloadId, 'Download id', 512)))
   handle(BROWSER_PLATFORM_IPC.revealDownload, (downloadId) =>
     service.revealDownload(asString(downloadId, 'Download id', 512)))
+  handle(BROWSER_PLATFORM_IPC.clearFinishedDownloads, () => service.clearFinishedDownloads())
   handle(BROWSER_PLATFORM_IPC.installExtension, async () => {
     const result = await dialog.showOpenDialog(window, {
       title: 'Load unpacked browser extension',

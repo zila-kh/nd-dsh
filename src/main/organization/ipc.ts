@@ -19,6 +19,7 @@ import { OrganizationControlPlane, taskDispatchAvailability } from './control-pl
 import type { ExecutionCoordinator, RuntimePermit } from './execution-coordinator.js'
 import type { OrganizationOrchestrator } from './orchestrator.js'
 import { materializeOrganizationSignal } from './signal-materializer.js'
+import { runDueSchedules } from './schedule-runner.js'
 import { OrganizationStrategyPlane } from './strategy-plane.js'
 import type { OrganizationStore } from './store.js'
 
@@ -81,14 +82,14 @@ export function registerOrganizationIpc(
   }, 1_500)
   reconcileTimer.unref()
 
-  // Recurring company intent is only a wake-up mechanism. Every due tick still
-  // passes through OrganizationControlPlane.shouldRun() and the guarded
-  // orchestrator, so a timer never becomes an independent authority source.
+  // Recurring company work: every due tick passes OrganizationControlPlane.shouldRun()
+  // before it creates a task, and only the guarded orchestrator can start one, so
+  // a timer never becomes an independent authority source.
   let scheduleBusy = false
   const scheduleTimer = setInterval(() => {
     if (scheduleBusy) return
     scheduleBusy = true
-    void runDueSchedules(strategy, control, orchestrator)
+    void runDueSchedules({ strategy, control, store, orchestrator })
       .catch((error) => console.warn('Organization scheduled work failed:', error instanceof Error ? error.message : String(error)))
       .finally(() => { scheduleBusy = false })
   }, 15_000)
@@ -249,45 +250,6 @@ async function projectLatestStrategyMemory(
     content: `[${item.status.toUpperCase()} | ${item.confidence} | ${item.source}] ${item.content}${item.supersedesId ? `\nSupersedes strategy knowledge ${item.supersedesId}.` : ''}`,
     tags: ['company-brain', item.kind, item.status, ...item.tags].slice(0, 50),
   })
-}
-
-async function runDueSchedules(
-  strategy: OrganizationStrategyPlane,
-  control: OrganizationControlPlane,
-  orchestrator: OrganizationOrchestrator,
-): Promise<void> {
-  for (const candidate of await strategy.dueSchedules()) {
-    const schedule = await strategy.beginSchedule(candidate.id)
-    if (!schedule) continue
-    try {
-      const decision = await control.shouldRun(schedule.projectId, 'workflow.continue')
-      if (decision.route !== 'ready') {
-        await strategy.finishSchedule(schedule.id, 'skipped', decision.reason)
-        await strategy.mutate({
-          type: 'action.record', companyId: schedule.companyId, projectId: schedule.projectId,
-          action: 'workflow.continue', target: `schedule:${schedule.id}`, scope: schedule.projectId,
-          risk: 'low', externality: 'internal', destructiveLevel: 'none', decision: 'deny', reason: decision.reason,
-        })
-        continue
-      }
-      const receipt = await orchestrator.runNext(schedule.projectId, false)
-      const detail = receipt ? `Dispatched ${receipt.kind} run ${receipt.runId}.` : 'No runnable work was available.'
-      await strategy.finishSchedule(schedule.id, 'success', detail)
-      await strategy.mutate({
-        type: 'action.record', companyId: schedule.companyId, projectId: schedule.projectId,
-        action: 'workflow.continue', target: `schedule:${schedule.id}`, scope: schedule.projectId,
-        risk: 'low', externality: 'internal', destructiveLevel: 'none', decision: 'allow', reason: 'Scheduled company continuation passed current ND control gates.', result: detail,
-      })
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
-      await strategy.finishSchedule(schedule.id, 'failed', detail)
-      await strategy.mutate({
-        type: 'action.record', companyId: schedule.companyId, projectId: schedule.projectId,
-        action: 'workflow.continue', target: `schedule:${schedule.id}`, scope: schedule.projectId,
-        risk: 'low', externality: 'internal', destructiveLevel: 'none', decision: 'deny', reason: 'Scheduled continuation failed closed.', result: detail,
-      })
-    }
-  }
 }
 
 function guardOrchestrator(
