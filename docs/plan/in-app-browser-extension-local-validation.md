@@ -32,6 +32,7 @@ The browser runtime result must show:
 - `capabilities.extensions.mv3ActionPopup.runtimeAvailable === true`
 - `capabilities.extensions.mv3ActionPopup.storageAvailable === true`
 - `capabilities.extensions.mv3ActionPopup.tabsQueryAvailable === true`
+- `capabilities.extensions.mv3ActionPopup.tabsReloadAvailable === true`
 - `capabilities.extensions.mv3ActionPopup.activeTabMatchesHost === true`
 - `capabilities.extensions.mv3ActionPopup.removed === true`
 
