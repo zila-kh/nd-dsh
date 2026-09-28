@@ -65,23 +65,16 @@ export function registerBrowserPlatformIpc(
     const id = asString(catalogId, 'Browser extension catalog id', 512)
     const item = (await service.state()).extensionCatalog.find((candidate) => candidate.id === id)
     if (!item) throw new Error('Unknown built-in browser extension catalog item')
-
-    let path: string | undefined
-    if (!item.bundleAvailable) {
-      if (item.packagePolicy === 'bundled') {
-        throw new Error(`${item.name} is missing from this ND build.`)
-      }
-      const result = await dialog.showOpenDialog(window, {
-        title: `Load unpacked ${item.name} browser extension package`,
-        properties: ['openDirectory'],
-      })
-      path = result.filePaths[0]
-      if (result.canceled || !path) return null
+    if (item.packagePolicy === 'reference-only') {
+      throw new Error(
+        `${item.name} is reference-only. Use Developer mode → Load unpacked to test a third-party folder without publisher verification.`,
+      )
     }
+    if (!item.bundleAvailable) throw new Error(`${item.name} is missing from this ND build.`)
 
-    const preview = await service.previewCatalogExtension(id, path)
+    const preview = await service.previewCatalogExtension(id)
     if (!await confirmExtensionInstall(window, preview, `${item.name} · ${item.publisher}`)) return null
-    return service.installCatalogExtension(id, path)
+    return service.installCatalogExtension(id)
   })
   handle(BROWSER_PLATFORM_IPC.openCatalogExtension, (catalogId) =>
     service.openCatalogExtension(asString(catalogId, 'Browser extension catalog id', 512)))
