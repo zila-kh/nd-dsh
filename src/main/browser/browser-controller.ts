@@ -160,13 +160,20 @@ export class BrowserController {
     view.webContents.on('render-process-gone', () => {
       if (this.extensionPopup?.view === view) this.closeExtensionPopup()
     })
+    view.webContents.on('blur', () => {
+      if (this.extensionPopup?.view === view) this.closeExtensionPopup()
+    })
 
     this.window.contentView.addChildView(view)
     this.extensionPopup = { extensionId: cleanId, view }
     this.syncExtensionPopupBounds()
-    view.setVisible(this.visible)
+    view.setVisible(false)
     try {
       await view.webContents.loadURL(popupUrl.toString())
+      if (this.extensionPopup?.view === view && this.visible) {
+        view.setVisible(true)
+        view.webContents.focus()
+      }
     } catch (cause) {
       this.closeExtensionPopup()
       throw cause
