@@ -168,6 +168,7 @@ export interface BrowserExtensionRecord {
   publisher?: string | undefined
   actionTitle?: string | undefined
   actionPopup?: string | undefined
+  compatibilityNotes?: string[] | undefined
 }
 
 export interface BrowserExtensionCatalogItem {
