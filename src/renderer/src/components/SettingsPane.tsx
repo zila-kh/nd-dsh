@@ -513,7 +513,7 @@ export function SettingsPane({
 
                             <div className="pt-1">
                               <strong className="block text-[10px] font-semibold text-strong">Built-in catalog</strong>
-                              <span className="text-[9px] text-faint">Catalog items run in the ND browser profile. ND can use a bundled package or an authorized unpacked directory you choose.</span>
+                              <span className="text-[9px] text-faint">First-party items are bundled with ND. Verified third-party references can be tested from an authorized unpacked package without launching external Chrome.</span>
                             </div>
                             {(browserPlatform?.extensionCatalog ?? [])
                               .filter((item) => {
@@ -530,20 +530,29 @@ export function SettingsPane({
                                     {item.installed ? (
                                       <StatusChip good>{item.installedSource === 'unpacked' ? 'Loaded package' : 'Installed'}</StatusChip>
                                     ) : (
-                                      <SettingsButton onClick={() => {
-                                        void window.ndDsh.browserPlatform.installCatalogExtension(item.id)
-                                          .catch((cause) => onError(errorMessage(cause)))
-                                      }}>
-                                        {item.bundleAvailable ? 'Install' : 'Load package…'}
+                                      <SettingsButton
+                                        disabled={!item.bundleAvailable && item.packagePolicy === 'bundled'}
+                                        onClick={() => {
+                                          void window.ndDsh.browserPlatform.installCatalogExtension(item.id)
+                                            .catch((cause) => onError(errorMessage(cause)))
+                                        }}
+                                      >
+                                        {item.bundleAvailable
+                                          ? 'Install'
+                                          : item.packagePolicy === 'verified-chrome-id'
+                                            ? 'Load package…'
+                                            : 'Unavailable'}
                                       </SettingsButton>
                                     )}
-                                    <SettingsButton onClick={() => {
-                                      void window.ndDsh.browserPlatform.openCatalogExtension(item.id)
-                                        .then(() => onOpenBrowser())
-                                        .catch((cause) => onError(errorMessage(cause)))
-                                    }}>
-                                      View in ND browser
-                                    </SettingsButton>
+                                    {item.storeUrl ? (
+                                      <SettingsButton onClick={() => {
+                                        void window.ndDsh.browserPlatform.openCatalogExtension(item.id)
+                                          .then(() => onOpenBrowser())
+                                          .catch((cause) => onError(errorMessage(cause)))
+                                      }}>
+                                        View in ND browser
+                                      </SettingsButton>
+                                    ) : null}
                                   </div>
                                 </SettingsRow>
                               ))}
