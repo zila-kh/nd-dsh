@@ -181,6 +181,7 @@ export interface BrowserExtensionCatalogItem {
   bundleAvailable: boolean
   installed: boolean
   installedExtensionId?: string | undefined
+  installedSource?: BrowserExtensionSource | undefined
   note?: string | undefined
 }
 
