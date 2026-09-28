@@ -1,5 +1,5 @@
 import 'dotenv/config'
-import { app, BrowserWindow, crashReporter, dialog, globalShortcut, Menu, type MenuItemConstructorOptions } from 'electron'
+import { app, BrowserWindow, crashReporter, dialog, globalShortcut, Menu, screen, type MenuItemConstructorOptions } from 'electron'
 import { createServer } from 'node:net'
 import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
@@ -22,6 +22,7 @@ import { DEFAULT_BROWSER_URL } from './browser/browser-url.js'
 import { CapabilityAssignmentStore } from './capabilities/capability-assignment-store.js'
 import { CapabilityRegistry } from './capabilities/capability-registry.js'
 import { CapabilityStatusStore } from './capabilities/capability-status-store.js'
+import { createEngineCliSetupAdapters } from './capabilities/engine-cli-setup.js'
 import { createHarnessSourceSetupAdapters } from './capabilities/harness-runtime-setup.js'
 import { ExternalElementStage, RecentPickStore } from './capture/external-inspect.js'
 import { CoreClient } from './core/core-client.js'
@@ -194,11 +195,15 @@ async function createWindow(cdpPort: number): Promise<void> {
   const usageLedger = new UsageLedger(join(userData, 'usage-ledger.jsonl'))
   const isMac = process.platform === 'darwin'
 
+  // On displays narrower than the intended 1640×980 the window would hang off
+  // the screen and hide the right-hand surfaces. Clamp the default and the
+  // minimum to the primary work area so the whole shell stays reachable.
+  const { workArea } = screen.getPrimaryDisplay()
   const window = new BrowserWindow({
-    width: 1640,
-    height: 980,
-    minWidth: 1180,
-    minHeight: 720,
+    width: Math.min(1640, workArea.width),
+    height: Math.min(980, workArea.height),
+    minWidth: Math.min(1180, workArea.width),
+    minHeight: Math.min(720, workArea.height),
     show: false,
     backgroundColor: theme.windowBackgroundColor(),
     autoHideMenuBar: true,
@@ -227,7 +232,9 @@ async function createWindow(cdpPort: number): Promise<void> {
   activeTerminalManager = terminalManager
 
   const workspaces = new WorkspaceRegistry(join(userData, 'workspaces.json'))
-  await workspaces.ensureActive(workspace.state().root)
+  // Only a folder the user already saved becomes the active entry. The boot root
+  // itself is never pinned, so ND never presents an implicit default project.
+  await workspaces.activateSaved(workspace.state().root)
 
   // The window's own origin is reserved: neither the project runtime nor a
   // browser-pane navigation may load ND's renderer into ND's browser view.
@@ -347,7 +354,10 @@ async function createWindow(cdpPort: number): Promise<void> {
     list: () => workerAssignableCodingEngines(engines.list()),
     assign: (agentId, engineId) => engines.assign(agentId, engineId),
   }
-  const capabilitySetupAdapters = createHarnessSourceSetupAdapters()
+  // Approved-package setup for engine CLIs published on npm (Pi, Claude Code)
+  // joins the harness source-runtime adapters; each engine id only gains a
+  // setup block while its binary probe fails.
+  const capabilitySetupAdapters = { ...createHarnessSourceSetupAdapters(), ...createEngineCliSetupAdapters() }
   const capabilities = new CapabilityRegistry(capabilityAssignments, workerEngines, capabilityStatuses, {
     [ND_ORG_MEMORY_ID]: async () => { await organizationStore.state() },
     [ND_WORKSPACE_CONTEXT_ID]: async () => {

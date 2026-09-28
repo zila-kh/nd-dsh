@@ -78,7 +78,9 @@ interface IpcDependencies {
 
 type Handler = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown | Promise<unknown>
 
-const GATEWAY_METHOD_PATTERN = /^[a-z]+\.[a-zA-Z][a-zA-Z0-9]*$/
+// The namespace segment is camelCase upstream too (agentPresets.list,
+// settings.update), not lowercase-only.
+const GATEWAY_METHOD_PATTERN = /^[a-z][a-zA-Z0-9]*\.[a-zA-Z][a-zA-Z0-9]*$/
 const GATEWAY_METHOD_MAX_LENGTH = 64
 
 const APP_INSPECT_PROMPT = [

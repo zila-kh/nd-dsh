@@ -50,10 +50,7 @@ if (!flags.has('--skip-install')) {
 const nativeSystemScript = join(harnessRoot, 'native', 'system', 'scripts', 'build.ts')
 if (existsSync(nativeSystemScript)) {
   console.log('\nBuilding the Harness native system addons...')
-  const tsxBin = join(harnessRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'tsx.cmd' : 'tsx')
-  if (existsSync(tsxBin)) {
-    await run(tsxBin, [nativeSystemScript], harnessRoot, harnessEnv)
-  }
+  await run('corepack', ['pnpm', '--dir', harnessRoot, 'run', 'build:native-system'], root, harnessEnv)
 }
 
 console.log('\nBuilding the Harness host face...')

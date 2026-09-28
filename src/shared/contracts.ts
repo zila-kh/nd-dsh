@@ -122,6 +122,14 @@ export type WorkspaceBinding = 'standalone' | 'project' | 'unlinked' | 'missing'
 export interface WorkspaceState {
   root: string
   name: string
+  /**
+   * True only when this root came from an explicit selection: the folder picker,
+   * a saved/open workspace, or the folder restored for a selected organization
+   * project. The boot fallback (`process.cwd()` / `ND_DSH_WORKSPACE`) is never a
+   * selection, so product surfaces must not present an unselected root as a
+   * project.
+   */
+  selectedByUser?: boolean
   binding?: WorkspaceBinding
   companyId?: string
   companyName?: string
@@ -290,6 +298,16 @@ export interface CodingEngineCapabilities {
   persistentSessions: boolean
 }
 
+export type CodingEngineInstallPlatform = 'win32' | 'darwin' | 'linux'
+
+/** End-user install guidance for a third-party CLI engine; ND never installs it. */
+export interface CodingEngineInstallHelp {
+  /** Official install/download page; absolute https. */
+  url?: string
+  /** Copyable official command; a plain string is platform-agnostic. */
+  command?: string | Partial<Record<CodingEngineInstallPlatform, string>>
+}
+
 export interface CodingEngineDescriptor {
   id: string
   name: string
@@ -300,6 +318,7 @@ export interface CodingEngineDescriptor {
   capabilities: CodingEngineCapabilities
   /** Engine-owned execution guidance injected into organization worker prompts. */
   workerInstructions?: string
+  installHelp?: CodingEngineInstallHelp
 }
 
 /** A model selectable for an engine's native configuration; empty name means display the id. */

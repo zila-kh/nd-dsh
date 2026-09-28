@@ -11,6 +11,7 @@ import {
   ZCODE_CLI_ENGINE_ID,
   buildCodingEngineCatalog,
   chatGptWebEngineDescriptor,
+  codingEngineInstallCommand,
   workerAssignableCodingEngines,
   type CodingEngineAvailability,
 } from '../src/shared/coding-engines.js'
@@ -196,6 +197,55 @@ describe('coding engine catalog', () => {
     for (const engine of engines) {
       expect(engine.unavailableReason ?? '').not.toMatch(/pnpm |npm install|product bootstrap|Run pnpm/i)
     }
+  })
+
+  it('offers end-user install guidance for the optional CLIs without putting commands in reasons', () => {
+    const engines = buildCodingEngineCatalog(availability({
+      harnessReady: false,
+      codexReady: false,
+      codexCliReady: false,
+      antigravityReady: false,
+      zcodeCliReady: false,
+      piCodingReady: false,
+      cursorCliReady: false,
+      claudeCodeCliReady: false,
+    }))
+    const antigravity = engines.find((engine) => engine.id === ANTIGRAVITY_ENGINE_ID)!
+    const zcode = engines.find((engine) => engine.id === ZCODE_CLI_ENGINE_ID)!
+    const pi = engines.find((engine) => engine.id === PI_CODING_ENGINE_ID)!
+    const cursor = engines.find((engine) => engine.id === CURSOR_CLI_ENGINE_ID)!
+    const claude = engines.find((engine) => engine.id === CLAUDE_CODE_CLI_ENGINE_ID)!
+
+    expect(antigravity.installHelp?.url).toBe('https://antigravity.google')
+    expect(cursor.installHelp?.url).toBe('https://cursor.com/docs/cli/installation')
+    expect(claude.installHelp?.url).toBe('https://claude.com/product/claude-code')
+    expect(pi.installHelp?.command).toBe('npm install -g @mariozechner/pi-coding-agent')
+    expect(claude.installHelp?.command).toBe('npm install -g @anthropic-ai/claude-code')
+    // No official ZCode download source ships with ND, so its card offers Re-check only.
+    expect(zcode.installHelp).toBeUndefined()
+    // ND installs its own runtime from Settings, so the harness carries no third-party guidance.
+    expect(engines.find((engine) => engine.id === ND_HARNESS_ENGINE_ID)?.installHelp).toBeUndefined()
+
+    for (const engine of engines) {
+      const url = engine.installHelp?.url
+      if (url === undefined) continue
+      expect(new URL(url).protocol).toBe('https:')
+    }
+
+    // The copyable command is the only place a shell command may appear.
+    for (const engine of [pi, claude]) {
+      const command = codingEngineInstallCommand(engine.installHelp, 'win32')!
+      expect(command).toMatch(/^npm install -g /)
+      expect(engine.unavailableReason ?? '').not.toContain(command)
+    }
+  })
+
+  it('resolves the copyable install command per platform', () => {
+    expect(codingEngineInstallCommand(undefined, 'win32')).toBeUndefined()
+    expect(codingEngineInstallCommand({}, 'win32')).toBeUndefined()
+    expect(codingEngineInstallCommand({ command: 'npm install -g anywhere' }, 'linux')).toBe('npm install -g anywhere')
+    expect(codingEngineInstallCommand({ command: { win32: 'winget install X', darwin: 'brew install X' } }, 'darwin')).toBe('brew install X')
+    expect(codingEngineInstallCommand({ command: { win32: 'winget install X' } }, 'linux')).toBeUndefined()
   })
 
   it('keeps the direct Codex CLI available independently from the ND runtime bootstrap', () => {

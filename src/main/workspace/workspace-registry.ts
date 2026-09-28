@@ -45,28 +45,17 @@ export class WorkspaceRegistry {
   }
 
   /**
-   * Startup migration: make sure the root the app booted with is pinned and
-   * active so the sidebar is never empty after upgrading from the
-   * single-workspace build.
+   * Startup repair: point the active marker at the saved entry for the root the
+   * app booted with, when the user saved that folder on an earlier run.
+   *
+   * The boot root is deliberately never pinned here. ND must not invent a
+   * default project, so this list — and every surface behind it — only ever
+   * holds folders the user opened or added themselves.
    */
-  async ensureActive(root: string): Promise<WorkspaceRegistryView> {
+  async activateSaved(root: string): Promise<WorkspaceRegistryView> {
     await this.load()
     const existing = this.findByRoot(root)
-    if (!existing) {
-      const entry: SavedWorkspace = {
-        id: randomUUID(),
-        root: resolve(root),
-        name: basename(root) || root,
-        addedAt: Date.now(),
-        lastOpenedAt: Date.now(),
-      }
-      this.items.unshift(entry)
-      this.evictOverflow()
-      this.activeId = entry.id
-      await this.save()
-      return this.view()
-    }
-    if (this.activeId !== existing.id) {
+    if (existing && this.activeId !== existing.id) {
       this.activeId = existing.id
       await this.save()
     }

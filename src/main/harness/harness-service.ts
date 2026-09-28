@@ -804,19 +804,27 @@ function providerRequiresCredential(provider: { baseUrl: string } | undefined): 
   }
 }
 
-/** Reads the harness package version from its package.json (cached after first read). */
+/** Reads the harness version of the runtime ND boots (cached after first read). */
 let _harnessVersionCache: string | undefined | null = null
 function readHarnessVersion(): string | undefined {
   if (_harnessVersionCache !== null) return _harnessVersionCache
+  // A published runtime is a managed install whose root manifest is ND's own
+  // (`nd-dsh-managed-runtime`, no version); its DSH version lives on the
+  // installed package instead. A source checkout has no installed package, so
+  // its root manifest carries the version.
+  _harnessVersionCache = readPackageVersion(join(harnessRoot(), 'node_modules', '@deepseek-ai', 'dsh', 'package.json'))
+    ?? readPackageVersion(join(harnessRoot(), 'package.json'))
+  return _harnessVersionCache
+}
+
+function readPackageVersion(manifestPath: string): string | undefined {
   try {
-    const pkgPath = join(harnessRoot(), 'package.json')
-    if (!existsSync(pkgPath)) { _harnessVersionCache = undefined; return undefined }
-    const parsed = JSON.parse(readFileSync(pkgPath, 'utf8')) as { version?: unknown }
-    _harnessVersionCache = typeof parsed.version === 'string' ? parsed.version : undefined
+    if (!existsSync(manifestPath)) return undefined
+    const parsed = JSON.parse(readFileSync(manifestPath, 'utf8')) as { version?: unknown }
+    return typeof parsed.version === 'string' && parsed.version.trim() ? parsed.version.trim() : undefined
   } catch {
-    _harnessVersionCache = undefined
+    return undefined
   }
-  return _harnessVersionCache ?? undefined
 }
 
 

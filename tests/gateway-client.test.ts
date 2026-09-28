@@ -41,9 +41,15 @@ describe('GatewayClient.rpc', () => {
     try {
       expect((await client.rpc('session.list')).ok).toBe(true)
       expect((await client.rpc('session.models')).ok).toBe(true)
+      // Zero-parameter and named-parameter remotes reject the request envelope,
+      // so their args are shaped individually.
+      expect((await client.rpc('agentPresets.list')).ok).toBe(true)
+      expect((await client.rpc('settings.update', { ns: 'agent-presets', patch: { default: 'code' } })).ok).toBe(true)
       expect(requests).toEqual([
         { url: '/api/session/list', method: 'session/list', payload: { args: { _request: {} } } },
         { url: '/api/session/modelCatalog', method: 'session/modelCatalog', payload: { args: {} } },
+        { url: '/api/agentPresets/list', method: 'agentPresets/list', payload: { args: {} } },
+        { url: '/api/settings/update', method: 'settings/update', payload: { args: { ns: 'agent-presets', patch: { default: 'code' } } } },
       ])
     } finally {
       client.close()

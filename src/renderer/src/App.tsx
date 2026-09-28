@@ -77,6 +77,25 @@ const CHAT_MIN_PX = 580
 const CHAT_DEFAULT_PX = 640
 const CHAT_MIN_PX_SIDEBAR_COLLAPSED = 420
 const WORKSPACE_MIN_PX = 480
+const CHAT_SEPARATOR_PX = 5
+/**
+ * Width the workbench needs to render its three-pane surfaces (Design) at the
+ * minimums they declare: 208 + 228 for the side panes plus the center's 40%.
+ */
+const WORKSPACE_PREFERRED_PX = 744
+
+/**
+ * The window opens narrower than the 1640 px default on small displays. The
+ * chat column then starts smaller — with its sessions sidebar collapsed once it
+ * would fall under its expanded minimum — so the workbench keeps enough width
+ * for its own pane minimums. At desktop widths this is the shipped default.
+ * Dragging the separator still overrides the width.
+ */
+function initialChatLayout(): { width: number; sessionsCollapsed: boolean } {
+  const forWorkbench = window.innerWidth - CHAT_SEPARATOR_PX - WORKSPACE_PREFERRED_PX
+  const width = Math.max(CHAT_MIN_PX_SIDEBAR_COLLAPSED, Math.min(CHAT_DEFAULT_PX, forWorkbench))
+  return { width, sessionsCollapsed: width < CHAT_MIN_PX }
+}
 
 function viewFromHash(): ProductView {
   const route = window.location.hash.replace(/^#\/?/, '').split(/[/?]/)[0]
@@ -160,10 +179,12 @@ export default function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(settingsTabFromLocation)
   const [settingsSubTabs, setSettingsSubTabs] = useState<SettingsSubTabs>(settingsSubTabsFromLocation)
   const [agentPane, setAgentPane] = useState<AgentPane>('files')
-  const [sessionsCollapsed, setSessionsCollapsed] = useState(false)
+  const [initialChat] = useState(initialChatLayout)
+  const [sessionsCollapsed, setSessionsCollapsed] = useState(initialChat.sessionsCollapsed)
   const [gitEditable, setGitEditable] = useState(false)
   const [workspaceCollapsed, setWorkspaceCollapsed] = useState(false)
   const [externalPrompt, setExternalPrompt] = useState<{ id: string; text: string } | null>(null)
+  const [sessionOpenRequest, setSessionOpenRequest] = useState<{ id: string; sessionId: string } | null>(null)
   const [theme, setTheme] = useState<ThemeState | null>(null)
   const [appInspectCountdown, setAppInspectCountdown] = useState<number | null>(null)
   const [appInspectInFlight, setAppInspectInFlight] = useState(false)
@@ -688,6 +709,13 @@ export default function App() {
     setActiveDiff(null)
   }
 
+  /** Opens the folder picker from the unselected sidebar/Explorer empty states. */
+  const openWorkspaceFolder = (): void => {
+    void window.ndDsh.workspace.pick()
+      .then((next) => changeWorkspace(next))
+      .catch((cause) => notify(errorMessage(cause)))
+  }
+
   const openLink = async (url: string): Promise<void> => {
     try {
       switchToWorkbench('agent')
@@ -742,6 +770,12 @@ export default function App() {
     switchToWorkbench('agent')
   }
 
+  /** Opens an existing session in the Agent workbench from another surface. */
+  const openSession = (sessionId: string): void => {
+    setSessionOpenRequest({ id: crypto.randomUUID(), sessionId })
+    switchToWorkbench('agent')
+  }
+
   const company = orgState?.companies.find((item) => item.id === orgState.activeCompanyId) ?? orgState?.companies[0] ?? null
   const companyProjects = orgState && company ? orgState.projects.filter((item) => item.companyId === company.id) : []
   const companyRemovalTarget = useMemo(() => {
@@ -768,11 +802,20 @@ export default function App() {
     return map
   }, [orgState])
 
-  const headerWorkspaceLabel = orgState && company
-    ? (project ? (workspace?.projectName ?? project.name ?? workspace?.name ?? 'No workspace') : 'No project')
-    : (workspace?.projectName ?? workspace?.name ?? 'No workspace')
+  // The boot fallback root is a runtime cwd, never a project: only a folder the
+  // user opened — or the workspace of a selected organization project — may be
+  // presented as one.
+  const workspaceSelected = workspace?.selectedByUser === true
 
-  const showGitControls = workspaceProfile === 'coding' && Boolean(
+  // An unselected boot root is a runtime cwd, not a project: the title bar stays
+  // neutral until the user opens a folder or selects an organization project.
+  const headerWorkspaceLabel = !workspaceSelected
+    ? 'No project'
+    : orgState && company
+      ? (project ? (workspace?.projectName ?? project.name ?? workspace?.name ?? 'No workspace') : 'No project')
+      : (workspace?.projectName ?? workspace?.name ?? 'No workspace')
+
+  const showGitControls = workspaceProfile === 'coding' && workspaceSelected && Boolean(
     workspace?.root && (!orgState || (project && (!workspace.projectId || workspace.projectId === project.id)))
   )
 
@@ -1518,7 +1561,7 @@ export default function App() {
           <>
             <div className={cn('h-full w-full', view === 'settings' ? 'hidden' : 'block')}>
               <Group orientation="horizontal" className="h-full w-full">
-            <Panel className="flex min-w-0 flex-col overflow-hidden" defaultSize={CHAT_DEFAULT_PX} minSize={sessionsCollapsed ? CHAT_MIN_PX_SIDEBAR_COLLAPSED : CHAT_MIN_PX}>
+            <Panel className="flex min-w-0 flex-col overflow-hidden" defaultSize={initialChat.width} minSize={sessionsCollapsed ? CHAT_MIN_PX_SIDEBAR_COLLAPSED : CHAT_MIN_PX}>
               <SurfaceErrorBoundary label="Chat" resetKey={workspace?.root ?? 'workspace-loading'} onError={notify}>
                 <ChatPanel
                   key={workspace?.root ?? 'workspace-loading'}
@@ -1526,6 +1569,8 @@ export default function App() {
                   workspaceRoot={workspace?.root}
                   onGitEditableChange={setGitEditable}
                   {...(workspace?.projectName || workspace?.name ? { workspaceName: workspace.projectName ?? workspace.name } : {})}
+                  workspaceSelected={workspaceSelected}
+                  onOpenWorkspace={openWorkspaceFolder}
                   sessionProjectScope={{ activeProjectId: project?.id, sessionProjects: runSessionProjects }}
                   {...(companyProjects.length ? {
                     projects: companyProjects.map((item) => ({
@@ -1543,6 +1588,8 @@ export default function App() {
                   onOpenLink={(url) => void openLink(url)}
                   externalPrompt={externalPrompt}
                   onExternalPromptConsumed={() => setExternalPrompt(null)}
+                  sessionOpenRequest={sessionOpenRequest}
+                  onSessionOpenConsumed={() => setSessionOpenRequest(null)}
                   elementAttachmentVersion={elementAttachmentVersion}
                 />
               </SurfaceErrorBoundary>
@@ -1567,10 +1614,7 @@ export default function App() {
                       onCopyCapture={(captureId) => runHomeCaptureAction('capture-copy', captureId)}
                       onExportCapture={(captureId) => runHomeCaptureAction('capture-export', captureId)}
                       onAskWithCapture={askWithCapture}
-                      onOpenChat={(sessionId) => {
-                        switchToWorkbench('agent')
-                        void sessionId
-                      }}
+                      onOpenChat={openSession}
                       onStartChat={(prompt) => startContextChat(prompt?.trim() || 'Hello ND — this is my personal space.', { kind: 'personal' })}
                     />
                   ) : null}
@@ -1652,6 +1696,7 @@ export default function App() {
                           <SurfaceErrorBoundary label="Files" resetKey={workspace?.root ?? ''} onError={notify}>
                             <Explorer
                               workspace={workspace}
+                              workspaceSelected={workspaceSelected}
                               selectedPath={selectedFile?.relativePath}
                               onWorkspaceChanged={changeWorkspace}
                               onOpenFile={(path) => void openFile(path)}
@@ -1666,7 +1711,11 @@ export default function App() {
                         <BrowserPane
                           active={view === 'agent'}
                           state={browserState}
-                          onSnapshot={() => notify('Browser snapshot captured from the live page.')}
+                          onSnapshot={(result) => {
+                            navigator.clipboard.writeText(result)
+                              .then(() => notify('Browser snapshot copied to the clipboard.'))
+                              .catch(() => notify('Browser snapshot captured, but copying to the clipboard failed.'))
+                          }}
                           onError={notify}
                         />
                       </SurfaceErrorBoundary>
@@ -1680,11 +1729,13 @@ export default function App() {
                   <DesignView
                     active={view === 'design'}
                     workspace={workspace}
+                    workspaceSelected={workspaceSelected}
                     browser={browserState}
                     harness={harnessStatus}
                     onWorkspaceChanged={changeWorkspace}
                     onAskAgent={askAgent}
                     onError={notify}
+                    onNotify={notify}
                   />
                 </SurfaceErrorBoundary>
               </section>
@@ -1715,6 +1766,7 @@ export default function App() {
                   onSelectSubTab={(subTab) => setSettingsSubTabs((current) => ({ ...current, general: subTab }))}
                   capabilitySubTab={settingsSubTabs.capabilities}
                   onSelectCapabilitySubTab={(subTab) => setSettingsSubTabs((current) => ({ ...current, capabilities: subTab }))}
+                  onOpenSession={openSession}
                   extensionsExtra={ndExtensions ? (
                     <ExtensionPackagesCard
                       state={ndExtensions}
