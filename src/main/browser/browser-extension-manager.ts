@@ -94,7 +94,10 @@ export class BrowserExtensionManager {
         bundleAvailable: bundledExtensionCandidates(item.id)
           .some((candidate) => existsSync(resolve(candidate, 'manifest.json'))),
         installed: Boolean(installed),
-        ...(installed ? { installedExtensionId: installed.id } : {}),
+        ...(installed ? {
+          installedExtensionId: installed.id,
+          ...(installed.source ? { installedSource: installed.source } : {}),
+        } : {}),
       }
     })
   }
