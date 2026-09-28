@@ -1,0 +1,34 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ND Browser Tools</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { margin: 0; min-width: 300px; background: Canvas; color: CanvasText; }
+    main { padding: 14px; display: grid; gap: 10px; }
+    h1 { margin: 0; font-size: 14px; }
+    .muted { opacity: .68; font-size: 11px; }
+    .card { border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); border-radius: 9px; padding: 10px; display: grid; gap: 4px; }
+    #title, #url { overflow-wrap: anywhere; }
+    button { border: 1px solid color-mix(in srgb, CanvasText 20%, transparent); border-radius: 7px; padding: 7px 10px; background: ButtonFace; color: ButtonText; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: default; }
+  </style>
+</head>
+<body>
+  <main>
+    <div>
+      <h1>ND Browser Tools</h1>
+      <div class="muted">Running inside the ND built-in browser</div>
+    </div>
+    <div class="card">
+      <strong id="title">Reading active tab…</strong>
+      <span id="url" class="muted"></span>
+    </div>
+    <button id="reload" type="button" disabled>Reload active tab</button>
+    <div id="status" class="muted">Extension runtime starting…</div>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>
