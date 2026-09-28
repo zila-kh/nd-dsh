@@ -163,6 +163,7 @@ export interface BrowserExtensionRecord {
   error?: string | undefined
   installedAt: number
   source?: BrowserExtensionSource | undefined
+  catalogId?: string | undefined
   storeId?: string | undefined
   publisher?: string | undefined
   actionTitle?: string | undefined
