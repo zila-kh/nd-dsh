@@ -177,6 +177,7 @@ export interface BrowserExtensionCatalogItem {
   storeId: string
   storeUrl: string
   compatibility: 'experimental' | 'limited'
+  bundleAvailable: boolean
   installed: boolean
   installedExtensionId?: string | undefined
   note?: string | undefined
