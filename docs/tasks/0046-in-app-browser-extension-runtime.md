@@ -45,6 +45,7 @@ Automated runtime evidence now includes an MV3 action-popup fixture that verifie
 - `chrome-extension://` popup page load in an ND-owned `WebContentsView`;
 - `chrome.runtime` availability;
 - `chrome.storage.local` availability;
+- partial `chrome.tabs.query({ active: true })` availability from the popup;
 - clean extension unload.
 
 Required before merge:
