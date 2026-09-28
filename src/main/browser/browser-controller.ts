@@ -136,7 +136,7 @@ export class BrowserController {
     this.closeExtensionPopup()
     const view = new WebContentsView({
       webPreferences: {
-        partition: BROWSER_PARTITION,
+        session: this.browserSessionValue,
         nodeIntegration: false,
         contextIsolation: true,
         sandbox: true,
