@@ -531,7 +531,7 @@ export function SettingsPane({
                                       <StatusChip good>{item.installedSource === 'unpacked' ? 'Loaded package' : 'Installed'}</StatusChip>
                                     ) : (
                                       <SettingsButton
-                                        disabled={!item.bundleAvailable && item.packagePolicy === 'bundled'}
+                                        disabled={!item.bundleAvailable || item.packagePolicy === 'reference-only'}
                                         onClick={() => {
                                           void window.ndDsh.browserPlatform.installCatalogExtension(item.id)
                                             .catch((cause) => onError(errorMessage(cause)))
@@ -539,8 +539,8 @@ export function SettingsPane({
                                       >
                                         {item.bundleAvailable
                                           ? 'Install'
-                                          : item.packagePolicy === 'verified-chrome-id'
-                                            ? 'Load package…'
+                                          : item.packagePolicy === 'reference-only'
+                                            ? 'Reference only'
                                             : 'Unavailable'}
                                       </SettingsButton>
                                     )}
