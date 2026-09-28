@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { analyzeBrowserExtensionManifest } from '../src/main/browser/browser-extension-compatibility.js'
+import {
+  analyzeBrowserExtensionManifest,
+  extensionIdFromManifestKey,
+} from '../src/main/browser/browser-extension-compatibility.js'
 
 describe('browser extension compatibility analyzer', () => {
   it('marks the documented Electron subset compatible', () => {
@@ -64,5 +67,16 @@ describe('browser extension compatibility analyzer', () => {
     })
     expect(result.status).toBe('limited')
     expect(result.notes.join(' ')).toContain('provisional')
+  })
+})
+
+
+describe('extension id verification', () => {
+  it('derives Chrome extension ids from the manifest public key', () => {
+    expect(extensionIdFromManifestKey('AQIDBA==')).toBe('jpgekhehobljhpbdbpkllgleehcjgmjl')
+  })
+
+  it('rejects empty manifest keys', () => {
+    expect(extensionIdFromManifestKey('')).toBeUndefined()
   })
 })
