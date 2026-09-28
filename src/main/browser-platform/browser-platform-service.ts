@@ -126,7 +126,16 @@ export class BrowserPlatformService {
       && method !== 'browser.targets'
       && method !== 'browser.connections'
       && method !== 'browser.selection') {
-      throw new Error('Built-in browser control is disabled in Settings > Browser')
+      const explicitTarget = typeof params.targetId === 'string' ? params.targetId : undefined
+      const selected = this.router.selection()
+      const selectedTarget = selected.mode === 'target' || selected.mode === 'tab'
+        ? selected.targetId
+        : undefined
+      const companionOnly = explicitTarget?.startsWith('companion:') === true
+        || (!explicitTarget && selectedTarget?.startsWith('companion:') === true)
+      if (!companionOnly) {
+        throw new Error('Built-in browser agent control is disabled in Settings > Browser')
+      }
     }
     return this.router.call(method, params, 'agent')
   }
