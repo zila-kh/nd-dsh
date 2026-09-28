@@ -8,7 +8,7 @@ import type {
   BrowserExtensionRecord,
   BrowserExtensionSource,
 } from '../../shared/browser-platform.js'
-import { analyzeBrowserExtensionManifest, extensionIdFromManifestKey } from './browser-extension-compatibility.js'
+import { analyzeBrowserExtensionManifest } from './browser-extension-compatibility.js'
 
 interface PersistedExtension {
   path: string
@@ -34,7 +34,7 @@ interface CatalogDefinition {
   description: string
   storeId?: string
   storeUrl?: string
-  packagePolicy: 'bundled' | 'verified-chrome-id'
+  packagePolicy: 'bundled' | 'reference-only'
   compatibility: 'experimental' | 'limited' | 'compatible'
   note: string
 }
@@ -56,9 +56,9 @@ const CATALOG: CatalogDefinition[] = [
     description: 'Compatibility reference for the official standalone-Chrome extension, not the ND Method 2 runtime.',
     storeId: 'hehggadaopoacecdllhhajmbjkdcmajg',
     storeUrl: 'https://chromewebstore.google.com/detail/chatgpt/hehggadaopoacecdllhhajmbjkdcmajg?hl=en',
-    packagePolicy: 'verified-chrome-id',
+    packagePolicy: 'reference-only',
     compatibility: 'experimental',
-    note: 'This package targets the standalone Chrome integration and may require APIs Electron does not expose. ND never launches external Chrome for built-in extension execution.',
+    note: 'Reference only: this package targets the standalone Chrome integration and may require APIs Electron does not expose. ND does not authenticate or install it as a vendor package.',
   },
 ]
 
@@ -148,15 +148,13 @@ export class BrowserExtensionManager {
     })
   }
 
-  async previewCatalog(catalogId: string, selectedPath?: string): Promise<BrowserExtensionInstallPreview> {
-    const { definition, sourcePath, manifest } = await this.resolveCatalogPackage(catalogId, selectedPath)
-    verifyCatalogManifest(definition, manifest)
+  async previewCatalog(catalogId: string): Promise<BrowserExtensionInstallPreview> {
+    const { sourcePath, manifest } = await this.resolveCatalogPackage(catalogId)
     return previewFromManifest(sourcePath, manifest)
   }
 
-  async installCatalog(catalogId: string, selectedPath?: string): Promise<BrowserExtensionRecord> {
-    const { definition, sourcePath, manifest } = await this.resolveCatalogPackage(catalogId, selectedPath)
-    verifyCatalogManifest(definition, manifest)
+  async installCatalog(catalogId: string): Promise<BrowserExtensionRecord> {
+    const { definition, sourcePath } = await this.resolveCatalogPackage(catalogId)
 
     for (const [id, record] of [...this.records]) {
       if (!matchesCatalogRecord(record, definition)) continue
@@ -168,7 +166,7 @@ export class BrowserExtensionManager {
       !matchesCatalogPersisted(item, definition))
 
     return this.installPath(sourcePath, {
-      source: selectedPath ? 'unpacked' : 'bundled',
+      source: 'bundled',
       catalogId: definition.id,
       ...(definition.storeId !== undefined ? { storeId: definition.storeId } : {}),
       publisher: definition.publisher,
@@ -177,24 +175,16 @@ export class BrowserExtensionManager {
 
   private async resolveCatalogPackage(
     catalogId: string,
-    selectedPath?: string,
   ): Promise<{ definition: CatalogDefinition; sourcePath: string; manifest: Record<string, unknown> }> {
     const definition = CATALOG.find((item) => item.id === catalogId)
     if (!definition) throw new Error('Unknown built-in browser extension catalog item')
-    if (selectedPath && definition.packagePolicy === 'bundled') {
-      throw new Error(`${definition.name} is a bundled ND extension and cannot be replaced by an arbitrary folder.`)
-    }
-    const sourcePath = selectedPath
-      ? resolve(selectedPath)
-      : await findBundledExtensionPath(definition.id)
-    if (!sourcePath) {
-      if (definition.packagePolicy === 'bundled') {
-        throw new Error(`${definition.name} is missing from this ND build.`)
-      }
+    if (definition.packagePolicy === 'reference-only') {
       throw new Error(
-        `${definition.name} is not bundled in this ND build. Choose an authorized unpacked package to test it directly in the ND browser.`,
+        `${definition.name} is a reference-only catalog item. Use Developer mode → Load unpacked to test a third-party folder without publisher verification.`,
       )
     }
+    const sourcePath = await findBundledExtensionPath(definition.id)
+    if (!sourcePath) throw new Error(`${definition.name} is missing from this ND build.`)
     return {
       definition,
       sourcePath,
@@ -368,18 +358,6 @@ function matchesCatalogRecord(record: BrowserExtensionRecord, definition: Catalo
 function matchesCatalogPersisted(item: PersistedExtension, definition: CatalogDefinition): boolean {
   return item.catalogId === definition.id
     || (definition.storeId !== undefined && item.storeId === definition.storeId)
-}
-
-function verifyCatalogManifest(definition: CatalogDefinition, manifest: Record<string, unknown>): void {
-  if (definition.packagePolicy === 'bundled') return
-  if (!definition.storeId) throw new Error(`${definition.name} catalog entry is missing its expected extension id.`)
-  const manifestKey = typeof manifest.key === 'string' ? manifest.key : undefined
-  const verifiedId = manifestKey ? extensionIdFromManifestKey(manifestKey) : undefined
-  if (verifiedId !== definition.storeId) {
-    throw new Error(
-      `${definition.name} package could not be verified as extension ${definition.storeId}. Use Load unpacked for unverified packages.`,
-    )
-  }
 }
 
 function previewFromManifest(
