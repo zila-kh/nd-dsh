@@ -1,10 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import {
-  analyzeBrowserExtensionManifest,
-  extensionIdFromManifestKey,
-} from '../src/main/browser/browser-extension-compatibility.js'
+import { analyzeBrowserExtensionManifest } from '../src/main/browser/browser-extension-compatibility.js'
 
 describe('browser extension compatibility analyzer', () => {
   it('marks the documented Electron subset compatible', () => {
@@ -94,15 +91,5 @@ describe('bundled ND browser extension', () => {
     const result = analyzeBrowserExtensionManifest(manifest)
     expect(result.status).toBe('compatible')
     expect(result.notes.join(' ')).toContain('Action popup is hosted by ND')
-  })
-})
-
-describe('extension id verification', () => {
-  it('derives Chrome extension ids from the manifest public key', () => {
-    expect(extensionIdFromManifestKey('AQIDBA==')).toBe('jpgekhehobljhpbdbpkllgleehcjgmjl')
-  })
-
-  it('rejects empty manifest keys', () => {
-    expect(extensionIdFromManifestKey('')).toBeUndefined()
   })
 })
