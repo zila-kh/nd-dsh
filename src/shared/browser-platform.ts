@@ -149,6 +149,8 @@ export interface BrowserHistoryEntry {
   visitedAt: number
 }
 
+export type BrowserExtensionSource = 'unpacked' | 'chrome-import'
+
 export interface BrowserExtensionRecord {
   id: string
   name: string
@@ -160,6 +162,22 @@ export interface BrowserExtensionRecord {
   manifestVersion?: number | undefined
   error?: string | undefined
   installedAt: number
+  source?: BrowserExtensionSource | undefined
+  storeId?: string | undefined
+  publisher?: string | undefined
+}
+
+export interface BrowserExtensionCatalogItem {
+  id: string
+  name: string
+  publisher: string
+  description: string
+  storeId: string
+  storeUrl: string
+  compatibility: 'experimental' | 'limited'
+  installed: boolean
+  installedExtensionId?: string | undefined
+  note?: string | undefined
 }
 
 export interface BrowserCredentialSummary {
@@ -198,6 +216,9 @@ export interface BrowserPlatformState {
   leases: BrowserTabLease[]
   downloads: BrowserDownloadRecord[]
   extensions: BrowserExtensionRecord[]
+  extensionCatalog: BrowserExtensionCatalogItem[]
+  browserUseEnabled: boolean
+  developerMode: boolean
   credentials: BrowserCredentialSummary[]
   sitePermissions: BrowserSitePermission[]
   approvals: BrowserApprovalRequest[]
@@ -218,6 +239,11 @@ export interface BrowserPlatformDesktopApi {
   installExtension(): Promise<BrowserExtensionRecord | null>
   setExtensionEnabled(extensionId: string, enabled: boolean): Promise<BrowserExtensionRecord[]>
   removeExtension(extensionId: string): Promise<BrowserExtensionRecord[]>
+  reloadExtensions(): Promise<BrowserExtensionRecord[]>
+  setDeveloperMode(enabled: boolean): Promise<BrowserPlatformState>
+  setBrowserUseEnabled(enabled: boolean): Promise<BrowserPlatformState>
+  importCatalogExtension(catalogId: string): Promise<BrowserExtensionRecord>
+  openCatalogExtension(catalogId: string): Promise<void>
   saveCredential(input: { origin: string; username: string; password: string; label?: string | undefined }): Promise<BrowserCredentialSummary>
   removeCredential(credentialId: string): Promise<boolean>
   autofillCredential(credentialId: string, targetId?: string, tabId?: string): Promise<{ ok: true; credentialId: string; username: string }>
@@ -241,6 +267,11 @@ export const BROWSER_PLATFORM_IPC = {
   installExtension: 'browser-platform:install-extension',
   extensionEnabled: 'browser-platform:extension-enabled',
   removeExtension: 'browser-platform:remove-extension',
+  reloadExtensions: 'browser-platform:reload-extensions',
+  developerMode: 'browser-platform:developer-mode',
+  browserUseEnabled: 'browser-platform:browser-use-enabled',
+  importCatalogExtension: 'browser-platform:import-catalog-extension',
+  openCatalogExtension: 'browser-platform:open-catalog-extension',
   saveCredential: 'browser-platform:save-credential',
   removeCredential: 'browser-platform:remove-credential',
   autofillCredential: 'browser-platform:autofill-credential',
