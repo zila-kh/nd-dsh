@@ -896,6 +896,27 @@ export function SettingsPane({
   )
 }
 
+function BrowserToggle({ label, checked, onChange }: { label: string; checked: boolean; onChange(checked: boolean): void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-label={label}
+      aria-checked={checked}
+      className={cn(
+        'relative h-[20px] w-[34px] shrink-0 rounded-full border transition-colors',
+        checked ? 'border-primary bg-primary' : 'border-border-strong bg-secondary',
+      )}
+      onClick={() => onChange(!checked)}
+    >
+      <span className={cn(
+        'absolute top-[2px] size-[14px] rounded-full bg-background shadow-sm transition-[left]',
+        checked ? 'left-[16px]' : 'left-[2px]',
+      )} />
+    </button>
+  )
+}
+
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
 }
