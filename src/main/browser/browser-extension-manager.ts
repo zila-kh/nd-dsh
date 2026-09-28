@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { app, type Extension, type Session } from 'electron'
-import { promises as fs } from 'node:fs'
+import { existsSync, promises as fs } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import type {
   BrowserExtensionCatalogItem,
@@ -90,6 +90,8 @@ export class BrowserExtensionManager {
       const installed = this.list().find((record) => record.storeId === item.storeId)
       return {
         ...item,
+        bundleAvailable: bundledExtensionCandidates(item.id)
+          .some((candidate) => existsSync(resolve(candidate, 'manifest.json'))),
         installed: Boolean(installed),
         ...(installed ? { installedExtensionId: installed.id } : {}),
       }
@@ -122,16 +124,19 @@ export class BrowserExtensionManager {
     })
   }
 
-  async installCatalog(catalogId: string): Promise<BrowserExtensionRecord> {
+  async installCatalog(catalogId: string, selectedPath?: string): Promise<BrowserExtensionRecord> {
     const definition = CATALOG.find((item) => item.id === catalogId)
     if (!definition) throw new Error('Unknown built-in browser extension catalog item')
 
-    const sourcePath = await findBundledExtensionPath(definition.id)
+    const sourcePath = selectedPath
+      ? resolve(selectedPath)
+      : await findBundledExtensionPath(definition.id)
     if (!sourcePath) {
       throw new Error(
-        `${definition.name} is not bundled in this ND build. Add an authorized unpacked package at resources/browser-extensions/${definition.id} and rebuild ND.`,
+        `${definition.name} is not bundled in this ND build. Choose an authorized unpacked package to load it directly into the ND browser.`,
       )
     }
+    await readManifest(sourcePath)
 
     for (const [id, record] of [...this.records]) {
       if (record.storeId !== definition.storeId) continue
@@ -142,7 +147,7 @@ export class BrowserExtensionManager {
     this.value.extensions = this.value.extensions.filter((item) => item.storeId !== definition.storeId)
 
     return this.installPath(sourcePath, {
-      source: 'bundled',
+      source: selectedPath ? 'unpacked' : 'bundled',
       storeId: definition.storeId,
       publisher: definition.publisher,
     })
@@ -381,12 +386,15 @@ function manifestPermissions(manifest: Record<string, unknown>): string[] {
   return values.filter((item): item is string => typeof item === 'string').slice(0, 256)
 }
 
-async function findBundledExtensionPath(catalogId: string): Promise<string | undefined> {
-  const candidates = [
+function bundledExtensionCandidates(catalogId: string): string[] {
+  return [
     resolve(process.resourcesPath, 'browser-extensions', catalogId),
     resolve(app.getAppPath(), 'resources', 'browser-extensions', catalogId),
   ]
-  for (const candidate of candidates) {
+}
+
+async function findBundledExtensionPath(catalogId: string): Promise<string | undefined> {
+  for (const candidate of bundledExtensionCandidates(catalogId)) {
     if (await readManifest(candidate).then(() => true).catch(() => false)) return candidate
   }
   return undefined
