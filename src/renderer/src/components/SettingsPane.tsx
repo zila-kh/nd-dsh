@@ -532,7 +532,7 @@ export function SettingsPane({
                                         void window.ndDsh.browserPlatform.installCatalogExtension(item.id)
                                           .catch((cause) => onError(errorMessage(cause)))
                                       }}>
-                                        Install
+                                        {item.bundleAvailable ? 'Install' : 'Load package…'}
                                       </SettingsButton>
                                     )}
                                     <SettingsButton onClick={() => {
