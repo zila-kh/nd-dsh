@@ -171,6 +171,18 @@ export interface BrowserExtensionRecord {
   compatibilityNotes?: string[] | undefined
 }
 
+export interface BrowserExtensionInstallPreview {
+  path: string
+  name: string
+  version: string
+  permissions: string[]
+  manifestVersion?: number | undefined
+  status: BrowserExtensionRecord['status']
+  compatibilityNotes: string[]
+  actionTitle?: string | undefined
+  actionPopup?: string | undefined
+}
+
 export interface BrowserExtensionCatalogItem {
   id: string
   name: string
