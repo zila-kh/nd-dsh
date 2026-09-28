@@ -11,6 +11,8 @@ The current product is coding-first: an AI PM plans work, assigned workers can e
 
 Two more first-class surfaces ship with the desktop: a **unified browser platform** — the ND built-in multi-tab browser (tabs, history, downloads, credential mediation, extensions, trusted leases/policy) plus an explicit **Browser Companion** target into your existing Chrome/Chromium profile, both behind one governed BrowserTarget contract — and **ND Pencil**, ND's native Freeform design surface for design work against the active project's real source.
 
+![ND DSH — Full Platform Flow](docs/assets/nd-dsh-full-platform-flow.png)
+
 ## Product boundary
 
 ND-DSH is the product and control plane. Runtime vendors are replaceable implementation dependencies.
