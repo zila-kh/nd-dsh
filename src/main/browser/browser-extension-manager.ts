@@ -7,6 +7,7 @@ import type {
   BrowserExtensionRecord,
   BrowserExtensionSource,
 } from '../../shared/browser-platform.js'
+import { analyzeBrowserExtensionManifest } from './browser-extension-compatibility.js'
 
 interface PersistedExtension {
   path: string
@@ -323,13 +324,14 @@ function recordFromExtension(
   enabled: boolean,
   manifest: Record<string, unknown>,
 ): BrowserExtensionRecord {
+  const compatibility = analyzeBrowserExtensionManifest(manifest)
   return {
     id: extension.id,
     name: extension.name,
     version: extension.version,
     path: item.path,
     enabled,
-    status: 'limited',
+    status: compatibility.status,
     permissions: manifestPermissions(manifest),
     ...(typeof manifest.manifest_version === 'number' ? { manifestVersion: manifest.manifest_version } : {}),
     ...(item.source ? { source: item.source } : {}),
@@ -337,6 +339,7 @@ function recordFromExtension(
     ...(item.storeId ? { storeId: item.storeId } : {}),
     ...(item.publisher ? { publisher: item.publisher } : {}),
     ...manifestAction(manifest),
+    ...(compatibility.notes.length > 0 ? { compatibilityNotes: compatibility.notes } : {}),
     installedAt: item.installedAt,
   }
 }
@@ -347,13 +350,14 @@ function recordFromManifest(
   enabled: boolean,
   manifest: Record<string, unknown> | undefined,
 ): BrowserExtensionRecord {
+  const compatibility = manifest ? analyzeBrowserExtensionManifest(manifest) : undefined
   return {
     id,
     name: typeof manifest?.name === 'string' ? manifest.name : item.path,
     version: typeof manifest?.version === 'string' ? manifest.version : 'unknown',
     path: item.path,
     enabled,
-    status: manifest ? 'limited' : 'error',
+    status: compatibility?.status ?? 'error',
     permissions: manifest ? manifestPermissions(manifest) : [],
     ...(typeof manifest?.manifest_version === 'number' ? { manifestVersion: manifest.manifest_version } : {}),
     ...(item.source ? { source: item.source } : {}),
@@ -361,6 +365,7 @@ function recordFromManifest(
     ...(item.storeId ? { storeId: item.storeId } : {}),
     ...(item.publisher ? { publisher: item.publisher } : {}),
     ...(manifest ? manifestAction(manifest) : {}),
+    ...(compatibility && compatibility.notes.length > 0 ? { compatibilityNotes: compatibility.notes } : {}),
     ...(!manifest ? { error: 'Extension manifest could not be read' } : {}),
     installedAt: item.installedAt,
   }
