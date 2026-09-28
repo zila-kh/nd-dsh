@@ -19,6 +19,9 @@ if (chrome.tabs?.query) {
       : Array.isArray(tabs)
         ? 'ok'
         : 'failed'
+    document.documentElement.dataset.ndPopupActiveTabUrl = Array.isArray(tabs) && typeof tabs[0]?.url === 'string'
+      ? tabs[0].url
+      : ''
     done()
   })
 } else {
