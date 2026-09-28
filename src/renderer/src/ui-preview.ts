@@ -755,6 +755,7 @@ const desktopApi: DesktopApi = {
     openCatalogExtension: async (catalogId) => {
       const item = browserPlatform.extensionCatalog.find((candidate) => candidate.id === catalogId)
       if (!item) throw new Error('Preview browser extension catalog item not found')
+      if (!item.storeUrl) throw new Error('This built-in extension does not have an external catalog listing')
       return desktopApi.browserPlatform.createTab('builtin', item.storeUrl)
     },
     showExtensionPopup: async (extensionId) => {
