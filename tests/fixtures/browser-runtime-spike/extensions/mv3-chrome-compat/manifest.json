@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "ND Chrome Compatibility Probe",
+  "version": "0.0.1",
+  "permissions": ["storage"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "commands": {
+    "probe-command": {
+      "suggested_key": { "default": "Ctrl+Shift+Y" },
+      "description": "Probe command"
+    }
+  },
+  "action": {
+    "default_title": "ND Chrome Compatibility Probe",
+    "default_popup": "popup.html"
+  }
+}

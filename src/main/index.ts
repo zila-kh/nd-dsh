@@ -242,7 +242,11 @@ async function createWindow(cdpPort: number): Promise<void> {
     } catch { return undefined }
   }
 
-  const browser = new BrowserController(window, cdpPort, projectRoot(), { reservedOrigin, dataPath: userData })
+  const browser = new BrowserController(window, cdpPort, projectRoot(), {
+    reservedOrigin,
+    dataPath: userData,
+    extensionRuntimePreload: join(currentDirectory, '../preload/extension-runtime.cjs'),
+  })
   activeBrowser = browser
   const browserCompanion = new BrowserCompanionService({
     dataPath: userData,

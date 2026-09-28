@@ -304,3 +304,16 @@ export const BROWSER_PLATFORM_IPC = {
   resolveApproval: 'browser-platform:resolve-approval',
   changedEvent: 'browser-platform:changed-event',
 } as const
+
+// Served only to the extension action popup ND is currently hosting. Carries
+// Electron tab ids, never URLs or titles; tab contents still come from
+// Electron's own chrome.tabs implementation.
+export interface BrowserExtensionPopupContext {
+  hostTabId: number
+  tabIds: number[]
+  windowId: number
+}
+
+export const BROWSER_EXTENSION_POPUP_IPC = {
+  context: 'browser-extension-popup:context',
+} as const

@@ -73,6 +73,10 @@ export function analyzeBrowserExtensionManifest(manifest: Record<string, unknown
     notes.push(`Manifest features outside Electron's documented extension subset: ${unique(functionalKeys).join(', ')}.`)
   }
 
+  if (!permissions.includes('tabs')) {
+    notes.push('ND cannot hide open tab URLs and titles from this extension: Electron returns them from chrome.tabs.query without the tabs permission.')
+  }
+
   const background = objectValue(manifest.background)
   if (manifestVersion === 3 && typeof background?.service_worker === 'string') {
     notes.push('MV3 background service workers are treated as provisional until the runtime probe passes on this Electron build.')

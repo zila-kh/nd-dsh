@@ -1,10 +1,22 @@
 import { randomUUID } from 'node:crypto'
-import { app, BrowserWindow, WebContentsView, session, type Rectangle, type Session, type WebContents } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  ipcMain,
+  WebContentsView,
+  session,
+  type IpcMainInvokeEvent,
+  type Rectangle,
+  type Session,
+  type WebContents,
+} from 'electron'
 import { join } from 'node:path'
-import type {
-  BrowserDownloadRecord,
-  BrowserSiteToolDescriptor,
-  BrowserTabDescriptor,
+import {
+  BROWSER_EXTENSION_POPUP_IPC,
+  type BrowserDownloadRecord,
+  type BrowserExtensionPopupContext,
+  type BrowserSiteToolDescriptor,
+  type BrowserTabDescriptor,
 } from '../../shared/browser-platform.js'
 import type { BrowserBounds, BrowserState, UiAnnotation, UiTarget } from '../../shared/contracts.js'
 import { AgentBrowserClient } from './agent-browser-client.js'
@@ -22,13 +34,35 @@ const BROWSER_PARTITION = 'persist:nd-dsh-browser'
 export interface BrowserControllerOptions {
   reservedOrigin?: () => string | undefined
   dataPath?: string
+  extensionRuntimePreload?: string
 }
+
+const EXTENSION_RUNTIME_PRELOAD_ID = 'nd-extension-runtime'
 
 interface BrowserExtensionPopupRuntime {
   extensionId: string
   view: WebContentsView
+  // `view.webContents` reads as undefined once the popup closes itself; this
+  // reference stays safe to query.
+  contents: WebContents
+  hostWebContentsId: number
   preferredWidth?: number
   preferredHeight?: number
+}
+
+// ipcMain allows one handler per channel; a replacement controller (window
+// re-created on activate) takes ownership while the old one tears down.
+let extensionPopupContextOwner: BrowserController | undefined
+let extensionPopupContextRegistered = false
+
+function claimExtensionPopupContext(controller: BrowserController): void {
+  extensionPopupContextOwner = controller
+  if (extensionPopupContextRegistered) return
+  extensionPopupContextRegistered = true
+  ipcMain.handle(BROWSER_EXTENSION_POPUP_IPC.context, (event) => {
+    if (!extensionPopupContextOwner) throw new Error('No extension popup is open')
+    return extensionPopupContextOwner.extensionPopupContext(event)
+  })
 }
 
 interface BrowserTabRuntime {
@@ -59,6 +93,7 @@ export class BrowserController {
   private readonly permissionStore: BrowserPermissionStore
   private readonly downloads: BrowserDownloadManager
   private readonly reservedOrigin: (() => string | undefined) | undefined
+  private readonly extensionRuntimePreload: string | undefined
   private extensionPopup: BrowserExtensionPopupRuntime | undefined
   private activeTabIdValue: string
   private bounds: Rectangle = { x: 0, y: 0, width: 0, height: 0 }
@@ -77,7 +112,17 @@ export class BrowserController {
     options: BrowserControllerOptions = {},
   ) {
     this.reservedOrigin = options.reservedOrigin
+    this.extensionRuntimePreload = options.extensionRuntimePreload
     this.browserSessionValue = session.fromPartition(BROWSER_PARTITION)
+    claimExtensionPopupContext(this)
+    if (this.extensionRuntimePreload
+      && !this.browserSessionValue.getPreloadScripts().some((script) => script.id === EXTENSION_RUNTIME_PRELOAD_ID)) {
+      this.browserSessionValue.registerPreloadScript({
+        id: EXTENSION_RUNTIME_PRELOAD_ID,
+        type: 'service-worker',
+        filePath: this.extensionRuntimePreload,
+      })
+    }
 
     this.agentBrowser = new AgentBrowserClient(cdpPort, projectRoot)
     const dataPath = options.dataPath ?? app.getPath('userData')
@@ -136,9 +181,11 @@ export class BrowserController {
     }
 
     this.closeExtensionPopup()
+    const hostContents = this.activeTab().view.webContents
     const view = new WebContentsView({
       webPreferences: {
         session: this.browserSessionValue,
+        ...(this.extensionRuntimePreload ? { preload: this.extensionRuntimePreload } : {}),
         nodeIntegration: false,
         contextIsolation: true,
         sandbox: true,
@@ -181,13 +228,13 @@ export class BrowserController {
     })
 
     this.window.contentView.addChildView(view)
-    this.extensionPopup = { extensionId: cleanId, view }
+    this.extensionPopup = { extensionId: cleanId, view, contents: view.webContents, hostWebContentsId: hostContents.id }
     this.syncExtensionPopupBounds()
     view.setVisible(false)
-    // Electron's chrome.tabs.query({ active: true }) matches the focused WebContents,
-    // so the page tab must hold focus while the popup initializes.
-    const activeContents = this.activeTab().view.webContents
-    if (this.visible && !activeContents.isDestroyed()) activeContents.focus()
+    // Electron's chrome.tabs.query({ active: true }) matches the focused WebContents.
+    // The runtime preload corrects the popup's own view; extension service workers
+    // still see Electron's semantics, so the page tab holds focus while the popup initializes.
+    if (this.visible && !hostContents.isDestroyed()) hostContents.focus()
     try {
       await view.webContents.loadURL(popupUrl.toString())
       if (this.extensionPopup?.view === view && this.visible) {
@@ -203,6 +250,29 @@ export class BrowserController {
     }
   }
 
+  extensionPopupContext(event: IpcMainInvokeEvent): BrowserExtensionPopupContext {
+    const popup = this.extensionPopup
+    const frame = event.senderFrame
+    const trusted = Boolean(
+      popup
+      && !popup.contents.isDestroyed()
+      && event.sender === popup.contents
+      && frame
+      && frame === event.sender.mainFrame
+      && URL.canParse(frame.url)
+      && new URL(frame.url).protocol === 'chrome-extension:'
+      && new URL(frame.url).host === popup.extensionId,
+    )
+    if (!popup || !trusted) throw new Error('Extension popup context is only available to the open extension popup')
+    return {
+      hostTabId: popup.hostWebContentsId,
+      tabIds: [...this.tabs.values()]
+        .filter((tab) => !tab.view.webContents.isDestroyed())
+        .map((tab) => tab.view.webContents.id),
+      windowId: this.window.id,
+    }
+  }
+
   closeExtensionPopup(): void {
     const popup = this.extensionPopup
     this.extensionPopup = undefined
@@ -211,7 +281,7 @@ export class BrowserController {
       if (!this.window.isDestroyed()) this.window.contentView.removeChildView(popup.view)
     } catch {
     }
-    if (!popup.view.webContents.isDestroyed()) popup.view.webContents.close()
+    if (!popup.contents.isDestroyed()) popup.contents.close()
     if (!this.destroying) this.emitState()
   }
 
@@ -295,6 +365,7 @@ export class BrowserController {
   async closeTab(tabId: string): Promise<boolean> {
     const tab = this.tabs.get(tabId)
     if (!tab) return false
+    if (this.extensionPopup?.hostWebContentsId === tab.view.webContents.id) this.closeExtensionPopup()
     const wasActive = tabId === this.activeTabIdValue
     if (wasActive && this.binding) await this.binding.catch(() => undefined)
     await Promise.allSettled([tab.inspector.stop(), tab.annotator.cancel()])
@@ -361,8 +432,8 @@ export class BrowserController {
     this.visible = visible
     if (!visible) this.closeExtensionPopup()
     this.syncViewVisibility()
-    if (visible && this.extensionPopup && !this.extensionPopup.view.webContents.isDestroyed()) {
-      this.extensionPopup.view.webContents.focus()
+    if (visible && this.extensionPopup && !this.extensionPopup.contents.isDestroyed()) {
+      this.extensionPopup.contents.focus()
     }
     this.emitState()
   }
@@ -668,6 +739,7 @@ export class BrowserController {
   private async destroyInternal(): Promise<void> {
     this.destroying = true
     this.closeExtensionPopup()
+    if (extensionPopupContextOwner === this) extensionPopupContextOwner = undefined
     this.onStateChanged = undefined
     this.onTabClosed = undefined
     const binding = this.binding

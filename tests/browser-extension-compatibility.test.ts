@@ -71,6 +71,17 @@ describe('browser extension compatibility analyzer', () => {
     expect(result.notes.join(' ')).toContain('side_panel')
   })
 
+  it('discloses tab URL visibility without changing status when the tabs permission is absent', () => {
+    const result = analyzeBrowserExtensionManifest({
+      manifest_version: 3,
+      name: 'Storage only',
+      version: '1.0.0',
+      permissions: ['storage'],
+    })
+    expect(result.status).toBe('compatible')
+    expect(result.notes.join(' ')).toContain('cannot hide open tab URLs and titles')
+  })
+
   it('records MV3 service workers as provisional without automatically rejecting the extension', () => {
     const result = analyzeBrowserExtensionManifest({
       manifest_version: 3,
