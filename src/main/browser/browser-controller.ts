@@ -24,6 +24,11 @@ export interface BrowserControllerOptions {
   dataPath?: string
 }
 
+interface BrowserExtensionPopupRuntime {
+  extensionId: string
+  view: WebContentsView
+}
+
 interface BrowserTabRuntime {
   id: string
   view: WebContentsView
@@ -52,6 +57,7 @@ export class BrowserController {
   private readonly permissionStore: BrowserPermissionStore
   private readonly downloads: BrowserDownloadManager
   private readonly reservedOrigin: (() => string | undefined) | undefined
+  private extensionPopup: BrowserExtensionPopupRuntime | undefined
   private activeTabIdValue: string
   private bounds: Rectangle = { x: 0, y: 0, width: 0, height: 0 }
   private visible = false
@@ -106,6 +112,76 @@ export class BrowserController {
 
   activeTabId(): string {
     return this.activeTabIdValue
+  }
+
+  extensionPopupId(): string | undefined {
+    return this.extensionPopup?.extensionId
+  }
+
+  async showExtensionPopup(extensionId: string, popupPath: string): Promise<void> {
+    if (this.destroying) throw new Error('Built-in browser is shutting down')
+    const cleanId = extensionId.trim()
+    const cleanPath = popupPath.trim().replace(/^\/+/, '')
+    if (!/^[a-p]{32}$/i.test(cleanId) && !/^[a-z0-9_-]{8,128}$/i.test(cleanId)) {
+      throw new Error('Browser extension id is invalid')
+    }
+    if (!cleanPath) throw new Error('Browser extension does not declare an action popup')
+
+    const base = `chrome-extension://${cleanId}/`
+    const popupUrl = new URL(cleanPath, base)
+    if (popupUrl.protocol !== 'chrome-extension:' || popupUrl.host !== cleanId) {
+      throw new Error('Browser extension popup must stay inside its extension origin')
+    }
+
+    this.closeExtensionPopup()
+    const view = new WebContentsView({
+      webPreferences: {
+        partition: BROWSER_PARTITION,
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: true,
+        webSecurity: true,
+        allowRunningInsecureContent: false,
+      },
+    })
+    view.webContents.setUserAgent(sanitizeBrowserUserAgent(app.userAgentFallback))
+    view.webContents.setWindowOpenHandler(({ url }) => {
+      if (isAllowedBrowserUrl(url)) void this.createTab(url, true).catch(() => undefined)
+      return { action: 'deny' }
+    })
+    view.webContents.on('will-navigate', (event, url) => {
+      try {
+        const target = new URL(url)
+        if (target.protocol !== 'chrome-extension:' || target.host !== cleanId) event.preventDefault()
+      } catch {
+        event.preventDefault()
+      }
+    })
+    view.webContents.on('render-process-gone', () => {
+      if (this.extensionPopup?.view === view) this.closeExtensionPopup()
+    })
+
+    this.window.contentView.addChildView(view)
+    this.extensionPopup = { extensionId: cleanId, view }
+    this.syncExtensionPopupBounds()
+    view.setVisible(this.visible)
+    try {
+      await view.webContents.loadURL(popupUrl.toString())
+    } catch (cause) {
+      this.closeExtensionPopup()
+      throw cause
+    }
+  }
+
+  closeExtensionPopup(): void {
+    const popup = this.extensionPopup
+    this.extensionPopup = undefined
+    if (!popup) return
+    try {
+      if (!this.window.isDestroyed()) this.window.contentView.removeChildView(popup.view)
+    } catch {
+    }
+    if (!popup.view.webContents.isDestroyed()) popup.view.webContents.close()
   }
 
   setTabClosedListener(listener: ((tabId: string) => void) | undefined): void {
@@ -167,6 +243,7 @@ export class BrowserController {
 
   async activateTab(tabId: string): Promise<BrowserTabDescriptor> {
     const tab = this.requireTab(tabId)
+    this.closeExtensionPopup()
     if (this.activeTabIdValue === tabId) return this.describeTab(tab)
     const previous = this.activeTab()
     if (previous.state.inspectMode) await previous.inspector.stop().catch(() => undefined)
@@ -246,6 +323,7 @@ export class BrowserController {
       height: Math.max(0, Math.round(bounds.height)),
     }
     this.activeTab().view.setBounds(this.bounds)
+    this.syncExtensionPopupBounds()
   }
 
   async setVisible(visible: boolean): Promise<void> {
@@ -259,6 +337,7 @@ export class BrowserController {
   }
 
   async navigate(input: string, tabId = this.activeTabIdValue): Promise<BrowserState> {
+    this.closeExtensionPopup()
     const tab = this.requireTab(tabId)
     const url = normalizeBrowserUrl(input)
     this.assertNotSelfHosted(url)
@@ -267,6 +346,7 @@ export class BrowserController {
   }
 
   async back(tabId = this.activeTabIdValue): Promise<BrowserState> {
+    this.closeExtensionPopup()
     const tab = this.requireTab(tabId)
     const history = tab.view.webContents.navigationHistory
     if (history.canGoBack()) history.goBack()
@@ -274,6 +354,7 @@ export class BrowserController {
   }
 
   async forward(tabId = this.activeTabIdValue): Promise<BrowserState> {
+    this.closeExtensionPopup()
     const tab = this.requireTab(tabId)
     const history = tab.view.webContents.navigationHistory
     if (history.canGoForward()) history.goForward()
@@ -281,6 +362,7 @@ export class BrowserController {
   }
 
   async reload(tabId = this.activeTabIdValue): Promise<BrowserState> {
+    this.closeExtensionPopup()
     this.requireTab(tabId).view.webContents.reload()
     return this.state()
   }
@@ -550,6 +632,7 @@ export class BrowserController {
 
   private async destroyInternal(): Promise<void> {
     this.destroying = true
+    this.closeExtensionPopup()
     this.onStateChanged = undefined
     this.onTabClosed = undefined
     const binding = this.binding
@@ -754,6 +837,21 @@ export class BrowserController {
       tab.view.setBounds(this.bounds)
       tab.view.setVisible(active && this.visible)
     }
+    if (this.extensionPopup) {
+      this.syncExtensionPopupBounds()
+      this.extensionPopup.view.setVisible(this.visible)
+    }
+  }
+
+  private syncExtensionPopupBounds(): void {
+    const popup = this.extensionPopup
+    if (!popup) return
+    const margin = 8
+    const width = Math.max(260, Math.min(420, this.bounds.width - margin * 2))
+    const height = Math.max(220, Math.min(520, this.bounds.height - margin * 2))
+    const x = Math.max(this.bounds.x + margin, this.bounds.x + this.bounds.width - width - margin)
+    const y = this.bounds.y + margin
+    popup.view.setBounds({ x, y, width, height })
   }
 
   private assertNotSelfHosted(url: string): void {
