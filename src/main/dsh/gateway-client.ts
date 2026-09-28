@@ -566,10 +566,23 @@ function translateFrame(message: ServerRequestFrame): DshEventFrame | undefined 
   }
 }
 
+/**
+ * Wire-args convention per Remote method, defaulting to one enclosing
+ * `request` object named after the source parameter. A method that takes no
+ * parameters or names its parameters individually cannot use that envelope:
+ * the gateway rejects the unexpected field.
+ */
+const REMOTE_ARGS: Record<string, (payload: unknown) => unknown> = {
+  'session.list': (payload) => ({ _request: payload }),
+  'session.models': () => ({}),
+  'agentPresets.list': () => ({}),
+  'settings.update': (payload) => payload,
+}
+
 function remoteRequest(method: string, payload: unknown): { method: string; payload: unknown } {
   const endpoint = method === 'session.models' ? 'session/modelCatalog' : method.replace('.', '/')
-  const args = method === 'session.models' ? {} : { [method === 'session.list' ? '_request' : 'request']: payload }
-  return { method: endpoint, payload: { args } }
+  const toArgs = REMOTE_ARGS[method] ?? ((request: unknown) => ({ request }))
+  return { method: endpoint, payload: { args: toArgs(payload) } }
 }
 
 function asString(value: unknown): string | undefined {

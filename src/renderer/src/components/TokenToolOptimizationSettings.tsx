@@ -7,6 +7,7 @@ import type {
 } from '../../../shared/tool-routing'
 import {
   SettingsButton,
+  SettingsNote,
   SettingsRow,
   SettingsSection,
   StatusChip,
@@ -21,22 +22,33 @@ interface TokenToolOptimizationSettingsProps {
   onError(message: string): void
 }
 
+const numberInput = 'w-[86px] shrink-0 rounded-md border border-border-strong bg-background px-[9px] py-[5px] text-right font-mono text-[11px] text-foreground outline-none focus:border-primary/40 disabled:opacity-50'
+
 export function TokenToolOptimizationSettings({ onError }: TokenToolOptimizationSettingsProps) {
   const [settings, setSettings] = useState<ToolRoutingSettings | null>(null)
   const [recentDecisions, setRecentDecisions] = useState<ToolRoutingDecision[]>([])
+  const [bridgeAvailable, setBridgeAvailable] = useState(true)
+  const [thresholdDraft, setThresholdDraft] = useState('')
+  const [minToolsDraft, setMinToolsDraft] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
 
   useEffect(() => {
     let mounted = true
-    const api = (window as any).ndDshToolRouting
-    if (!api) return
+    const api = window.ndDshToolRouting
+    if (!api) {
+      setBridgeAvailable(false)
+      return
+    }
 
-    api.state().then((res: any) => {
-      if (mounted && res) {
-        setSettings(res.settings)
-        setRecentDecisions(res.recentDecisions ?? [])
-      }
-    }).catch((err: any) => onError(err?.message ?? String(err)))
+    api.state().then((res) => {
+      if (!mounted) return
+      setSettings(res.settings)
+      setThresholdDraft(res.settings.confidenceThreshold.toFixed(2))
+      setMinToolsDraft(String(res.settings.minTools))
+      setRecentDecisions(res.recentDecisions ?? [])
+    }).catch((cause) => {
+      if (mounted) onError(cause instanceof Error ? cause.message : String(cause))
+    })
 
     return () => { mounted = false }
   }, [onError])
@@ -44,18 +56,53 @@ export function TokenToolOptimizationSettings({ onError }: TokenToolOptimization
   const update = async (next: ToolRoutingSettings, label = 'settings'): Promise<void> => {
     setBusy(label)
     try {
-      const api = (window as any).ndDshToolRouting
-      if (api) {
-        const updated = await api.updateSettings(next)
-        setSettings(updated)
-      } else {
-        setSettings(next)
+      const updated = await window.ndDshToolRouting.updateSettings(next)
+      setSettings(updated)
+      setThresholdDraft(updated.confidenceThreshold.toFixed(2))
+      setMinToolsDraft(String(updated.minTools))
+    } catch (cause) {
+      if (settings) {
+        setThresholdDraft(settings.confidenceThreshold.toFixed(2))
+        setMinToolsDraft(String(settings.minTools))
       }
-    } catch (err: any) {
-      onError(err?.message ?? String(err))
+      onError(cause instanceof Error ? cause.message : String(cause))
     } finally {
       setBusy(null)
     }
+  }
+
+  const commitThreshold = (): void => {
+    if (!settings) return
+    const value = Number.parseFloat(thresholdDraft)
+    if (!Number.isFinite(value)) {
+      setThresholdDraft(settings.confidenceThreshold.toFixed(2))
+      return
+    }
+    const clamped = Math.min(1, Math.max(0.5, value))
+    setThresholdDraft(clamped.toFixed(2))
+    if (clamped !== settings.confidenceThreshold) void update({ ...settings, confidenceThreshold: clamped }, 'threshold')
+  }
+
+  const commitMinTools = (): void => {
+    if (!settings) return
+    const value = Number.parseInt(minToolsDraft, 10)
+    if (!Number.isFinite(value)) {
+      setMinToolsDraft(String(settings.minTools))
+      return
+    }
+    const clamped = Math.min(24, Math.max(1, value))
+    setMinToolsDraft(String(clamped))
+    if (clamped !== settings.minTools) void update({ ...settings, minTools: clamped }, 'minTools')
+  }
+
+  if (!bridgeAvailable) {
+    return (
+      <SettingsSection title="Token & Tool Optimization">
+        <SettingsNote>
+          Tool routing runs inside the ND desktop app. It is not available in the UI preview.
+        </SettingsNote>
+      </SettingsSection>
+    )
   }
 
   if (!settings) {
@@ -130,18 +177,42 @@ export function TokenToolOptimizationSettings({ onError }: TokenToolOptimization
       <SettingsRow>
         <div className={rowStack}>
           <span className={rowTitle}>Confidence Threshold</span>
-          <span className={rowDesc}>Required minimum certainty before filtering the tool catalog (Default: 0.78).</span>
+          <span className={rowDesc}>Required minimum certainty before filtering the tool catalog (0.50–1.00, Default: 0.78).</span>
         </div>
-        <span className={rowValueText}>{settings.confidenceThreshold.toFixed(2)}</span>
+        <input
+          className={numberInput}
+          type="number"
+          min="0.5"
+          max="1"
+          step="0.01"
+          aria-label="Confidence threshold"
+          value={thresholdDraft}
+          disabled={busy !== null}
+          onChange={(event) => setThresholdDraft(event.target.value)}
+          onBlur={commitThreshold}
+          onKeyDown={(event) => { if (event.key === 'Enter') commitThreshold() }}
+        />
       </SettingsRow>
 
       {/* Minimum Tools */}
       <SettingsRow>
         <div className={rowStack}>
           <span className={rowTitle}>Minimum Tools</span>
-          <span className={rowDesc}>Lower bound of exposed tools guaranteed for each turn (Default: 3).</span>
+          <span className={rowDesc}>Lower bound of exposed tools guaranteed for each turn (1–24, Default: 3).</span>
         </div>
-        <span className={rowValueText}>{settings.minTools} tools</span>
+        <input
+          className={numberInput}
+          type="number"
+          min="1"
+          max="24"
+          step="1"
+          aria-label="Minimum tools"
+          value={minToolsDraft}
+          disabled={busy !== null}
+          onChange={(event) => setMinToolsDraft(event.target.value)}
+          onBlur={commitMinTools}
+          onKeyDown={(event) => { if (event.key === 'Enter') commitMinTools() }}
+        />
       </SettingsRow>
 
       {/* Always-available safe/core tools */}

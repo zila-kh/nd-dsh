@@ -13,6 +13,8 @@ import {
 
 interface PresetSettingsProps {
   onError(message: string): void
+  /** Opens the created session in the Agent workbench when embedded in the app. */
+  onOpenSession?(sessionId: string): void
 }
 
 interface PresetRow extends AgentPresetSummary {
@@ -25,7 +27,7 @@ interface PresetRow extends AgentPresetSummary {
  * code (PTC), minimal, and cordis (creator) presets plus locally authored
  * ones (the ND-DSH preset lives in the harness-home user root).
  */
-export function PresetSettings({ onError }: PresetSettingsProps) {
+export function PresetSettings({ onError, onOpenSession }: PresetSettingsProps) {
   const [presets, setPresets] = useState<PresetRow[]>([])
   const [loaded, setLoaded] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
@@ -33,7 +35,7 @@ export function PresetSettings({ onError }: PresetSettingsProps) {
 
   useEffect(() => {
     let mounted = true
-    void window.ndDsh.dsh.rpc('agentPreset.list', {})
+    void window.ndDsh.dsh.rpc('agentPresets.list', {})
       .then((result) => {
         if (!mounted) return
         if (!result.ok) {
@@ -59,7 +61,11 @@ export function PresetSettings({ onError }: PresetSettingsProps) {
       const result = await window.ndDsh.dsh.rpc('session.create', { agentPreset: preset.id })
       if (!result.ok) throw new Error(result.error?.message ?? 'session.create failed')
       const sessionId = ((result.value ?? {}) as { sessionId?: string }).sessionId
-      setNotice(`Started a new ${preset.name ?? preset.id} session: ${sessionId ?? ''}`)
+      if (sessionId && onOpenSession) {
+        onOpenSession(sessionId)
+      } else {
+        setNotice(`Started a new ${preset.name ?? preset.id} session: ${sessionId ?? ''}`)
+      }
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : String(cause))
     } finally {

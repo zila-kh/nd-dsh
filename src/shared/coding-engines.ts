@@ -1,4 +1,4 @@
-import type { CodingEngineDescriptor } from './contracts.js'
+import type { CodingEngineDescriptor, CodingEngineInstallHelp } from './contracts.js'
 
 export const ND_HARNESS_ENGINE_ID = 'nd-harness'
 export const CHATGPT_WEB_ENGINE_ID = 'chatgpt-web'
@@ -49,6 +49,14 @@ export function workerAssignableCodingEngines(engines: readonly CodingEngineDesc
   return engines.filter((engine) => engine.capabilities.workspace)
 }
 
+/** The install command matching the current platform, when the engine publishes one. */
+export function codingEngineInstallCommand(help: CodingEngineInstallHelp | undefined, platform: string): string | undefined {
+  const command = help?.command
+  if (command === undefined) return undefined
+  if (typeof command === 'string') return command
+  return command[platform as keyof typeof command]
+}
+
 /**
  * Product-owned engine catalog. Runtime probes decide availability; the
  * descriptors themselves stay independent from Electron and vendor packages.
@@ -70,7 +78,7 @@ export function buildCodingEngineCatalog(availability: CodingEngineAvailability)
     : 'The bundled Codex CLI payload is missing from this install. Set the runtime up in Settings → Capabilities, or reinstall ND.'
   const antigravityReason = availability.antigravityReady
     ? undefined
-    : 'The Antigravity CLI (agy) is not installed. Install it from https://antigravity.google. (Developers can override the path with ND_DSH_ANTIGRAVITY_BINARY.)'
+    : 'The Antigravity CLI (agy) is not installed. Install it from the official Antigravity page. (Developers can override the path with ND_DSH_ANTIGRAVITY_BINARY.)'
   const zcodeCliReason = availability.zcodeCliReady
     ? undefined
     : 'The ZCode CLI is not installed. Install the ZCode desktop app. (Developers can override the path with ND_DSH_ZCODE_BINARY.)'
@@ -79,10 +87,10 @@ export function buildCodingEngineCatalog(availability: CodingEngineAvailability)
     : 'The Pi coding agent CLI (pi) is not installed. Install the @mariozechner/pi-coding-agent package. (Developers can override the path with ND_DSH_PI_BINARY.)'
   const cursorReason = availability.cursorCliReady
     ? undefined
-    : 'The Cursor CLI (cursor-agent) is not installed. Install it from https://cursor.com/docs/cli/installation. (Developers can override the path with ND_DSH_CURSOR_BINARY.)'
+    : 'The Cursor CLI (cursor-agent) is not installed. Follow the official Cursor CLI installation guide. (Developers can override the path with ND_DSH_CURSOR_BINARY.)'
   const claudeReason = availability.claudeCodeCliReady
     ? undefined
-    : 'The Claude Code CLI is not installed. Install it from https://claude.com/product/claude-code. (Developers can override the path with ND_DSH_CLAUDE_BINARY.)'
+    : 'The Claude Code CLI is not installed. Install it from the official Claude Code page. (Developers can override the path with ND_DSH_CLAUDE_BINARY.)'
 
   return [
     {
@@ -155,6 +163,7 @@ export function buildCodingEngineCatalog(availability: CodingEngineAvailability)
       available: availability.antigravityReady,
       description: 'Google Antigravity CLI (agy) managed directly by ND: streamed multi-turn conversations over the stream-json wires with native Google-account authentication. Model configuration and headless permission policy remain native to Antigravity.',
       ...(antigravityReason ? { unavailableReason: antigravityReason } : {}),
+      installHelp: { url: 'https://antigravity.google' },
       capabilities: {
         workspace: true,
         filesystem: true,
@@ -197,6 +206,7 @@ export function buildCodingEngineCatalog(availability: CodingEngineAvailability)
       available: availability.piCodingReady,
       description: 'Pi coding agent (pi --mode rpc) managed directly by ND: streamed multi-turn conversations over the JSONL RPC wires with native provider authentication and a real model catalog. Extension dialogs are cancelled because headless sessions have no human attached.',
       ...(piReason ? { unavailableReason: piReason } : {}),
+      installHelp: { command: 'npm install -g @mariozechner/pi-coding-agent' },
       capabilities: {
         workspace: true,
         filesystem: true,
@@ -218,6 +228,7 @@ export function buildCodingEngineCatalog(availability: CodingEngineAvailability)
       available: availability.cursorCliReady,
       description: 'Cursor CLI (cursor-agent -p) managed directly by ND: streamed headless turns over the stream-json wires with native Cursor authentication and models. Runs with --force because headless Cursor otherwise only proposes diffs instead of applying them.',
       ...(cursorReason ? { unavailableReason: cursorReason } : {}),
+      installHelp: { url: 'https://cursor.com/docs/cli/installation' },
       capabilities: {
         workspace: true,
         filesystem: true,
@@ -239,6 +250,10 @@ export function buildCodingEngineCatalog(availability: CodingEngineAvailability)
       available: availability.claudeCodeCliReady,
       description: 'Claude Code CLI (claude -p) managed directly by ND: streamed multi-turn conversations over the headless stream-json wires with native Claude authentication and settings. File edits run under acceptEdits; headless permission prompts stay denied by the CLI itself.',
       ...(claudeReason ? { unavailableReason: claudeReason } : {}),
+      installHelp: {
+        url: 'https://claude.com/product/claude-code',
+        command: 'npm install -g @anthropic-ai/claude-code',
+      },
       capabilities: {
         workspace: true,
         filesystem: true,
