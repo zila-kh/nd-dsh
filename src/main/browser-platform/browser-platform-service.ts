@@ -274,8 +274,8 @@ export class BrowserPlatformService {
     return this.state()
   }
 
-  async installCatalogExtension(catalogId: string): Promise<BrowserExtensionRecord> {
-    const record = await this.extensions.installCatalog(catalogId)
+  async installCatalogExtension(catalogId: string, selectedPath?: string): Promise<BrowserExtensionRecord> {
+    const record = await this.extensions.installCatalog(catalogId, selectedPath)
     await this.emit()
     return record
   }
