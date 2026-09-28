@@ -328,7 +328,7 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
                         {extension.name} · {extension.version} · {extension.status}
                       </span>
                     </div>
-                    {extension.enabled && extension.actionPopup ? (
+                    {extension.enabled && extension.status !== 'error' && extension.actionPopup ? (
                       <button
                         type="button"
                         className="shrink-0 rounded border border-border bg-secondary px-2 py-1 text-[8px] font-semibold text-soft hover:bg-accent"
