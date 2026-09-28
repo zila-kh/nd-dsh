@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { app, type Extension, type Session } from 'electron'
 import { existsSync, promises as fs } from 'node:fs'
 import { dirname, resolve } from 'node:path'
@@ -490,5 +490,5 @@ async function findBundledExtensionPath(catalogId: string): Promise<string | und
 }
 
 function persistedId(path: string): string {
-  return `pending:${Buffer.from(path).toString('base64url').slice(0, 48)}`
+  return `pending:${createHash('sha256').update(path).digest('base64url').slice(0, 32)}`
 }

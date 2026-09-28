@@ -23,7 +23,7 @@ chrome.tabs.query({ active: true }, (tabs) => {
   }
 
   activeTab = Array.isArray(tabs)
-    ? tabs.find((tab) => typeof tab?.url === 'string' && !tab.url.startsWith('chrome-extension://')) || tabs[0]
+    ? tabs.find((tab) => typeof tab?.url === 'string' && !tab.url.startsWith('chrome-extension://'))
     : undefined
 
   if (!activeTab) {

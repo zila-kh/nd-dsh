@@ -166,10 +166,7 @@ export class BrowserController {
       if (this.extensionPopup?.view === view) this.closeExtensionPopup()
     })
     view.webContents.on('destroyed', () => {
-      if (this.extensionPopup?.view === view) {
-        this.extensionPopup = undefined
-        if (!this.destroying) this.emitState()
-      }
+      if (this.extensionPopup?.view === view) this.closeExtensionPopup()
     })
     view.webContents.on('blur', () => {
       if (this.extensionPopup?.view === view) this.closeExtensionPopup()
@@ -186,6 +183,10 @@ export class BrowserController {
     this.extensionPopup = { extensionId: cleanId, view }
     this.syncExtensionPopupBounds()
     view.setVisible(false)
+    // Electron's chrome.tabs.query({ active: true }) matches the focused WebContents,
+    // so the page tab must hold focus while the popup initializes.
+    const activeContents = this.activeTab().view.webContents
+    if (this.visible && !activeContents.isDestroyed()) activeContents.focus()
     try {
       await view.webContents.loadURL(popupUrl.toString())
       if (this.extensionPopup?.view === view && this.visible) {
@@ -194,6 +195,8 @@ export class BrowserController {
         this.emitState()
       }
     } catch (cause) {
+      // A newer popup (or a close) may have replaced this one mid-load; leave it alone.
+      if (this.extensionPopup?.view !== view) return
       this.closeExtensionPopup()
       throw cause
     }
