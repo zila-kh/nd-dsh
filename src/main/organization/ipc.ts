@@ -4,6 +4,7 @@ import {
   ORGANIZATION_CONTROL_IPC,
   type OrganizationControlAction,
   type OrganizationControlMutation,
+  type OrganizationControlSnapshot,
 } from '../../shared/organization-control.js'
 import { ORGANIZATION_IPC, type OrganizationMutation, type OrganizationSnapshot } from '../../shared/organization.js'
 import {
@@ -45,7 +46,12 @@ export function registerOrganizationIpc(
 ): () => void {
   const channels: string[] = []
   const computeLedger = new ComputeLedger(join(app.getPath('userData'), 'compute-usage.jsonl'))
-  const control = new OrganizationControlPlane(join(app.getPath('userData'), 'organization-control.json'), store, computeLedger)
+  const control = new OrganizationControlPlane(
+    join(app.getPath('userData'), 'organization-control.json'),
+    store,
+    computeLedger,
+    (projectWorkspace, taskId) => orchestrator.captureTaskEvidence(projectWorkspace, taskId),
+  )
   const strategy = new OrganizationStrategyPlane(join(app.getPath('userData'), 'organization-strategy.json'), store)
   control.setOnChanged((state) => {
     if (!window.isDestroyed()) window.webContents.send(ORGANIZATION_CONTROL_IPC.changed, state)
@@ -419,10 +425,22 @@ async function bindRuntimePermit(
 }
 
 async function reconcileControlState(store: OrganizationStore, control: OrganizationControlPlane): Promise<void> {
-  await control.state()
+  const controlState = await control.state()
   const organization = await store.state()
-  for (const project of organization.projects) {
-    await assertProjectCompletionEvidence(store, control, project.id, false)
+  const newestReceipt = new Map<string, OrganizationControlSnapshot['evidence'][number]>()
+  for (const receipt of controlState.evidence) {
+    if (!newestReceipt.has(receipt.taskId)) newestReceipt.set(receipt.taskId, receipt)
+  }
+  // Runs every tick, so only projects with a completed task whose newest receipt is
+  // still unverified pay for the per-project evidence pass.
+  const projectIds = new Set<string>()
+  for (const task of organization.tasks) {
+    if (task.status !== 'completed') continue
+    const receipt = newestReceipt.get(task.id)
+    if (receipt && receipt.status !== 'verified') projectIds.add(task.projectId)
+  }
+  for (const projectId of projectIds) {
+    await assertProjectCompletionEvidence(store, control, projectId, false)
   }
 }
 

@@ -13,6 +13,7 @@ import { isRetryableExecutionFailure, MAX_EXECUTION_ATTEMPTS, retryBackoffMs, st
 import type { OrganizationStore } from './store.js'
 import { TaskIntegrationConflictError, TaskWorktreeManager, type TaskWorktree } from './task-worktree.js'
 import { formatVerificationEvidence, runArtifactVerification, runVerification, type VerificationProcessRuntime } from './verification-evidence.js'
+import { createCoreEvidenceCapturer, unavailableEvidenceCapturer, type WorkspaceEvidenceCapture, type WorkspaceEvidenceCapturer } from './worktree-evidence.js'
 import { RuntimeCapacityError, type ExecutionCoordinator, type RuntimeAvailability } from './execution-coordinator.js'
 import { executePreparedFastPath, ND_FAST_PATH_ENGINE_ID, prepareFastPath, type FastPathAuditRecorder, type PreparedFastPath } from './fast-path.js'
 import { formatDecisionSupportForReviewer, formatDecisionSupportReceipt, type DecisionSupportReceipt } from './decision-support-contract.js'
@@ -95,6 +96,7 @@ export class OrganizationOrchestrator {
   private readonly structuredErrors = new Map<string, string>()
   private readonly decisionSupportReceipts = new Map<string, DecisionSupportReceipt>()
   private readonly taskWorktrees: TaskWorktreeManager
+  private readonly captureEvidence: WorkspaceEvidenceCapturer
 
   constructor(
     private readonly store: OrganizationStore,
@@ -115,6 +117,18 @@ export class OrganizationOrchestrator {
     private readonly decisionSupport?: DecisionSupportService,
   ) {
     this.taskWorktrees = taskWorktrees ?? new TaskWorktreeManager()
+    this.captureEvidence = core ? createCoreEvidenceCapturer(core) : unavailableEvidenceCapturer
+  }
+
+  /**
+   * Capture review evidence for the checkout the task's work lives in: the
+   * attached ND task worktree, else the project workspace.
+   */
+  async captureTaskEvidence(projectWorkspace: string | undefined, taskId: string): Promise<WorkspaceEvidenceCapture> {
+    const workspace = projectWorkspace
+      ? (await this.taskWorktrees.existing(projectWorkspace, taskId))?.root ?? projectWorkspace
+      : undefined
+    return await this.captureEvidence(workspace)
   }
 
   /**

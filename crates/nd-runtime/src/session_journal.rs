@@ -140,17 +140,13 @@ impl SessionJournalStore {
         })
     }
 
-    pub fn reset(&self, params: SessionJournalSessionParams) -> Result<bool> {
+    pub fn drop_session(&self, params: SessionJournalSessionParams) -> Result<bool> {
         validate_session_id(&params.session_id)?;
         let mut sessions = self
             .sessions
             .lock()
             .map_err(|_| anyhow::anyhow!("session journal lock poisoned"))?;
         Ok(sessions.remove(&params.session_id).is_some())
-    }
-
-    pub fn drop_session(&self, params: SessionJournalSessionParams) -> Result<bool> {
-        self.reset(params)
     }
 
     pub fn clear(&self) -> Result<usize> {
@@ -324,7 +320,7 @@ mod tests {
     }
 
     #[test]
-    fn reset_drops_only_one_session() {
+    fn drop_session_removes_only_one_session() {
         let store = SessionJournalStore::new(10, 1024);
         for id in ["a", "b"] {
             store
@@ -338,7 +334,7 @@ mod tests {
         }
         assert!(
             store
-                .reset(SessionJournalSessionParams {
+                .drop_session(SessionJournalSessionParams {
                     session_id: "a".into(),
                 })
                 .unwrap()

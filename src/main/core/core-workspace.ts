@@ -27,14 +27,23 @@ export interface CoreWorkspaceFile {
   byteSize: number
 }
 
+export interface CoreWorkspaceIndex {
+  root: string
+  entries: Array<{ path: string; isDirectory: boolean }>
+  truncated: boolean
+  maxEntries: number
+  durationMs: number
+}
+
 /**
- * The workspace filesystem as nd-core implements it: a bounded listing and a
- * bounded read, both resolving inside the active workspace root and both reporting
- * whether a bound was hit.
+ * The workspace filesystem as nd-core implements it: a bounded listing, a bounded
+ * read, and a bounded breadth-first path index, all resolving inside the active
+ * workspace root and all reporting whether a bound was hit.
  */
 export interface WorkspaceFileSystem {
   list(root: string, relativePath: string, maxEntries?: number): Promise<CoreWorkspaceListing>
   read(root: string, relativePath: string, maxBytes?: number): Promise<CoreWorkspaceFile>
+  index(root: string, maxEntries: number, skipNames: readonly string[]): Promise<CoreWorkspaceIndex>
 }
 
 /**
@@ -71,6 +80,13 @@ export function createCoreWorkspaceFileSystem(
         15_000,
       )
       return file
+    },
+    async index(root, maxEntries, skipNames) {
+      return await core.request<CoreWorkspaceIndex>(
+        'workspace.index',
+        { root, maxEntries, skipNames: [...skipNames] },
+        15_000,
+      )
     },
   }
 }

@@ -18,8 +18,7 @@ import type {
 } from '../../shared/organization-control.js'
 import type { OrganizationRun, OrganizationRunKind, OrganizationRunReceipt, OrganizationSnapshot } from '../../shared/organization.js'
 import type { OrganizationStore } from './store.js'
-import { taskEvidenceWorkspace } from './task-worktree.js'
-import { captureWorkspaceEvidence } from './worktree-evidence.js'
+import { unavailableEvidenceCapturer, type WorkspaceEvidenceCapture } from './worktree-evidence.js'
 import type { ExecutionCoordinator, RuntimeAvailability, RuntimePoolClaim } from './execution-coordinator.js'
 import type { ComputeLedger } from '../compute/compute-ledger.js'
 
@@ -64,12 +63,16 @@ export class OrganizationControlPlane {
   private loaded = false
   private value: OrganizationControlSnapshot = clone(EMPTY)
   private saveChain: Promise<void> = Promise.resolve()
+  private pendingSave: Promise<void> | undefined
   private onChanged: ((state: OrganizationControlSnapshot) => void) | undefined
 
   constructor(
     private readonly filePath: string,
     private readonly store: Pick<OrganizationStore, 'state' | 'taskContext'>,
     private readonly computeLedger?: Pick<ComputeLedger, 'cashSummary' | 'management'>,
+    /** Exact task-worktree capture; without nd-core every receipt is inexact and review fails closed. */
+    private readonly captureTaskEvidence: (projectWorkspace: string | undefined, taskId: string) => Promise<WorkspaceEvidenceCapture> =
+      (projectWorkspace) => unavailableEvidenceCapturer(projectWorkspace),
   ) {}
 
   setOnChanged(listener: ((state: OrganizationControlSnapshot) => void) | undefined): void {
@@ -267,8 +270,7 @@ export class OrganizationControlPlane {
     const latest = this.value.evidence.find((item) => item.taskId === taskId && item.status === 'pending_review')
     if (!latest) return null
     const context = await this.store.taskContext(taskId)
-    const workspace = await taskEvidenceWorkspace(context.project.workspacePath, taskId)
-    const current = await captureWorkspaceEvidence(workspace)
+    const current = await this.captureTaskEvidence(context.project.workspacePath, taskId)
     latest.status = !latest.exact || !current.exact
       ? 'failed'
       : current.fingerprint === latest.fingerprint ? 'verified' : 'stale'
@@ -417,8 +419,7 @@ export class OrganizationControlPlane {
 
   private async ensureEvidence(taskId: string): Promise<boolean> {
     const context = await this.store.taskContext(taskId)
-    const workspace = await taskEvidenceWorkspace(context.project.workspacePath, taskId)
-    const capture = await captureWorkspaceEvidence(workspace)
+    const capture = await this.captureTaskEvidence(context.project.workspacePath, taskId)
     const existing = this.value.evidence.find((item) => item.taskId === taskId && item.status === 'pending_review' && item.fingerprint === capture.fingerprint)
     if (existing) return false
     this.value.evidence.unshift({
@@ -613,10 +614,13 @@ export class OrganizationControlPlane {
     this.loaded = true
   }
 
-  private async save(): Promise<void> {
-    const snapshot = clone(this.value)
-    const serialized = `${JSON.stringify(snapshot, null, 2)}\n`
+  /** Durable once settled; saves requested during an in-flight write share the next one. */
+  private save(): Promise<void> {
+    if (this.pendingSave) return this.pendingSave
     const write = this.saveChain.catch(() => undefined).then(async () => {
+      this.pendingSave = undefined
+      const snapshot = clone(this.value)
+      const serialized = `${JSON.stringify(snapshot)}\n`
       await fs.mkdir(dirname(this.filePath), { recursive: true })
       const temp = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`
       try {
@@ -626,8 +630,9 @@ export class OrganizationControlPlane {
         await fs.rm(temp, { force: true }).catch(() => undefined)
         throw error
       }
-      this.onChanged?.(clone(snapshot))
+      this.onChanged?.(snapshot)
     })
+    this.pendingSave = write
     this.saveChain = write
     return write
   }

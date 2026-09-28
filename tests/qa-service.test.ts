@@ -173,7 +173,12 @@ describe('qa service', () => {
     service.setProjectRoot(workspace)
 
     const pendingRun = service.run('script:test')
-    expect(calls[0]).toMatchObject({ command: 'npm', args: ['run', 'test'], cwd: workspace })
+    if (process.platform === 'win32') {
+      expect(calls[0]).toMatchObject({ args: ['/d', '/s', '/c', '"npm run test"'], cwd: workspace })
+      expect(calls[0]?.command.toLowerCase()).toMatch(/cmd(\.exe)?$/)
+    } else {
+      expect(calls[0]).toMatchObject({ command: 'npm', args: ['run', 'test'], cwd: workspace })
+    }
     children[0]?.emitExit(0, null)
     const state = await pendingRun
     expect(state.suites.find((suite) => suite.id === 'script:test')).toMatchObject({ kind: 'project', status: 'passed' })
@@ -192,5 +197,25 @@ describe('qa service', () => {
     expect(stopped.activeRun).toBeNull()
     expect(state.activeRun).toBeNull()
     expect(state.suites.find((suite) => suite.id === 'unit')?.status).toBe('idle')
+  })
+
+  it('stops through the injected teardown instead of the Node process-tree kill', async () => {
+    const root = makeCheckout({ unit: true })
+    const { spawnProcess, children } = makeSpawner()
+    const stopped: unknown[] = []
+    const service = new QaService({
+      root,
+      spawnProcess,
+      stopProcess: async (child) => {
+        stopped.push(child)
+        children[0]?.emitExit(null, 'SIGTERM')
+      },
+    })
+
+    const pendingRun = service.run('unit')
+    await service.stop()
+    await pendingRun
+    expect(stopped).toEqual([children[0]])
+    expect(children[0]?.killCalls.length).toBe(0)
   })
 })

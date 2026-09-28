@@ -130,6 +130,106 @@ pub fn list(params: ListParams) -> Result<ListResult> {
     })
 }
 
+const DEFAULT_MAX_INDEX_ENTRIES: usize = 10_000;
+/// Keeps the response comfortably inside one protocol frame.
+const HARD_MAX_INDEX_ENTRIES: usize = 20_000;
+const MAX_INDEX_SKIP_NAMES: usize = 256;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexParams {
+    pub root: String,
+    pub max_entries: Option<usize>,
+    /// Directory or file names never descended into or returned, chosen by the
+    /// product (dependency and generated trees).
+    #[serde(default)]
+    pub skip_names: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexEntry {
+    /// Workspace-relative path with `/` separators.
+    pub path: String,
+    pub is_directory: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexResult {
+    pub root: String,
+    pub entries: Vec<IndexEntry>,
+    pub truncated: bool,
+    pub max_entries: usize,
+    pub duration_ms: u64,
+}
+
+/// Bounded breadth-first path index of the workspace, for mention suggestions.
+/// Symlinks are never followed or returned, unreadable directories are skipped,
+/// and hitting the bound is reported rather than presented as a complete tree.
+pub fn index(params: IndexParams, interrupt: &crate::deadline::Interrupt) -> Result<IndexResult> {
+    let started_at = crate::scheduler::now_ms();
+    let root = canonical_root(&params.root)?;
+    if params.skip_names.len() > MAX_INDEX_SKIP_NAMES {
+        bail!("too many workspace index skip names");
+    }
+    let skip = params
+        .skip_names
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::HashSet<_>>();
+    let max_entries = params
+        .max_entries
+        .unwrap_or(DEFAULT_MAX_INDEX_ENTRIES)
+        .clamp(1, HARD_MAX_INDEX_ENTRIES);
+
+    let mut entries = Vec::new();
+    let mut truncated = false;
+    let mut queue = std::collections::VecDeque::from([String::new()]);
+    'walk: while let Some(directory) = queue.pop_front() {
+        interrupt.check("workspace.index")?;
+        let Ok(children) = fs::read_dir(root.join(&directory)) else {
+            continue;
+        };
+        for child in children {
+            let Ok(child) = child else { continue };
+            let Ok(file_type) = child.file_type() else {
+                continue;
+            };
+            let name = child.file_name().to_string_lossy().into_owned();
+            if skip.contains(name.as_str()) || file_type.is_symlink() {
+                continue;
+            }
+            if !file_type.is_file() && !file_type.is_dir() {
+                continue;
+            }
+            if entries.len() >= max_entries {
+                truncated = true;
+                break 'walk;
+            }
+            let path = if directory.is_empty() {
+                name
+            } else {
+                format!("{directory}/{name}")
+            };
+            if file_type.is_dir() {
+                queue.push_back(path.clone());
+            }
+            entries.push(IndexEntry {
+                path,
+                is_directory: file_type.is_dir(),
+            });
+        }
+    }
+    Ok(IndexResult {
+        root: root.to_string_lossy().into_owned(),
+        entries,
+        truncated,
+        max_entries,
+        duration_ms: crate::scheduler::now_ms().saturating_sub(started_at),
+    })
+}
+
 /// Bounded read: the returned payload never exceeds the resolved bound, and
 /// `truncated` distinguishes a whole file from its leading bytes.
 pub fn read(params: ReadParams) -> Result<ReadResult> {
@@ -260,6 +360,83 @@ mod tests {
 
     fn root_of(path: &Path) -> String {
         path.to_string_lossy().into_owned()
+    }
+
+    fn no_interrupt() -> crate::deadline::Interrupt {
+        crate::deadline::Interrupt::new(
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            None,
+        )
+    }
+
+    #[test]
+    fn index_walks_breadth_first_and_skips_named_trees() {
+        let root = temp_root("index");
+        fs::create_dir_all(root.join("src/deep")).unwrap();
+        fs::create_dir_all(root.join("node_modules/pkg")).unwrap();
+        fs::write(root.join("src/deep/leaf.ts"), "x").unwrap();
+        fs::write(root.join("src/app.ts"), "x").unwrap();
+        fs::write(root.join("node_modules/pkg/index.js"), "x").unwrap();
+        fs::write(root.join("README.md"), "x").unwrap();
+
+        let result = index(
+            IndexParams {
+                root: root_of(&root),
+                max_entries: None,
+                skip_names: vec!["node_modules".into()],
+            },
+            &no_interrupt(),
+        )
+        .unwrap();
+        let paths = result
+            .entries
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect::<Vec<_>>();
+        assert!(!result.truncated);
+        assert!(paths.iter().all(|path| !path.starts_with("node_modules")));
+        let depth = |path: &str| path.matches('/').count();
+        assert!(
+            paths
+                .windows(2)
+                .all(|pair| depth(pair[0]) <= depth(pair[1]))
+        );
+        for expected in [
+            "README.md",
+            "src",
+            "src/app.ts",
+            "src/deep",
+            "src/deep/leaf.ts",
+        ] {
+            assert!(paths.contains(&expected), "missing {expected}: {paths:?}");
+        }
+        assert!(
+            result
+                .entries
+                .iter()
+                .any(|entry| entry.path == "src" && entry.is_directory)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn index_reports_the_entry_bound() {
+        let root = temp_root("index-bound");
+        for index in 0..5 {
+            fs::write(root.join(format!("file-{index}.txt")), "x").unwrap();
+        }
+        let result = index(
+            IndexParams {
+                root: root_of(&root),
+                max_entries: Some(3),
+                skip_names: Vec::new(),
+            },
+            &no_interrupt(),
+        )
+        .unwrap();
+        assert_eq!(result.entries.len(), 3);
+        assert!(result.truncated);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

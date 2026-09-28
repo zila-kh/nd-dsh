@@ -9,6 +9,7 @@ use crate::windows_job::WindowsJob;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::process::{Child, Command, Stdio};
@@ -280,6 +281,125 @@ fn parse_log(raw: &str) -> Result<Vec<GitLogEntry>> {
 }
 
 pub fn exec(params: GitExecParams, interrupt: &Interrupt) -> Result<GitExecResult> {
+    let max_output = params
+        .max_output_bytes
+        .unwrap_or(DEFAULT_MAX_OUTPUT)
+        .clamp(64 * 1024, 64 * 1024 * 1024);
+    let started_at = now_ms();
+    let run = run_owned(params, interrupt, BufferSink::new(max_output), max_output)?;
+    Ok(GitExecResult {
+        exit_code: run.exit_code,
+        stdout: String::from_utf8_lossy(&run.stdout.kept).into_owned(),
+        stderr: String::from_utf8_lossy(&run.stderr.kept).into_owned(),
+        duration_ms: now_ms().saturating_sub(started_at),
+        truncated: run.stdout.truncated || run.stderr.truncated,
+    })
+}
+
+/// Result of a streamed Git command whose stdout was hashed rather than kept.
+pub struct HashedOutput {
+    pub hasher: Sha256,
+    pub bytes: usize,
+}
+
+/// Run a Git command and feed its stdout into `hasher` without retaining it, so a
+/// diff far larger than any RPC frame can still be fingerprinted under the same
+/// deadline, cancellation, and process-tree ownership as `exec`.
+pub fn hash_stdout(
+    params: GitExecParams,
+    interrupt: &Interrupt,
+    hasher: Sha256,
+    max_bytes: usize,
+) -> Result<HashedOutput> {
+    let args = params.args.join(" ");
+    let sink = HashSink {
+        hasher,
+        bytes: 0,
+        max_bytes,
+        overflow: false,
+    };
+    let run = run_owned(params, interrupt, sink, DEFAULT_MAX_OUTPUT)?;
+    if run.exit_code != 0 {
+        let stderr = String::from_utf8_lossy(&run.stderr.kept);
+        let stderr = stderr.trim();
+        if stderr.is_empty() {
+            bail!("git {args} exited {}", run.exit_code);
+        }
+        bail!("{stderr}");
+    }
+    if run.stdout.overflow {
+        bail!("git {args} output exceeded the {max_bytes}-byte bound");
+    }
+    Ok(HashedOutput {
+        hasher: run.stdout.hasher,
+        bytes: run.stdout.bytes,
+    })
+}
+
+/// Where a Git child's stdout goes. Every sink drains the pipe to EOF, so a full
+/// bound never leaves Git blocked on a write while the owner waits for its exit.
+trait StdoutSink: Send + 'static {
+    fn accept(&mut self, chunk: &[u8]);
+}
+
+struct BufferSink {
+    kept: Vec<u8>,
+    max: usize,
+    truncated: bool,
+}
+
+impl BufferSink {
+    fn new(max: usize) -> Self {
+        Self {
+            kept: Vec::with_capacity(max.min(64 * 1024)),
+            max,
+            truncated: false,
+        }
+    }
+}
+
+impl StdoutSink for BufferSink {
+    fn accept(&mut self, chunk: &[u8]) {
+        let remaining = self.max.saturating_sub(self.kept.len());
+        let take = remaining.min(chunk.len());
+        self.kept.extend_from_slice(&chunk[..take]);
+        if chunk.len() > remaining {
+            self.truncated = true;
+        }
+    }
+}
+
+struct HashSink {
+    hasher: Sha256,
+    bytes: usize,
+    max_bytes: usize,
+    overflow: bool,
+}
+
+impl StdoutSink for HashSink {
+    fn accept(&mut self, chunk: &[u8]) {
+        self.bytes = self.bytes.saturating_add(chunk.len());
+        if self.bytes > self.max_bytes {
+            self.overflow = true;
+        }
+        if !self.overflow {
+            self.hasher.update(chunk);
+        }
+    }
+}
+
+struct OwnedRun<S> {
+    exit_code: i32,
+    stdout: S,
+    stderr: BufferSink,
+}
+
+fn run_owned<S: StdoutSink>(
+    params: GitExecParams,
+    interrupt: &Interrupt,
+    stdout_sink: S,
+    max_output: usize,
+) -> Result<OwnedRun<S>> {
     interrupt.check("git.exec")?;
     if params.cwd.trim().is_empty() || params.cwd.len() > 4096 {
         bail!("invalid Git cwd");
@@ -296,11 +416,6 @@ pub fn exec(params: GitExecParams, interrupt: &Interrupt) -> Result<GitExecResul
         .as_deref()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or("git");
-    let max_output = params
-        .max_output_bytes
-        .unwrap_or(DEFAULT_MAX_OUTPUT)
-        .clamp(64 * 1024, 64 * 1024 * 1024);
-    let started_at = now_ms();
 
     let mut command = Command::new(git);
     command
@@ -389,8 +504,8 @@ pub fn exec(params: GitExecParams, interrupt: &Interrupt) -> Result<GitExecResul
         .stderr
         .take()
         .ok_or_else(|| anyhow::anyhow!("Git stderr pipe is unavailable"))?;
-    let stdout_reader = spawn_bounded_reader(stdout, max_output);
-    let stderr_reader = spawn_bounded_reader(stderr, max_output);
+    let stdout_reader = spawn_sink_reader(stdout, stdout_sink);
+    let stderr_reader = spawn_sink_reader(stderr, BufferSink::new(max_output));
 
     // The child is owned by this thread, which is what keeps the interrupt honest: a
     // stop kills the tree this thread is waiting on, and no other thread ever holds a
@@ -407,8 +522,8 @@ pub fn exec(params: GitExecParams, interrupt: &Interrupt) -> Result<GitExecResul
     };
 
     let status = child.wait()?;
-    let (stdout_bytes, stdout_truncated) = join_reader(stdout_reader, "stdout")?;
-    let (stderr_bytes, stderr_truncated) = join_reader(stderr_reader, "stderr")?;
+    let stdout = join_reader(stdout_reader, "stdout")?;
+    let stderr = join_reader(stderr_reader, "stderr")?;
 
     if let Some(stop_reason) = stopped {
         return Err(coded(
@@ -420,12 +535,10 @@ pub fn exec(params: GitExecParams, interrupt: &Interrupt) -> Result<GitExecResul
         ));
     }
 
-    Ok(GitExecResult {
+    Ok(OwnedRun {
         exit_code: status.code().unwrap_or(-1),
-        stdout: String::from_utf8_lossy(&stdout_bytes).into_owned(),
-        stderr: String::from_utf8_lossy(&stderr_bytes).into_owned(),
-        duration_ms: now_ms().saturating_sub(started_at),
-        truncated: stdout_truncated || stderr_truncated,
+        stdout,
+        stderr,
     })
 }
 
@@ -441,36 +554,24 @@ fn end_git_tree(child: &mut Child, job: &mut JobHandle) {
     let _ = child.wait();
 }
 
-fn spawn_bounded_reader<R: Read + Send + 'static>(
+fn spawn_sink_reader<R: Read + Send + 'static, S: StdoutSink>(
     mut reader: R,
-    max: usize,
-) -> JoinHandle<Result<(Vec<u8>, bool)>> {
+    mut sink: S,
+) -> JoinHandle<Result<S>> {
     thread::spawn(move || {
-        let mut kept = Vec::with_capacity(max.min(64 * 1024));
         let mut buffer = [0u8; 16 * 1024];
-        let mut truncated = false;
         loop {
             let read = reader.read(&mut buffer)?;
             if read == 0 {
                 break;
             }
-            let remaining = max.saturating_sub(kept.len());
-            if remaining > 0 {
-                let take = remaining.min(read);
-                kept.extend_from_slice(&buffer[..take]);
-            }
-            if read > remaining {
-                truncated = true;
-            }
+            sink.accept(&buffer[..read]);
         }
-        Ok((kept, truncated))
+        Ok(sink)
     })
 }
 
-fn join_reader(
-    handle: JoinHandle<Result<(Vec<u8>, bool)>>,
-    stream: &str,
-) -> Result<(Vec<u8>, bool)> {
+fn join_reader<S>(handle: JoinHandle<Result<S>>, stream: &str) -> Result<S> {
     handle
         .join()
         .map_err(|_| anyhow::anyhow!("Git {stream} reader thread panicked"))?

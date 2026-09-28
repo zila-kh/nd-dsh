@@ -8,7 +8,8 @@ import { ND_ORG_MEMORY_ID, ND_WORKSPACE_CONTEXT_ID } from '../shared/capabilitie
 import { workerAssignableCodingEngines } from '../shared/coding-engines.js'
 import { IPC, type DshEventFrame } from '../shared/contracts.js'
 import { DESIGN_IPC } from '../shared/design.js'
-import { ORGANIZATION_IPC } from '../shared/organization.js'
+import { ORGANIZATION_IPC, type OrganizationSnapshot } from '../shared/organization.js'
+import { throttleLatest } from './latest-value-throttle.js'
 import { TERMINAL_IPC } from '../shared/terminal.js'
 import { resolveShortcutBehavior } from '../shared/quick-launcher.js'
 import { bundledResourceRoot, projectRoot } from './app-paths.js'
@@ -111,6 +112,7 @@ if (!hasSingleInstanceLock) app.quit()
 
 const theme = new ThemeService()
 const LAUNCHER_PRELOAD_PATH = join(currentDirectory, '../preload/index.cjs')
+const ORGANIZATION_BROADCAST_INTERVAL_MS = 100
 const launcherPopup = createLauncherPopup({
   preloadPath: LAUNCHER_PRELOAD_PATH,
   getMainWindow: () => mainWindow,
@@ -377,16 +379,17 @@ async function createWindow(cdpPort: number): Promise<void> {
   const design = new DesignService(workspace, browser)
   const ndPencil = new NdPencilController(window, workspace, projectRoot(), ndPencilPreload)
   await ndPencil.initialize()
-  const taskWorktrees = new TaskWorktreeManager(createCoreWorktreeGit(core))
+  const coreWorktreeGit = createCoreWorktreeGit(core)
+  const taskWorktrees = new TaskWorktreeManager(coreWorktreeGit)
   // Task worktrees are ND's own isolated checkouts for this project, so the
   // engine router admits them by the exact roots ND created — never by a path
   // shape a caller could construct.
   engineRouter.setWorktreeGuard((cwd) => taskWorktrees.ownsRoot(cwd))
   harness.setSessionCwdGuard((cwd) => taskWorktrees.ownsRoot(cwd))
   const decisionSupport = createDecisionSupportFromEnv(process.env, fetch, core)
-  const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter, projectRuntime, capabilities, executionCoordinator, taskWorktrees, core, { spawnProcess: unscopedCoreSpawn, stopProcess: stopCoreManagedChildProcess }, browserPlatform, decisionSupport)
+  const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter, projectRuntime, capabilities, executionCoordinator, taskWorktrees, core, { spawnProcess: unscopedCoreSpawn, stopProcess: stopCoreManagedChildProcess, runGit: coreWorktreeGit }, browserPlatform, decisionSupport)
   const approvalGate = new OrganizationApprovalGate(organizationStore, harness, core)
-  const qa = new QaService()
+  const qa = new QaService({ spawnProcess: unscopedCoreSpawn, stopProcess: stopCoreManagedChildProcess })
   activeQa = qa
   qa.setProjectRoot(workspace.state().root)
   const disposeIpc = registerIpc({ window, preloadPath: preload, launcherPopup, browser, dshSurface, engines, engineRouter, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, qa, sessionArchive, usageLedger, capabilities, organizationStore })
@@ -410,9 +413,12 @@ async function createWindow(cdpPort: number): Promise<void> {
     if (!window.isDestroyed()) window.webContents.send(ORGANIZATION_IPC.runtimeChanged, status)
   })
 
-  organizationStore.setOnChanged((state) => {
+  // Agent runs mutate the organization in bursts and every broadcast re-renders the
+  // workbench from full state, so only the latest snapshot per window is sent.
+  const broadcastOrganization = throttleLatest<OrganizationSnapshot>(ORGANIZATION_BROADCAST_INTERVAL_MS, (state) => {
     if (!window.isDestroyed()) window.webContents.send(ORGANIZATION_IPC.changed, state)
   })
+  organizationStore.setOnChanged(broadcastOrganization)
   let lastWorkspaceRoot = workspace.state().root
   workspace.setStateListener((state) => {
     // Project checks and a running dev server always belong to the active
@@ -694,6 +700,7 @@ async function createWindow(cdpPort: number): Promise<void> {
 
   window.on('closed', () => {
     organizationStore.setOnChanged(undefined)
+    broadcastOrganization.cancel()
     workspace.setStateListener(undefined)
     ndPencil.setStateListener(undefined)
     disposeOrganizationIpc()

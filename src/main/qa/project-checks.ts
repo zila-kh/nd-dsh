@@ -65,7 +65,7 @@ function packageManagerCommand(root: string, scriptName: string): [string, strin
     ? 'pnpm'
     : existsSync(join(root, 'yarn.lock'))
       ? 'yarn'
-      : existsSync(join(root, 'bun.lockb') || join(root, 'bun.lock'))
+      : existsSync(join(root, 'bun.lockb')) || existsSync(join(root, 'bun.lock'))
         ? 'bun'
         : 'npm'
   return [manager, ['run', scriptName]]

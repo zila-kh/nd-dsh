@@ -1,7 +1,7 @@
 import type { WorkspaceSuggestion } from '../../shared/contracts.js'
 
 /** Directories that are never useful as chat mentions and dwarf the index. */
-const SUGGEST_SKIPPED_NAMES = new Set([
+export const SUGGEST_SKIPPED_NAMES: ReadonlySet<string> = new Set([
   '.git', 'node_modules', 'out', 'dist', 'build', 'coverage', 'vendor', '.dsh', '.sessions', '.agents',
 ])
 

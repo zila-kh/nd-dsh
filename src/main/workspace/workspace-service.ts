@@ -4,7 +4,7 @@ import { basename, join, relative, resolve } from 'node:path'
 import type { WorkspaceEntry, WorkspaceFile, WorkspaceState, WorkspaceSuggestion } from '../../shared/contracts.js'
 import { CORE_WORKSPACE_LIST_HARD_MAX, type WorkspaceFileSystem } from '../core/core-workspace.js'
 import { resolveInside } from './path-utils.js'
-import { collectSuggestionIndex, rankFileSuggestions } from './suggest.js'
+import { collectSuggestionIndex, rankFileSuggestions, SUGGEST_INDEX_MAX_ENTRIES, SUGGEST_SKIPPED_NAMES } from './suggest.js'
 
 const MAX_FILE_BYTES = 1024 * 1024
 const MAX_DIRECTORY_ENTRIES = 500
@@ -161,6 +161,15 @@ export class WorkspaceService {
       return this.suggestIndex.entries
     }
     const root = this.root
+    if (this.files) {
+      const index = await this.files.index(root, SUGGEST_INDEX_MAX_ENTRIES, [...SUGGEST_SKIPPED_NAMES])
+      const entries = index.entries.map((entry): WorkspaceSuggestion => ({
+        relativePath: entry.path,
+        kind: entry.isDirectory ? 'directory' : 'file',
+      }))
+      this.suggestIndex = { root, at: now, entries }
+      return entries
+    }
     const entries = await collectSuggestionIndex(async (relativeDirectory) => {
       const absolute = relativeDirectory ? join(root, relativeDirectory) : root
       const items = await fs.readdir(absolute, { withFileTypes: true })

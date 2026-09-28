@@ -1,5 +1,5 @@
 import { foldEvent, foldHistory, type HistoryEventEnvelope } from '../../../shared/chat-events'
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type KeyboardEvent, type ReactNode, Fragment } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
 import type {
   CodingEngineDescriptor,
   DshEventFrame,
@@ -1007,15 +1007,21 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
 
   // Prompt that produced a given entry — walks back to the nearest user
   // message so Retry on an assistant bubble resends the right turn.
-  function lastPromptBefore(list: ThreadEntry[], entryId: string): string | undefined {
-    const index = list.findIndex((item) => item.id === entryId)
-    if (index === -1) return undefined
-    for (let i = index; i >= 0; i--) {
-      const item = list[i]!
-      if (item.kind === 'user') return item.text
+  // One pass per entries change; the feed renders on every streamed event.
+  const feed = useMemo(() => {
+    const groups = groupEntries(entries)
+    const promptAtEntry = new Map<string, string>()
+    let lastPrompt: string | undefined
+    for (const item of entries) {
+      if (item.kind === 'user') lastPrompt = item.text
+      if (lastPrompt !== undefined) promptAtEntry.set(item.id, lastPrompt)
     }
-    return undefined
-  }
+    let lastAssistantIndex = -1
+    groups.forEach((group, index) => {
+      if (group.kind === 'entry' && group.entry.kind === 'assistant') lastAssistantIndex = index
+    })
+    return { groups, promptAtEntry, lastAssistantIndex }
+  }, [entries])
 
   // ChatGPT-style scroll: follow the newest content only while the user is
   // already at (or near) the bottom; scrolling up to read wins.
@@ -1204,6 +1210,21 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
       onError(cause instanceof Error ? cause.message : String(cause))
     }
   }
+
+  // Feed rows are memoized, so the handlers they receive must keep one identity
+  // while still calling the latest closures.
+  const feedHandlerRef = useRef({ answerApproval, retry, openAntigravityAccountTerminal, onOpenFile, onOpenLink })
+  feedHandlerRef.current = { answerApproval, retry, openAntigravityAccountTerminal, onOpenFile, onOpenLink }
+  const feedHandlers = useMemo(() => ({
+    answerApproval: (entry: Extract<ThreadEntry, { kind: 'approval' }>, outcome: 'allowed-once' | 'rejected') =>
+      feedHandlerRef.current.answerApproval(entry, outcome),
+    retry: (retryPrompt: string) => feedHandlerRef.current.retry(retryPrompt),
+    switchModel: () => { setModelMenuOpen(true); setModelMenuPane('root') },
+    switchAccount: () => { void feedHandlerRef.current.openAntigravityAccountTerminal() },
+    configureZcodeModel: () => setZcodeConfigOpen(true),
+    openFile: (path: string) => feedHandlerRef.current.onOpenFile?.(path),
+    openLink: (url: string) => feedHandlerRef.current.onOpenLink?.(url),
+  }), [])
 
   const markResolved = (id: string, kind: 'approval' | 'question', outcome: string): void => {
     if (!activeSessionId) return
@@ -1638,37 +1659,37 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
               <p className="m-0 max-w-[300px] text-[9px]/[1.6]">Ask anything about this workspace — open files, inspect the browser, or plan company goals. Inspect context usage and thread activity with the Context badge.</p>
             </div>
           ) : null}
-          {groupEntries(entries).map((group, index, groups) => {
-            const isLastAssistant = group.kind === 'entry'
-              && group.entry.kind === 'assistant'
-              && groups.slice(index + 1).every((later) => later.kind !== 'entry' || later.entry.kind !== 'assistant')
-            const entryRetryPrompt = group.kind === 'entry' && group.entry.kind === 'user' ? group.entry.text : lastPromptBefore(entries, group.key)
+          {feed.groups.map((group, index) => {
+            const isLastAssistant = index === feed.lastAssistantIndex
+            const entryRetryPrompt = group.kind === 'entry' && group.entry.kind === 'user' ? group.entry.text : feed.promptAtEntry.get(group.key)
+            // Off-screen rows skip layout and paint; `auto` remembers each row's
+            // rendered height so scrolling back does not jump.
             return (
-              <Fragment key={group.key}>
+              <div key={group.key} className="[content-visibility:auto] [contain-intrinsic-size:auto_80px]">
                 {group.kind === 'tool-group' ? (
-                  <ToolGroupView group={group} {...(onOpenFile ? { onOpenFile } : {})} />
+                  <ToolGroupView group={group} {...(onOpenFile ? { onOpenFile: feedHandlers.openFile } : {})} />
                 ) : group.kind === 'reasoning-group' ? (
                   <ReasoningCard text={group.text} />
                 ) : group.kind === 'context-group' ? (
                   <ContextCard blocks={group.blocks} />
                 ) : (
-                  <ThreadEntryView
+                  <MemoThreadEntryView
                     entry={group.entry}
                     isLastAssistant={isLastAssistant}
                     {...(entryRetryPrompt ? { retryPrompt: entryRetryPrompt } : {})}
-                    onAnswerApproval={answerApproval}
-                    onRetry={retry}
-                    onSwitchModel={() => { setModelMenuOpen(true); setModelMenuPane('root') }}
-                    onSwitchAccount={() => void openAntigravityAccountTerminal()}
+                    onAnswerApproval={feedHandlers.answerApproval}
+                    onRetry={feedHandlers.retry}
+                    onSwitchModel={feedHandlers.switchModel}
+                    onSwitchAccount={feedHandlers.switchAccount}
                     {...(group.kind === 'entry' && group.entry.kind === 'notice' && group.entry.tone === 'error'
                       && ZCODE_MODEL_CONFIG_MISSING.test(group.entry.text) && activeEngineId === ZCODE_CLI_ENGINE_ID
-                      ? { onConfigureModel: () => setZcodeConfigOpen(true) }
+                      ? { onConfigureModel: feedHandlers.configureZcodeModel }
                       : {})}
-                    {...(onOpenFile ? { onOpenFile } : {})}
-                    {...(onOpenLink ? { onOpenLink } : {})}
+                    {...(onOpenFile ? { onOpenFile: feedHandlers.openFile } : {})}
+                    {...(onOpenLink ? { onOpenLink: feedHandlers.openLink } : {})}
                   />
                 )}
-              </Fragment>
+              </div>
             )
           })}
           {busy ? (
@@ -2363,6 +2384,9 @@ interface ThreadEntryViewProps {
   /** Opens the ND GUI for the engine's own model config (ZCode CLI provider setup). */
   onConfigureModel?(): void
 }
+
+/** Streaming replaces only the changed entry, so every other row skips re-rendering. */
+const MemoThreadEntryView = memo(ThreadEntryView)
 
 function ThreadEntryView({ entry, isLastAssistant, retryPrompt, onAnswerApproval, onOpenFile, onOpenLink, onRetry, onSwitchModel, onSwitchAccount, onConfigureModel }: ThreadEntryViewProps) {
   switch (entry.kind) {

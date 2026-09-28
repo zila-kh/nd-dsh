@@ -40,6 +40,7 @@ export class OrganizationStore {
   private loaded = false
   private loadPromise: Promise<void> | undefined
   private saveChain: Promise<void> = Promise.resolve()
+  private pendingSave: Promise<void> | undefined
   private value: OrganizationSnapshot = clone(EMPTY)
   private onChanged: ((state: OrganizationSnapshot) => void) | undefined
 
@@ -508,10 +509,18 @@ export class OrganizationStore {
     return normalizeSnapshot(parsed)
   }
 
-  private async save(): Promise<void> {
-    const snapshot = clone(this.value)
-    const serialized = `${JSON.stringify(snapshot, null, 2)}\n`
+  /**
+   * Durable once the returned promise settles. Saves requested while a write is in
+   * flight share the next write, which snapshots state when it starts, so a burst
+   * of mutations costs one snapshot, one serialization, and one listener update
+   * instead of one per mutation.
+   */
+  private save(): Promise<void> {
+    if (this.pendingSave) return this.pendingSave
     const write = this.saveChain.catch(() => undefined).then(async () => {
+      this.pendingSave = undefined
+      const snapshot = clone(this.value)
+      const serialized = `${JSON.stringify(snapshot)}\n`
       await fs.mkdir(dirname(this.filePath), { recursive: true })
       await writeAtomic(this.filePath, serialized)
       try {
@@ -519,8 +528,9 @@ export class OrganizationStore {
       } catch (error) {
         console.warn('Failed to persist organization backup:', error)
       }
-      this.onChanged?.(clone(snapshot))
+      this.onChanged?.(snapshot)
     })
+    this.pendingSave = write
     this.saveChain = write
     return write
   }

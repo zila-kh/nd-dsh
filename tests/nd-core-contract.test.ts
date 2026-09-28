@@ -75,6 +75,9 @@ describe('workspace primitives call site', () => {
       async read(_root: string, path: string) {
         return { root: '/workspace', path, data: 'content', size: 7, truncated: true, maxBytes: 1024 * 1024, byteSize: 4096 }
       },
+      async index() {
+        return { root: '/workspace', entries: [], truncated: false, maxEntries: 10_000, durationMs: 0 }
+      },
     }
     const workspace = new WorkspaceService('/workspace', { files })
     const entries = await workspace.list()
@@ -112,10 +115,40 @@ describe('workspace primitives call site', () => {
       files: {
         async list() { throw escape },
         async read() { throw escape },
+        async index() { throw escape },
       },
     })
     await expect(workspace.list('../..')).rejects.toThrow(/escapes the root/)
     await expect(workspace.read('../secret')).rejects.toThrow(/escapes the root/)
+    await expect(workspace.suggest('app')).rejects.toThrow(/escapes the root/)
+  })
+
+  it('builds @-mention suggestions from the core path index with the product skip list', async () => {
+    const requests: Array<{ method: string; params: unknown }> = []
+    const workspace = new WorkspaceService('/workspace', {
+      files: createCoreWorkspaceFileSystem({
+        async request<T>(method: string, params: unknown) {
+          requests.push({ method, params })
+          return {
+            root: '/workspace',
+            truncated: false,
+            maxEntries: 10_000,
+            durationMs: 1,
+            entries: [
+              { path: 'src', isDirectory: true },
+              { path: 'src/app.ts', isDirectory: false },
+              { path: 'docs/app-notes.md', isDirectory: false },
+            ],
+          } as T
+        },
+      }),
+    })
+    const suggestions = await workspace.suggest('app')
+    expect(suggestions.map((entry) => entry.relativePath)).toEqual(['docs/app-notes.md', 'src/app.ts'])
+    await workspace.suggest('src')
+    expect(requests).toHaveLength(1)
+    expect(requests[0]!.method).toBe('workspace.index')
+    expect((requests[0]!.params as { skipNames: string[] }).skipNames).toContain('node_modules')
   })
 
   it('keeps the in-process path working while the core backend is detached', async () => {

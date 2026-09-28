@@ -8,6 +8,9 @@ import { quarantineFile } from '../logging/log-file.js'
 
 const MAX_BUFFER = 512 * 1024
 const MAX_INPUT = 64 * 1024
+const PERSIST_DELAY_MS = 120
+/** Output only moves the recovery tail; each persist reads every native tail back from nd-core. */
+const OUTPUT_PERSIST_DELAY_MS = 1_000
 const RESTORE_MARKER = '\r\n\x1b[2m[ND] Restored terminal after desktop restart; the previous shell process ended with the app.\x1b[0m\r\n'
 
 type StoredSession = TerminalSessionState
@@ -74,6 +77,7 @@ export class TerminalManager {
   private initialized = false
   private closing = false
   private persistTimer: ReturnType<typeof setTimeout> | undefined
+  private persistDueAt = 0
   private persistChain: Promise<void> = Promise.resolve()
   private stateEventChain: Promise<void> = Promise.resolve()
 
@@ -320,7 +324,7 @@ export class TerminalManager {
           terminal.outputSeq += 1; terminal.updatedAt = Date.now()
           if (!pty.tailState) append(terminal, data)
           this.options.onOutput?.({ sessionId: terminal.sessionId, terminalId: terminal.id, seq: terminal.outputSeq, data })
-          this.schedulePersist()
+          this.schedulePersist(OUTPUT_PERSIST_DELAY_MS)
         })
         runtime.exit = pty.onExit((event) => {
           void this.handleRuntimeExit(terminal, runtime, event)
@@ -456,10 +460,19 @@ export class TerminalManager {
       this.options.onState?.({ sessionId, state })
     })
   }
-  private schedulePersist(): void {
+  /**
+   * A pending persist is only ever pulled earlier, never pushed later, so
+   * sustained output still reaches disk once per window instead of starving it.
+   */
+  private schedulePersist(delayMs = PERSIST_DELAY_MS): void {
     if (this.closing) return
-    if (this.persistTimer) clearTimeout(this.persistTimer)
-    this.persistTimer = setTimeout(() => { this.persistTimer = undefined; void this.persist().catch((error) => console.error('[terminal] persist failed:', error)) }, 120)
+    const dueAt = Date.now() + delayMs
+    if (this.persistTimer) {
+      if (this.persistDueAt <= dueAt) return
+      clearTimeout(this.persistTimer)
+    }
+    this.persistDueAt = dueAt
+    this.persistTimer = setTimeout(() => { this.persistTimer = undefined; void this.persist().catch((error) => console.error('[terminal] persist failed:', error)) }, delayMs)
   }
   private async persist(): Promise<void> {
     const sessions = await Promise.all([...this.sessions.values()].map((session) => this.snapshotSession(session)))
