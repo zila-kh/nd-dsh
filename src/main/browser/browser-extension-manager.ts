@@ -159,13 +159,13 @@ export class BrowserExtensionManager {
     verifyCatalogManifest(definition, manifest)
 
     for (const [id, record] of [...this.records]) {
-      if (record.catalogId !== definition.id && record.storeId !== definition.storeId) continue
+      if (!matchesCatalogRecord(record, definition)) continue
       const loaded = this.browserSession.extensions.getExtension(id)
       if (loaded) this.browserSession.extensions.removeExtension(id)
       this.records.delete(id)
     }
     this.value.extensions = this.value.extensions.filter((item) =>
-      item.catalogId !== definition.id && item.storeId !== definition.storeId)
+      !matchesCatalogPersisted(item, definition))
 
     return this.installPath(sourcePath, {
       source: selectedPath ? 'unpacked' : 'bundled',
@@ -188,8 +188,11 @@ export class BrowserExtensionManager {
       ? resolve(selectedPath)
       : await findBundledExtensionPath(definition.id)
     if (!sourcePath) {
+      if (definition.packagePolicy === 'bundled') {
+        throw new Error(`${definition.name} is missing from this ND build.`)
+      }
       throw new Error(
-        `${definition.name} is not bundled in this ND build. Choose an authorized unpacked package to load it directly into the ND browser.`,
+        `${definition.name} is not bundled in this ND build. Choose an authorized unpacked package to test it directly in the ND browser.`,
       )
     }
     return {
@@ -346,6 +349,16 @@ export class BrowserExtensionManager {
     this.saveChain = operation
     await operation
   }
+}
+
+function matchesCatalogRecord(record: BrowserExtensionRecord, definition: CatalogDefinition): boolean {
+  return record.catalogId === definition.id
+    || (definition.storeId !== undefined && record.storeId === definition.storeId)
+}
+
+function matchesCatalogPersisted(item: PersistedExtension, definition: CatalogDefinition): boolean {
+  return item.catalogId === definition.id
+    || (definition.storeId !== undefined && item.storeId === definition.storeId)
 }
 
 function verifyCatalogManifest(definition: CatalogDefinition, manifest: Record<string, unknown>): void {
