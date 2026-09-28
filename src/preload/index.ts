@@ -251,6 +251,11 @@ const api: DesktopApi = {
     installExtension: () => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.installExtension) as Promise<BrowserExtensionRecord | null>,
     setExtensionEnabled: (extensionId: string, enabled: boolean) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.extensionEnabled, extensionId, enabled) as Promise<BrowserExtensionRecord[]>,
     removeExtension: (extensionId: string) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.removeExtension, extensionId) as Promise<BrowserExtensionRecord[]>,
+    reloadExtensions: () => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.reloadExtensions) as Promise<BrowserExtensionRecord[]>,
+    setDeveloperMode: (enabled: boolean) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.developerMode, enabled) as Promise<BrowserPlatformState>,
+    setBrowserUseEnabled: (enabled: boolean) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.browserUseEnabled, enabled) as Promise<BrowserPlatformState>,
+    importCatalogExtension: (catalogId: string) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.importCatalogExtension, catalogId) as Promise<BrowserExtensionRecord>,
+    openCatalogExtension: (catalogId: string) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.openCatalogExtension, catalogId) as Promise<void>,
     saveCredential: (input: { origin: string; username: string; password: string; label?: string }) =>
       ipcRenderer.invoke(BROWSER_PLATFORM_IPC.saveCredential, input) as Promise<BrowserCredentialSummary>,
     removeCredential: (credentialId: string) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.removeCredential, credentialId) as Promise<boolean>,
