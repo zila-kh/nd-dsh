@@ -89,7 +89,8 @@ export function analyzeBrowserExtensionManifest(manifest: Record<string, unknown
     status: notes.some((note) =>
       note.startsWith('Electron does not document support')
       || note.startsWith('Manifest features outside')
-      || note.startsWith('Manifest version is not'))
+      || note.startsWith('Manifest version is not')
+      || note.startsWith('MV3 background service workers are treated as provisional'))
       ? 'limited'
       : 'compatible',
     notes,
