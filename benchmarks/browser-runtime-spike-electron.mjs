@@ -193,7 +193,7 @@ async function probeExtensions(ses, origin, hostWindow) {
       hostWindow,
     ),
   }
-  result.loadedExtensionsAfterCleanup = ses.getAllExtensions().map((extension) => ({
+  result.loadedExtensionsAfterCleanup = ses.extensions.getAllExtensions().map((extension) => ({
     id: extension.id,
     name: extension.name,
     version: extension.version,
@@ -215,7 +215,7 @@ async function loadAndExerciseExtension(label, extensionPath, ses, origin, hostW
   let extension
   try {
     const started = performance.now()
-    extension = await ses.loadExtension(extensionPath, { allowFileAccess: false })
+    extension = await ses.extensions.loadExtension(extensionPath, { allowFileAccess: false })
     result.loadMs = performance.now() - started
     result.loaded = true
     result.id = extension.id
@@ -239,8 +239,8 @@ async function loadAndExerciseExtension(label, extensionPath, ses, origin, hostW
   } finally {
     if (extension?.id) {
       try {
-        ses.removeExtension(extension.id)
-        result.removed = !ses.getAllExtensions().some((item) => item.id === extension.id)
+        ses.extensions.removeExtension(extension.id)
+        result.removed = !ses.extensions.getAllExtensions().some((item) => item.id === extension.id)
       } catch (cause) {
         recordFailure('extension.' + label + '.remove', cause)
       }
@@ -261,7 +261,7 @@ async function loadAndExerciseActionPopup(extensionPath, ses, hostWindow) {
   }
   let extension
   try {
-    extension = await ses.loadExtension(extensionPath, { allowFileAccess: false })
+    extension = await ses.extensions.loadExtension(extensionPath, { allowFileAccess: false })
     result.loaded = true
     result.id = extension.id
     const view = createView(ses, hostWindow)
@@ -285,8 +285,8 @@ async function loadAndExerciseActionPopup(extensionPath, ses, hostWindow) {
   } finally {
     if (extension?.id) {
       try {
-        ses.removeExtension(extension.id)
-        result.removed = !ses.getAllExtensions().some((item) => item.id === extension.id)
+        ses.extensions.removeExtension(extension.id)
+        result.removed = !ses.extensions.getAllExtensions().some((item) => item.id === extension.id)
       } catch (cause) {
         recordFailure('extension.mv3-action-popup.remove', cause)
       }
