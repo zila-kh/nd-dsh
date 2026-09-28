@@ -276,10 +276,14 @@ export class BrowserExtensionManager {
       ...metadata,
     }
     item.enabled = true
-    assignOptional(item, 'source', metadata.source)
-    assignOptional(item, 'catalogId', metadata.catalogId)
-    assignOptional(item, 'storeId', metadata.storeId)
-    assignOptional(item, 'publisher', metadata.publisher)
+    if (metadata.source !== undefined) item.source = metadata.source
+    else delete item.source
+    if (metadata.catalogId !== undefined) item.catalogId = metadata.catalogId
+    else delete item.catalogId
+    if (metadata.storeId !== undefined) item.storeId = metadata.storeId
+    else delete item.storeId
+    if (metadata.publisher !== undefined) item.publisher = metadata.publisher
+    else delete item.publisher
     if (!existing) this.value.extensions.push(item)
     await this.persist()
 
@@ -351,15 +355,6 @@ export class BrowserExtensionManager {
     this.saveChain = operation
     await operation
   }
-}
-
-function assignOptional<K extends 'source' | 'catalogId' | 'storeId' | 'publisher'>(
-  item: PersistedExtension,
-  key: K,
-  value: PersistedExtension[K],
-): void {
-  if (value === undefined) delete item[key]
-  else item[key] = value
 }
 
 function matchesCatalogRecord(record: BrowserExtensionRecord, definition: CatalogDefinition): boolean {
