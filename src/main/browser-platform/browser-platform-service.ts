@@ -122,6 +122,12 @@ export class BrowserPlatformService {
   }
 
   async callAgent(method: string, params: Record<string, unknown>): Promise<unknown> {
+    if (!this.extensions.browserUseEnabled()
+      && method !== 'browser.targets'
+      && method !== 'browser.connections'
+      && method !== 'browser.selection') {
+      throw new Error('Built-in browser control is disabled in Settings > Browser')
+    }
     return this.router.call(method, params, 'agent')
   }
 
@@ -139,6 +145,9 @@ export class BrowserPlatformService {
       leases: this.leases.list(),
       downloads: this.browser.listDownloads(),
       extensions: this.extensions.list(),
+      extensionCatalog: this.extensions.catalog(),
+      browserUseEnabled: this.extensions.browserUseEnabled(),
+      developerMode: this.extensions.developerMode(),
       credentials,
       sitePermissions: this.browser.sitePermissions(),
       approvals: this.policy.approvals(),
@@ -214,6 +223,9 @@ export class BrowserPlatformService {
   }
 
   async installExtension(path: string): Promise<BrowserExtensionRecord> {
+    if (!this.extensions.developerMode()) {
+      throw new Error('Enable Browser extension Developer mode before loading an unpacked extension')
+    }
     const record = await this.extensions.install(path)
     await this.emit()
     return record
@@ -229,6 +241,36 @@ export class BrowserPlatformService {
     const records = await this.extensions.remove(extensionId)
     await this.emit()
     return records
+  }
+
+  async reloadExtensions(): Promise<BrowserExtensionRecord[]> {
+    const records = await this.extensions.reloadAll()
+    await this.emit()
+    return records
+  }
+
+  async setDeveloperMode(enabled: boolean): Promise<BrowserPlatformState> {
+    await this.extensions.setDeveloperMode(enabled)
+    await this.emit()
+    return this.state()
+  }
+
+  async setBrowserUseEnabled(enabled: boolean): Promise<BrowserPlatformState> {
+    await this.extensions.setBrowserUseEnabled(enabled)
+    await this.emit()
+    return this.state()
+  }
+
+  async importCatalogExtension(catalogId: string): Promise<BrowserExtensionRecord> {
+    const record = await this.extensions.importCatalog(catalogId)
+    await this.emit()
+    return record
+  }
+
+  async openCatalogExtension(catalogId: string): Promise<void> {
+    const item = this.extensions.catalog().find((candidate) => candidate.id === catalogId)
+    if (!item) throw new Error('Unknown built-in browser extension catalog item')
+    await shell.openExternal(item.storeUrl)
   }
 
   async saveCredential(input: { origin: string; username: string; password: string; label?: string | undefined }): Promise<BrowserCredentialSummary> {
