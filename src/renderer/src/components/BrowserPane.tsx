@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import type { BrowserPlatformState } from '../../../shared/browser-platform'
 import type { BrowserState } from '../../../shared/contracts'
-import { ArrowLeftIcon, ArrowRightIcon, CameraIcon, ContextIcon, ExternalIcon, PencilIcon, ReloadIcon } from './Icons'
+import { ArrowLeftIcon, ArrowRightIcon, CameraIcon, ContextIcon, ExternalIcon, PencilIcon, PuzzleIcon, ReloadIcon } from './Icons'
 import { BridgePill } from './bridge-pill'
+import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 import { cn } from '../lib/utils'
 import { useNativeViewOcclusion } from '../lib/use-native-view-occlusion'
 
@@ -34,6 +35,7 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
   const [address, setAddress] = useState(state?.url ?? 'about:blank')
   const [platform, setPlatform] = useState<BrowserPlatformState | null>(null)
   const [siteToolCount, setSiteToolCount] = useState(0)
+  const [extensionsMenuOpen, setExtensionsMenuOpen] = useState(false)
 
   const builtinTabs = state?.tabs ?? []
   const activeTabId = state?.activeTabId
@@ -283,6 +285,103 @@ export function BrowserPane({ active, state, onSnapshot, onError }: BrowserPaneP
         >
           <PencilIcon />
         </button>
+        <Popover
+          open={extensionsMenuOpen}
+          onOpenChange={(open) => {
+            setExtensionsMenuOpen(open)
+            if (open && platform?.extensionPopupId) {
+              void window.ndDsh.browserPlatform.closeExtensionPopup().catch(() => undefined)
+            }
+          }}
+        >
+          <PopoverTrigger asChild>
+            <button
+              className={platform?.extensionPopupId ? activeIconButtonClasses : iconButtonClasses}
+              disabled={Boolean(state?.annotationMode)}
+              title="Extensions in the ND built-in browser"
+              aria-label="Built-in browser extensions"
+            >
+              <PuzzleIcon />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent align="end" sideOffset={6} className="w-[320px] p-0">
+            <div className="border-b border-border-soft px-3 py-2.5">
+              <strong className="block text-[11px] font-semibold text-strong">Extensions</strong>
+              <span className="text-[9px] text-faint">Runs inside ND's built-in Chromium browser</span>
+            </div>
+            <div className="max-h-[300px] space-y-1 overflow-auto p-2">
+              {(platform?.extensions ?? []).length === 0 ? (
+                <div className="rounded-md px-2 py-4 text-center text-[9px] text-faint">
+                  No built-in browser extensions installed.
+                </div>
+              ) : (
+                (platform?.extensions ?? []).map((extension) => (
+                  <div key={extension.id} className="flex items-center gap-2 rounded-md px-2 py-2 hover:bg-accent/70">
+                    <div className="grid size-7 shrink-0 place-items-center rounded-md border border-border bg-secondary text-soft">
+                      <PuzzleIcon className="size-3.5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <strong className="block truncate text-[10px] font-semibold text-strong">
+                        {extension.actionTitle || extension.name}
+                      </strong>
+                      <span className="block truncate text-[8px] text-faint">
+                        {extension.name} · {extension.version} · {extension.status}
+                      </span>
+                    </div>
+                    {extension.enabled && extension.actionPopup ? (
+                      <button
+                        type="button"
+                        className="shrink-0 rounded border border-border bg-secondary px-2 py-1 text-[8px] font-semibold text-soft hover:bg-accent"
+                        onClick={() => {
+                          setExtensionsMenuOpen(false)
+                          void runBrowserAction(() => window.ndDsh.browserPlatform.showExtensionPopup(extension.id))
+                        }}
+                      >
+                        Open
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-label={`Enable ${extension.name}`}
+                        aria-checked={extension.enabled}
+                        className={cn(
+                          'relative h-[18px] w-[31px] shrink-0 rounded-full border transition-colors',
+                          extension.enabled ? 'border-primary bg-primary' : 'border-border-strong bg-secondary',
+                        )}
+                        onClick={() => void runBrowserAction(() =>
+                          window.ndDsh.browserPlatform.setExtensionEnabled(extension.id, !extension.enabled)
+                        )}
+                      >
+                        <span className={cn(
+                          'absolute top-[2px] size-[12px] rounded-full bg-background shadow-sm transition-[left]',
+                          extension.enabled ? 'left-[15px]' : 'left-[2px]',
+                        )} />
+                      </button>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="flex items-center justify-between border-t border-border-soft px-3 py-2">
+              <span className="text-[8px] text-faint">
+                {platform?.developerMode ? 'Developer mode on' : 'Managed in Settings → Browser'}
+              </span>
+              {platform?.developerMode ? (
+                <button
+                  type="button"
+                  className="rounded border border-border bg-secondary px-2 py-1 text-[8px] font-semibold text-soft hover:bg-accent"
+                  onClick={() => {
+                    setExtensionsMenuOpen(false)
+                    void runBrowserAction(() => window.ndDsh.browserPlatform.installExtension())
+                  }}
+                >
+                  Load unpacked
+                </button>
+              ) : null}
+            </div>
+          </PopoverContent>
+        </Popover>
         <button
           className={iconButtonClasses}
           disabled={!state?.url || state.url === 'about:blank' || Boolean(state?.annotationMode)}
