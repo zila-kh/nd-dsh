@@ -39,6 +39,8 @@ extraResources:
       - register-browser-native-host.mjs
   - from: node_modules/agent-browser
     to: node_modules/agent-browser
+  - from: resources/browser-extensions
+    to: browser-extensions
   - from: resources/nd-pencil
     to: nd-pencil
   - from: LICENSE
