@@ -44,34 +44,43 @@ Launch the desktop app:
 corepack pnpm dev
 ~~~
 
-Then:
+Start with the **bundled Method 2 extension**, not an external Chrome package:
 
 1. Open **Settings → General → Browser**.
 2. Confirm the Browser control toggle is visible.
 3. Open **Extensions → Manage**.
-4. Enable **Developer mode**.
-5. Click **Load unpacked**.
-6. Select:
-   `tests/fixtures/browser-runtime-spike/extensions/mv3-action-popup`
+4. Find **ND Browser Tools · ND** under the built-in catalog.
+5. Confirm it is available even with Developer mode off.
+6. Click **Install**.
 7. Before activation, verify the native ND confirmation shows:
-   - extension name/version;
+   - ND Browser Tools name/version;
    - MV version;
-   - requested permissions;
+   - requested `storage` and `tabs` permissions;
    - compatibility status/notes;
-   - source directory.
+   - bundled source directory.
 8. Cancel once and confirm the extension is **not** installed.
 9. Repeat and approve **Load into ND browser**.
-10. Open the ND built-in browser.
+10. Open the ND built-in browser on an ordinary HTTP/HTTPS page.
 11. Confirm the **puzzle/Extensions** button is in the ND browser toolbar.
-12. Open the extension menu and press **Open** for the popup fixture.
-13. Confirm the popup renders inside the ND desktop window over the built-in browser surface.
-14. Click the website or browser chrome and confirm the popup closes.
-15. Switch tabs and confirm the popup closes.
-16. Re-open the popup, navigate the website, and confirm the popup closes.
-17. Disable the extension and confirm it can no longer open.
-18. Re-enable it and confirm it works again.
-19. Restart ND and confirm enabled state and extension identity persist.
-20. Remove it and confirm it disappears after restart.
+12. Open the extension menu and press **Open** for ND Browser Tools.
+13. Confirm its popup renders inside the ND desktop window over the built-in browser surface.
+14. Confirm the popup shows the underlying website tab title/URL, not a `chrome-extension://` popup URL.
+15. Press **Reload active tab** and confirm the underlying ND website tab reloads and the popup closes.
+16. Re-open the popup, then click the website/browser chrome and confirm it closes.
+17. Switch tabs and confirm the popup closes.
+18. Re-open the popup, navigate the website, and confirm it closes.
+19. Disable the extension and confirm it can no longer open.
+20. Re-enable it and confirm it works again.
+21. Restart ND and confirm enabled state and extension identity persist.
+22. Remove it and confirm it disappears after restart.
+
+Then exercise the **Developer mode** path separately:
+
+1. Enable Developer mode.
+2. Click **Load unpacked**.
+3. Select `tests/fixtures/browser-runtime-spike/extensions/mv3-action-popup`.
+4. Verify the same pre-activation permission/compatibility confirmation.
+5. Approve the load and confirm its action popup also opens inside ND.
 
 ## 3. No-external-browser proof
 
@@ -102,9 +111,11 @@ An action manifest without `default_popup` should be marked limited because `chr
 
 ## 5. Catalog identity smoke
 
-The ChatGPT catalog entry is metadata only unless an authorized unpacked package is available.
+**ND Browser Tools** is the Method 2 first-party package and must come only from the bundled ND resources. Its catalog entry must never accept an arbitrary replacement folder.
 
-For a vendor catalog install:
+The **ChatGPT** entry is a compatibility reference to the official standalone-Chrome extension, not the Method 2 implementation. Unless an authorized unpacked package is available, it remains metadata/reference only.
+
+For a verified third-party catalog install:
 
 - ND must verify the manifest public key maps to the expected extension id;
 - a mismatched/unverifiable package must be rejected as that vendor catalog item;
@@ -121,6 +132,7 @@ Attach:
 - one screenshot of the puzzle menu;
 - one screenshot of an action popup visibly inside ND;
 - process evidence showing no standalone Chrome was required;
-- any unsupported API encountered with the exact extension name/version and manifest permission/key.
+- any unsupported API encountered with the exact extension name/version and manifest permission/key;
+- confirmation that the packaged/release configuration includes `browser-extensions/nd-browser-tools`.
 
 Only after these gates are green should PR #60 be changed from draft to ready.
