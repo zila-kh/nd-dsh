@@ -302,6 +302,7 @@ export class InvocationBroker {
       context,
       rows,
       actions: view.actions.map((action) => ({ id: action.id, title: action.title, host: action.host })),
+      ...(view.refreshIntervalMs ? { refreshIntervalMs: view.refreshIntervalMs } : {}),
       ...(view.description ? { empty: view.description } : {}),
     }
   }
@@ -506,6 +507,7 @@ function commandView(extensionId: string, command: NdCommandContribution): NdCom
     contexts: command.contexts,
     startsAgent: command.startsAgent === true,
     host: command.host,
+    ...(command.openViewId ? { openViewId: command.openViewId } : {}),
     permission: descriptor.permission,
     ...(command.description ? { description: command.description } : {}),
   }
@@ -538,6 +540,10 @@ function toRows(value: unknown, view: NdViewContribution): NdViewRow[] {
       title: title.trim().slice(0, 512),
       ...(typeof body === 'string' && body.trim() ? { body: body.trim().slice(0, 4_000) } : {}),
       ...(typeof record.status === 'string' ? { meta: record.status.slice(0, 64) } : {}),
+      ...(record.actionsDisabled === true ? { actionsDisabled: true } : {}),
+      ...(record.sortValues && typeof record.sortValues === 'object' && !Array.isArray(record.sortValues)
+        ? { sortValues: Object.fromEntries(Object.entries(record.sortValues).filter((entry): entry is [string, number] => typeof entry[1] === 'number' && Number.isFinite(entry[1]))) }
+        : {}),
     }]
   })
 }

@@ -181,6 +181,7 @@ export default function App() {
   // explicit context selector (Personal by default, independent of the active
   // company/project selection).
   const [ndExtensions, setNdExtensions] = useState<NdExtensionsStateView | null>(null)
+  const [extensionViewRequest, setExtensionViewRequest] = useState<{ extensionId: string; viewId: string; context: NdContext } | null>(null)
   const [homeState, setHomeState] = useState<NdHomeStateView | null>(null)
   const [homeBusy, setHomeBusy] = useState(false)
   const [launcherContextId, setLauncherContextId] = useState('personal')
@@ -987,12 +988,25 @@ export default function App() {
       notify(plan.missing)
       return
     }
+    if (command.openViewId) {
+      setExtensionViewRequest({ extensionId: command.extensionId, viewId: command.openViewId, context })
+      setSettingsTab('extensions')
+      setView('settings')
+      return
+    }
     if (command.host === 'capture.area') {
       await openLocalAreaCapture()
       return
     }
     try {
-      const result = await invokeDailyEssentials(command.contributionId, 'command', context, plan.input)
+      const result = await window.ndDsh.ndExtensions.invoke({
+        extensionId: command.extensionId,
+        contributionId: command.contributionId,
+        contributionKind: 'command',
+        context,
+        caller: 'user',
+        input: plan.input,
+      })
       if (handleInvocationFailure(result)) return
       await applyHostEffect(command.host, result.value)
     } catch (cause) {
@@ -1105,6 +1119,14 @@ export default function App() {
         case 'capture-clipboard':
           void captureClipboardToNote(context)
           return
+        case 'extension-view': {
+          const match = /^([a-z0-9][a-z0-9._-]{1,127}):([a-z0-9][a-z0-9._-]{0,127})$/.exec(text ?? '')
+          if (!match) return
+          setExtensionViewRequest({ extensionId: match[1]!, viewId: match[2]!, context })
+          setSettingsTab('extensions')
+          setView('settings')
+          return
+        }
       }
     }
   })
@@ -1724,6 +1746,8 @@ export default function App() {
                       state={ndExtensions}
                       organization={orgState}
                       contexts={extensionContextOptions}
+                      requestedView={extensionViewRequest}
+                      onRequestedViewHandled={() => setExtensionViewRequest(null)}
                       onError={notify}
                       onChanged={async () => {
                         setNdExtensions(await window.ndDsh.ndExtensions.state())

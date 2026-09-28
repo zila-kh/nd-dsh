@@ -24,6 +24,8 @@ extraResources:
     to: nd-browser-host
   - from: extensions/browser-companion
     to: browser-companion
+  - from: extensions/quit-process
+    to: nd-extensions/quit-process
   - from: .release/harness
     to: vendor/deepseek-harness
   - from: configs/dsh

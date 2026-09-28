@@ -32,6 +32,8 @@ export const ND_EXTENSION_PERMISSIONS = [
   'browser.openExternal',
   'os.launch',
   'os.wallpaper.write',
+  'process.read',
+  'process.quit',
   'chat.start',
   'workflow.read',
 ] as const
@@ -68,6 +70,9 @@ export const ND_HOST_METHODS = [
   { id: 'browser.openExternal', title: 'Open in the system browser', permission: 'browser.openExternal', contexts: ['personal', 'company', 'project'], sensitive: false },
   { id: 'os.openTarget', title: 'Open an app, file, or folder', permission: 'os.launch', contexts: ['personal', 'company', 'project'], sensitive: false },
   { id: 'os.wallpaper.chooseAndSet', title: 'Choose and set desktop wallpaper', permission: 'os.wallpaper.write', contexts: ['personal'], sensitive: true },
+  { id: 'process.list', title: 'List running processes', permission: 'process.read', contexts: ['personal'], sensitive: false },
+  { id: 'process.quit', title: 'Quit a process', permission: 'process.quit', contexts: ['personal'], sensitive: true },
+  { id: 'process.forceQuit', title: 'Force quit a process', permission: 'process.quit', contexts: ['personal'], sensitive: true },
   { id: 'chat.ask', title: 'Ask ND', permission: 'chat.start', contexts: ['personal', 'company', 'project'], sensitive: false },
   { id: 'workflow.list', title: 'Read repository tasks', permission: 'workflow.read', contexts: ['project'], sensitive: false },
   { id: 'workflow.refresh', title: 'Refresh repository tasks', permission: 'workflow.read', contexts: ['project'], sensitive: false },
@@ -95,6 +100,8 @@ export interface NdCommandContribution {
   keywords?: string[]
   contexts: NdContextKind[]
   host: NdHostMethod
+  /** Open a view from the launcher; the view load still runs through the broker. */
+  openViewId?: string
   startsAgent?: boolean
 }
 
@@ -114,6 +121,8 @@ export interface NdViewContribution {
   host: NdHostMethod
   itemTitleKey: string
   itemBodyKey?: string
+  /** Refresh only while this view is open; useful for live native lists. */
+  refreshIntervalMs?: number
   actions: NdViewActionContribution[]
 }
 
@@ -431,6 +440,7 @@ function contributionsValue(
         title: text(item.title, `${path}.title`, 128, undefined, issues),
         contexts: narrowContexts(contexts, defaultContexts, `${path}.contexts`, issues),
         host,
+        ...(typeof item.openViewId === 'string' && item.openViewId.trim() ? { openViewId: item.openViewId.trim() } : {}),
         ...(item.startsAgent === true ? { startsAgent: true } : {}),
         ...(typeof item.description === 'string' && item.description.trim() ? { description: item.description.trim().slice(0, 500) } : {}),
         ...(keywords.length > 0 ? { keywords } : {}),
@@ -445,6 +455,10 @@ function contributionsValue(
         title: text(action.title, `${actionPath}.title`, 128, undefined, issues),
         host: hostMethodValue(action.host, `${actionPath}.host`, issues),
       }))
+      const refreshIntervalMs = item.refreshIntervalMs
+      if (refreshIntervalMs !== undefined && (!Number.isInteger(refreshIntervalMs) || (refreshIntervalMs as number) < 2_000 || (refreshIntervalMs as number) > 60_000)) {
+        issues.push({ path: `${path}.refreshIntervalMs`, message: 'refreshIntervalMs must be an integer from 2000 to 60000' })
+      }
       return {
         id,
         title: text(item.title, `${path}.title`, 128, undefined, issues),
@@ -453,6 +467,7 @@ function contributionsValue(
         itemTitleKey: text(item.itemTitleKey, `${path}.itemTitleKey`, 64, undefined, issues),
         contexts: narrowContexts(contexts, defaultContexts, `${path}.contexts`, issues),
         actions,
+        ...(typeof refreshIntervalMs === 'number' && Number.isInteger(refreshIntervalMs) && refreshIntervalMs >= 2_000 && refreshIntervalMs <= 60_000 ? { refreshIntervalMs } : {}),
         ...(typeof item.itemBodyKey === 'string' && item.itemBodyKey.trim() ? { itemBodyKey: item.itemBodyKey.trim().slice(0, 64) } : {}),
         ...(typeof item.description === 'string' && item.description.trim() ? { description: item.description.trim().slice(0, 500) } : {}),
       }
@@ -468,6 +483,11 @@ function contributionsValue(
         ...(typeof item.description === 'string' && item.description.trim() ? { description: item.description.trim().slice(0, 500) } : {}),
       }
     }),
+  }
+  for (const [index, command] of result.commands.entries()) {
+    if (command.openViewId && !result.views.some((view) => view.id === command.openViewId)) {
+      issues.push({ path: `contributions.commands[${index}].openViewId`, message: 'openViewId must name a view in this package' })
+    }
   }
   if (totalContributions(result) === 0) {
     issues.push({ path: 'contributions', message: 'a package must contribute at least one tool, skill, command, view, or workflow' })

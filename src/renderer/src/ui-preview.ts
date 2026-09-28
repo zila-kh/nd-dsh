@@ -617,6 +617,7 @@ const desktopApi: DesktopApi = {
     state: async () => ({ packages: [], activations: [], grants: [], audit: [], pendingApprovals: [] }),
     installLocal: async () => null,
     installFromPath: async () => previewExtensionsState(),
+    installAvailable: async () => previewExtensionsState(),
     update: async () => previewExtensionsState(),
     rollback: async () => previewExtensionsState(),
     uninstall: async () => previewExtensionsState(),
