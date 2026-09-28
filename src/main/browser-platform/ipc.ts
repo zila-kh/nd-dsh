@@ -68,6 +68,9 @@ export function registerBrowserPlatformIpc(
 
     let path: string | undefined
     if (!item.bundleAvailable) {
+      if (item.packagePolicy === 'bundled') {
+        throw new Error(`${item.name} is missing from this ND build.`)
+      }
       const result = await dialog.showOpenDialog(window, {
         title: `Load unpacked ${item.name} browser extension package`,
         properties: ['openDirectory'],
