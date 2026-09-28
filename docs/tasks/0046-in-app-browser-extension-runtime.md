@@ -39,9 +39,9 @@ The catalog may also contain third-party compatibility references such as the of
 Catalog package policies are explicit:
 
 - `bundled` — first-party/trusted package must ship with the ND build and cannot be replaced by an arbitrary user folder;
-- `verified-chrome-id` — a user-selected authorized unpacked package must prove the expected Chrome extension id from its manifest public key before ND labels it as that vendor entry.
+- `reference-only` — third-party/store metadata can be shown for compatibility research, but ND does not install or authenticate an arbitrary unpacked folder as that publisher.
 
-An unverified third-party folder can still be loaded through Developer mode as a generic unpacked extension, but ND will not label it as the vendor catalog item. Neither path launches Chrome or imports a Chrome profile. A third-party catalog listing opens in a normal **ND built-in browser tab**, not the system browser.
+Third-party folders can still be loaded through Developer mode as generic unpacked extensions, but ND does not label them as the vendor catalog item. Matching a public manifest key/extension id alone is not treated as publisher authentication. Neither path launches Chrome or imports a Chrome profile. A third-party catalog listing opens in a normal **ND built-in browser tab**, not the system browser.
 
 ## Validation
 
