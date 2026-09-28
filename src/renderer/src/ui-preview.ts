@@ -749,8 +749,7 @@ const desktopApi: DesktopApi = {
       return browserPlatform
     },
     closeExtensionPopup: async () => {
-      const { extensionPopupId: _extensionPopupId, ...next } = browserPlatform
-      browserPlatform = next
+      browserPlatform = { ...browserPlatform, extensionPopupId: undefined }
       browserPlatformEvents.emit(browserPlatform)
       return browserPlatform
     },
