@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import type {
   OrganizationControlSnapshot,
   OrganizationHumanAction,
+  OrganizationManagementAttentionItem,
   OrganizationManagementProjection,
   SignalDisposition,
 } from '../../../shared/organization-control'
@@ -149,6 +150,8 @@ export function OrganizationControlCenter({ companyId, projectId, agents, onErro
                 <button className={button} disabled={busy !== null} onClick={() => void resolveAction(item.id)}>Resolve</button>
               ) : item.kind === 'stale-evidence' && item.taskId ? (
                 <button className={button} disabled={busy !== null} onClick={() => void act(`verify-${item.taskId}`, () => window.ndDshControl.verifyEvidence(item.taskId!))}>Re-check</button>
+              ) : item.kind === 'failed-run' && item.runKind ? (
+                <button className={button} disabled={busy !== null} onClick={() => void act(`retry-${item.id}`, () => retryFailedRun(item))}>Retry</button>
               ) : null}
             </div>
           </div>
@@ -263,6 +266,13 @@ export function OrganizationControlCenter({ companyId, projectId, agents, onErro
       </ControlCard>
     </div>
   )
+
+  function retryFailedRun(item: OrganizationManagementAttentionItem): Promise<unknown> {
+    if (item.runKind === 'pm-plan' && item.projectId) return window.ndDshOrganization.planProject(item.projectId)
+    if (item.runKind === 'task-review' && item.taskId) return window.ndDshOrganization.reviewTask(item.taskId)
+    if (item.taskId) return window.ndDshOrganization.runTask(item.taskId)
+    return Promise.reject(new Error('This failed run has no task or project to retry.'))
+  }
 
   async function resolveAction(id: string): Promise<void> {
     await act(`resolve-${id}`, () => window.ndDshControl.mutate({ type: 'human-action.resolve', id, resolution: 'Resolved by company operator in ND.' }))

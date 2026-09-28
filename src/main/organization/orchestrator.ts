@@ -16,6 +16,7 @@ import { formatVerificationEvidence, runArtifactVerification, runVerification, t
 import { createCoreEvidenceCapturer, unavailableEvidenceCapturer, type WorkspaceEvidenceCapture, type WorkspaceEvidenceCapturer } from './worktree-evidence.js'
 import { RuntimeCapacityError, type ExecutionCoordinator, type RuntimeAvailability } from './execution-coordinator.js'
 import { normalizeProjectPlan } from './plan-normalizer.js'
+import { mergeRepeatedArrayKeys } from '../../shared/structured-output.js'
 import { executePreparedFastPath, ND_FAST_PATH_ENGINE_ID, prepareFastPath, type FastPathAuditRecorder, type PreparedFastPath } from './fast-path.js'
 import { formatDecisionSupportForReviewer, formatDecisionSupportReceipt, type DecisionSupportReceipt } from './decision-support-contract.js'
 import type { DecisionSupportService } from './decision-support.js'
@@ -689,6 +690,18 @@ export class OrganizationOrchestrator {
           await this.continueProject(run.projectId)
         }
       }
+      // A hung reviewer would otherwise hold the task in "Reviewing…" until restart.
+      // The work itself is intact, so the task simply returns to the review queue.
+      for (const run of state.runs.filter((item) => item.status === 'running' && item.kind === 'task-review' && item.taskId)) {
+        const lastProgress = this.lastProgressAt.get(run.sessionId) ?? run.startedAt
+        if (now - lastProgress < stallTimeoutMs()) continue
+        const message = `Review stalled with no engine progress for ${stallTimeoutMs()}ms; the task is back in review and can be reviewed again.`
+        try { await this.stopSession(run.sessionId) } catch { /* the run is still failed and released below */ }
+        await this.store.completeRun(run.id, undefined, message)
+        await this.store.clearReviewSession(run.taskId!)
+        this.cleanupSession(run.sessionId)
+        recovered += 1
+      }
       return recovered
     } finally {
       this.stallReconcileBusy = false
@@ -901,9 +914,15 @@ export class OrganizationOrchestrator {
     let plan: ProjectPlanInput | undefined
     let adjustments: string[] = []
     try {
-      const extracted = extractTaggedJson<ProjectPlanInput>(text, 'nd-dsh-plan', ['goal', 'milestones'])
+      let mergedLists = 0
+      const extracted = extractTaggedJson<ProjectPlanInput>(text, 'nd-dsh-plan', ['goal', 'milestones'], (json) => {
+        const repaired = mergeRepeatedArrayKeys(json, ['milestones', 'tasks'])
+        mergedLists = repaired.merged
+        return repaired.json
+      })
       if (!extracted) return
       ;({ plan, adjustments } = normalizeProjectPlan(extracted))
+      if (mergedLists) adjustments.unshift(`Merged ${mergedLists} repeated milestone/task list(s) the model wrote as duplicate keys.`)
       this.structuredErrors.delete(sessionId)
     } catch (cause) {
       this.structuredErrors.set(sessionId, errorMessage(cause))
@@ -1279,7 +1298,7 @@ export class OrganizationOrchestrator {
     const state = await this.store.state()
     const task = state.tasks.find((item) => item.id === taskId)
     if (!task) return
-    await this.store.mutate({ type: 'task.update', id: taskId, patch: { status: 'blocked' } })
+    await this.store.blockTask(taskId, message)
     if (task.assignedAgentId) {
       const hasOtherActiveRun = state.runs.some((run) => run.status === 'running' && run.taskId && run.taskId !== taskId
         && state.tasks.find((candidate) => candidate.id === run.taskId)?.assignedAgentId === task.assignedAgentId)
@@ -1534,7 +1553,7 @@ function sanitizeJson(raw: string): string {
   return cleaned.replace(/,(\s*[}\]])/g, '$1')
 }
 
-function extractTaggedJson<T>(text: string, tag: string, fallbackMarkers?: string[]): T | undefined {
+function extractTaggedJson<T>(text: string, tag: string, fallbackMarkers?: string[], prepare: (json: string) => string = (json) => json): T | undefined {
   const tagRegex = new RegExp(`<${tag}>([\\s\\S]*?)(?:</${tag}>|$)`, 'i')
   const match = tagRegex.exec(text)
   let candidateText: string | undefined
@@ -1549,7 +1568,7 @@ function extractTaggedJson<T>(text: string, tag: string, fallbackMarkers?: strin
   const jsonObject = extractJsonObjectString(candidateText, fallbackMarkers)
   if (!jsonObject) return undefined
 
-  const sanitized = sanitizeJson(jsonObject)
+  const sanitized = prepare(sanitizeJson(jsonObject))
   return JSON.parse(sanitized) as T
 }
 

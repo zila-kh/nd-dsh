@@ -4,7 +4,7 @@ import type { CodingEngineDescriptor, ModelProvider, WorkspaceState } from '../.
 import type { CapabilityAssignmentSnapshot, CapabilityDescriptor, CapabilityKind, CapabilityProviderStatus } from '../../../shared/capabilities'
 import { DEFAULT_CAPABILITY_PROVIDER } from '../../../shared/capabilities'
 import { ND_HARNESS_ENGINE_ID } from '../../../shared/coding-engines'
-import type { OrganizationPolicyEffect, OrganizationRun, OrganizationSnapshot, OrganizationSubagentMode, OrganizationTask, ProjectRuntimeStatus, TaskPriority } from '../../../shared/organization'
+import type { OrganizationPolicyEffect, OrganizationRun, OrganizationRunReceipt, OrganizationSnapshot, OrganizationSubagentMode, OrganizationTask, ProjectRuntimeStatus, TaskPriority } from '../../../shared/organization'
 import { DEFAULT_PROJECT_PORT } from '../../../shared/organization'
 import type { RepositoryBoardCard, RepositoryWorkflowPrd, RepositoryWorkflowTask, WorkflowProjectView } from '../../../shared/workflow-plugins'
 import { projectRepositoryBoard, WORKFLOW_BOARD_COLUMNS } from '../../../shared/workflow-plugins'
@@ -47,8 +47,12 @@ const CAPABILITY_SELECTS: Array<{ kind: CapabilityKind; label: string; title: st
 
 export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, onError }: Props) {
   const [state, setState] = useState<OrganizationSnapshot | null>(null)
-  const [section, setSection] = useState<Section>('overview')
+  const [section, setSection] = useState<Section>('work')
   const [busy, setBusy] = useState<string | null>(null)
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null)
+  // Runs a human started from this screen: when one fails later (runs finish
+  // asynchronously), the failure is raised here instead of only in Live runs.
+  const [watchedRuns, setWatchedRuns] = useState<Record<string, string>>({})
   const [companyDraft, setCompanyDraft] = useState({ name: '', mission: '' })
   const [showCreateCompany, setShowCreateCompany] = useState(false)
   const [projectDraft, setProjectDraft] = useState({ name: '', objective: '', workspacePath: workspace?.root ?? '' })
@@ -107,6 +111,7 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
   const projects = useMemo(() => state?.projects.filter((item) => item.companyId === company?.id) ?? [], [state, company?.id])
   const project = useMemo(() => projects.find((item) => item.id === state?.activeProjectId) ?? projects[0] ?? null, [projects, state?.activeProjectId])
   const tasks = useMemo(() => state?.tasks.filter((item) => item.projectId === project?.id) ?? [], [state, project?.id])
+  const editingTask = useMemo(() => state?.tasks.find((item) => item.id === editingTaskId) ?? null, [state, editingTaskId])
   const goals = useMemo(() => state?.goals.filter((item) => item.projectId === project?.id) ?? [], [state, project?.id])
   const agents = useMemo(() => state?.agents.filter((item) => item.companyId === company?.id) ?? [], [state, company?.id])
   const teams = useMemo(() => state?.teams.filter((item) => item.companyId === company?.id) ?? [], [state, company?.id])
@@ -277,11 +282,30 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
     }
   }
 
-  function retryRun(run: OrganizationRun): Promise<unknown> {
-    if (run.kind === 'pm-plan') return window.ndDshOrganization.planProject(run.projectId)
-    if (run.kind === 'task-review' && run.taskId) return window.ndDshOrganization.reviewTask(run.taskId)
-    if (run.taskId) return window.ndDshOrganization.runTask(run.taskId)
-    return window.ndDshOrganization.runNext(run.projectId)
+  useEffect(() => {
+    if (!state) return
+    const ids = Object.keys(watchedRuns)
+    if (!ids.length) return
+    const settled: string[] = []
+    for (const id of ids) {
+      const run = state.runs.find((item) => item.id === id)
+      if (!run || run.status === 'running') continue
+      settled.push(id)
+      if (run.status === 'failed') onError(`${watchedRuns[id]} failed: ${run.error ?? 'no reason was reported.'}`)
+    }
+    if (settled.length) setWatchedRuns((current) => Object.fromEntries(Object.entries(current).filter(([id]) => !settled.includes(id))))
+  }, [state, watchedRuns, onError])
+
+  async function startRun(label: string, fn: () => Promise<OrganizationRunReceipt | null>): Promise<void> {
+    const receipt = await fn()
+    if (receipt?.runId) setWatchedRuns((current) => ({ ...current, [receipt.runId]: label }))
+  }
+
+  function retryRun(run: OrganizationRun): Promise<void> {
+    if (run.kind === 'pm-plan') return startRun('AI PM plan', () => window.ndDshOrganization.planProject(run.projectId))
+    if (run.kind === 'task-review' && run.taskId) return startRun('AI review', () => window.ndDshOrganization.reviewTask(run.taskId!))
+    if (run.taskId) return startRun('Task run', () => window.ndDshOrganization.runTask(run.taskId!))
+    return startRun('Next run', () => window.ndDshOrganization.runNext(run.projectId))
   }
 
   async function action(key: string, fn: () => Promise<unknown>): Promise<void> {
@@ -461,7 +485,7 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
           </Select>
         </label>
         <button className={orgButton} onClick={onOpenDeepSeek}>Agent console</button>
-        <button className={orgPrimaryButton} disabled={!project || busy !== null} onClick={() => project && void action('next', () => window.ndDshOrganization.runNext(project.id))}>Run next</button>
+        <button className={orgPrimaryButton} disabled={!project || busy !== null} onClick={() => project && void action('next', () => startRun('Next run', () => window.ndDshOrganization.runNext(project.id)))}>Run next</button>
       </div>
     </header>
 
@@ -626,7 +650,7 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
           ))}
         </div>
         <div className="mb-2.5 grid grid-cols-1 gap-2.5 min-[1100px]:grid-cols-2">
-          <Card title="Goals" action={project ? <button className={orgButton} disabled={busy !== null} onClick={() => void action('plan', () => window.ndDshOrganization.planProject(project.id))}>AI PM plan</button> : undefined}>
+          <Card title="Goals" action={project ? <button className={orgButton} disabled={busy !== null} onClick={() => void action('plan', () => startRun('AI PM plan', () => window.ndDshOrganization.planProject(project.id)))}>AI PM plan</button> : undefined}>
             {goals.length ? goals.map((goal) => (
               <Row key={goal.id} left={<><strong className="truncate text-sm">{goal.title}</strong><small className="text-xs text-faint">{goal.status}</small></>} right={<span className="shrink-0 text-xs text-muted-foreground">{goal.progress}%</span>} />
             )) : <Empty text="Create a project and ask the AI PM to plan it." />}
@@ -642,7 +666,12 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
                   right={run.status === 'failed'
                     ? <button className={cn(orgButton, 'h-[22px] shrink-0 px-1.5 text-[11px]')} disabled={busy !== null} onClick={() => void action(`retry-${run.id}`, () => retryRun(run))}>Retry</button>
                     : run.status === 'running'
-                      ? <span className="shrink-0 text-xs font-semibold text-primary">running…</span>
+                      ? (
+                        <span className="flex shrink-0 items-center gap-1.5">
+                          <span className="text-xs font-semibold text-primary">running…</span>
+                          <button className={cn(orgButton, 'h-[22px] px-1.5 text-[11px]')} disabled={busy !== null} onClick={() => void action(`cancel-${run.id}`, () => window.ndDshOrganization.cancelRun(run.id))}>Cancel</button>
+                        </span>
+                      )
                       : undefined}
                 />
                 {run.workspaceBranch || run.checkpointCommit || run.baselineCommit ? (
@@ -671,7 +700,7 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
                   </span>
                   {activeRuntime?.targetUrl ? <code className="min-w-0 truncate font-mono text-xs text-soft" title={activeRuntime.targetUrl}>{activeRuntime.targetUrl}</code> : null}
                   <div className="ml-auto flex shrink-0 gap-[7px]">
-                    <button className={orgButton} disabled={busy !== null} onClick={() => void openProjectTarget()}>Open in Browser</button>
+                    <button className={orgButton} disabled={busy !== null || !activeRuntime?.targetUrl} title={activeRuntime?.targetUrl ? undefined : 'Start the project or set a target URL first'} onClick={() => void openProjectTarget()}>Open in Browser</button>
                     {activeRuntime?.state === 'starting' || activeRuntime?.state === 'ready' ? (
                       <>
                         <button className={orgButton} disabled={busy !== null} onClick={() => void controlRuntime('restart')}>Restart</button>
@@ -740,6 +769,7 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
                 workflow off
               </span>
             ) : null}
+            <button className={orgButton} disabled={busy !== null} title="Ask the AI product manager to plan goals, milestones and tasks for this project" onClick={() => void action('plan', () => startRun('AI PM plan', () => window.ndDshOrganization.planProject(project.id)))}>AI PM plan</button>
             <button className={orgButton} onClick={() => setShowWorkflow(true)}>Workflow</button>
           </div>
         ) : undefined}
@@ -762,16 +792,16 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
             <button className={orgButton}>Add task</button>
           </form>
         ) : null}
-        <div className="grid grid-cols-[repeat(5,minmax(160px,1fr))] gap-2 overflow-x-auto max-[1100px]:grid-cols-[repeat(5,220px)]">
-          {(['ready', 'in_progress', 'review', 'blocked', 'completed'] as const).map((status) => {
-            const repoCards = repoBoard[status]
+        <div className="grid grid-cols-[repeat(6,minmax(160px,1fr))] gap-2 overflow-x-auto max-[1100px]:grid-cols-[repeat(6,220px)]">
+          {(['backlog', 'ready', 'in_progress', 'review', 'blocked', 'completed'] as const).map((status) => {
+            const repoCards = status === 'backlog' ? [] : repoBoard[status] ?? []
             return (
               <section key={status} className="min-h-[300px] rounded-[7px] border border-border-soft bg-surface-0 p-2">
                 <header className="mb-[7px] flex items-center justify-between text-xs font-bold uppercase text-muted-foreground">
                   <span>{status.replace('_', ' ')}</span>
                   <span className="flex items-center gap-1">
                     <b>{tasks.filter((item) => item.status === status).length}{repoCards.length ? <span className="font-normal normal-case text-faint">+{repoCards.length} repo</span> : null}</b>
-                    {onAskAgent ? (
+                    {onAskAgent && status !== 'backlog' ? (
                       <button
                         type="button"
                         aria-label={`Ask the agent to add or advance a ${status.replace('_', ' ')} task`}
@@ -784,7 +814,17 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
                     ) : null}
                   </span>
                 </header>
-                {tasks.filter((item) => item.status === status).map((item) => <TaskCard key={item.id} task={item} state={state} busy={busy} run={action} />)}
+                {tasks.filter((item) => item.status === status).map((item) => (
+                  <TaskCard
+                    key={item.id}
+                    task={item}
+                    state={state}
+                    busy={busy}
+                    run={action}
+                    startRun={startRun}
+                    onEdit={() => setEditingTaskId(item.id)}
+                  />
+                ))}
                 {repoCards.map((card) => {
               const task = repoTasksByPath.get(card.sourcePath)
               return (
@@ -945,12 +985,40 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
           ))}
         </Card>
       </div> : null}
+      {editingTask && state ? (
+        <TaskEditDialog
+          task={editingTask}
+          state={state}
+          onClose={() => setEditingTaskId(null)}
+          onSave={async (patch) => {
+            try {
+              await mutate({ type: 'task.update', id: editingTask.id, patch })
+            } catch (cause) {
+              onError(errorMessage(cause))
+              throw cause
+            }
+          }}
+        />
+      ) : null}
     </main>
   </div>
 }
 
-function TaskCard({ task, state, busy, run }: { task: OrganizationTask; state: OrganizationSnapshot; busy: string | null; run(key: string, fn: () => Promise<unknown>): Promise<void> }) {
+interface TaskCardProps {
+  task: OrganizationTask
+  state: OrganizationSnapshot
+  busy: string | null
+  run(key: string, fn: () => Promise<unknown>): Promise<void>
+  startRun(label: string, fn: () => Promise<OrganizationRunReceipt | null>): Promise<void>
+  onEdit(): void
+}
+
+function TaskCard({ task, state, busy, run, startRun, onEdit }: TaskCardProps) {
   const agent = state.agents.find((item) => item.id === task.assignedAgentId)
+  const waitingOn = task.dependsOn
+    .map((id) => state.tasks.find((item) => item.id === id))
+    .filter((item): item is OrganizationTask => Boolean(item) && item!.status !== 'completed')
+  const activeRun = state.runs.find((item) => item.taskId === task.id && item.status === 'running')
   const latestReview = state.runs
     .filter((item) => item.taskId === task.id && item.kind === 'task-review')
     .sort((left, right) => (right.completedAt ?? right.startedAt) - (left.completedAt ?? left.startedAt))[0]
@@ -964,11 +1032,30 @@ function TaskCard({ task, state, busy, run }: { task: OrganizationTask; state: O
     && (!latestExecution || (latestReview.completedAt ?? latestReview.startedAt) > (latestExecution.completedAt ?? latestExecution.startedAt))
     ? latestReview
     : undefined
+  const blockedReason = task.status !== 'blocked' || task.integrationState === 'conflict'
+    ? undefined
+    : task.blockedReason
+      ?? (latestExecution?.status === 'failed' ? latestExecution.error : undefined)
+      ?? task.reviewSummary
   return (
     <article className="mb-[7px] flex flex-col gap-1.5 rounded-[7px] border border-border-soft bg-sidebar p-[9px]">
-      <small className="text-[11px] uppercase text-faint">{task.priority}</small>
+      <div className="flex items-center gap-1.5 text-[11px] uppercase text-faint">
+        <small>{task.priority}</small>
+        {task.sourceScheduleId ? <small className="rounded border border-border-soft bg-secondary px-1 normal-case">recurring</small> : null}
+        <button type="button" className="ml-auto rounded px-1 normal-case text-faint transition-colors hover:bg-secondary hover:text-foreground" onClick={onEdit}>Edit</button>
+      </div>
       <strong className="text-sm">{task.title}</strong>
       <p className="m-0 text-xs/[1.45] text-muted-foreground">{task.description}</p>
+      {waitingOn.length ? (
+        <p className="m-0 text-[11px]/[1.4] text-faint" title={waitingOn.map((item) => item.title).join('\n')}>
+          Waiting on: {waitingOn.slice(0, 3).map((item) => item.title).join(', ')}{waitingOn.length > 3 ? ` +${waitingOn.length - 3}` : ''}
+        </p>
+      ) : null}
+      {blockedReason ? (
+        <p className="m-0 max-h-[96px] overflow-auto whitespace-pre-wrap break-words rounded-md border border-destructive/25 bg-destructive/[0.06] px-2 py-1 text-[11px]/[1.4] text-destructive" title={blockedReason}>
+          {blockedReason.length > 300 ? `${blockedReason.slice(0, 300)}…` : blockedReason}
+        </p>
+      ) : null}
       {task.integrationState === 'conflict' ? (
         <p className="m-0 rounded-md border border-warning/30 bg-warning/10 px-2 py-1 text-[11px]/[1.4] text-warning" title={task.integrationSummary}>
           Integration conflict · task checkpoint preserved
@@ -989,20 +1076,132 @@ function TaskCard({ task, state, busy, run }: { task: OrganizationTask; state: O
       ) : null}
       <footer className="flex items-center justify-between gap-1.5 text-[11px] text-faint">
         <span className="truncate">{agent?.name ?? 'AI worker'}</span>
-        <TaskAction task={task} busy={busy} run={run} reviewRetry={Boolean(reviewFailure)} />
+        <span className="flex shrink-0 items-center gap-1">
+          {activeRun ? (
+            <button className={cn(orgButton, 'h-[22px] px-1.5 text-[11px]')} disabled={busy !== null} title="Stop the agent working on this task" onClick={() => void run(`cancel-${activeRun.id}`, () => window.ndDshOrganization.cancelRun(activeRun.id))}>Cancel</button>
+          ) : null}
+          <TaskAction task={task} busy={busy} run={run} startRun={startRun} reviewRetry={Boolean(reviewFailure)} />
+        </span>
       </footer>
     </article>
   )
 }
 
-function TaskAction({ task, busy, run, reviewRetry }: { task: OrganizationTask; busy: string | null; run(key: string, fn: () => Promise<unknown>): Promise<void>; reviewRetry: boolean }) {
+function TaskAction({ task, busy, run, startRun, reviewRetry }: Pick<TaskCardProps, 'task' | 'busy' | 'run' | 'startRun'> & { reviewRetry: boolean }) {
+  const small = cn(orgButton, 'h-[22px] px-1.5 text-[11px]')
   if (task.status === 'ready' || task.status === 'blocked') {
-    return <button className={cn(orgButton, 'h-[22px] px-1.5 text-[11px]')} disabled={busy !== null} onClick={() => void run(`task-${task.id}`, () => window.ndDshOrganization.runTask(task.id))}>{task.status === 'blocked' ? 'Retry' : 'Run'}</button>
+    return <button className={small} disabled={busy !== null} onClick={() => void run(`task-${task.id}`, () => startRun(`“${task.title}”`, () => window.ndDshOrganization.runTask(task.id)))}>{task.status === 'blocked' ? 'Retry' : 'Run'}</button>
   }
   if (task.status === 'review') {
-    return <button className={cn(orgButton, 'h-[22px] px-1.5 text-[11px]')} disabled={busy !== null || Boolean(task.reviewSessionId)} onClick={() => void run(`review-${task.id}`, () => window.ndDshOrganization.reviewTask(task.id))}>{task.reviewSessionId ? 'Reviewing…' : reviewRetry ? 'Retry review' : 'Review'}</button>
+    return (
+      <button className={small} disabled={busy !== null || Boolean(task.reviewSessionId)} title="An independent AI reviewer checks the work against the acceptance criteria" onClick={() => void run(`review-${task.id}`, () => startRun(`AI review of “${task.title}”`, () => window.ndDshOrganization.reviewTask(task.id)))}>
+        {task.reviewSessionId ? 'Reviewing…' : reviewRetry ? 'Retry AI review' : 'AI review'}
+      </button>
+    )
   }
-  return <small className="shrink-0">{task.status}</small>
+  if (task.status === 'backlog') return <small className="shrink-0">{task.dependsOn.length ? 'waiting' : 'backlog'}</small>
+  return <small className="shrink-0">{task.status.replace('_', ' ')}</small>
+}
+
+const EDITABLE_STATUSES: Array<OrganizationTask['status']> = ['backlog', 'ready', 'blocked']
+
+/**
+ * Human edit of an ND task. Status is limited to the states a person may set
+ * directly; in-progress, review and completed are reached only through runs,
+ * review and evidence so the board never claims work that did not happen.
+ */
+function TaskEditDialog({ task, state, onClose, onSave }: {
+  task: OrganizationTask
+  state: OrganizationSnapshot
+  onClose(): void
+  onSave(patch: Extract<Parameters<typeof window.ndDshOrganization.mutate>[0], { type: 'task.update' }>['patch']): Promise<void>
+}) {
+  const [draft, setDraft] = useState({
+    title: task.title,
+    description: task.description,
+    acceptance: task.acceptanceCriteria.join('\n'),
+    priority: task.priority,
+    status: task.status,
+    assignedAgentId: task.assignedAgentId ?? '',
+  })
+  const [saving, setSaving] = useState(false)
+  const active = task.status === 'in_progress' || task.status === 'review'
+  const agents = state.agents.filter((item) => item.companyId === task.companyId)
+  const statusChoices = EDITABLE_STATUSES.includes(task.status) ? EDITABLE_STATUSES : [task.status]
+
+  async function save(event: FormEvent): Promise<void> {
+    event.preventDefault()
+    setSaving(true)
+    try {
+      const acceptanceCriteria = draft.acceptance.split('\n').map((line) => line.trim()).filter(Boolean)
+      await onSave({
+        title: draft.title,
+        description: draft.description,
+        acceptanceCriteria: acceptanceCriteria.length ? acceptanceCriteria : task.acceptanceCriteria,
+        priority: draft.priority,
+        ...(draft.status !== task.status ? { status: draft.status } : {}),
+        ...(draft.assignedAgentId && draft.assignedAgentId !== task.assignedAgentId ? { assignedAgentId: draft.assignedAgentId } : {}),
+      })
+      onClose()
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogContent className="max-w-[560px]">
+        <DialogHeader>
+          <DialogTitle>Edit task</DialogTitle>
+          <DialogDescription>
+            {active ? 'An agent is working on this task; assignee and status change after the run ends.' : 'Changes apply to the board immediately.'}
+          </DialogDescription>
+        </DialogHeader>
+        <form className="flex flex-col gap-2" onSubmit={(event) => void save(event)}>
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">Title
+            <input required value={draft.title} onChange={(event) => setDraft((value) => ({ ...value, title: event.target.value }))} className={orgInput} />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">Required outcome
+            <textarea required rows={3} value={draft.description} onChange={(event) => setDraft((value) => ({ ...value, description: event.target.value }))} className={cn(orgInput, 'resize-y')} />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">Acceptance criteria (one per line)
+            <textarea rows={3} value={draft.acceptance} onChange={(event) => setDraft((value) => ({ ...value, acceptance: event.target.value }))} className={cn(orgInput, 'resize-y')} />
+          </label>
+          <div className="grid grid-cols-3 gap-2">
+            <label className="flex flex-col gap-1 text-xs text-muted-foreground">Priority
+              <Select value={draft.priority} onValueChange={(value) => setDraft((current) => ({ ...current, priority: value as TaskPriority }))}>
+                <SelectTrigger className="h-8 rounded-md border-border-strong bg-background text-sm"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {(['low', 'medium', 'high', 'critical'] as const).map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </label>
+            <label className="flex flex-col gap-1 text-xs text-muted-foreground">Status
+              <Select value={draft.status} disabled={active} onValueChange={(value) => setDraft((current) => ({ ...current, status: value as OrganizationTask['status'] }))}>
+                <SelectTrigger className="h-8 rounded-md border-border-strong bg-background text-sm"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {statusChoices.map((value) => <SelectItem key={value} value={value}>{value.replace('_', ' ')}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </label>
+            <label className="flex flex-col gap-1 text-xs text-muted-foreground">Assignee
+              <Select value={draft.assignedAgentId || 'none'} disabled={active} onValueChange={(value) => setDraft((current) => ({ ...current, assignedAgentId: value === 'none' ? '' : value }))}>
+                <SelectTrigger className="h-8 rounded-md border-border-strong bg-background text-sm"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {!draft.assignedAgentId ? <SelectItem value="none">Unassigned</SelectItem> : null}
+                  {agents.map((agent) => <SelectItem key={agent.id} value={agent.id}>{agent.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </label>
+          </div>
+          <DialogFooter>
+            <DialogClose asChild><button type="button" className={orgButton}>Cancel</button></DialogClose>
+            <button type="submit" className={orgPrimaryButton} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
 }
 
 /**

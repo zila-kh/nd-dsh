@@ -1,4 +1,5 @@
 import type { ComputeManagementProjection } from './compute-budget.js'
+import type { OrganizationRunKind } from './organization.js'
 
 export type OrganizationTurnRoute =
   | 'ready'
@@ -161,6 +162,8 @@ export interface OrganizationManagementAttentionItem {
   companyId: string
   projectId?: string
   taskId?: string
+  /** Set for `failed-run` items so the human can retry the same kind of run. */
+  runKind?: OrganizationRunKind
   title: string
   detail: string
   createdAt: number

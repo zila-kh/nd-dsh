@@ -306,9 +306,14 @@ export class OrganizationControlPlane {
         id: item.id, kind: item.kind as 'gate' | 'action', companyId: item.companyId,
         ...(item.projectId ? { projectId: item.projectId } : {}), title: item.title, detail: item.question, createdAt: item.createdAt,
       })),
-      ...scopedRuns.filter((item) => item.status === 'failed').slice(0, 8).map((item) => ({
+      // Only a failure that is still the latest attempt needs the human; one that
+      // was already retried (or whose task has since completed) is history.
+      ...scopedRuns.filter((item) => item.status === 'failed' && isLatestAttempt(item, scopedRuns)
+        && (!item.taskId || scopedTasks.find((task) => task.id === item.taskId)?.status !== 'completed')).slice(0, 8).map((item) => ({
         id: `run:${item.id}`, kind: 'failed-run' as const, companyId: item.companyId, projectId: item.projectId,
-        ...(item.taskId ? { taskId: item.taskId } : {}), title: `${item.kind} failed`, detail: item.error ?? 'Run failed.', createdAt: item.completedAt ?? item.startedAt,
+        ...(item.taskId ? { taskId: item.taskId } : {}), runKind: item.kind,
+        title: `${runKindTitle(item.kind)} failed${item.taskId ? ` · ${scopedTasks.find((task) => task.id === item.taskId)?.title ?? 'task'}` : ''}`,
+        detail: item.error ?? 'Run failed.', createdAt: item.completedAt ?? item.startedAt,
       })),
       ...scopedEvidence.filter((item) => item.status === 'stale' || item.status === 'failed').slice(0, 8).map((item) => ({
         id: `evidence:${item.id}`, kind: 'stale-evidence' as const, companyId: item.companyId, projectId: item.projectId,
@@ -653,6 +658,21 @@ function normalize(value: unknown): OrganizationControlSnapshot {
     if (!Number.isFinite(budget.monthlyWindowStartedAt)) budget.monthlyWindowStartedAt = startOfUtcMonth(now)
   }
   return normalized
+}
+
+/** A run is the latest attempt when no newer run of the same kind targets the same task (or project plan). */
+function isLatestAttempt(run: OrganizationRun, runs: OrganizationRun[]): boolean {
+  return !runs.some((other) => other.id !== run.id
+    && other.kind === run.kind
+    && other.projectId === run.projectId
+    && other.taskId === run.taskId
+    && other.startedAt > run.startedAt)
+}
+
+function runKindTitle(kind: OrganizationRunKind): string {
+  if (kind === 'pm-plan') return 'AI PM plan'
+  if (kind === 'task-review') return 'AI review'
+  return 'Task run'
 }
 
 function actionForRun(kind: OrganizationRunKind): OrganizationControlAction {

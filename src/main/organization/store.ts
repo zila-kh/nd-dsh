@@ -315,12 +315,23 @@ export class OrganizationStore {
   async markExecution(taskId: string, sessionId: string): Promise<void> {
     await this.load()
     const task = this.task(taskId)
-    task.status = 'in_progress'; task.executionSessionId = sessionId; delete task.reviewSessionId
+    task.status = 'in_progress'; task.executionSessionId = sessionId; delete task.reviewSessionId; delete task.blockedReason
     task.integrationState = 'pending'; delete task.integrationSummary; delete task.integratedHead
     task.updatedAt = Date.now()
     this.setAgent(task.assignedAgentId, 'working', task.id, sessionId)
     this.activity(task.companyId, task.projectId, 'task.execute', `Started “${task.title}”.`)
     this.teamEvent(task, 'progress', `Execution started for “${task.title}”.`)
+    await this.save()
+  }
+
+  async blockTask(taskId: string, reason: string): Promise<void> {
+    await this.load()
+    const task = this.task(taskId)
+    task.status = 'blocked'
+    task.blockedReason = reason.trim().slice(0, 2_000) || 'Blocked by ND.'
+    task.updatedAt = Date.now()
+    this.activity(task.companyId, task.projectId, 'task.blocked', `Blocked “${task.title}”: ${task.blockedReason}`)
+    this.refreshProject(task.projectId)
     await this.save()
   }
 
@@ -695,6 +706,7 @@ export class OrganizationStore {
     const effectiveArtifacts = nextPatch.artifactPaths ?? task.artifactPaths ?? []
     if (effectiveEvidence === 'artifact' && effectiveArtifacts.length === 0) throw new Error('Artifact tasks require at least one artifact path')
     Object.assign(task, nextPatch)
+    if (task.status !== 'blocked') delete task.blockedReason
     task.updatedAt = Date.now()
     this.refreshProject(task.projectId)
   }

@@ -1,5 +1,22 @@
 import { describe, expect, it } from 'vitest'
 import { normalizeProjectPlan } from '../src/main/organization/plan-normalizer.js'
+import { mergeRepeatedArrayKeys } from '../src/shared/structured-output.js'
+
+describe('mergeRepeatedArrayKeys', () => {
+  it('merges milestones written as repeated keys instead of keeping only the last', () => {
+    const raw = '{"goal":{"title":"G"},"milestones":[{"title":"A","tasks":[{"title":"a1"}]}],"milestones":[{"title":"B","tasks":[{"title":"b1"}],"tasks":[{"title":"b2"}]}],"milestones":[]}'
+    const { json, merged } = mergeRepeatedArrayKeys(raw, ['milestones', 'tasks'])
+    const parsed = JSON.parse(json)
+    expect(parsed.milestones.map((item: { title: string }) => item.title)).toEqual(['A', 'B'])
+    expect(parsed.milestones[1].tasks.map((item: { title: string }) => item.title)).toEqual(['b1', 'b2'])
+    expect(merged).toBe(3)
+  })
+
+  it('leaves well-formed JSON untouched', () => {
+    const raw = '{"milestones":[{"title":"A","tasks":[]}],"memory":[]}'
+    expect(mergeRepeatedArrayKeys(raw, ['milestones', 'tasks'])).toEqual({ json: raw, merged: 0 })
+  })
+})
 
 function task(title: string, extra: Record<string, unknown> = {}) {
   return { title, description: `${title} work`, ...extra }

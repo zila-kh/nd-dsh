@@ -53,7 +53,7 @@ export function normalizeProjectPlan(raw: unknown): NormalizedPlan {
       adjustments.push(`Dropped milestone "${milestoneTitle}" because it had no tasks.`)
       continue
     }
-    milestones.push({ title: milestoneTitle, description: text(milestoneInput?.description), tasks })
+    milestones.push({ title: milestoneTitle, description: text(milestoneInput?.description) || milestoneTitle, tasks })
   }
   if (!flat.length) throw new Error('Invalid ND-DSH project plan: it contains no tasks')
 

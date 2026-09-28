@@ -12,13 +12,39 @@ export type AssistantSegment =
   | { kind: 'review'; review: ReviewVerdict }
   | { kind: 'plan'; plan: ProjectPlanInput }
 
+/**
+ * Models sometimes write one `"milestones": [...]` entry per milestone (or one
+ * `"tasks": [...]` per task) inside the same object. That is valid JSON, but a
+ * parser keeps only the last duplicate key and silently drops the rest of the
+ * plan, so adjacent repeats are merged into one array before parsing.
+ */
+export function mergeRepeatedArrayKeys(json: string, keys: readonly string[]): { json: string; merged: number } {
+  let merged = 0
+  let result = json
+  for (const key of keys) {
+    const name = key.replace(/[.*+?^${}()|[\]\\]/g, '\\const TAGGED_BLOCK_PATTERN')
+    const repeat = `\\s*,\\s*"${name}"\\s*:\\s*\\[`
+    const count = (pattern: RegExp): void => { merged += (result.match(pattern) ?? []).length }
+    const emptyBefore = new RegExp(`\\[\\s*\\]${repeat}`, 'g')
+    count(emptyBefore)
+    result = result.replace(emptyBefore, '[')
+    const emptyAfter = new RegExp(`\\]${repeat}\\s*\\]`, 'g')
+    count(emptyAfter)
+    result = result.replace(emptyAfter, ']')
+    const adjacent = new RegExp(`\\]${repeat}`, 'g')
+    count(adjacent)
+    result = result.replace(adjacent, ',')
+  }
+  return { json: result, merged }
+}
+
 const TAGGED_BLOCK_PATTERN = /<(nd-dsh-review|nd-dsh-plan)>\s*([\s\S]*?)\s*<\/\1>/g
 
-function parseTaggedBody<T>(raw: string): T | undefined {
+function parseTaggedBody<T>(raw: string, repeatedArrayKeys: readonly string[] = []): T | undefined {
   let body = raw.trim()
   if (body.startsWith('```')) body = body.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
   try {
-    return JSON.parse(body) as T
+    return JSON.parse(mergeRepeatedArrayKeys(body, repeatedArrayKeys).json) as T
   } catch {
     return undefined
   }
@@ -46,7 +72,7 @@ export function splitAssistantSegments(text: string): AssistantSegment[] {
         continue
       }
     } else {
-      const plan = parseTaggedBody<ProjectPlanInput>(body)
+      const plan = parseTaggedBody<ProjectPlanInput>(body, ['milestones', 'tasks'])
       if (plan?.goal?.title && Array.isArray(plan.milestones) && plan.milestones.length > 0) {
         segments.push({ kind: 'plan', plan })
         continue

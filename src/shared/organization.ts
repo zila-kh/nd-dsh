@@ -195,6 +195,8 @@ export interface OrganizationTask {
   integratedHead?: string
   /** Set when a recurring company schedule created this task. */
   sourceScheduleId?: string
+  /** Why ND blocked the task, shown to the human until the task moves again. */
+  blockedReason?: string
   createdAt: number
   updatedAt: number
 }
