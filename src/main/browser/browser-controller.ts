@@ -341,6 +341,9 @@ export class BrowserController {
     this.visible = visible
     if (!visible) this.closeExtensionPopup()
     this.syncViewVisibility()
+    if (visible && this.extensionPopup && !this.extensionPopup.view.webContents.isDestroyed()) {
+      this.extensionPopup.view.webContents.focus()
+    }
     this.emitState()
   }
 
