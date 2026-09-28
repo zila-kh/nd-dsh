@@ -410,12 +410,26 @@ export function SettingsPane({
 
                 {activeSubTab === 'browser' && (
                   <>
-                    <SettingsSection title="Agent browser" className="mt-3.5">
+                    <SettingsSection title="Browser" className="mt-3.5">
                       <div className="space-y-1.5">
                         <SettingsRow>
                           <div className={rowStack}>
-                            <strong className={rowTitle}>Browser control</strong>
-                            <span className={rowDesc}>The agent controls the visible Electron browser pane through the pinned browser bridge.</span>
+                            <strong className={rowTitle}>Browser</strong>
+                            <span className={rowDesc}>Let ND control the built-in Chromium browser. This never launches Google Chrome or another external browser.</span>
+                          </div>
+                          <BrowserToggle
+                            label="Built-in browser control"
+                            checked={browserPlatform?.browserUseEnabled !== false}
+                            onChange={(enabled) => {
+                              void window.ndDsh.browserPlatform.setBrowserUseEnabled(enabled)
+                                .catch((cause) => onError(errorMessage(cause)))
+                            }}
+                          />
+                        </SettingsRow>
+                        <SettingsRow>
+                          <div className={rowStack}>
+                            <strong className={rowTitle}>Agent control</strong>
+                            <span className={rowDesc}>The agent controls the exact visible WebContentsView tab through the pinned browser bridge.</span>
                           </div>
                           <BridgePill state={browser?.agentBrowser ?? 'binding'}>
                             {browser?.agentBrowser === 'ready' ? 'Linked' : browser?.agentBrowser === 'unavailable' ? 'Offline' : 'Linking'}
