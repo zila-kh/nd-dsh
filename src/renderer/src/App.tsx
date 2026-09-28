@@ -1709,6 +1709,10 @@ export default function App() {
                   harness={harnessStatus}
                   browser={browserState}
                   onError={notify}
+                  onOpenBrowser={() => {
+                    switchToWorkbench('agent')
+                    setAgentPane('browser')
+                  }}
                   tab={settingsTab}
                   onSelectTab={setSettingsTab}
                   subTab={settingsSubTabs.general}
