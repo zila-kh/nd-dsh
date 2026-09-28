@@ -32,22 +32,33 @@ interface CatalogDefinition {
   name: string
   publisher: string
   description: string
-  storeId: string
-  storeUrl: string
-  compatibility: 'experimental' | 'limited'
+  storeId?: string
+  storeUrl?: string
+  packagePolicy: 'bundled' | 'verified-chrome-id'
+  compatibility: 'experimental' | 'limited' | 'compatible'
   note: string
 }
 
 const CATALOG: CatalogDefinition[] = [
   {
+    id: 'nd-browser-tools',
+    name: 'ND Browser Tools',
+    publisher: 'ND',
+    description: 'First-party browser tools that run entirely inside the ND built-in Chromium profile.',
+    packagePolicy: 'bundled',
+    compatibility: 'compatible',
+    note: 'Bundled with ND as the Method 2 reference extension; it does not use external Chrome or Native Messaging.',
+  },
+  {
     id: 'openai-chatgpt',
     name: 'ChatGPT',
     publisher: 'OpenAI',
-    description: 'Official ChatGPT browser extension catalog entry for the ND built-in Chromium browser.',
+    description: 'Compatibility reference for the official standalone-Chrome extension, not the ND Method 2 runtime.',
     storeId: 'hehggadaopoacecdllhhajmbjkdcmajg',
     storeUrl: 'https://chromewebstore.google.com/detail/chatgpt/hehggadaopoacecdllhhajmbjkdcmajg?hl=en',
+    packagePolicy: 'verified-chrome-id',
     compatibility: 'experimental',
-    note: 'ND never launches external Chrome. Load an authorized unpacked package directly into the ND browser (or bundle it with ND); Electron supports only a subset of Chrome extension APIs.',
+    note: 'This package targets the standalone Chrome integration and may require APIs Electron does not expose. ND never launches external Chrome for built-in extension execution.',
   },
 ]
 
@@ -90,7 +101,8 @@ export class BrowserExtensionManager {
 
   catalog(): BrowserExtensionCatalogItem[] {
     return CATALOG.map((item) => {
-      const installed = this.list().find((record) => record.catalogId === item.id || record.storeId === item.storeId)
+      const installed = this.list().find((record) =>
+        record.catalogId === item.id || (item.storeId !== undefined && record.storeId === item.storeId))
       return {
         ...item,
         bundleAvailable: bundledExtensionCandidates(item.id)
@@ -169,6 +181,9 @@ export class BrowserExtensionManager {
   ): Promise<{ definition: CatalogDefinition; sourcePath: string; manifest: Record<string, unknown> }> {
     const definition = CATALOG.find((item) => item.id === catalogId)
     if (!definition) throw new Error('Unknown built-in browser extension catalog item')
+    if (selectedPath && definition.packagePolicy === 'bundled') {
+      throw new Error(`${definition.name} is a bundled ND extension and cannot be replaced by an arbitrary folder.`)
+    }
     const sourcePath = selectedPath
       ? resolve(selectedPath)
       : await findBundledExtensionPath(definition.id)
@@ -334,6 +349,8 @@ export class BrowserExtensionManager {
 }
 
 function verifyCatalogManifest(definition: CatalogDefinition, manifest: Record<string, unknown>): void {
+  if (definition.packagePolicy === 'bundled') return
+  if (!definition.storeId) throw new Error(`${definition.name} catalog entry is missing its expected extension id.`)
   const manifestKey = typeof manifest.key === 'string' ? manifest.key : undefined
   const verifiedId = manifestKey ? extensionIdFromManifestKey(manifestKey) : undefined
   if (verifiedId !== definition.storeId) {
