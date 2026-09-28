@@ -1,8 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import type { Extension, Session } from 'electron'
+import { app, type Extension, type Session } from 'electron'
 import { promises as fs } from 'node:fs'
-import { homedir } from 'node:os'
-import { basename, dirname, join, resolve } from 'node:path'
+ import { dirname, resolve } from 'node:path'
 import type {
   BrowserExtensionCatalogItem,
   BrowserExtensionRecord,
@@ -41,11 +40,11 @@ const CATALOG: CatalogDefinition[] = [
     id: 'openai-chatgpt',
     name: 'ChatGPT',
     publisher: 'OpenAI',
-    description: 'Official ChatGPT browser extension. ND can import a locally installed Chrome copy into its built-in browser profile for compatibility testing.',
+    description: 'Official ChatGPT browser extension catalog entry for the ND built-in Chromium browser.',
     storeId: 'hehggadaopoacecdllhhajmbjkdcmajg',
     storeUrl: 'https://chromewebstore.google.com/detail/chatgpt/hehggadaopoacecdllhhajmbjkdcmajg?hl=en',
     compatibility: 'experimental',
-    note: 'The official listing currently targets Google Chrome. Electron supports only a subset of Chrome extension APIs, so ND never claims full compatibility.',
+    note: 'ND never launches external Chrome. A licensed unpacked copy must be bundled with the ND build before this catalog item can be installed; Electron supports only a subset of Chrome extension APIs.',
   },
 ]
 
@@ -123,14 +122,14 @@ export class BrowserExtensionManager {
     })
   }
 
-  async importCatalog(catalogId: string): Promise<BrowserExtensionRecord> {
+  async installCatalog(catalogId: string): Promise<BrowserExtensionRecord> {
     const definition = CATALOG.find((item) => item.id === catalogId)
     if (!definition) throw new Error('Unknown built-in browser extension catalog item')
 
-    const sourcePath = await findChromeExtensionPath(definition.storeId)
+    const sourcePath = await findBundledExtensionPath(definition.id)
     if (!sourcePath) {
       throw new Error(
-        `${definition.name} is not installed in a local Google Chrome profile. Install it in Chrome first, then retry Import into ND.`,
+        `${definition.name} is not bundled in this ND build. Add an authorized unpacked package at resources/browser-extensions/${definition.id} and rebuild ND.`,
       )
     }
 
@@ -142,14 +141,8 @@ export class BrowserExtensionManager {
     }
     this.value.extensions = this.value.extensions.filter((item) => item.storeId !== definition.storeId)
 
-    const catalogRoot = resolve(dirname(this.filePath), 'browser-extension-imports', definition.id)
-    await fs.rm(catalogRoot, { recursive: true, force: true })
-    await fs.mkdir(catalogRoot, { recursive: true, mode: 0o700 })
-    const destination = resolve(catalogRoot, basename(sourcePath))
-    await fs.cp(sourcePath, destination, { recursive: true, force: true })
-
-    return this.installPath(destination, {
-      source: 'chrome-import',
+    return this.installPath(sourcePath, {
+      source: 'bundled',
       storeId: definition.storeId,
       publisher: definition.publisher,
     })
@@ -210,10 +203,6 @@ export class BrowserExtensionManager {
     this.records.delete(extensionId)
     this.value.extensions = this.value.extensions.filter((item) => item.path !== record.path)
     await this.persist()
-    if (record.source === 'chrome-import') {
-      const managedRoot = resolve(dirname(this.filePath), 'browser-extension-imports')
-      if (record.path.startsWith(managedRoot)) await fs.rm(dirname(record.path), { recursive: true, force: true }).catch(() => undefined)
-    }
     this.onChanged()
     return this.list()
   }
@@ -367,35 +356,15 @@ function manifestPermissions(manifest: Record<string, unknown>): string[] {
   return values.filter((item): item is string => typeof item === 'string').slice(0, 256)
 }
 
-async function findChromeExtensionPath(storeId: string): Promise<string | undefined> {
-  const roots = chromeUserDataRoots()
-  for (const root of roots) {
-    const profiles = await fs.readdir(root, { withFileTypes: true }).catch(() => [])
-    for (const profile of profiles) {
-      if (!profile.isDirectory() || (profile.name !== 'Default' && !profile.name.startsWith('Profile '))) continue
-      const extensionRoot = join(root, profile.name, 'Extensions', storeId)
-      const versions = (await fs.readdir(extensionRoot, { withFileTypes: true }).catch(() => []))
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => entry.name)
-        .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
-      for (const version of versions) {
-        const candidate = join(extensionRoot, version)
-        if (await readManifest(candidate).then(() => true).catch(() => false)) return candidate
-      }
-    }
+async function findBundledExtensionPath(catalogId: string): Promise<string | undefined> {
+  const candidates = [
+    resolve(process.resourcesPath, 'browser-extensions', catalogId),
+    resolve(app.getAppPath(), 'resources', 'browser-extensions', catalogId),
+  ]
+  for (const candidate of candidates) {
+    if (await readManifest(candidate).then(() => true).catch(() => false)) return candidate
   }
   return undefined
-}
-
-function chromeUserDataRoots(): string[] {
-  if (process.platform === 'win32') {
-    const localAppData = process.env.LOCALAPPDATA
-    return localAppData ? [join(localAppData, 'Google', 'Chrome', 'User Data')] : []
-  }
-  if (process.platform === 'darwin') {
-    return [join(homedir(), 'Library', 'Application Support', 'Google', 'Chrome')]
-  }
-  return [join(homedir(), '.config', 'google-chrome')]
 }
 
 function persistedId(path: string): string {
