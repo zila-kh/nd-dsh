@@ -173,6 +173,7 @@ export class BrowserController {
       if (this.extensionPopup?.view === view && this.visible) {
         view.setVisible(true)
         view.webContents.focus()
+        this.emitState()
       }
     } catch (cause) {
       this.closeExtensionPopup()
@@ -189,6 +190,7 @@ export class BrowserController {
     } catch {
     }
     if (!popup.view.webContents.isDestroyed()) popup.view.webContents.close()
+    if (!this.destroying) this.emitState()
   }
 
   setTabClosedListener(listener: ((tabId: string) => void) | undefined): void {
