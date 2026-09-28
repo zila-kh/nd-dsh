@@ -57,8 +57,8 @@ export function registerBrowserPlatformIpc(
   handle(BROWSER_PLATFORM_IPC.reloadExtensions, () => service.reloadExtensions())
   handle(BROWSER_PLATFORM_IPC.developerMode, (enabled) => service.setDeveloperMode(Boolean(enabled)))
   handle(BROWSER_PLATFORM_IPC.browserUseEnabled, (enabled) => service.setBrowserUseEnabled(Boolean(enabled)))
-  handle(BROWSER_PLATFORM_IPC.importCatalogExtension, (catalogId) =>
-    service.importCatalogExtension(asString(catalogId, 'Browser extension catalog id', 512)))
+  handle(BROWSER_PLATFORM_IPC.installCatalogExtension, (catalogId) =>
+    service.installCatalogExtension(asString(catalogId, 'Browser extension catalog id', 512)))
   handle(BROWSER_PLATFORM_IPC.openCatalogExtension, (catalogId) =>
     service.openCatalogExtension(asString(catalogId, 'Browser extension catalog id', 512)))
   handle(BROWSER_PLATFORM_IPC.saveCredential, (value) => {
