@@ -106,6 +106,37 @@ try {
   if (planActivity) log(`activity: ${redact(planActivity.message).slice(0, 1_500)}`)
   if (process.env.ND_E2E_PLAN_DUMP) writeFileSync(process.env.ND_E2E_PLAN_DUMP, redact(run.output ?? ''), 'utf8')
   exitCode = run.status === 'completed' && goals.length > 0 && tasks.length > 0 ? 0 : 1
+
+  // Optional: carry the first ready task through execute -> AI review -> merge,
+  // started explicitly the way a human does from the board at autonomy 2.
+  if (exitCode === 0 && process.env.ND_E2E_EXECUTE) {
+    const first = tasks.find((item) => item.status === 'ready')
+    if (!first) throw new Error('plan produced no ready task to execute')
+    log(`executing "${first.title}"`)
+    const taskState = () => page.evaluate((id) => window.ndDshOrganization.state().then((state) => ({
+      task: state.tasks.find((item) => item.id === id),
+      runs: state.runs.filter((item) => item.taskId === id),
+    })), first.id)
+    const waitFor = async (label, done, timeoutMs = 15 * 60_000) => {
+      const began = Date.now()
+      for (;;) {
+        const snapshot = await taskState()
+        if (done(snapshot)) return snapshot
+        if (Date.now() - began > timeoutMs) throw new Error(`${label} still waiting after ${timeoutMs} ms (task ${snapshot.task?.status})`)
+        await new Promise((resolveWait) => setTimeout(resolveWait, 5_000))
+      }
+    }
+    await page.evaluate((id) => window.ndDshOrganization.runTask(id), first.id)
+    let snapshot = await waitFor('execution', (value) => value.task && value.task.status !== 'in_progress' && !value.runs.some((item) => item.status === 'running'))
+    log(`after execution: task ${snapshot.task.status}${snapshot.task.blockedReason ? ` (${redact(snapshot.task.blockedReason).slice(0, 600)})` : ''}`)
+    if (snapshot.task.status === 'review') {
+      await page.evaluate((id) => window.ndDshOrganization.reviewTask(id), first.id)
+      snapshot = await waitFor('review', (value) => value.task && value.task.status !== 'review' && !value.runs.some((item) => item.status === 'running'))
+    }
+    for (const item of snapshot.runs) log(`  run ${item.kind}: ${item.status}${item.error ? ` — ${redact(item.error).slice(0, 600)}` : ''}`)
+    log(`final: task ${snapshot.task.status} · integration ${snapshot.task.integrationState ?? 'n/a'}${snapshot.task.reviewSummary ? ` · review: ${redact(snapshot.task.reviewSummary).slice(0, 400)}` : ''}`)
+    if (snapshot.task.status !== 'completed') exitCode = 1
+  }
   log(exitCode === 0 ? 'PASS' : 'FAIL')
 } catch (error) {
   log(`FAIL: ${redact(error instanceof Error ? error.stack ?? error.message : error)}`)
