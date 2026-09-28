@@ -146,6 +146,7 @@ export class BrowserPlatformService {
       downloads: this.browser.listDownloads(),
       extensions: this.extensions.list(),
       extensionCatalog: this.extensions.catalog(),
+      ...(this.browser.extensionPopupId() ? { extensionPopupId: this.browser.extensionPopupId() } : {}),
       browserUseEnabled: this.extensions.browserUseEnabled(),
       developerMode: this.extensions.developerMode(),
       credentials,
@@ -232,18 +233,21 @@ export class BrowserPlatformService {
   }
 
   async setExtensionEnabled(extensionId: string, enabled: boolean): Promise<BrowserExtensionRecord[]> {
+    if (!enabled && this.browser.extensionPopupId() === extensionId) this.browser.closeExtensionPopup()
     const records = await this.extensions.setEnabled(extensionId, enabled)
     await this.emit()
     return records
   }
 
   async removeExtension(extensionId: string): Promise<BrowserExtensionRecord[]> {
+    if (this.browser.extensionPopupId() === extensionId) this.browser.closeExtensionPopup()
     const records = await this.extensions.remove(extensionId)
     await this.emit()
     return records
   }
 
   async reloadExtensions(): Promise<BrowserExtensionRecord[]> {
+    this.browser.closeExtensionPopup()
     const records = await this.extensions.reloadAll()
     await this.emit()
     return records
@@ -274,6 +278,22 @@ export class BrowserPlatformService {
     await this.router.select({ mode: 'tab', targetId: BUILTIN_BROWSER_TARGET_ID, tabId: tab.id })
     await this.emit()
     return tab
+  }
+
+  async showExtensionPopup(extensionId: string): Promise<BrowserPlatformState> {
+    const extension = this.extensions.list().find((item) => item.id === extensionId)
+    if (!extension) throw new Error('Built-in browser extension not found')
+    if (!extension.enabled) throw new Error('Built-in browser extension is disabled')
+    if (!extension.actionPopup) throw new Error('This extension does not declare action.default_popup')
+    await this.browser.showExtensionPopup(extension.id, extension.actionPopup)
+    await this.emit()
+    return this.state()
+  }
+
+  async closeExtensionPopup(): Promise<BrowserPlatformState> {
+    this.browser.closeExtensionPopup()
+    await this.emit()
+    return this.state()
   }
 
   async saveCredential(input: { origin: string; username: string; password: string; label?: string | undefined }): Promise<BrowserCredentialSummary> {
