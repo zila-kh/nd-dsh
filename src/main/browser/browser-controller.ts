@@ -27,6 +27,8 @@ export interface BrowserControllerOptions {
 interface BrowserExtensionPopupRuntime {
   extensionId: string
   view: WebContentsView
+  preferredWidth?: number
+  preferredHeight?: number
 }
 
 interface BrowserTabRuntime {
@@ -142,6 +144,7 @@ export class BrowserController {
         sandbox: true,
         webSecurity: true,
         allowRunningInsecureContent: false,
+        enablePreferredSizeMode: true,
       },
     })
     view.webContents.setUserAgent(sanitizeBrowserUserAgent(app.userAgentFallback))
@@ -164,6 +167,13 @@ export class BrowserController {
     })
     view.webContents.on('blur', () => {
       if (this.extensionPopup?.view === view) this.closeExtensionPopup()
+    })
+    view.webContents.on('preferred-size-changed', (_event, preferredSize) => {
+      const popup = this.extensionPopup
+      if (!popup || popup.view !== view) return
+      popup.preferredWidth = preferredSize.width
+      popup.preferredHeight = preferredSize.height
+      this.syncExtensionPopupBounds()
     })
 
     this.window.contentView.addChildView(view)
@@ -862,8 +872,12 @@ export class BrowserController {
     const popup = this.extensionPopup
     if (!popup) return
     const margin = 8
-    const width = Math.max(260, Math.min(420, this.bounds.width - margin * 2))
-    const height = Math.max(220, Math.min(520, this.bounds.height - margin * 2))
+    const availableWidth = Math.max(1, this.bounds.width - margin * 2)
+    const availableHeight = Math.max(1, this.bounds.height - margin * 2)
+    const requestedWidth = popup.preferredWidth ?? 360
+    const requestedHeight = popup.preferredHeight ?? 420
+    const width = Math.min(availableWidth, Math.max(240, Math.min(420, requestedWidth)))
+    const height = Math.min(availableHeight, Math.max(120, Math.min(520, requestedHeight)))
     const x = Math.max(this.bounds.x + margin, this.bounds.x + this.bounds.width - width - margin)
     const y = this.bounds.y + margin
     popup.view.setBounds({ x, y, width, height })
