@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto'
 import type { BrowserExtensionRecord } from '../../shared/browser-platform.js'
 
 const DOCUMENTED_PERMISSION_APIS = new Set([
@@ -121,16 +120,4 @@ function isHostPattern(value: string): boolean {
 
 function unique(values: string[]): string[] {
   return [...new Set(values)].sort()
-}
-
-
-export function extensionIdFromManifestKey(key: string): string | undefined {
-  try {
-    const der = Buffer.from(key.trim(), 'base64')
-    if (der.length === 0) return undefined
-    const digest = createHash('sha256').update(der).digest('hex').slice(0, 32)
-    return [...digest].map((nibble) => String.fromCharCode('a'.charCodeAt(0) + Number.parseInt(nibble, 16))).join('')
-  } catch {
-    return undefined
-  }
 }
