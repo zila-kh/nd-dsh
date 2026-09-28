@@ -81,6 +81,18 @@ export class BrowserExtensionManager {
 
   async initialize(): Promise<void> {
     await this.load()
+    let bundledPathChanged = false
+    for (const item of this.value.extensions) {
+      if (item.source === 'bundled' && item.catalogId) {
+        const currentPath = await findBundledExtensionPath(item.catalogId)
+        if (currentPath && currentPath !== item.path) {
+          item.path = currentPath
+          bundledPathChanged = true
+        }
+      }
+    }
+    if (bundledPathChanged) await this.persist()
+
     for (const item of this.value.extensions) {
       if (!item.enabled) {
         const manifest = await readManifest(item.path).catch(() => undefined)
