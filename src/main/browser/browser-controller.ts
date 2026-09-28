@@ -328,6 +328,7 @@ export class BrowserController {
 
   async setVisible(visible: boolean): Promise<void> {
     this.visible = visible
+    if (!visible) this.closeExtensionPopup()
     this.syncViewVisibility()
     this.emitState()
   }
