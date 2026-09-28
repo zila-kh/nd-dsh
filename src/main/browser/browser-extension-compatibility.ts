@@ -84,6 +84,8 @@ export function analyzeBrowserExtensionManifest(manifest: Record<string, unknown
     ?? objectValue(manifest.page_action)
   if (action && typeof action.default_popup === 'string' && action.default_popup.trim()) {
     notes.push('Action popup is hosted by ND inside the built-in browser; chrome.action itself is not claimed as a supported Electron API.')
+  } else if (action) {
+    notes.push('Extension action has no default popup; chrome.action.onClicked is not hosted by ND yet.')
   }
 
   return {
@@ -91,7 +93,8 @@ export function analyzeBrowserExtensionManifest(manifest: Record<string, unknown
       note.startsWith('Electron does not document support')
       || note.startsWith('Manifest features outside')
       || note.startsWith('Manifest version is not')
-      || note.startsWith('MV3 background service workers are treated as provisional'))
+      || note.startsWith('MV3 background service workers are treated as provisional')
+      || note.startsWith('Extension action has no default popup'))
       ? 'limited'
       : 'compatible',
     notes,
