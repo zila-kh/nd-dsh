@@ -246,7 +246,7 @@ export interface BrowserPlatformDesktopApi {
   reloadExtensions(): Promise<BrowserExtensionRecord[]>
   setDeveloperMode(enabled: boolean): Promise<BrowserPlatformState>
   setBrowserUseEnabled(enabled: boolean): Promise<BrowserPlatformState>
-  installCatalogExtension(catalogId: string): Promise<BrowserExtensionRecord>
+  installCatalogExtension(catalogId: string): Promise<BrowserExtensionRecord | null>
   openCatalogExtension(catalogId: string): Promise<BrowserTabDescriptor>
   showExtensionPopup(extensionId: string): Promise<BrowserPlatformState>
   closeExtensionPopup(): Promise<BrowserPlatformState>
