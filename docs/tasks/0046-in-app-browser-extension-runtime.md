@@ -62,3 +62,9 @@ Required before merge:
 ## Follow-up ceiling
 
 If representative extensions require Chrome APIs Electron does not expose, record the missing API surface explicitly. Do not fall back to external Chrome for Method 2. Instead, open a runtime-compatibility task for a deeper Chromium integration or maintained Chromium fork behind the same ND `BrowserTarget` contract.
+
+
+## Handoff
+
+- Local validation: [In-app browser extension runtime](../plan/in-app-browser-extension-local-validation.md)
+- Keep PR #60 draft until the handoff evidence is recorded.
