@@ -261,16 +261,19 @@ export class BrowserPlatformService {
     return this.state()
   }
 
-  async importCatalogExtension(catalogId: string): Promise<BrowserExtensionRecord> {
-    const record = await this.extensions.importCatalog(catalogId)
+  async installCatalogExtension(catalogId: string): Promise<BrowserExtensionRecord> {
+    const record = await this.extensions.installCatalog(catalogId)
     await this.emit()
     return record
   }
 
-  async openCatalogExtension(catalogId: string): Promise<void> {
+  async openCatalogExtension(catalogId: string): Promise<BrowserTabDescriptor> {
     const item = this.extensions.catalog().find((candidate) => candidate.id === catalogId)
     if (!item) throw new Error('Unknown built-in browser extension catalog item')
-    await shell.openExternal(item.storeUrl)
+    const tab = await this.browser.createTab(item.storeUrl, true)
+    await this.router.select({ mode: 'tab', targetId: BUILTIN_BROWSER_TARGET_ID, tabId: tab.id })
+    await this.emit()
+    return tab
   }
 
   async saveCredential(input: { origin: string; username: string; password: string; label?: string | undefined }): Promise<BrowserCredentialSummary> {
