@@ -140,12 +140,13 @@ export class BrowserExtensionManager {
     await readManifest(sourcePath)
 
     for (const [id, record] of [...this.records]) {
-      if (record.storeId !== definition.storeId) continue
+      if (record.catalogId !== definition.id && record.storeId !== definition.storeId) continue
       const loaded = this.browserSession.extensions.getExtension(id)
       if (loaded) this.browserSession.extensions.removeExtension(id)
       this.records.delete(id)
     }
-    this.value.extensions = this.value.extensions.filter((item) => item.storeId !== definition.storeId)
+    this.value.extensions = this.value.extensions.filter((item) =>
+      item.catalogId !== definition.id && item.storeId !== definition.storeId)
 
     return this.installPath(sourcePath, {
       source: selectedPath ? 'unpacked' : 'bundled',
