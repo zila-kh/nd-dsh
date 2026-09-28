@@ -149,7 +149,7 @@ export interface BrowserHistoryEntry {
   visitedAt: number
 }
 
-export type BrowserExtensionSource = 'unpacked' | 'chrome-import'
+export type BrowserExtensionSource = 'unpacked' | 'bundled'
 
 export interface BrowserExtensionRecord {
   id: string
@@ -242,8 +242,8 @@ export interface BrowserPlatformDesktopApi {
   reloadExtensions(): Promise<BrowserExtensionRecord[]>
   setDeveloperMode(enabled: boolean): Promise<BrowserPlatformState>
   setBrowserUseEnabled(enabled: boolean): Promise<BrowserPlatformState>
-  importCatalogExtension(catalogId: string): Promise<BrowserExtensionRecord>
-  openCatalogExtension(catalogId: string): Promise<void>
+  installCatalogExtension(catalogId: string): Promise<BrowserExtensionRecord>
+  openCatalogExtension(catalogId: string): Promise<BrowserTabDescriptor>
   saveCredential(input: { origin: string; username: string; password: string; label?: string | undefined }): Promise<BrowserCredentialSummary>
   removeCredential(credentialId: string): Promise<boolean>
   autofillCredential(credentialId: string, targetId?: string, tabId?: string): Promise<{ ok: true; credentialId: string; username: string }>
@@ -270,7 +270,7 @@ export const BROWSER_PLATFORM_IPC = {
   reloadExtensions: 'browser-platform:reload-extensions',
   developerMode: 'browser-platform:developer-mode',
   browserUseEnabled: 'browser-platform:browser-use-enabled',
-  importCatalogExtension: 'browser-platform:import-catalog-extension',
+  installCatalogExtension: 'browser-platform:install-catalog-extension',
   openCatalogExtension: 'browser-platform:open-catalog-extension',
   saveCredential: 'browser-platform:save-credential',
   removeCredential: 'browser-platform:remove-credential',
