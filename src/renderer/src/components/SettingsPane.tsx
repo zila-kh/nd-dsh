@@ -513,7 +513,7 @@ export function SettingsPane({
 
                             <div className="pt-1">
                               <strong className="block text-[10px] font-semibold text-strong">Built-in catalog</strong>
-                              <span className="text-[9px] text-faint">First-party items are bundled with ND. Verified third-party references can be tested from an authorized unpacked package without launching external Chrome.</span>
+                              <span className="text-[9px] text-faint">First-party items are bundled with ND. Third-party store entries are reference-only; local folders are tested separately through Developer mode without launching external Chrome.</span>
                             </div>
                             {(browserPlatform?.extensionCatalog ?? [])
                               .filter((item) => {
