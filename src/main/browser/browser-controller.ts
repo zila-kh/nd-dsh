@@ -152,7 +152,9 @@ export class BrowserController {
     view.webContents.on('will-navigate', (event, url) => {
       try {
         const target = new URL(url)
-        if (target.protocol !== 'chrome-extension:' || target.host !== cleanId) event.preventDefault()
+        if (target.protocol === 'chrome-extension:' && target.host === cleanId) return
+        event.preventDefault()
+        if (isAllowedBrowserUrl(url)) void this.createTab(url, true).catch(() => undefined)
       } catch {
         event.preventDefault()
       }
