@@ -561,6 +561,7 @@ export function SettingsPane({
                                       {extension.version} · MV{extension.manifestVersion ?? '?'} · {extension.status}
                                       {extension.publisher ? ` · ${extension.publisher}` : ''}
                                       {extension.error ? ` · ${extension.error}` : ''}
+                                      {extension.compatibilityNotes?.length ? ` · ${extension.compatibilityNotes.join(' ')}` : ''}
                                     </span>
                                   </div>
                                   <div className="flex shrink-0 items-center gap-1.5">
