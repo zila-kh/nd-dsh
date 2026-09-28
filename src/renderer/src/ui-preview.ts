@@ -191,6 +191,20 @@ let browserPlatform: BrowserPlatformState = {
   leases: [],
   downloads: [],
   extensions: [],
+  extensionCatalog: [{
+    id: 'openai-chatgpt',
+    name: 'ChatGPT',
+    publisher: 'OpenAI',
+    description: 'Official ChatGPT browser extension catalog entry for the ND built-in Chromium browser.',
+    storeId: 'hehggadaopoacecdllhhajmbjkdcmajg',
+    storeUrl: 'https://chromewebstore.google.com/detail/chatgpt/hehggadaopoacecdllhhajmbjkdcmajg?hl=en',
+    compatibility: 'experimental',
+    bundleAvailable: false,
+    installed: false,
+    note: 'UI preview only.',
+  }],
+  browserUseEnabled: true,
+  developerMode: false,
   credentials: [],
   sitePermissions: [],
   approvals: [],
@@ -712,6 +726,34 @@ const desktopApi: DesktopApi = {
     installExtension: async () => null,
     setExtensionEnabled: async () => browserPlatform.extensions,
     removeExtension: async () => browserPlatform.extensions,
+    reloadExtensions: async () => browserPlatform.extensions,
+    setDeveloperMode: async (enabled) => {
+      browserPlatform = { ...browserPlatform, developerMode: enabled }
+      browserPlatformEvents.emit(browserPlatform)
+      return browserPlatform
+    },
+    setBrowserUseEnabled: async (enabled) => {
+      browserPlatform = { ...browserPlatform, browserUseEnabled: enabled }
+      browserPlatformEvents.emit(browserPlatform)
+      return browserPlatform
+    },
+    installCatalogExtension: async () => null,
+    openCatalogExtension: async (catalogId) => {
+      const item = browserPlatform.extensionCatalog.find((candidate) => candidate.id === catalogId)
+      if (!item) throw new Error('Preview browser extension catalog item not found')
+      return desktopApi.browserPlatform.createTab('builtin', item.storeUrl)
+    },
+    showExtensionPopup: async (extensionId) => {
+      browserPlatform = { ...browserPlatform, extensionPopupId: extensionId }
+      browserPlatformEvents.emit(browserPlatform)
+      return browserPlatform
+    },
+    closeExtensionPopup: async () => {
+      const { extensionPopupId: _extensionPopupId, ...next } = browserPlatform
+      browserPlatform = next
+      browserPlatformEvents.emit(browserPlatform)
+      return browserPlatform
+    },
     saveCredential: async (input) => {
       const record = { id: `preview-credential-${Date.now()}`, origin: new URL(input.origin).origin, username: input.username, ...(input.label ? { label: input.label } : {}), createdAt: Date.now(), updatedAt: Date.now() }
       browserPlatform = { ...browserPlatform, credentials: [record, ...browserPlatform.credentials] }
