@@ -188,9 +188,10 @@ export interface BrowserExtensionCatalogItem {
   name: string
   publisher: string
   description: string
-  storeId: string
-  storeUrl: string
-  compatibility: 'experimental' | 'limited'
+  storeId?: string | undefined
+  storeUrl?: string | undefined
+  packagePolicy: 'bundled' | 'verified-chrome-id'
+  compatibility: 'experimental' | 'limited' | 'compatible'
   bundleAvailable: boolean
   installed: boolean
   installedExtensionId?: string | undefined
