@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { app, type Extension, type Session } from 'electron'
 import { promises as fs } from 'node:fs'
- import { dirname, resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
 import type {
   BrowserExtensionCatalogItem,
   BrowserExtensionRecord,
