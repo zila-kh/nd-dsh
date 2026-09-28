@@ -256,6 +256,8 @@ const api: DesktopApi = {
     setBrowserUseEnabled: (enabled: boolean) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.browserUseEnabled, enabled) as Promise<BrowserPlatformState>,
     installCatalogExtension: (catalogId: string) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.installCatalogExtension, catalogId) as Promise<BrowserExtensionRecord>,
     openCatalogExtension: (catalogId: string) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.openCatalogExtension, catalogId) as Promise<BrowserTabDescriptor>,
+    showExtensionPopup: (extensionId: string) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.showExtensionPopup, extensionId) as Promise<BrowserPlatformState>,
+    closeExtensionPopup: () => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.closeExtensionPopup) as Promise<BrowserPlatformState>,
     saveCredential: (input: { origin: string; username: string; password: string; label?: string }) =>
       ipcRenderer.invoke(BROWSER_PLATFORM_IPC.saveCredential, input) as Promise<BrowserCredentialSummary>,
     removeCredential: (credentialId: string) => ipcRenderer.invoke(BROWSER_PLATFORM_IPC.removeCredential, credentialId) as Promise<boolean>,
