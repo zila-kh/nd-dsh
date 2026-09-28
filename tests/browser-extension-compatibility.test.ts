@@ -62,7 +62,7 @@ describe('browser extension compatibility analyzer', () => {
       version: '1.0.0',
       background: { service_worker: 'worker.js' },
     })
-    expect(result.status).toBe('compatible')
+    expect(result.status).toBe('limited')
     expect(result.notes.join(' ')).toContain('provisional')
   })
 })
