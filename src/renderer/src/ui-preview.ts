@@ -210,7 +210,7 @@ let browserPlatform: BrowserPlatformState = {
       description: 'Compatibility reference for the official standalone-Chrome extension, not the ND Method 2 runtime.',
       storeId: 'hehggadaopoacecdllhhajmbjkdcmajg',
       storeUrl: 'https://chromewebstore.google.com/detail/chatgpt/hehggadaopoacecdllhhajmbjkdcmajg?hl=en',
-      packagePolicy: 'verified-chrome-id',
+      packagePolicy: 'reference-only',
       compatibility: 'experimental',
       bundleAvailable: false,
       installed: false,
