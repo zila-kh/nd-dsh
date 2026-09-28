@@ -44,7 +44,7 @@ const CATALOG: CatalogDefinition[] = [
     storeId: 'hehggadaopoacecdllhhajmbjkdcmajg',
     storeUrl: 'https://chromewebstore.google.com/detail/chatgpt/hehggadaopoacecdllhhajmbjkdcmajg?hl=en',
     compatibility: 'experimental',
-    note: 'ND never launches external Chrome. A licensed unpacked copy must be bundled with the ND build before this catalog item can be installed; Electron supports only a subset of Chrome extension APIs.',
+    note: 'ND never launches external Chrome. Load an authorized unpacked package directly into the ND browser (or bundle it with ND); Electron supports only a subset of Chrome extension APIs.',
   },
 ]
 
