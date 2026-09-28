@@ -103,6 +103,8 @@ export function SettingsPane({
   const [credentialPassword, setCredentialPassword] = useState('')
   const [permissionOrigin, setPermissionOrigin] = useState('')
   const [permissionName, setPermissionName] = useState('notifications')
+  const [browserExtensionsOpen, setBrowserExtensionsOpen] = useState(false)
+  const [browserExtensionSearch, setBrowserExtensionSearch] = useState('')
 
   const activeSubTab = propSubTab ?? internalSubTab
   const handleSelectSubTab = (selected: GeneralSubTab): void => {
