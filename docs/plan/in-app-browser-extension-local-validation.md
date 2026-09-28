@@ -114,14 +114,14 @@ An action manifest without `default_popup` should be marked limited because `chr
 
 **ND Browser Tools** is the Method 2 first-party package and must come only from the bundled ND resources. Its catalog entry must never accept an arbitrary replacement folder.
 
-The **ChatGPT** entry is a compatibility reference to the official standalone-Chrome extension, not the Method 2 implementation. Unless an authorized unpacked package is available, it remains metadata/reference only.
+The **ChatGPT** entry is a reference to the official standalone-Chrome extension, not the Method 2 implementation. It remains non-installable catalog metadata in this wave.
 
-For a verified third-party catalog install:
+For third-party compatibility research:
 
-- ND must verify the manifest public key maps to the expected extension id;
-- a mismatched/unverifiable package must be rejected as that vendor catalog item;
-- the same folder may still be tested through generic **Load unpacked**, where it is not labeled as vendor-verified;
-- ND must never copy a user's Chrome profile to make the catalog install work.
+- the catalog entry may open the vendor/store listing in an ND built-in browser tab;
+- any local folder must be tested through generic **Developer mode → Load unpacked**;
+- ND must not label that folder publisher-verified merely because its manifest contains a matching public key or extension id;
+- ND must never copy a user's Chrome profile or launch standalone Chrome to make Method 2 work.
 
 ## 6. Evidence to attach to PR #60
 
