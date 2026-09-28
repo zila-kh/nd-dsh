@@ -22,6 +22,7 @@ const RULES_PROBE = `(async () => chrome.declarativeNetRequest?.getDynamicRules 
 const STYLE_PROBE = `document.querySelectorAll('style').length`
 
 test.setTimeout(240_000)
+test.skip(!EXT, 'Manual probe: set PROBE_EXTENSION_PATH to an unpacked extension folder')
 
 test('real Chromium baseline', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'probe-chromium-'))
