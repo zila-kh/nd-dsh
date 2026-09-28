@@ -165,6 +165,12 @@ export class BrowserController {
     view.webContents.on('render-process-gone', () => {
       if (this.extensionPopup?.view === view) this.closeExtensionPopup()
     })
+    view.webContents.on('destroyed', () => {
+      if (this.extensionPopup?.view === view) {
+        this.extensionPopup = undefined
+        if (!this.destroying) this.emitState()
+      }
+    })
     view.webContents.on('blur', () => {
       if (this.extensionPopup?.view === view) this.closeExtensionPopup()
     })
