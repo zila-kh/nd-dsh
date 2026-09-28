@@ -135,8 +135,8 @@ export class BrowserExtensionManager {
 
     for (const [id, record] of [...this.records]) {
       if (record.storeId !== definition.storeId) continue
-      const loaded = this.browserSession.getExtension(id)
-      if (loaded) this.browserSession.removeExtension(id)
+      const loaded = this.browserSession.extensions.getExtension(id)
+      if (loaded) this.browserSession.extensions.removeExtension(id)
       this.records.delete(id)
     }
     this.value.extensions = this.value.extensions.filter((item) => item.storeId !== definition.storeId)
@@ -150,8 +150,8 @@ export class BrowserExtensionManager {
 
   async reloadAll(): Promise<BrowserExtensionRecord[]> {
     for (const record of this.records.values()) {
-      const loaded = this.browserSession.getExtension(record.id)
-      if (loaded) this.browserSession.removeExtension(record.id)
+      const loaded = this.browserSession.extensions.getExtension(record.id)
+      if (loaded) this.browserSession.extensions.removeExtension(record.id)
     }
     this.records.clear()
 
@@ -186,8 +186,8 @@ export class BrowserExtensionManager {
       await this.loadOne(item)
     } else {
       item.enabled = false
-      const loaded = this.browserSession.getExtension(extensionId)
-      if (loaded) this.browserSession.removeExtension(extensionId)
+      const loaded = this.browserSession.extensions.getExtension(extensionId)
+      if (loaded) this.browserSession.extensions.removeExtension(extensionId)
       this.records.set(extensionId, { ...record, enabled: false })
       await this.persist()
     }
@@ -198,8 +198,8 @@ export class BrowserExtensionManager {
   async remove(extensionId: string): Promise<BrowserExtensionRecord[]> {
     const record = this.records.get(extensionId)
     if (!record) return this.list()
-    const loaded = this.browserSession.getExtension(extensionId)
-    if (loaded) this.browserSession.removeExtension(extensionId)
+    const loaded = this.browserSession.extensions.getExtension(extensionId)
+    if (loaded) this.browserSession.extensions.removeExtension(extensionId)
     this.records.delete(extensionId)
     this.value.extensions = this.value.extensions.filter((item) => item.path !== record.path)
     await this.persist()
@@ -228,8 +228,8 @@ export class BrowserExtensionManager {
 
     for (const [id, record] of [...this.records]) {
       if (record.path === extensionPath) {
-        const loaded = this.browserSession.getExtension(id)
-        if (loaded) this.browserSession.removeExtension(id)
+        const loaded = this.browserSession.extensions.getExtension(id)
+        if (loaded) this.browserSession.extensions.removeExtension(id)
         this.records.delete(id)
       }
     }
@@ -243,7 +243,7 @@ export class BrowserExtensionManager {
     const manifest = manifestInput ?? await readManifest(item.path)
     let extension: Extension | undefined
     try {
-      extension = await this.browserSession.loadExtension(item.path, { allowFileAccess: false })
+      extension = await this.browserSession.extensions.loadExtension(item.path, { allowFileAccess: false })
       const record = recordFromExtension(extension, item, true, manifest)
       this.records.set(record.id, record)
       return record
