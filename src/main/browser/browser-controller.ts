@@ -145,6 +145,7 @@ export class BrowserController {
         webSecurity: true,
         allowRunningInsecureContent: false,
         enablePreferredSizeMode: true,
+        focusOnNavigation: false,
       },
     })
     view.webContents.setUserAgent(sanitizeBrowserUserAgent(app.userAgentFallback))
