@@ -93,6 +93,7 @@ try {
         && capabilities.extensions.mv3ActionPopup?.runtimeAvailable
         && capabilities.extensions.mv3ActionPopup?.storageAvailable
         && capabilities.extensions.mv3ActionPopup?.tabsQueryAvailable
+        && capabilities.extensions.mv3ActionPopup?.tabsReloadAvailable
         && capabilities.extensions.mv3ActionPopup?.activeTabMatchesHost,
       ),
       multiTabPass,
@@ -259,6 +260,7 @@ async function loadAndExerciseActionPopup(extensionPath, ses, origin, hostWindow
     runtimeAvailable: false,
     storageAvailable: false,
     tabsQueryAvailable: false,
+    tabsReloadAvailable: false,
     activeTabMatchesHost: false,
     activeTabUrl: '',
     removed: false,
@@ -286,6 +288,7 @@ async function loadAndExerciseActionPopup(extensionPath, ses, origin, hostWindow
         runtime: document.documentElement.dataset.ndPopupRuntime || '',
         storage: document.documentElement.dataset.ndPopupStorage || '',
         tabs: document.documentElement.dataset.ndPopupTabs || '',
+        tabsReload: document.documentElement.dataset.ndPopupTabsReload || '',
         activeTabUrl: document.documentElement.dataset.ndPopupActiveTabUrl || '',
         status: document.getElementById('status')?.textContent || ''
       })`)
@@ -293,6 +296,7 @@ async function loadAndExerciseActionPopup(extensionPath, ses, origin, hostWindow
       result.runtimeAvailable = state.runtime === 'ok'
       result.storageAvailable = state.storage === 'ok'
       result.tabsQueryAvailable = state.tabs === 'ok'
+      result.tabsReloadAvailable = state.tabsReload === 'ok'
       result.activeTabUrl = state.activeTabUrl
       result.activeTabMatchesHost = typeof state.activeTabUrl === 'string' && state.activeTabUrl.startsWith(origin)
     } finally {
