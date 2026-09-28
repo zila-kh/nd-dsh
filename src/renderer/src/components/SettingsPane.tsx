@@ -462,32 +462,121 @@ export function SettingsPane({
                         </SettingsRow>
                         <SettingsRow>
                           <div className={rowStack}>
-                            <strong className={rowTitle}>Browser extensions</strong>
-                            <span className={rowDesc}>Load unpacked extensions supported by the current Electron/Chromium runtime. ND reports compatibility limits instead of claiming full Chrome Web Store parity.</span>
+                            <strong className={rowTitle}>Extensions</strong>
+                            <span className={rowDesc}>Manage extensions for ND's built-in Chromium profile. Nothing here launches or imports from external Google Chrome.</span>
                           </div>
-                          <SettingsButton onClick={() => {
-                            void window.ndDsh.browserPlatform.installExtension()
-                              .catch((cause) => onError(errorMessage(cause)))
-                          }}>Load unpacked</SettingsButton>
+                          <SettingsButton onClick={() => setBrowserExtensionsOpen((open) => !open)}>
+                            {browserExtensionsOpen ? 'Close' : 'Manage'}
+                          </SettingsButton>
                         </SettingsRow>
-                        {(browserPlatform?.extensions ?? []).map((extension) => (
-                          <SettingsRow key={extension.id}>
-                            <div className={rowStack}>
-                              <strong className={rowTitle}>{extension.name}</strong>
-                              <span className={rowDesc}>{extension.version} · MV{extension.manifestVersion ?? '?'} · {extension.status}{extension.error ? ` · ${extension.error}` : ''}</span>
+                        {browserExtensionsOpen ? (
+                          <div className="space-y-2 rounded-lg border border-border-soft bg-secondary/35 p-3">
+                            <div className="flex items-center gap-2">
+                              <input
+                                aria-label="Search browser extensions"
+                                placeholder="Search extensions"
+                                value={browserExtensionSearch}
+                                onChange={(event) => setBrowserExtensionSearch(event.target.value)}
+                                className="h-[28px] min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-[10px] outline-none focus:border-(--border-focus)"
+                              />
+                              <div className="flex shrink-0 items-center gap-2">
+                                <span className="text-[9px] font-semibold text-soft">Developer mode</span>
+                                <BrowserToggle
+                                  label="Browser extension developer mode"
+                                  checked={browserPlatform?.developerMode === true}
+                                  onChange={(enabled) => {
+                                    void window.ndDsh.browserPlatform.setDeveloperMode(enabled)
+                                      .catch((cause) => onError(errorMessage(cause)))
+                                  }}
+                                />
+                              </div>
                             </div>
-                            <div className="flex shrink-0 items-center gap-1.5">
+                            <div className="flex flex-wrap gap-1.5">
+                              <SettingsButton
+                                disabled={browserPlatform?.developerMode !== true}
+                                onClick={() => {
+                                  void window.ndDsh.browserPlatform.installExtension()
+                                    .catch((cause) => onError(errorMessage(cause)))
+                                }}
+                              >
+                                Load unpacked
+                              </SettingsButton>
                               <SettingsButton onClick={() => {
-                                void window.ndDsh.browserPlatform.setExtensionEnabled(extension.id, !extension.enabled)
+                                void window.ndDsh.browserPlatform.reloadExtensions()
                                   .catch((cause) => onError(errorMessage(cause)))
-                              }}>{extension.enabled ? 'Disable' : 'Enable'}</SettingsButton>
-                              <SettingsButton onClick={() => {
-                                void window.ndDsh.browserPlatform.removeExtension(extension.id)
-                                  .catch((cause) => onError(errorMessage(cause)))
-                              }}>Remove</SettingsButton>
+                              }}>
+                                Update
+                              </SettingsButton>
                             </div>
-                          </SettingsRow>
-                        ))}
+
+                            <div className="pt-1">
+                              <strong className="block text-[10px] font-semibold text-strong">Built-in catalog</strong>
+                              <span className="text-[9px] text-faint">Catalog items run in the ND browser profile. A package must be bundled with the ND build before install.</span>
+                            </div>
+                            {(browserPlatform?.extensionCatalog ?? [])
+                              .filter((item) => {
+                                const query = browserExtensionSearch.trim().toLowerCase()
+                                return !query || item.name.toLowerCase().includes(query) || item.publisher.toLowerCase().includes(query)
+                              })
+                              .map((item) => (
+                                <SettingsRow key={item.id}>
+                                  <div className={rowStack}>
+                                    <strong className={rowTitle}>{item.name} · {item.publisher}</strong>
+                                    <span className={rowDesc}>{item.description} · {item.compatibility}{item.note ? ` · ${item.note}` : ''}</span>
+                                  </div>
+                                  <div className="flex shrink-0 items-center gap-1.5">
+                                    {item.installed ? (
+                                      <StatusChip good>Installed</StatusChip>
+                                    ) : (
+                                      <SettingsButton onClick={() => {
+                                        void window.ndDsh.browserPlatform.installCatalogExtension(item.id)
+                                          .catch((cause) => onError(errorMessage(cause)))
+                                      }}>
+                                        Install
+                                      </SettingsButton>
+                                    )}
+                                    <SettingsButton onClick={() => {
+                                      void window.ndDsh.browserPlatform.openCatalogExtension(item.id)
+                                        .catch((cause) => onError(errorMessage(cause)))
+                                    }}>
+                                      View in ND browser
+                                    </SettingsButton>
+                                  </div>
+                                </SettingsRow>
+                              ))}
+
+                            <div className="pt-1">
+                              <strong className="block text-[10px] font-semibold text-strong">Installed extensions</strong>
+                            </div>
+                            {(browserPlatform?.extensions ?? [])
+                              .filter((extension) => {
+                                const query = browserExtensionSearch.trim().toLowerCase()
+                                return !query || extension.name.toLowerCase().includes(query) || extension.publisher?.toLowerCase().includes(query)
+                              })
+                              .map((extension) => (
+                                <SettingsRow key={extension.id}>
+                                  <div className={rowStack}>
+                                    <strong className={rowTitle}>{extension.name}</strong>
+                                    <span className={rowDesc}>
+                                      {extension.version} · MV{extension.manifestVersion ?? '?'} · {extension.status}
+                                      {extension.publisher ? ` · ${extension.publisher}` : ''}
+                                      {extension.error ? ` · ${extension.error}` : ''}
+                                    </span>
+                                  </div>
+                                  <div className="flex shrink-0 items-center gap-1.5">
+                                    <SettingsButton onClick={() => {
+                                      void window.ndDsh.browserPlatform.setExtensionEnabled(extension.id, !extension.enabled)
+                                        .catch((cause) => onError(errorMessage(cause)))
+                                    }}>{extension.enabled ? 'Disable' : 'Enable'}</SettingsButton>
+                                    <SettingsButton onClick={() => {
+                                      void window.ndDsh.browserPlatform.removeExtension(extension.id)
+                                        .catch((cause) => onError(errorMessage(cause)))
+                                    }}>Remove</SettingsButton>
+                                  </div>
+                                </SettingsRow>
+                              ))}
+                          </div>
+                        ) : null}
                         <SettingsRow>
                           <div className={rowStack}>
                             <strong className={rowTitle}>Downloads</strong>
