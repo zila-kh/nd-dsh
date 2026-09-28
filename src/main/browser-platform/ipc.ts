@@ -61,6 +61,9 @@ export function registerBrowserPlatformIpc(
     service.installCatalogExtension(asString(catalogId, 'Browser extension catalog id', 512)))
   handle(BROWSER_PLATFORM_IPC.openCatalogExtension, (catalogId) =>
     service.openCatalogExtension(asString(catalogId, 'Browser extension catalog id', 512)))
+  handle(BROWSER_PLATFORM_IPC.showExtensionPopup, (extensionId) =>
+    service.showExtensionPopup(asString(extensionId, 'Browser extension id', 1_024)))
+  handle(BROWSER_PLATFORM_IPC.closeExtensionPopup, () => service.closeExtensionPopup())
   handle(BROWSER_PLATFORM_IPC.saveCredential, (value) => {
     const input = object(value, 'Browser credential')
     return service.saveCredential({
