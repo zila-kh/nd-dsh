@@ -24,6 +24,7 @@ Method 1 / Browser Companion remains available for users who explicitly want the
 - Popup navigation is constrained to the extension origin; HTTP/HTTPS popup windows are redirected to a normal ND browser tab.
 - Popup teardown occurs on blur, browser navigation, tab switches, browser hiding, extension disable/remove/reload, and shutdown.
 - Settings provides Browser enable/disable, Developer mode, Load unpacked, reload/update, catalog, enable/disable, remove, permissions/status, and compatibility messaging.
+- Before first activation, ND parses the manifest and shows a native confirmation with extension identity, requested permissions, compatibility status/notes, and source path; cancel leaves the extension unloaded.
 - Unsupported Chrome APIs remain an explicit compatibility limitation; ND does not claim full Chrome Web Store parity.
 
 ## Built-in catalog
