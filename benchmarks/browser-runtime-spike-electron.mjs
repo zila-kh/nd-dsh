@@ -92,7 +92,8 @@ try {
         capabilities.extensions.mv3ActionPopup?.popupLoaded
         && capabilities.extensions.mv3ActionPopup?.runtimeAvailable
         && capabilities.extensions.mv3ActionPopup?.storageAvailable
-        && capabilities.extensions.mv3ActionPopup?.tabsQueryAvailable,
+        && capabilities.extensions.mv3ActionPopup?.tabsQueryAvailable
+        && capabilities.extensions.mv3ActionPopup?.activeTabMatchesHost,
       ),
       multiTabPass,
       credentialVaultPrimitiveAvailable: capabilities.runtime.safeStorageAvailable,
@@ -191,6 +192,7 @@ async function probeExtensions(ses, origin, hostWindow) {
     mv3ActionPopup: await loadAndExerciseActionPopup(
       resolve(root, 'tests/fixtures/browser-runtime-spike/extensions/mv3-action-popup'),
       ses,
+      origin,
       hostWindow,
     ),
   }
@@ -250,13 +252,15 @@ async function loadAndExerciseExtension(label, extensionPath, ses, origin, hostW
   return result
 }
 
-async function loadAndExerciseActionPopup(extensionPath, ses, hostWindow) {
+async function loadAndExerciseActionPopup(extensionPath, ses, origin, hostWindow) {
   const result = {
     loaded: false,
     popupLoaded: false,
     runtimeAvailable: false,
     storageAvailable: false,
     tabsQueryAvailable: false,
+    activeTabMatchesHost: false,
+    activeTabUrl: '',
     removed: false,
     id: null,
     error: null,
@@ -266,22 +270,34 @@ async function loadAndExerciseActionPopup(extensionPath, ses, hostWindow) {
     extension = await ses.extensions.loadExtension(extensionPath, { allowFileAccess: false })
     result.loaded = true
     result.id = extension.id
+    const hostView = createView(ses, hostWindow)
     const view = createView(ses, hostWindow)
     try {
+      await hostView.webContents.loadURL(origin + '/extension/popup-host')
+      hostView.setVisible(true)
+      hostView.webContents.focus()
+      await wait(50)
+
       await view.webContents.loadURL(`chrome-extension://${extension.id}/popup.html`)
+      view.setVisible(true)
+      view.webContents.focus()
       await wait(250)
       const state = await view.webContents.executeJavaScript(`({
         runtime: document.documentElement.dataset.ndPopupRuntime || '',
         storage: document.documentElement.dataset.ndPopupStorage || '',
         tabs: document.documentElement.dataset.ndPopupTabs || '',
+        activeTabUrl: document.documentElement.dataset.ndPopupActiveTabUrl || '',
         status: document.getElementById('status')?.textContent || ''
       })`)
       result.popupLoaded = state.status === 'ready'
       result.runtimeAvailable = state.runtime === 'ok'
       result.storageAvailable = state.storage === 'ok'
       result.tabsQueryAvailable = state.tabs === 'ok'
+      result.activeTabUrl = state.activeTabUrl
+      result.activeTabMatchesHost = typeof state.activeTabUrl === 'string' && state.activeTabUrl.startsWith(origin)
     } finally {
       destroyView(view, hostWindow)
+      destroyView(hostView, hostWindow)
     }
   } catch (cause) {
     result.error = cause instanceof Error ? cause.message : String(cause)
