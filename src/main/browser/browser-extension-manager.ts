@@ -321,6 +321,7 @@ function recordFromExtension(
     ...(item.source ? { source: item.source } : {}),
     ...(item.storeId ? { storeId: item.storeId } : {}),
     ...(item.publisher ? { publisher: item.publisher } : {}),
+    ...manifestAction(manifest),
     installedAt: item.installedAt,
   }
 }
@@ -343,9 +344,33 @@ function recordFromManifest(
     ...(item.source ? { source: item.source } : {}),
     ...(item.storeId ? { storeId: item.storeId } : {}),
     ...(item.publisher ? { publisher: item.publisher } : {}),
+    ...(manifest ? manifestAction(manifest) : {}),
     ...(!manifest ? { error: 'Extension manifest could not be read' } : {}),
     installedAt: item.installedAt,
   }
+}
+
+function manifestAction(manifest: Record<string, unknown>): Pick<BrowserExtensionRecord, 'actionTitle' | 'actionPopup'> {
+  const action = objectValue(manifest.action)
+    ?? objectValue(manifest.browser_action)
+    ?? objectValue(manifest.page_action)
+  if (!action) return {}
+  const title = typeof action.default_title === 'string' && action.default_title.trim()
+    ? action.default_title.trim()
+    : undefined
+  const popup = typeof action.default_popup === 'string' && action.default_popup.trim()
+    ? action.default_popup.trim().replace(/^\/+/, '')
+    : undefined
+  return {
+    ...(title ? { actionTitle: title } : {}),
+    ...(popup ? { actionPopup: popup } : {}),
+  }
+}
+
+function objectValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
 }
 
 function manifestPermissions(manifest: Record<string, unknown>): string[] {
