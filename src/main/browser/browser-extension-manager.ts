@@ -13,6 +13,7 @@ interface PersistedExtension {
   enabled: boolean
   installedAt: number
   source?: BrowserExtensionSource
+  catalogId?: string
   storeId?: string
   publisher?: string
 }
@@ -87,7 +88,7 @@ export class BrowserExtensionManager {
 
   catalog(): BrowserExtensionCatalogItem[] {
     return CATALOG.map((item) => {
-      const installed = this.list().find((record) => record.storeId === item.storeId)
+      const installed = this.list().find((record) => record.catalogId === item.id || record.storeId === item.storeId)
       return {
         ...item,
         bundleAvailable: bundledExtensionCandidates(item.id)
@@ -148,8 +149,11 @@ export class BrowserExtensionManager {
 
     return this.installPath(sourcePath, {
       source: selectedPath ? 'unpacked' : 'bundled',
-      storeId: definition.storeId,
-      publisher: definition.publisher,
+      catalogId: definition.id,
+      ...(selectedPath ? {} : {
+        storeId: definition.storeId,
+        publisher: definition.publisher,
+      }),
     })
   }
 
@@ -214,7 +218,7 @@ export class BrowserExtensionManager {
 
   private async installPath(
     extensionPath: string,
-    metadata: Pick<PersistedExtension, 'source' | 'storeId' | 'publisher'>,
+    metadata: Pick<PersistedExtension, 'source' | 'catalogId' | 'storeId' | 'publisher'>,
   ): Promise<BrowserExtensionRecord> {
     const manifest = await readManifest(extensionPath)
     const existing = this.value.extensions.find((item) => item.path === extensionPath)
@@ -226,6 +230,7 @@ export class BrowserExtensionManager {
     }
     item.enabled = true
     item.source = metadata.source
+    item.catalogId = metadata.catalogId
     item.storeId = metadata.storeId
     item.publisher = metadata.publisher
     if (!existing) this.value.extensions.push(item)
@@ -324,6 +329,7 @@ function recordFromExtension(
     permissions: manifestPermissions(manifest),
     ...(typeof manifest.manifest_version === 'number' ? { manifestVersion: manifest.manifest_version } : {}),
     ...(item.source ? { source: item.source } : {}),
+    ...(item.catalogId ? { catalogId: item.catalogId } : {}),
     ...(item.storeId ? { storeId: item.storeId } : {}),
     ...(item.publisher ? { publisher: item.publisher } : {}),
     ...manifestAction(manifest),
@@ -347,6 +353,7 @@ function recordFromManifest(
     permissions: manifest ? manifestPermissions(manifest) : [],
     ...(typeof manifest?.manifest_version === 'number' ? { manifestVersion: manifest.manifest_version } : {}),
     ...(item.source ? { source: item.source } : {}),
+    ...(item.catalogId ? { catalogId: item.catalogId } : {}),
     ...(item.storeId ? { storeId: item.storeId } : {}),
     ...(item.publisher ? { publisher: item.publisher } : {}),
     ...(manifest ? manifestAction(manifest) : {}),
