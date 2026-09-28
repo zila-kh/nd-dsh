@@ -88,6 +88,11 @@ try {
     requirements: {
       coreBrowserPass,
       extensionBaselinePass,
+      extensionActionPopupPass: Boolean(
+        capabilities.extensions.mv3ActionPopup?.popupLoaded
+        && capabilities.extensions.mv3ActionPopup?.runtimeAvailable
+        && capabilities.extensions.mv3ActionPopup?.storageAvailable,
+      ),
       multiTabPass,
       credentialVaultPrimitiveAvailable: capabilities.runtime.safeStorageAvailable,
       webMcpNavigatorPresent: capabilities.webMcp.documentPresent,
@@ -182,6 +187,11 @@ async function probeExtensions(ses, origin, hostWindow) {
   const result = {
     mv2: await loadAndExerciseExtension('mv2', resolve(root, 'tests/fixtures/browser-runtime-spike/extensions/mv2-baseline'), ses, origin, hostWindow),
     mv3: await loadAndExerciseExtension('mv3', resolve(root, 'tests/fixtures/browser-runtime-spike/extensions/mv3-service-worker'), ses, origin, hostWindow),
+    mv3ActionPopup: await loadAndExerciseActionPopup(
+      resolve(root, 'tests/fixtures/browser-runtime-spike/extensions/mv3-action-popup'),
+      ses,
+      hostWindow,
+    ),
   }
   result.loadedExtensionsAfterCleanup = ses.getAllExtensions().map((extension) => ({
     id: extension.id,
@@ -233,6 +243,52 @@ async function loadAndExerciseExtension(label, extensionPath, ses, origin, hostW
         result.removed = !ses.getAllExtensions().some((item) => item.id === extension.id)
       } catch (cause) {
         recordFailure('extension.' + label + '.remove', cause)
+      }
+    }
+  }
+  return result
+}
+
+async function loadAndExerciseActionPopup(extensionPath, ses, hostWindow) {
+  const result = {
+    loaded: false,
+    popupLoaded: false,
+    runtimeAvailable: false,
+    storageAvailable: false,
+    removed: false,
+    id: null,
+    error: null,
+  }
+  let extension
+  try {
+    extension = await ses.loadExtension(extensionPath, { allowFileAccess: false })
+    result.loaded = true
+    result.id = extension.id
+    const view = createView(ses, hostWindow)
+    try {
+      await view.webContents.loadURL(`chrome-extension://${extension.id}/popup.html`)
+      await wait(250)
+      const state = await view.webContents.executeJavaScript(`({
+        runtime: document.documentElement.dataset.ndPopupRuntime || '',
+        storage: document.documentElement.dataset.ndPopupStorage || '',
+        status: document.getElementById('status')?.textContent || ''
+      })`)
+      result.popupLoaded = state.status === 'ready'
+      result.runtimeAvailable = state.runtime === 'ok'
+      result.storageAvailable = state.storage === 'ok'
+    } finally {
+      destroyView(view, hostWindow)
+    }
+  } catch (cause) {
+    result.error = cause instanceof Error ? cause.message : String(cause)
+    observations.push({ label: 'extension-mv3-action-popup', outcome: 'unsupported-or-failed', detail: result.error })
+  } finally {
+    if (extension?.id) {
+      try {
+        ses.removeExtension(extension.id)
+        result.removed = !ses.getAllExtensions().some((item) => item.id === extension.id)
+      } catch (cause) {
+        recordFailure('extension.mv3-action-popup.remove', cause)
       }
     }
   }
