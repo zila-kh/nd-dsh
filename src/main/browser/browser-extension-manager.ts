@@ -4,6 +4,7 @@ import { existsSync, promises as fs } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import type {
   BrowserExtensionCatalogItem,
+  BrowserExtensionInstallPreview,
   BrowserExtensionRecord,
   BrowserExtensionSource,
 } from '../../shared/browser-platform.js'
@@ -123,32 +124,27 @@ export class BrowserExtensionManager {
     this.onChanged()
   }
 
+  async preview(path: string): Promise<BrowserExtensionInstallPreview> {
+    const extensionPath = resolve(path)
+    const manifest = await readManifest(extensionPath)
+    return previewFromManifest(extensionPath, manifest)
+  }
+
   async install(path: string): Promise<BrowserExtensionRecord> {
     return this.installPath(resolve(path), {
       source: 'unpacked',
     })
   }
 
-  async installCatalog(catalogId: string, selectedPath?: string): Promise<BrowserExtensionRecord> {
-    const definition = CATALOG.find((item) => item.id === catalogId)
-    if (!definition) throw new Error('Unknown built-in browser extension catalog item')
+  async previewCatalog(catalogId: string, selectedPath?: string): Promise<BrowserExtensionInstallPreview> {
+    const { definition, sourcePath, manifest } = await this.resolveCatalogPackage(catalogId, selectedPath)
+    verifyCatalogManifest(definition, manifest)
+    return previewFromManifest(sourcePath, manifest)
+  }
 
-    const sourcePath = selectedPath
-      ? resolve(selectedPath)
-      : await findBundledExtensionPath(definition.id)
-    if (!sourcePath) {
-      throw new Error(
-        `${definition.name} is not bundled in this ND build. Choose an authorized unpacked package to load it directly into the ND browser.`,
-      )
-    }
-    const manifest = await readManifest(sourcePath)
-    const manifestKey = typeof manifest.key === 'string' ? manifest.key : undefined
-    const verifiedId = manifestKey ? extensionIdFromManifestKey(manifestKey) : undefined
-    if (verifiedId !== definition.storeId) {
-      throw new Error(
-        `${definition.name} package could not be verified as extension ${definition.storeId}. Use Load unpacked for unverified packages.`,
-      )
-    }
+  async installCatalog(catalogId: string, selectedPath?: string): Promise<BrowserExtensionRecord> {
+    const { definition, sourcePath, manifest } = await this.resolveCatalogPackage(catalogId, selectedPath)
+    verifyCatalogManifest(definition, manifest)
 
     for (const [id, record] of [...this.records]) {
       if (record.catalogId !== definition.id && record.storeId !== definition.storeId) continue
@@ -162,11 +158,30 @@ export class BrowserExtensionManager {
     return this.installPath(sourcePath, {
       source: selectedPath ? 'unpacked' : 'bundled',
       catalogId: definition.id,
-      ...(selectedPath ? {} : {
-        storeId: definition.storeId,
-        publisher: definition.publisher,
-      }),
+      storeId: definition.storeId,
+      publisher: definition.publisher,
     })
+  }
+
+  private async resolveCatalogPackage(
+    catalogId: string,
+    selectedPath?: string,
+  ): Promise<{ definition: CatalogDefinition; sourcePath: string; manifest: Record<string, unknown> }> {
+    const definition = CATALOG.find((item) => item.id === catalogId)
+    if (!definition) throw new Error('Unknown built-in browser extension catalog item')
+    const sourcePath = selectedPath
+      ? resolve(selectedPath)
+      : await findBundledExtensionPath(definition.id)
+    if (!sourcePath) {
+      throw new Error(
+        `${definition.name} is not bundled in this ND build. Choose an authorized unpacked package to load it directly into the ND browser.`,
+      )
+    }
+    return {
+      definition,
+      sourcePath,
+      manifest: await readManifest(sourcePath),
+    }
   }
 
   async reloadAll(): Promise<BrowserExtensionRecord[]> {
@@ -315,6 +330,33 @@ export class BrowserExtensionManager {
     })
     this.saveChain = operation
     await operation
+  }
+}
+
+function verifyCatalogManifest(definition: CatalogDefinition, manifest: Record<string, unknown>): void {
+  const manifestKey = typeof manifest.key === 'string' ? manifest.key : undefined
+  const verifiedId = manifestKey ? extensionIdFromManifestKey(manifestKey) : undefined
+  if (verifiedId !== definition.storeId) {
+    throw new Error(
+      `${definition.name} package could not be verified as extension ${definition.storeId}. Use Load unpacked for unverified packages.`,
+    )
+  }
+}
+
+function previewFromManifest(
+  extensionPath: string,
+  manifest: Record<string, unknown>,
+): BrowserExtensionInstallPreview {
+  const compatibility = analyzeBrowserExtensionManifest(manifest)
+  return {
+    path: extensionPath,
+    name: typeof manifest.name === 'string' ? manifest.name : 'Browser extension',
+    version: typeof manifest.version === 'string' ? manifest.version : 'unknown',
+    permissions: manifestPermissions(manifest),
+    ...(typeof manifest.manifest_version === 'number' ? { manifestVersion: manifest.manifest_version } : {}),
+    status: compatibility.status,
+    compatibilityNotes: compatibility.notes,
+    ...manifestAction(manifest),
   }
 }
 
