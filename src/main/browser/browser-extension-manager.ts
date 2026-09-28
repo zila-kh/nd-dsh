@@ -170,7 +170,7 @@ export class BrowserExtensionManager {
     return this.installPath(sourcePath, {
       source: selectedPath ? 'unpacked' : 'bundled',
       catalogId: definition.id,
-      storeId: definition.storeId,
+      ...(definition.storeId !== undefined ? { storeId: definition.storeId } : {}),
       publisher: definition.publisher,
     })
   }
@@ -274,10 +274,10 @@ export class BrowserExtensionManager {
       ...metadata,
     }
     item.enabled = true
-    item.source = metadata.source
-    item.catalogId = metadata.catalogId
-    item.storeId = metadata.storeId
-    item.publisher = metadata.publisher
+    assignOptional(item, 'source', metadata.source)
+    assignOptional(item, 'catalogId', metadata.catalogId)
+    assignOptional(item, 'storeId', metadata.storeId)
+    assignOptional(item, 'publisher', metadata.publisher)
     if (!existing) this.value.extensions.push(item)
     await this.persist()
 
@@ -349,6 +349,15 @@ export class BrowserExtensionManager {
     this.saveChain = operation
     await operation
   }
+}
+
+function assignOptional<K extends 'source' | 'catalogId' | 'storeId' | 'publisher'>(
+  item: PersistedExtension,
+  key: K,
+  value: PersistedExtension[K],
+): void {
+  if (value === undefined) delete item[key]
+  else item[key] = value
 }
 
 function matchesCatalogRecord(record: BrowserExtensionRecord, definition: CatalogDefinition): boolean {
