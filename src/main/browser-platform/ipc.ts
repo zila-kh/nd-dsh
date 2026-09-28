@@ -57,8 +57,19 @@ export function registerBrowserPlatformIpc(
   handle(BROWSER_PLATFORM_IPC.reloadExtensions, () => service.reloadExtensions())
   handle(BROWSER_PLATFORM_IPC.developerMode, (enabled) => service.setDeveloperMode(Boolean(enabled)))
   handle(BROWSER_PLATFORM_IPC.browserUseEnabled, (enabled) => service.setBrowserUseEnabled(Boolean(enabled)))
-  handle(BROWSER_PLATFORM_IPC.installCatalogExtension, (catalogId) =>
-    service.installCatalogExtension(asString(catalogId, 'Browser extension catalog id', 512)))
+  handle(BROWSER_PLATFORM_IPC.installCatalogExtension, async (catalogId) => {
+    const id = asString(catalogId, 'Browser extension catalog id', 512)
+    const item = (await service.state()).extensionCatalog.find((candidate) => candidate.id === id)
+    if (!item) throw new Error('Unknown built-in browser extension catalog item')
+    if (item.bundleAvailable) return service.installCatalogExtension(id)
+
+    const result = await dialog.showOpenDialog(window, {
+      title: `Load unpacked ${item.name} browser extension package`,
+      properties: ['openDirectory'],
+    })
+    const path = result.filePaths[0]
+    return result.canceled || !path ? null : service.installCatalogExtension(id, path)
+  })
   handle(BROWSER_PLATFORM_IPC.openCatalogExtension, (catalogId) =>
     service.openCatalogExtension(asString(catalogId, 'Browser extension catalog id', 512)))
   handle(BROWSER_PLATFORM_IPC.showExtensionPopup, (extensionId) =>
