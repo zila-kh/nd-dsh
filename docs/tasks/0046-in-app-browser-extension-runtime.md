@@ -35,7 +35,7 @@ A catalog package can be supplied in either of two ND-owned ways:
 - bundled under `resources/browser-extensions/<catalog-id>/`; or
 - chosen by the user as an authorized unpacked extension directory through ND's native folder picker.
 
-Neither path launches Chrome or imports a Chrome profile. Opening a catalog listing opens it in a normal **ND built-in browser tab**, not the system browser.
+Neither path launches Chrome or imports a Chrome profile. Vendor catalog packages must verify to the expected Chrome extension id from their manifest public key; an unverified folder can still be loaded through Developer mode, but ND will not label it as the vendor catalog item. Opening a catalog listing opens it in a normal **ND built-in browser tab**, not the system browser.
 
 ## Validation
 
