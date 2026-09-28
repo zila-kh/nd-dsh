@@ -16,6 +16,7 @@ corepack pnpm typecheck
 corepack pnpm test
 corepack pnpm build
 corepack pnpm browser:platform:test
+node scripts/verify-release.mjs --config-only
 corepack pnpm bench:browser-runtime
 ~~~
 
