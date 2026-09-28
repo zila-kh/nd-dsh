@@ -282,12 +282,12 @@ export class BrowserPlatformService {
     return this.state()
   }
 
-  async previewCatalogExtension(catalogId: string, selectedPath?: string): Promise<BrowserExtensionInstallPreview> {
-    return this.extensions.previewCatalog(catalogId, selectedPath)
+  async previewCatalogExtension(catalogId: string): Promise<BrowserExtensionInstallPreview> {
+    return this.extensions.previewCatalog(catalogId)
   }
 
-  async installCatalogExtension(catalogId: string, selectedPath?: string): Promise<BrowserExtensionRecord> {
-    const record = await this.extensions.installCatalog(catalogId, selectedPath)
+  async installCatalogExtension(catalogId: string): Promise<BrowserExtensionRecord> {
+    const record = await this.extensions.installCatalog(catalogId)
     await this.emit()
     return record
   }
