@@ -295,6 +295,7 @@ export class BrowserPlatformService {
   async openCatalogExtension(catalogId: string): Promise<BrowserTabDescriptor> {
     const item = this.extensions.catalog().find((candidate) => candidate.id === catalogId)
     if (!item) throw new Error('Unknown built-in browser extension catalog item')
+    if (!item.storeUrl) throw new Error('This built-in extension does not have an external catalog listing')
     const tab = await this.browser.createTab(item.storeUrl, true)
     await this.router.select({ mode: 'tab', targetId: BUILTIN_BROWSER_TARGET_ID, tabId: tab.id })
     await this.emit()
