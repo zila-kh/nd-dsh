@@ -1,4 +1,3 @@
-import { app } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import { dirname } from 'node:path'
@@ -28,8 +27,8 @@ export class LocalRuntimeService {
 
   constructor(
     private readonly filePath: string,
-    private readonly appPort: LocalRuntimeAppPort = app as unknown as LocalRuntimeAppPort,
-    private readonly platform: NodeJS.Platform = process.platform,
+    private readonly appPort: LocalRuntimeAppPort,
+    private readonly platform: NodeJS.Platform,
   ) {}
 
   async initialize(): Promise<LocalRuntimeState> {

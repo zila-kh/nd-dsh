@@ -69,7 +69,7 @@ import { flushStartupBenchmark, markStartup } from './perf/startup-metrics.js'
 import { QaService } from './qa/qa-service.js'
 import { SessionArchiveStore } from './sessions/session-archive-store.js'
 import { LogFile, logFilePathFor } from './logging/log-file.js'
-import { LocalRuntimeService } from './local-runtime/local-runtime-service.js'
+import { LocalRuntimeService, type LocalRuntimeAppPort } from './local-runtime/local-runtime-service.js'
 import { registerLocalRuntimeIpc } from './local-runtime/ipc.js'
 import { UsageLedger } from './usage/usage-ledger.js'
 import { ThemeService } from './theme.js'
@@ -141,6 +141,7 @@ function showMainWindowAndOpenLauncher(): void {
   if (!window || window.isDestroyed()) return
   if (window.isMinimized()) window.restore()
   window.show()
+  localRuntime?.setBackground(false)
   window.setAlwaysOnTop(true)
   window.focus()
   window.setAlwaysOnTop(false)
@@ -158,10 +159,12 @@ function showQuickLauncher(): void {
   if (behavior.kind === 'toggle-window') {
     if (window.isVisible() && window.isFocused() && !window.isMinimized()) {
       window.hide()
+      localRuntime?.setBackground(true)
       return
     }
     if (window.isMinimized()) window.restore()
     window.show()
+    localRuntime?.setBackground(false)
     window.setAlwaysOnTop(true)
     window.focus()
     window.setAlwaysOnTop(false)
@@ -177,7 +180,11 @@ app.on('second-instance', () => {
 async function createWindow(cdpPort: number): Promise<void> {
   const preload = join(currentDirectory, '../preload/index.cjs')
   if (!localRuntime) {
-    localRuntime = new LocalRuntimeService(join(app.getPath('userData'), 'local-runtime.json'))
+    localRuntime = new LocalRuntimeService(
+      join(app.getPath('userData'), 'local-runtime.json'),
+      app as unknown as LocalRuntimeAppPort,
+      process.platform,
+    )
     await localRuntime.initialize()
   }
   const ndPencilPreload = join(currentDirectory, '../preload/nd-pencil.cjs')
