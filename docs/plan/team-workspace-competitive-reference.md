@@ -9,6 +9,62 @@ ND should study products that are already proving pieces of the human + AI works
 
 > **local-first human + AI work OS, General + Coding in one desktop, multi-engine/BYOK, isolated task execution, explicit approvals and extensible local capabilities.**
 
+## Strategy: stabilize first, inspire second
+
+ND will **not chase competitor features during the local milestone**.
+
+The order is:
+
+```text
+1. Make ND local stable
+2. Prove the full workflow offline
+3. Pass restart/recovery/security/review gates
+4. Re-check reference products
+5. Select only the strongest proven ideas
+6. Adapt them to ND's architecture
+7. Add them without weakening local-first guarantees
+```
+
+A competitor launch does not automatically become an ND task.
+
+A reference idea should only enter implementation when all of these are true:
+
+- it solves a real ND user/workflow problem;
+- it fits the existing ND control-plane model;
+- it does not make cloud mandatory for local core;
+- it does not weaken task isolation, policy, approval or audit guarantees;
+- it can be implemented without creating a parallel source of truth;
+- it has a concrete acceptance scenario and evidence plan.
+
+This makes the competitive reference set a **design library and future radar**, not a moving backlog.
+
+### Later combination model
+
+After the local gate, ND can intentionally combine the best patterns:
+
+```text
+Asana
+  shared human + agent work graph
+        +
+Linear
+  low-friction task/mention/comment UX
+        +
+GitHub Agent HQ
+  agent mission control + code review visibility
+        +
+Codex
+  parallel coding-agent/worktree supervision
+        +
+Microsoft Copilot
+  General + Code + persistent teammate convergence
+        +
+ND
+  local-first + engine-neutral + explicit governance
+  + extensible desktop + isolated execution
+```
+
+The result should feel like ND, not like five products glued together.
+
 ## Reference products
 
 | Product | What it proves | What ND should learn | Where ND should differentiate |

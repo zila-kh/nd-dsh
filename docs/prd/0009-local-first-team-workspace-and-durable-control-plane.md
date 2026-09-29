@@ -57,6 +57,22 @@ Primary references:
 
 The goal is not feature parity with their hosted platforms. PRD 0009 must match baseline collaboration expectations locally, then demonstrate ND-specific advantages: no required server, General + Coding over one project model, engine-neutral execution, isolated task/checkpoint lineage and explicit revision-bound approvals.
 
+## 2.2 Stability before parity
+
+Competitive references do not expand the PRD 0009 scope while the local foundation is still being stabilized.
+
+Implementation priority is:
+
+1. correctness;
+2. durability;
+3. restart/recovery;
+4. task/workspace isolation;
+5. explicit review/approval correctness;
+6. understandable local UX;
+7. only then broader competitive inspiration.
+
+A reference feature may be adopted later only if it preserves PRD 0009's local-first and governance invariants.
+
 ## 3. Scope boundary
 
 This PRD is **one-host local collaboration**.

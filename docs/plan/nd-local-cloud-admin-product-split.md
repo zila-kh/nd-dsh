@@ -49,6 +49,25 @@ The implementation rule is **reference, do not clone**. ND should match the esse
 
 Cloud breadth is not the current competition target. The local milestone wins by proving a complete, safe workflow without a server.
 
+## Stability-first competitive rule
+
+The competitive reference set is **future inspiration, not current scope pressure**.
+
+Current priority:
+
+```text
+stable local core
+-> durable collaboration
+-> reliable agent/task execution
+-> explicit review/approval
+-> offline/restart proof
+-> local milestone accepted
+```
+
+Only after that gate should ND selectively combine proven ideas from Asana, Linear, GitHub Agent HQ, Codex, Microsoft Copilot or newer references.
+
+Every borrowed idea must be adapted to ND's own invariants: local-first operation, General + Coding over one project model, engine-neutral execution, task/worktree isolation, explicit governance and one authoritative control plane.
+
 ## Immediate milestone: local team workspace
 
 PRD 0009 is the next product contract.
