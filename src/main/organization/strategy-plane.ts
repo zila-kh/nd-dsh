@@ -61,6 +61,23 @@ export class OrganizationStrategyPlane {
     return clone(this.value)
   }
 
+  async pruneToOrganization(organization: OrganizationSnapshot): Promise<void> {
+    await this.load()
+    const companyIds = new Set(organization.companies.map((item) => item.id))
+    const projectIds = new Set(organization.projects.map((item) => item.id))
+    const before = strategyRowCount(this.value)
+    this.value.anchors = this.value.anchors.filter((item) => companyIds.has(item.companyId) && (!item.projectId || projectIds.has(item.projectId)))
+    this.value.knowledge = this.value.knowledge.filter((item) => companyIds.has(item.companyId) && (!item.projectId || projectIds.has(item.projectId)))
+    this.value.schedules = this.value.schedules.filter((item) => companyIds.has(item.companyId) && projectIds.has(item.projectId))
+    this.value.heartbeats = this.value.heartbeats.filter((item) => companyIds.has(item.companyId) && projectIds.has(item.projectId))
+    this.value.triggers = this.value.triggers.filter((item) => companyIds.has(item.companyId) && projectIds.has(item.projectId))
+    const triggerIds = new Set(this.value.triggers.map((item) => item.id))
+    this.value.triggerReceipts = this.value.triggerReceipts.filter((item) => triggerIds.has(item.triggerId))
+    this.value.skillCandidates = this.value.skillCandidates.filter((item) => companyIds.has(item.companyId) && (!item.projectId || projectIds.has(item.projectId)))
+    this.value.audit = this.value.audit.filter((item) => companyIds.has(item.companyId) && (!item.projectId || projectIds.has(item.projectId)))
+    if (strategyRowCount(this.value) !== before) await this.save()
+  }
+
   async mutate(mutation: OrganizationStrategyMutation): Promise<OrganizationStrategySnapshot> {
     await this.load()
     const organization = await this.store.state()
@@ -615,6 +632,17 @@ function normalize(value: unknown): OrganizationStrategySnapshot {
     skillCandidates: Array.isArray(input.skillCandidates) ? input.skillCandidates : [],
     audit: Array.isArray(input.audit) ? input.audit : [],
   }
+}
+
+function strategyRowCount(value: OrganizationStrategySnapshot): number {
+  return value.anchors.length
+    + value.knowledge.length
+    + value.schedules.length
+    + value.heartbeats.length
+    + value.triggers.length
+    + value.triggerReceipts.length
+    + value.skillCandidates.length
+    + value.audit.length
 }
 
 function nextScheduleRun(schedule: OrganizationCompanySchedule, now: number): number {

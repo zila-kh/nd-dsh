@@ -232,6 +232,32 @@ describe('organization control plane', () => {
     expect((await control.management('project-1')).metrics.newSignals).toBe(0)
   })
 
+  it('prunes durable control records that belong to removed projects', async () => {
+    const { control, organization } = await fixture()
+    await control.mutate({
+      type: 'human-action.add',
+      companyId: 'company-1',
+      projectId: 'project-1',
+      kind: 'gate',
+      title: 'Release gate',
+      question: 'Proceed?',
+    })
+    await control.mutate({
+      type: 'signal.add',
+      companyId: 'company-1',
+      projectId: 'project-1',
+      source: 'test',
+      title: 'Signal',
+      summary: 'Project signal',
+    })
+    organization.projects = []
+    organization.tasks = []
+    await control.pruneToOrganization(organization)
+    const state = await control.state()
+    expect(state.humanActions).toHaveLength(0)
+    expect(state.signals).toHaveLength(0)
+  })
+
   it('serializes declared overlapping advisory work scopes but leaves independent scopes runnable', async () => {
     const { control, value } = await fixture()
     const now = Date.now()

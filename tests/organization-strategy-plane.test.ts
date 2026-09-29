@@ -131,6 +131,24 @@ describe('organization strategy plane', () => {
     expect(state.heartbeats[0]?.title).toBe('Durable heartbeat')
   })
 
+  it('prunes automation and strategy records when their project is removed', async () => {
+    const { strategy, value } = await fixture()
+    await strategy.mutate({ type: 'anchor.add', companyId: 'company-1', projectId: 'project-1', title: 'Anchor', outcome: 'Ship' })
+    await strategy.mutate({ type: 'schedule.add', companyId: 'company-1', projectId: 'project-1', title: 'Routine', intervalMinutes: 60 })
+    await strategy.mutate({ type: 'heartbeat.add', companyId: 'company-1', projectId: 'project-1', title: 'Heartbeat', intervalMinutes: 30 })
+    await strategy.mutate({ type: 'trigger.add', companyId: 'company-1', projectId: 'project-1', title: 'Trigger', eventType: 'task.blocked', action: 'signal', prompt: 'Inspect' })
+    await strategy.mutate({ type: 'skill-candidate.add', companyId: 'company-1', projectId: 'project-1', name: 'Candidate', description: 'D', instructions: 'I' })
+    value.projects = []
+    value.tasks = []
+    await strategy.pruneToOrganization(value)
+    const state = await strategy.state()
+    expect(state.anchors).toHaveLength(0)
+    expect(state.schedules).toHaveLength(0)
+    expect(state.heartbeats).toHaveLength(0)
+    expect(state.triggers).toHaveLength(0)
+    expect(state.skillCandidates).toHaveLength(0)
+  })
+
   it('projects release readiness from task state and exact review evidence', async () => {
     const { strategy, value } = await fixture()
     let projection = await strategy.projection('project-1', control())

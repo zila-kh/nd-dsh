@@ -139,6 +139,12 @@ export function registerOrganizationIpc(
       }
     }
     const state = await store.mutate(mutation)
+    if (mutation.type === 'project.remove' || mutation.type === 'company.remove') {
+      await Promise.all([
+        strategy.pruneToOrganization(state),
+        control.pruneToOrganization(state),
+      ])
+    }
     await projectWorkspace.afterOrganizationMutation(mutation, state)
     const projectId = autopilotProjectId(mutation, state)
     if (projectId) {

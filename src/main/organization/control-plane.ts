@@ -84,6 +84,24 @@ export class OrganizationControlPlane {
     return clone(this.value)
   }
 
+  async pruneToOrganization(organization: OrganizationSnapshot): Promise<void> {
+    await this.load()
+    const companyIds = new Set(organization.companies.map((item) => item.id))
+    const projectIds = new Set(organization.projects.map((item) => item.id))
+    const taskIds = new Set(organization.tasks.map((item) => item.id))
+    const before = controlRowCount(this.value)
+    const scopeExists = (item: { companyId: string; projectId?: string }): boolean =>
+      companyIds.has(item.companyId) && (!item.projectId || projectIds.has(item.projectId))
+    this.value.turns = this.value.turns.filter((item) => scopeExists(item) && (!item.taskId || taskIds.has(item.taskId)))
+    this.value.humanActions = this.value.humanActions.filter(scopeExists)
+    this.value.signals = this.value.signals.filter(scopeExists)
+    this.value.budgets = this.value.budgets.filter(scopeExists)
+    this.value.leases = this.value.leases.filter((item) => scopeExists(item) && taskIds.has(item.taskId))
+    this.value.evidence = this.value.evidence.filter((item) => scopeExists(item) && taskIds.has(item.taskId))
+    this.value.feedback = this.value.feedback.filter((item) => scopeExists(item) && (!item.taskId || taskIds.has(item.taskId)))
+    if (controlRowCount(this.value) !== before) await this.save()
+  }
+
   async mutate(mutation: OrganizationControlMutation): Promise<OrganizationControlSnapshot> {
     await this.load()
     const organization = await this.store.state()
@@ -658,6 +676,16 @@ function normalize(value: unknown): OrganizationControlSnapshot {
     if (!Number.isFinite(budget.monthlyWindowStartedAt)) budget.monthlyWindowStartedAt = startOfUtcMonth(now)
   }
   return normalized
+}
+
+function controlRowCount(value: OrganizationControlSnapshot): number {
+  return value.turns.length
+    + value.humanActions.length
+    + value.signals.length
+    + value.budgets.length
+    + value.leases.length
+    + value.evidence.length
+    + value.feedback.length
 }
 
 /** A run is the latest attempt when no newer run of the same kind targets the same task (or project plan). */
