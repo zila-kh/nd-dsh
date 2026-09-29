@@ -512,13 +512,33 @@ export class OrganizationStrategyPlane {
 
   private async load(): Promise<void> {
     if (this.loaded) return
+    let primaryError: unknown
     try {
-      const parsed = JSON.parse(await fs.readFile(this.filePath, 'utf8')) as unknown
-      this.value = normalize(parsed)
+      this.value = await this.readSnapshot(this.filePath)
+      this.loaded = true
+      return
     } catch (error) {
-      if ((error as NodeJS.ErrnoException | undefined)?.code !== 'ENOENT') throw error
+      primaryError = error
     }
-    this.loaded = true
+
+    try {
+      this.value = await this.readSnapshot(this.backupPath())
+      this.loaded = true
+      console.warn(`Recovered organization strategy from backup after primary load failed: ${errorMessage(primaryError)}`)
+      await this.save()
+      return
+    } catch (backupError) {
+      if (isMissing(primaryError) && isMissing(backupError)) {
+        this.loaded = true
+        return
+      }
+      throw new Error(`Organization strategy could not be loaded. Primary: ${errorMessage(primaryError)}. Backup: ${errorMessage(backupError)}.`)
+    }
+  }
+
+  private async readSnapshot(path: string): Promise<OrganizationStrategySnapshot> {
+    const parsed = JSON.parse(await fs.readFile(path, 'utf8')) as unknown
+    return normalize(parsed)
   }
 
   private async save(): Promise<void> {
@@ -526,14 +546,40 @@ export class OrganizationStrategyPlane {
     const serialized = `${JSON.stringify(snapshot, null, 2)}\n`
     const write = this.saveChain.catch(() => undefined).then(async () => {
       await fs.mkdir(dirname(this.filePath), { recursive: true })
-      const temp = `${this.filePath}.tmp-${process.pid}-${Date.now()}`
-      await fs.writeFile(temp, serialized, { mode: 0o600 })
-      await fs.rename(temp, this.filePath)
+      await writeAtomic(this.filePath, serialized)
+      try {
+        await writeAtomic(this.backupPath(), serialized)
+      } catch (error) {
+        console.warn('Failed to persist organization strategy backup:', error)
+      }
     })
     this.saveChain = write
     await write
     this.onChanged?.(snapshot)
   }
+
+  private backupPath(): string {
+    return `${this.filePath}.bak`
+  }
+}
+
+async function writeAtomic(path: string, content: string): Promise<void> {
+  const temp = `${path}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    await fs.writeFile(temp, content, { encoding: 'utf8', mode: 0o600 })
+    await fs.rename(temp, path)
+  } catch (error) {
+    await fs.rm(temp, { force: true }).catch(() => undefined)
+    throw error
+  }
+}
+
+function isMissing(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT'
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 function normalize(value: unknown): OrganizationStrategySnapshot {

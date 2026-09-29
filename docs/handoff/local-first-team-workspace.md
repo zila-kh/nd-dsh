@@ -32,6 +32,8 @@ The existing Agent `ChatPanel` remains the execution transcript. Team collaborat
 
 ### Automation v2
 
+Automation/strategy state is written atomically to both a primary file and `.bak` recovery snapshot. If the primary JSON is unreadable after an interrupted write or disk corruption, ND recovers the last durable automation state from backup and rewrites the primary.
+
 ND schedules now support:
 
 - interval;

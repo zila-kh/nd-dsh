@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -88,6 +88,29 @@ describe('organization strategy plane', () => {
     await strategy.finishSchedule(schedule.id, 'success', 'run dispatched')
     state = await strategy.state()
     expect(state.schedules[0]?.lastOutcome).toBe('success')
+  })
+
+  it('recovers durable automation state from backup when the primary strategy file is corrupt', async () => {
+    const { root, strategy } = await fixture()
+    let state = await strategy.mutate({
+      type: 'schedule.add',
+      companyId: 'company-1',
+      projectId: 'project-1',
+      title: 'Durable routine',
+      intervalMinutes: 30,
+    })
+    expect(state.schedules).toHaveLength(1)
+
+    const primary = join(root, 'strategy.json')
+    const backup = `${primary}.bak`
+    expect(JSON.parse(await readFile(backup, 'utf8')).schedules).toHaveLength(1)
+    await writeFile(primary, '{corrupt', 'utf8')
+
+    const value = organization()
+    const recovered = new OrganizationStrategyPlane(primary, { state: async () => structuredClone(value) } as never)
+    state = await recovered.state()
+    expect(state.schedules[0]?.title).toBe('Durable routine')
+    expect(JSON.parse(await readFile(primary, 'utf8')).schedules[0]?.title).toBe('Durable routine')
   })
 
   it('projects release readiness from task state and exact review evidence', async () => {
