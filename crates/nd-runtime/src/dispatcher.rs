@@ -218,7 +218,6 @@ pub fn priority_for_method(method: &str) -> Priority {
         "scheduler.snapshot"
         | "process.snapshot"
         | "workspace.list"
-        | "sessionJournal.reset"
         | "sessionJournal.drop"
         | "sessionJournal.clear" => Priority::Background,
         _ => Priority::Normal,

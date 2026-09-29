@@ -14,9 +14,11 @@ import {
   ANTIGRAVITY_ENGINE_ID,
   CHATGPT_WEB_ENGINE_ID,
   CLAUDE_CODE_CLI_ENGINE_ID,
+  CODEX_ENGINE_ID,
   CODEX_CLI_ENGINE_ID,
   CURSOR_CLI_ENGINE_ID,
   ND_HARNESS_ENGINE_ID,
+  ND_NATIVE_ENGINE_ID,
   PI_CODING_ENGINE_ID,
   ZCODE_CLI_ENGINE_ID,
 } from '../../shared/coding-engines.js'
@@ -46,6 +48,8 @@ import { createExtraCliEngines } from './agent-cli/extra-cli-engines.js'
 import { TRANSCRIPT_EVENT_TYPES } from './agent-cli/agent-cli-support.js'
 import type { PiCodingEngine } from './pi/pi-coding-engine.js'
 import type { ZcodeCliEngine } from './zcode/zcode-cli-engine.js'
+import type { NdNativeEngine } from './nd-native/nd-native-engine.js'
+import { nativePrivateSelectionEnabled } from './nd-native/native-selection-gate.js'
 
 const STRUCTURED_TRANSCRIPT_ENGINE_IDS = new Set([
   OPENCODE_CLI_ENGINE_ID,
@@ -67,11 +71,11 @@ export interface ChatGptWebRuntime {
  * never branch on engine ids.
  */
 export interface DirectWorkspaceEngine {
-  run(prompt: string, options?: { sessionId?: string; cwd?: string; model?: string; permissionMode?: string }): Promise<{ sessionId: string }>
+  run(prompt: string, options?: { sessionId?: string; cwd?: string; provider?: string; model?: string; permissionMode?: string }): Promise<{ sessionId: string }>
   createSession(input?: { cwd?: string; model?: string }): Promise<{ sessionId: string }>
   stop(sessionId?: string): Promise<void>
   listSessions(): EngineSessionSummary[]
-  transcript(sessionId: string): EngineSessionTranscript
+  transcript(sessionId: string): EngineSessionTranscript | Promise<EngineSessionTranscript>
   ownsSession(sessionId: string): boolean
   handlesApproval(rpcId: string): boolean
   respond(rpcId: string, value: unknown): Promise<void>
@@ -108,7 +112,7 @@ export class EngineSessionRouter {
   }
   /** Logical engine ids for harness-backed sessions such as delegated Codex. */
   private readonly logicalEngineBySession = new Map<string, string>()
-  /** ND-owned immutable workspace binding for direct task/interactive sessions. */
+  /** ND-owned immutable workspace binding for routed task/interactive sessions. */
   private readonly workspaceRootBySession = new Map<string, string>()
   private readonly chatGptWeb: ChatGptWebEngine | undefined
   private readonly chatGptWebBrowser: BrowserController | undefined
@@ -130,6 +134,7 @@ export class EngineSessionRouter {
     claude?: ClaudeCodeCliEngine,
     directSpawnProcess: typeof spawn = spawn,
     private readonly sessionJournal?: SessionJournalStore,
+    nativeAgent?: NdNativeEngine,
   ) {
     this.directEngines.set(CODEX_CLI_ENGINE_ID, codex)
     if (antigravity) this.directEngines.set(ANTIGRAVITY_ENGINE_ID, antigravity)
@@ -137,6 +142,10 @@ export class EngineSessionRouter {
     if (pi) this.directEngines.set(PI_CODING_ENGINE_ID, pi)
     if (cursor) this.directEngines.set(CURSOR_CLI_ENGINE_ID, cursor)
     if (claude) this.directEngines.set(CLAUDE_CODE_CLI_ENGINE_ID, claude)
+    if (nativeAgent) {
+      this.directEngines.set(ND_NATIVE_ENGINE_ID, nativeAgent)
+      this.routerOwnedDirectEngines.add(nativeAgent)
+    }
     for (const [engineId, engine] of createExtraCliEngines((line) => console.warn(line), directSpawnProcess)) {
       this.directEngines.set(engineId, engine)
       this.routerOwnedDirectEngines.add(engine)
@@ -186,7 +195,11 @@ export class EngineSessionRouter {
     const requested = options?.sessionId
       ? this.engineForSession(options.sessionId)
       : options?.engineId ?? ND_HARNESS_ENGINE_ID
-    const providerId = requested === ND_HARNESS_ENGINE_ID
+    if (!options?.sessionId) this.assertKnownEngine(requested)
+    if (requested === ND_NATIVE_ENGINE_ID) {
+      await (this.directEngines.get(requested) as NdNativeEngine | undefined)?.start()
+    }
+    const providerId = requested === ND_HARNESS_ENGINE_ID || requested === ND_NATIVE_ENGINE_ID
       ? options?.provider ?? this.harness.status().provider
       : undefined
     const directTarget = this.directEngines.get(requested)
@@ -196,6 +209,10 @@ export class EngineSessionRouter {
       ? directTarget?.listSessions().find((item) => item.sessionId === requestedSessionId)?.cwd
       : undefined
     const boundSessionCwd = requestedSessionId ? this.workspaceRootBySession.get(requestedSessionId) : undefined
+    const requestedRunCwd = options?.workspaceCwd?.trim()
+    if (boundSessionCwd && requestedRunCwd && !sameWorkspaceRoot(boundSessionCwd, requestedRunCwd)) {
+      throw new Error('Run requested a different workspace than the ND-bound session; create a new session instead of re-rooting this one')
+    }
     if (boundSessionCwd && engineSessionCwd && !sameWorkspaceRoot(boundSessionCwd, engineSessionCwd)) {
       throw new Error('Direct engine changed the ND-bound task workspace; create a new session instead of re-rooting this one')
     }
@@ -213,12 +230,12 @@ export class EngineSessionRouter {
       const result = await this.harness.gatewayRpc('session.list')
       const items = (result.value as { items?: Array<{ sessionId?: string; cwd?: string }> } | undefined)?.items
       const session = items?.find((item) => item.sessionId === options?.sessionId)
-      if (!result.ok || !session?.cwd || !sessionInWorkspace(this.workspace.state().root, session.cwd)) throw new Error('Skill session does not belong to the active workspace')
+      if (!result.ok || !session?.cwd || !this.sessionRootAllowed(session.cwd)) throw new Error('Skill session does not belong to the active workspace')
     }
     let routedPrompt = this.extensions
       ? await this.extensions.decoratePrompt(skill?.prompt ?? prompt, requested, providerId)
       : skill?.prompt ?? prompt
-    if (options?.sessionId && this.browserAccess) {
+    if (options?.sessionId && this.browserAccess && requested !== ND_NATIVE_ENGINE_ID) {
       const token = this.browserAccess.issueSessionAccess(options.sessionId)
       routedPrompt += `\n\n<nd-browser-access>\nOpaque browser access token for this ND session: ${token}\nPass it unchanged as accessToken on every nd_browser_call. Do not expose it in user-facing output.\n</nd-browser-access>`
     }
@@ -259,9 +276,10 @@ export class EngineSessionRouter {
       }
       this.workspace.assertUsable()
       const workspace = this.workspace.state()
-      return direct.run(appendWorkspaceContext(optimizedPrompt, workspace), {
+      return direct.run(appendWorkspaceContext(optimizedPrompt, workspace, sessionCwd ?? workspace.root), {
         ...(options?.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
         ...(options?.model !== undefined ? { model: options.model } : {}),
+        ...(options?.provider !== undefined ? { provider: options.provider } : {}),
         ...(options?.permissionMode !== undefined ? { permissionMode: options.permissionMode } : {}),
         // A session keeps the root it was created with. Re-rooting every turn
         // at the active workspace would run an isolated task worktree's worker
@@ -307,7 +325,8 @@ export class EngineSessionRouter {
     if (this.chatGptWeb?.listSessions().some((session) => session.running)) {
       throw new Error('ND Harness and ChatGPT Web share the visible browser. Finish the active ChatGPT Web turn before starting ND Harness.')
     }
-    return this.harness.run(optimizedPrompt, options)
+    const harnessCwd = sessionCwd ?? requestedRunCwd
+    return this.harness.run(optimizedPrompt, harnessCwd ? { ...options, workspaceCwd: harnessCwd } : options)
   }
 
   /**
@@ -316,6 +335,7 @@ export class EngineSessionRouter {
    * worktrees; interactive chat keeps the active workspace default.
    */
   async createSession(engineId: string, cwd?: string): Promise<{ sessionId: string; engineId: string }> {
+    this.assertKnownEngine(engineId)
     const direct = this.directEngines.get(engineId)
     if (direct) {
       const workspaceDirect = this.isWorkspaceDirectEngine(engineId)
@@ -336,6 +356,7 @@ export class EngineSessionRouter {
     if (cwd === undefined) {
       const sessionId = await this.harness.createSession()
       this.logicalEngineBySession.set(sessionId, engineId)
+      this.workspaceRootBySession.set(sessionId, targetCwd)
       return { engineId, sessionId }
     }
     const result = await this.harness.gatewayRpc('session.create', { cwd: targetCwd })
@@ -343,6 +364,7 @@ export class EngineSessionRouter {
     const sessionId = (result.value as { sessionId?: unknown } | undefined)?.sessionId
     if (typeof sessionId !== 'string' || !sessionId) throw new Error('Harness session.create returned no session id')
     this.logicalEngineBySession.set(sessionId, engineId)
+    this.workspaceRootBySession.set(sessionId, targetCwd)
     return { engineId, sessionId }
   }
 
@@ -402,7 +424,7 @@ export class EngineSessionRouter {
   async transcript(sessionId: string): Promise<EngineSessionTranscript> {
     for (const direct of this.directEngines.values()) {
       if (!direct.ownsSession(sessionId)) continue
-      const fallback = direct.transcript(sessionId)
+      const fallback = await direct.transcript(sessionId)
       const events = await this.nativeTranscript(sessionId, fallback.events)
       return { ...fallback, events }
     }
@@ -474,6 +496,24 @@ export class EngineSessionRouter {
     const zcode = this.zcode
     if (!zcode || zcode.listSessions().some((session) => session.running)) return
     await zcode.close()
+  }
+
+  private assertKnownEngine(engineId: string): void {
+    if (engineId === ND_NATIVE_ENGINE_ID) {
+      if (!nativePrivateSelectionEnabled()) {
+        throw new Error('ND Agent is private; set ND_DSH_NATIVE_PRIVATE_SELECTION=1 only after running the milestone validation gate')
+      }
+      const native = this.directEngines.get(engineId) as NdNativeEngine | undefined
+      if (!native?.ready()) throw new Error('ND Agent runtime is unavailable')
+      return
+    }
+    if (
+      engineId === ND_HARNESS_ENGINE_ID
+      || engineId === CODEX_ENGINE_ID
+      || engineId === CHATGPT_WEB_ENGINE_ID
+      || this.directEngines.has(engineId)
+    ) return
+    throw new Error(`Unknown coding engine: ${engineId}`)
   }
 
   private isWorkspaceDirectEngine(engineId: string): boolean {

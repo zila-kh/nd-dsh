@@ -9,6 +9,7 @@ use nd_runtime::effect_journal::{
     EffectJournalAppendParams, EffectJournalConfigureParams, EffectJournalReplayParams,
     EffectJournalStateParams, EffectJournalStore,
 };
+use nd_runtime::evidence::{self, EvidenceParams};
 use nd_runtime::git::{self, GitExecParams, GitLogParams, GitQueryParams};
 use nd_runtime::metrics::{self, MetricsRegistry};
 use nd_runtime::process::{
@@ -26,7 +27,9 @@ use nd_runtime::terminal::{
     TerminalCloseParams, TerminalCreateParams, TerminalHistoryAppendParams, TerminalManager,
     TerminalResizeParams, TerminalRestartParams, TerminalStateParams, TerminalWriteParams,
 };
-use nd_runtime::workspace::{self, ListParams, ReadParams};
+use nd_runtime::workspace::{
+    self, IndexParams, ListParams, ReadParams, WriteParams as WorkspaceWriteParams,
+};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -188,6 +191,7 @@ fn dispatch(
                     "effect-journal",
                     "decision-kernel",
                     "git",
+                    "evidence",
                     "workspace",
                     "search",
                     "revision",
@@ -456,12 +460,6 @@ fn dispatch(
                 .session_journal
                 .append(from_params::<SessionJournalAppendParams>(params)?)?,
         ),
-        "sessionJournal.reset" => {
-            let removed = state
-                .session_journal
-                .reset(from_params::<SessionJournalSessionParams>(params)?)?;
-            Ok(json!({ "removed": removed }))
-        }
         "sessionJournal.drop" => {
             let removed = state
                 .session_journal
@@ -502,6 +500,11 @@ fn dispatch(
             state.metrics.observe_workspace(&params.root);
             to_value(workspace::read(params)?)
         }
+        "workspace.write" => {
+            let params = from_params::<WorkspaceWriteParams>(params)?;
+            state.metrics.observe_workspace(&params.root);
+            to_value(workspace::write(params)?)
+        }
         "workspace.revision" => {
             let params = from_params::<RevisionParams>(params)?;
             state.metrics.observe_workspace(&params.root);
@@ -516,6 +519,16 @@ fn dispatch(
             let params = from_params::<search::SearchParams>(params)?;
             state.metrics.observe_workspace(&params.root);
             to_value(search::search(params, interrupt)?)
+        }
+        "workspace.index" => {
+            let params = from_params::<IndexParams>(params)?;
+            state.metrics.observe_workspace(&params.root);
+            to_value(workspace::index(params, interrupt)?)
+        }
+        "workspace.evidence" => {
+            let params = from_params::<EvidenceParams>(params)?;
+            state.metrics.observe_workspace(&params.root);
+            to_value(evidence::capture(params, interrupt)?)
         }
         "workspace.snapshot" => {
             let params = from_params::<snapshot::SnapshotParams>(params)?;

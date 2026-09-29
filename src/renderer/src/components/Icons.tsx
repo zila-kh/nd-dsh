@@ -72,6 +72,11 @@ export const ArchiveIcon = (props: IconProps) => <IconBase {...props}><rect x="2
 export const MoreHorizontalIcon = (props: IconProps) => <IconBase {...props}><circle cx="5" cy="12" r="1.1" fill="currentColor" /><circle cx="12" cy="12" r="1.1" fill="currentColor" /><circle cx="19" cy="12" r="1.1" fill="currentColor" /></IconBase>
 export const BoxIcon = (props: IconProps) => <IconBase {...props}><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" /><path d="m3.3 7 8.7 5 8.7-5M12 22V12" /></IconBase>
 export const PlugIcon = (props: IconProps) => <IconBase {...props}><path d="M12 22v-5M9 8V2M15 8V2" /><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8z" /></IconBase>
+export const PuzzleIcon = (props: IconProps) => (
+  <IconBase {...props}>
+    <path d="M19 13h-2.2a2.8 2.8 0 1 0-5.6 0H9v-2.2a2.8 2.8 0 1 0-5.6 0H2V5a2 2 0 0 1 2-2h5.8v1.4a2.8 2.8 0 1 0 5.6 0V3H20a2 2 0 0 1 2 2v5.8h-1.4a2.8 2.8 0 1 0 0 5.6H22V20a2 2 0 0 1-2 2h-5.8v-1.4a2.8 2.8 0 1 0-5.6 0V22H4a2 2 0 0 1-2-2v-4.6h1.4a2.8 2.8 0 1 0 0-5.6" />
+  </IconBase>
+)
 export const ShieldIcon = (props: IconProps) => <IconBase {...props}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10" /></IconBase>
 export const BrainIcon = (props: IconProps) => <IconBase {...props}><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z" /><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z" /></IconBase>
 export const ContextIcon = (props: IconProps) => <IconBase {...props}><path d="M12 3.25 21 8l-9 4.75L3 8z" /><path d="m4.6 12.2 7.4 3.9 7.4-3.9" /><path d="m4.6 16.1 7.4 3.9 7.4-3.9" /></IconBase>
@@ -90,3 +95,6 @@ export const CrosshairIcon = (props: IconProps) => (
   </IconBase>
 )
 export const HomeIcon = (props: IconProps) => <IconBase {...props}><path d="m3 10.5 9-7 9 7" /><path d="M5.5 9.5V20h13V9.5" /><path d="M10 20v-5.5h4V20" /></IconBase>
+export const DownloadIcon = (props: IconProps) => (
+  <IconBase {...props}><path d="M12 3v11" /><path d="m7.5 10 4.5 4.5L16.5 10" /><path d="M4 17v2.25A1.75 1.75 0 0 0 5.75 21h12.5A1.75 1.75 0 0 0 20 19.25V17" /></IconBase>
+)

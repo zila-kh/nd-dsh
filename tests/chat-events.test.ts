@@ -22,6 +22,26 @@ describe('chat event folding', () => {
     expect(completed).toEqual([{ kind: 'assistant', id: 'reply', text: 'Hello!', streaming: false }])
   })
 
+  it('replaces only the entry an event changes so unchanged rows keep their identity', () => {
+    const previous: ThreadEntry[] = [
+      { kind: 'user', id: 'ask', text: 'hi' },
+      { kind: 'tool', id: 'call', callId: 'c1', name: 'read', status: 'running' },
+      { kind: 'assistant', id: 'reply', text: 'Hel', streaming: true },
+    ]
+    previous.forEach((entry) => Object.freeze(entry))
+    const streamed = foldEvent(previous, message('assistant/chunk', 1, 'lo'))
+    expect(streamed[0]).toBe(previous[0])
+    expect(streamed[1]).toBe(previous[1])
+    expect(streamed[2]).not.toBe(previous[2])
+    expect(streamed[2]).toMatchObject({ text: 'Hello' })
+
+    const resolved = foldEvent(streamed, { type: 'tool/result', seq: 2, data: { callId: 'c1', message: { content: 'ok' } } })
+    expect(resolved[1]).not.toBe(streamed[1])
+    expect(resolved[1]).toMatchObject({ status: 'done', result: 'ok' })
+    expect(resolved[0]).toBe(previous[0])
+    expect(resolved[2]).toBe(streamed[2])
+  })
+
   it('keeps live and restored message order, including identical turns', () => {
     const events = [
       message('user/message', 1, 'hi'),

@@ -18,7 +18,6 @@ import {
   MAX_CLI_LENGTH,
   sanitizeRelativePath,
   splitInChunks,
-  type GitSpawnFunction,
 } from './git-cli.js'
 
 interface WorkspaceLike {
@@ -28,12 +27,27 @@ interface WorkspaceLike {
 export interface GitServiceOptions {
   gitPath?: string
   env?: Record<string, string>
-  spawnProcess?: GitSpawnFunction
-  core?: Pick<CoreClient, 'request'>
+  core: Pick<CoreClient, 'request'>
   onOutput?(output: string): void
 }
 
 const HEAD_LOG_LIMIT = 8
+
+// High-confidence formats only. This gate intentionally favors low false-positive
+// rates because it runs on every product push. Values never enter Git output or
+// renderer logs: git grep returns filenames only (-l).
+const PUSH_SECRET_PATTERNS = [
+  '-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----',
+  'AKIA[0-9A-Z]{16}',
+  'AIza[0-9A-Za-z_-]{35}',
+  'gh[pousr]_[0-9A-Za-z]{30,}',
+  'github_pat_[0-9A-Za-z_]{60,}',
+  'sk-[A-Za-z0-9_-]{24,}',
+  'xox[baprs]-[0-9A-Za-z-]{20,}',
+] as const
+
+const SENSITIVE_PUSH_PATH = /(^|\/)(?:\.env(?:\.[^/]+)?|id_(?:rsa|ed25519|ecdsa|dsa)|credentials\.json|service-account[^/]*\.json|\.pypirc)$/i
+const SAFE_SECRET_TEMPLATE_PATH = /\.(?:example|sample|template)$/i
 
 /** XY combinations git reports for unmerged paths (`git status --porcelain`). */
 const UNMERGED_COMBINATIONS = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU'])
@@ -47,7 +61,7 @@ export class GitService {
   private snapshot: GitStatusSnapshot
   private refreshGeneration = 0
 
-  constructor(workspace: WorkspaceLike, options: GitServiceOptions = {}) {
+  constructor(workspace: WorkspaceLike, options: GitServiceOptions) {
     this.workspace = workspace
     this.cli = new GitCli(options)
     // OAuth output must never enter the renderer's Git output stream.
@@ -349,6 +363,8 @@ export class GitService {
       let localHead = (await this.cli.exec(repoRoot, ['rev-parse', 'HEAD'])).stdout.trim()
       if (!localHead) throw new GitError({ message: `Cannot push ${branch}: the repository has no committed HEAD.` })
 
+      await this.assertNoCommittedSecrets(repoRoot)
+
       const remoteHeadBefore = this.parseRemoteHead((await this.cli.exec(repoRoot, ['ls-remote', '--heads', remote, `refs/heads/${branch}`])).stdout)
       if (remoteHeadBefore && remoteHeadBefore !== localHead) {
         await this.cli.exec(repoRoot, ['fetch', remote, branch])
@@ -358,6 +374,9 @@ export class GitService {
           throw this.divergedBranchError(remote, branch, error)
         }
         localHead = (await this.cli.exec(repoRoot, ['rev-parse', 'HEAD'])).stdout.trim()
+        // A fast-forward changes the exact tree being published; scan the final
+        // committed tree again before any network mutation.
+        await this.assertNoCommittedSecrets(repoRoot)
       }
 
       await this.cli.exec(repoRoot, ['push', '--set-upstream', remote, branch])
@@ -408,9 +427,17 @@ export class GitService {
   async push(): Promise<GitStatusSnapshot> {
     const context = this.captureWorkspaceContext()
     const repoRoot = await this.requireRepoRoot(context)
-    await this.runExclusive(() => {
+    await this.runExclusive(async () => {
       this.assertWorkspaceContext(context)
-      return this.cli.exec(repoRoot, ['push'])
+      const status = await this.cli.status(repoRoot)
+      if (status.stdout.length > 0) {
+        throw new GitError({
+          message: 'Refusing to push while the worktree has uncommitted changes. Commit or stash them first.',
+          gitErrorCode: GitErrorCodes.DirtyWorkTree,
+        })
+      }
+      await this.assertNoCommittedSecrets(repoRoot)
+      await this.cli.exec(repoRoot, ['push'])
     })
     return await this.refresh()
   }
@@ -433,6 +460,41 @@ export class GitService {
       return this.cli.exec(repoRoot, ['fetch'])
     })
     return await this.refresh()
+  }
+
+  private async assertNoCommittedSecrets(repoRoot: string): Promise<void> {
+    const tracked = (await this.authCli.exec(repoRoot, ['ls-tree', '-r', '--name-only', 'HEAD', '--'])).stdout
+      .split(/\r?\n/)
+      .map((path) => path.trim())
+      .filter(Boolean)
+    const sensitivePaths = tracked.filter((path) => SENSITIVE_PUSH_PATH.test(path) && !SAFE_SECRET_TEMPLATE_PATH.test(path))
+    if (sensitivePaths.length > 0) {
+      throw new GitError({
+        message: `Refusing to push: committed sensitive credential files were detected (${sensitivePaths.slice(0, 5).join(', ')}). Remove them from Git history/index and rotate any exposed credentials first.`,
+      })
+    }
+
+    const args = ['grep', '-I', '-l', '-i', '-E']
+    for (const pattern of PUSH_SECRET_PATTERNS) args.push('-e', pattern)
+    args.push('HEAD', '--', '.')
+    let output = ''
+    try {
+      output = (await this.authCli.exec(repoRoot, args, { timeoutMs: 30_000 })).stdout
+    } catch (error) {
+      // git grep uses exit code 1 for "no matches"; every other failure must
+      // fail closed because we cannot prove the tree is safe to publish.
+      if (error instanceof GitError && error.exitCode === 1) return
+      throw new GitError({ message: 'Secret scan failed; refusing to push until the committed tree can be scanned safely.' })
+    }
+    const files = output
+      .split(/\r?\n/)
+      .map((line) => line.trim().replace(/^HEAD:/, ''))
+      .filter(Boolean)
+    if (files.length > 0) {
+      throw new GitError({
+        message: `Refusing to push: high-confidence secret material was detected in committed files (${files.slice(0, 5).join(', ')}). Remove and rotate the secret, recommit, then retry.`,
+      })
+    }
   }
 
   private runExclusive<T>(operation: () => Promise<T>): Promise<T> {
@@ -618,8 +680,8 @@ export class GitService {
 
   private async listRemotes(root: string): Promise<string[]> {
     try {
-      // `git config --list` emits flat key=value records, not the INI sections
-      // consumed by parseGitRemotes. Ask Git for names directly instead.
+      // `git config --list` emits flat key=value records rather than remote
+      // sections, so ask Git for the names directly.
       const result = await this.cli.exec(root, ['remote'])
       return [...new Set(result.stdout.split(/\r?\n/).map((name) => name.trim()).filter(Boolean))]
     } catch {

@@ -183,6 +183,10 @@ export class InvocationBroker {
       return failure('invalid', `Unknown contribution ${contributionId} in ${extensionId}`)
     }
     const descriptor = ndHostMethod(contribution.host)!
+    if (!(descriptor.contexts as readonly string[]).includes(context.kind)) {
+      await audit('denied', `host method is not available in ${context.kind}`, { contextKey: agentGrantKey, host: contribution.host })
+      return failure('denied', `“${descriptor.title}” is not available in ${describeContext(context)}.`)
+    }
     if (!contribution.contexts.includes(context.kind)) {
       await audit('denied', `contribution is not available in ${context.kind}`, { contextKey: agentGrantKey, host: contribution.host })
       return failure('denied', `${manifest.name} is not available in ${describeContext(context)}.`)
@@ -298,6 +302,7 @@ export class InvocationBroker {
       context,
       rows,
       actions: view.actions.map((action) => ({ id: action.id, title: action.title, host: action.host })),
+      ...(view.refreshIntervalMs ? { refreshIntervalMs: view.refreshIntervalMs } : {}),
       ...(view.description ? { empty: view.description } : {}),
     }
   }
@@ -360,8 +365,15 @@ export class InvocationBroker {
     if (!credential) return failure('denied', 'This run credential is stale or unknown')
     const manifest = await this.deps.packages.activeManifest(params.extensionId)
     if (!manifest) return failure('unavailable', `Extension package is not installed: ${params.extensionId}`)
-    const contribution = resolveContribution(manifest, 'tool', params.contributionId)
-      ?? resolveContribution(manifest, 'command', params.contributionId)
+    // Executable `tool` contributions belong to the package MCP runtime.
+    // They cannot be routed through NativeHostRegistry: resolveContribution()
+    // uses a placeholder host for catalog typing, not an execution mapping.
+    // Keep this bridge limited to deterministic native-host command/view
+    // contributions until the dedicated MCP agent bridge is wired.
+    if (manifest.contributions.tools.some((item) => item.id === params.contributionId)) {
+      return failure('unavailable', 'Executable extension tools are not available through the ND native-host bridge yet')
+    }
+    const contribution = resolveContribution(manifest, 'command', params.contributionId)
       ?? resolveContribution(manifest, 'view', params.contributionId)
     if (!contribution) return failure('invalid', `Unknown contribution ${params.contributionId}`)
     if (credential.allowed.length > 0 && !credential.allowed.includes(contribution.host)) {
@@ -502,6 +514,7 @@ function commandView(extensionId: string, command: NdCommandContribution): NdCom
     contexts: command.contexts,
     startsAgent: command.startsAgent === true,
     host: command.host,
+    ...(command.openViewId ? { openViewId: command.openViewId } : {}),
     permission: descriptor.permission,
     ...(command.description ? { description: command.description } : {}),
   }
@@ -534,6 +547,10 @@ function toRows(value: unknown, view: NdViewContribution): NdViewRow[] {
       title: title.trim().slice(0, 512),
       ...(typeof body === 'string' && body.trim() ? { body: body.trim().slice(0, 4_000) } : {}),
       ...(typeof record.status === 'string' ? { meta: record.status.slice(0, 64) } : {}),
+      ...(record.actionsDisabled === true ? { actionsDisabled: true } : {}),
+      ...(record.sortValues && typeof record.sortValues === 'object' && !Array.isArray(record.sortValues)
+        ? { sortValues: Object.fromEntries(Object.entries(record.sortValues).filter((entry): entry is [string, number] => typeof entry[1] === 'number' && Number.isFinite(entry[1]))) }
+        : {}),
     }]
   })
 }

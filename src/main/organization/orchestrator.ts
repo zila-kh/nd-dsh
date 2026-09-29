@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { CodingEngineDescriptor, DshEventFrame } from '../../shared/contracts.js'
-import { ND_HARNESS_ENGINE_ID } from '../../shared/coding-engines.js'
-import type { OrganizationAgent, OrganizationRole, OrganizationRun, OrganizationRunReceipt, OrganizationTask, ProjectPlanInput } from '../../shared/organization.js'
+import { CODEX_ENGINE_ID, ND_HARNESS_ENGINE_ID } from '../../shared/coding-engines.js'
+import type { OrganizationAgent, OrganizationRole, OrganizationRun, OrganizationRunReceipt, OrganizationSubagentMode, OrganizationTask, ProjectPlanInput } from '../../shared/organization.js'
 import { parseFastActionPlan } from '../../shared/fast-action.js'
 import type { CodingEngineRegistry } from '../engines/coding-engine-registry.js'
 import type { EngineSessionRouter } from '../engines/engine-session-router.js'
@@ -13,7 +13,10 @@ import { isRetryableExecutionFailure, MAX_EXECUTION_ATTEMPTS, retryBackoffMs, st
 import type { OrganizationStore } from './store.js'
 import { TaskIntegrationConflictError, TaskWorktreeManager, type TaskWorktree } from './task-worktree.js'
 import { formatVerificationEvidence, runArtifactVerification, runVerification, type VerificationProcessRuntime } from './verification-evidence.js'
+import { createCoreEvidenceCapturer, unavailableEvidenceCapturer, type WorkspaceEvidenceCapture, type WorkspaceEvidenceCapturer } from './worktree-evidence.js'
 import { RuntimeCapacityError, type ExecutionCoordinator, type RuntimeAvailability } from './execution-coordinator.js'
+import { normalizeProjectPlan } from './plan-normalizer.js'
+import { mergeRepeatedArrayKeys } from '../../shared/structured-output.js'
 import { executePreparedFastPath, ND_FAST_PATH_ENGINE_ID, prepareFastPath, type FastPathAuditRecorder, type PreparedFastPath } from './fast-path.js'
 import { formatDecisionSupportForReviewer, formatDecisionSupportReceipt, type DecisionSupportReceipt } from './decision-support-contract.js'
 import type { DecisionSupportService } from './decision-support.js'
@@ -95,6 +98,7 @@ export class OrganizationOrchestrator {
   private readonly structuredErrors = new Map<string, string>()
   private readonly decisionSupportReceipts = new Map<string, DecisionSupportReceipt>()
   private readonly taskWorktrees: TaskWorktreeManager
+  private readonly captureEvidence: WorkspaceEvidenceCapturer
 
   constructor(
     private readonly store: OrganizationStore,
@@ -115,6 +119,18 @@ export class OrganizationOrchestrator {
     private readonly decisionSupport?: DecisionSupportService,
   ) {
     this.taskWorktrees = taskWorktrees ?? new TaskWorktreeManager()
+    this.captureEvidence = core ? createCoreEvidenceCapturer(core) : unavailableEvidenceCapturer
+  }
+
+  /**
+   * Capture review evidence for the checkout the task's work lives in: the
+   * attached ND task worktree, else the project workspace.
+   */
+  async captureTaskEvidence(projectWorkspace: string | undefined, taskId: string): Promise<WorkspaceEvidenceCapture> {
+    const workspace = projectWorkspace
+      ? (await this.taskWorktrees.existing(projectWorkspace, taskId))?.root ?? projectWorkspace
+      : undefined
+    return await this.captureEvidence(workspace)
   }
 
   /**
@@ -158,7 +174,11 @@ export class OrganizationOrchestrator {
     this.lastProgressAt.set(sessionId, run.startedAt)
     try {
       const prompt = appendBrowserAccess(pmPrompt(context), sessionId, this.browserAccess)
-      await this.harness.run(prompt, { sessionId, ...modelOpts })
+      await this.harness.run(prompt, {
+        sessionId,
+        ...modelOpts,
+        ...(context.project.workspacePath ? { workspaceCwd: context.project.workspacePath } : {}),
+      })
     } catch (cause) {
       const active = await this.store.runBySession(sessionId)
       if (active) await this.store.completeRun(run.id, undefined, errorMessage(cause)).catch(() => undefined)
@@ -221,8 +241,9 @@ export class OrganizationOrchestrator {
       fastEscalationReason = 'Fast path is unavailable without ND Core and the durable action-audit sink.'
     }
 
-    const engine = await this.resolveTaskEngine(context.agent?.id, useFallbackRoute)
-    const prompt = workerPrompt(context, engine, attempt, taskWorktree)
+    const subagentMode = context.company.subagentMode ?? 'auto'
+    const engine = await this.resolveTaskEngine(context.agent?.id, useFallbackRoute, subagentMode)
+    const prompt = workerPrompt(context, engine, attempt, taskWorktree, subagentMode)
     let modelOpts = this.resolveAgentModel(context.agent, context.role)
     if (useFallbackRoute) {
       modelOpts = fallbackRoute!
@@ -295,9 +316,16 @@ export class OrganizationOrchestrator {
 
     try {
       await this.store.markExecution(context.task.id, target.sessionId)
-      const browserPrompt = appendBrowserAccess(prompt, target.sessionId, this.browserAccess)
-      if (this.engineRuns) await this.engineRuns.run(browserPrompt, { sessionId: target.sessionId, ...modelOpts })
-      else await this.harness.run(browserPrompt, { sessionId: target.sessionId, ...modelOpts })
+      // The shared engine router owns browser-token injection in production.
+      // The direct-Harness fallback has no router, so only that path injects here.
+      const browserPrompt = this.engineRuns ? prompt : appendBrowserAccess(prompt, target.sessionId, this.browserAccess)
+      const runOptions = {
+        sessionId: target.sessionId,
+        ...modelOpts,
+        ...(workspaceRoot ? { workspaceCwd: workspaceRoot } : {}),
+      }
+      if (this.engineRuns) await this.engineRuns.run(browserPrompt, runOptions)
+      else await this.harness.run(browserPrompt, runOptions)
     } catch (cause) {
       const message = errorMessage(cause)
       const queued = await this.handleExecutionFailure(run, message)
@@ -535,7 +563,12 @@ export class OrganizationOrchestrator {
         sessionId,
         this.browserAccess,
       )
-      await this.harness.run(prompt, { sessionId, ...modelOpts })
+      const reviewWorkspaceRoot = taskWorktree?.root ?? context.project.workspacePath
+      await this.harness.run(prompt, {
+        sessionId,
+        ...modelOpts,
+        ...(reviewWorkspaceRoot ? { workspaceCwd: reviewWorkspaceRoot } : {}),
+      })
     } catch (cause) {
       const active = await this.store.runBySession(sessionId)
       if (active) {
@@ -656,6 +689,18 @@ export class OrganizationOrchestrator {
           await delay(retryBackoffMs(await this.store.executionAttemptCount(run.taskId!)))
           await this.continueProject(run.projectId)
         }
+      }
+      // A hung reviewer would otherwise hold the task in "Reviewing…" until restart.
+      // The work itself is intact, so the task simply returns to the review queue.
+      for (const run of state.runs.filter((item) => item.status === 'running' && item.kind === 'task-review' && item.taskId)) {
+        const lastProgress = this.lastProgressAt.get(run.sessionId) ?? run.startedAt
+        if (now - lastProgress < stallTimeoutMs()) continue
+        const message = `Review stalled with no engine progress for ${stallTimeoutMs()}ms; the task is back in review and can be reviewed again.`
+        try { await this.stopSession(run.sessionId) } catch { /* the run is still failed and released below */ }
+        await this.store.completeRun(run.id, undefined, message)
+        await this.store.clearReviewSession(run.taskId!)
+        this.cleanupSession(run.sessionId)
+        recovered += 1
       }
       return recovered
     } finally {
@@ -867,10 +912,17 @@ export class OrganizationOrchestrator {
 
   private async handlePlan(projectId: string, sessionId: string, text: string): Promise<void> {
     let plan: ProjectPlanInput | undefined
+    let adjustments: string[] = []
     try {
-      plan = extractTaggedJson<ProjectPlanInput>(text, 'nd-dsh-plan', ['goal', 'milestones'])
-      if (!plan) return
-      validatePlan(plan)
+      let mergedLists = 0
+      const extracted = extractTaggedJson<ProjectPlanInput>(text, 'nd-dsh-plan', ['goal', 'milestones'], (json) => {
+        const repaired = mergeRepeatedArrayKeys(json, ['milestones', 'tasks'])
+        mergedLists = repaired.merged
+        return repaired.json
+      })
+      if (!extracted) return
+      ;({ plan, adjustments } = normalizeProjectPlan(extracted))
+      if (mergedLists) adjustments.unshift(`Merged ${mergedLists} repeated milestone/task list(s) the model wrote as duplicate keys.`)
       this.structuredErrors.delete(sessionId)
     } catch (cause) {
       this.structuredErrors.set(sessionId, errorMessage(cause))
@@ -879,7 +931,7 @@ export class OrganizationOrchestrator {
     if (this.structuredInFlight.has(sessionId)) return
     this.structuredInFlight.add(sessionId)
     try {
-      await this.store.applyPlan(projectId, plan)
+      await this.store.applyPlan(projectId, plan, adjustments)
     } catch (cause) {
       this.structuredErrors.set(sessionId, `Failed to apply plan: ${errorMessage(cause)}`)
       throw cause
@@ -1246,7 +1298,7 @@ export class OrganizationOrchestrator {
     const state = await this.store.state()
     const task = state.tasks.find((item) => item.id === taskId)
     if (!task) return
-    await this.store.mutate({ type: 'task.update', id: taskId, patch: { status: 'blocked' } })
+    await this.store.blockTask(taskId, message)
     if (task.assignedAgentId) {
       const hasOtherActiveRun = state.runs.some((run) => run.status === 'running' && run.taskId && run.taskId !== taskId
         && state.tasks.find((candidate) => candidate.id === run.taskId)?.assignedAgentId === task.assignedAgentId)
@@ -1285,7 +1337,7 @@ export class OrganizationOrchestrator {
     if (!project) throw new Error('Project not found')
   }
 
-  private async resolveTaskEngine(agentId: string | undefined, fallback: boolean): Promise<TaskEngine> {
+  private async resolveTaskEngine(agentId: string | undefined, fallback: boolean, subagentMode: OrganizationSubagentMode): Promise<TaskEngine> {
     if (!this.engines || fallback) {
       if (this.engines && fallback) {
         const descriptor = this.engines.assertAvailable(ND_HARNESS_ENGINE_ID)
@@ -1295,6 +1347,9 @@ export class OrganizationOrchestrator {
     }
     const engineId = await this.engines.assignedEngine(agentId)
     const descriptor = this.engines.assertAvailable(engineId)
+    if (subagentMode === 'off' && descriptor.id === CODEX_ENGINE_ID) {
+      throw new Error('Subagents are disabled for this company, but the delegated Codex engine requires subagent_codex. Use Codex CLI/direct or enable automatic subagents.')
+    }
     return {
       id: descriptor.id,
       name: descriptor.name,
@@ -1368,15 +1423,24 @@ function pmPrompt(context: Awaited<ReturnType<OrganizationStore['projectContext'
   return `You are the AI Product Manager for ${context.company.name}.\nMission: ${context.company.mission}\nProject: ${context.project.name}\nObjective: ${context.project.objective}\n\nCreate a practical delivery plan. Respect company/project isolation. Use the existing teams and roles when assigning work. Keep independent work parallel: use dependsOn only for real code/data ordering, never merely to serialize execution. Tests, docs, accessibility, i18n, fixtures and independent components should remain parallel when safe. For each task, declare advisory workScopes when the likely file area is known. Use evidenceKind "artifact" with relative artifactPaths for design, research, or document deliverables that should be verified by produced artifacts instead of a code test command. Return concise reasoning, then exactly one JSON object between <nd-dsh-plan> and </nd-dsh-plan>.\n\nSchema:\n<nd-dsh-plan>{"goal":{"title":"...","description":"..."},"milestones":[{"title":"...","description":"...","tasks":[{"title":"...","description":"...","priority":"medium","acceptanceCriteria":["..."],"dependsOn":["earlier task title"],"role":"Software Engineer","workScopes":["src/feature/**"],"evidenceKind":"code","artifactPaths":[]}]}],"memory":[{"title":"...","content":"...","tags":["plan"]}]}</nd-dsh-plan>\n\nAvailable roles:\n${roles}\nAvailable teams:\n${teams}\nKnown memory:\n${context.memory.map((item) => `- ${item.title}: ${item.content}`).join('\n') || '- none'}\nPolicies:\n${context.policies.map((item) => `- ${item.action}: ${item.effect}`).join('\n')}`
 }
 
-function workerPrompt(context: Awaited<ReturnType<OrganizationStore['taskContext']>>, engine: TaskEngine, attempt: number, worktree?: TaskWorktree): string {
+function workerPrompt(
+  context: Awaited<ReturnType<OrganizationStore['taskContext']>>,
+  engine: TaskEngine,
+  attempt: number,
+  worktree: TaskWorktree | undefined,
+  subagentMode: OrganizationSubagentMode,
+): string {
   const reviewFeedback = context.task.reviewSummary
     ? `\nPrevious independent review feedback:\n${context.task.reviewSummary}\nResolve every relevant issue before declaring the task complete.\n`
     : ''
   const engineInstructions = engine.workerInstructions ?? DEFAULT_WORKER_INSTRUCTIONS
+  const delegationInstructions = subagentMode === 'off'
+    ? '\nSubagent policy: OFF. Complete this ticket inside this worker. Do not call subagent, delegation, swarm, or child-agent tools and do not hand implementation to another agent. Independent ND review after execution is still allowed.\n'
+    : '\nSubagent policy: AUTO. Keep straightforward work inside this worker. Delegate only when a child agent materially helps with breadth or an explicitly selected execution engine requires it. You remain responsible for inspecting the result and validating the workspace.\n'
   const isolation = worktree
     ? `\nND task isolation: this session is already rooted at the dedicated worktree ${worktree.root}. Stay on branch ${worktree.branch}; do not switch worktrees/branches, push, merge into the project branch, or modify the base checkout. ND will checkpoint and integrate only after verification.\n`
     : ''
-  return `You are ${context.agent?.name ?? 'an AI worker'} acting as ${context.role?.name ?? 'Software Engineer'} inside company ${context.company.name}.\nCompany mission: ${context.company.mission}\nProject: ${context.project.name}\nObjective: ${context.project.objective}\nTask: ${context.task.title}\nExecution attempt: ${attempt}/${MAX_EXECUTION_ATTEMPTS}\nDescription: ${context.task.description}\nAcceptance criteria:\n${context.task.acceptanceCriteria.map((item) => `- ${item}`).join('\n')}${reviewFeedback}\nResponsibilities: ${context.role?.responsibility ?? 'Complete the assigned work.'}\nRole instructions: ${context.role?.systemPrompt ?? 'Execute carefully and verify the result.'}\nRelevant skills:\n${context.skills.map((item) => `- ${item.name}: ${item.instructions}`).join('\n')}\nRelevant memory:\n${context.memory.map((item) => `- ${item.title}: ${item.content}`).join('\n') || '- none'}\nPolicies:\n${context.policies.map((item) => `- ${item.action}: ${item.effect}`).join('\n')}${engineInstructions}${isolation}\nInspect before editing, run meaningful validation, and finish with a concise result summary for the independent reviewer.`
+  return `You are ${context.agent?.name ?? 'an AI worker'} acting as ${context.role?.name ?? 'Software Engineer'} inside company ${context.company.name}.\nCompany mission: ${context.company.mission}\nProject: ${context.project.name}\nObjective: ${context.project.objective}\nTask: ${context.task.title}\nExecution attempt: ${attempt}/${MAX_EXECUTION_ATTEMPTS}\nDescription: ${context.task.description}\nAcceptance criteria:\n${context.task.acceptanceCriteria.map((item) => `- ${item}`).join('\n')}${reviewFeedback}\nResponsibilities: ${context.role?.responsibility ?? 'Complete the assigned work.'}\nRole instructions: ${context.role?.systemPrompt ?? 'Execute carefully and verify the result.'}\nRelevant skills:\n${context.skills.map((item) => `- ${item.name}: ${item.instructions}`).join('\n')}\nRelevant memory:\n${context.memory.map((item) => `- ${item.title}: ${item.content}`).join('\n') || '- none'}\nPolicies:\n${context.policies.map((item) => `- ${item.action}: ${item.effect}`).join('\n')}${engineInstructions}${delegationInstructions}${isolation}\nInspect before editing, run meaningful validation, and finish with a concise result summary for the independent reviewer.`
 }
 
 function reviewPrompt(task: OrganizationTask, context: Awaited<ReturnType<OrganizationStore['taskContext']>>, worktree?: TaskWorktree, decisionSupport = ''): string {
@@ -1489,7 +1553,7 @@ function sanitizeJson(raw: string): string {
   return cleaned.replace(/,(\s*[}\]])/g, '$1')
 }
 
-function extractTaggedJson<T>(text: string, tag: string, fallbackMarkers?: string[]): T | undefined {
+function extractTaggedJson<T>(text: string, tag: string, fallbackMarkers?: string[], prepare: (json: string) => string = (json) => json): T | undefined {
   const tagRegex = new RegExp(`<${tag}>([\\s\\S]*?)(?:</${tag}>|$)`, 'i')
   const match = tagRegex.exec(text)
   let candidateText: string | undefined
@@ -1504,46 +1568,8 @@ function extractTaggedJson<T>(text: string, tag: string, fallbackMarkers?: strin
   const jsonObject = extractJsonObjectString(candidateText, fallbackMarkers)
   if (!jsonObject) return undefined
 
-  const sanitized = sanitizeJson(jsonObject)
+  const sanitized = prepare(sanitizeJson(jsonObject))
   return JSON.parse(sanitized) as T
-}
-
-function validatePlan(plan: ProjectPlanInput): void {
-  if (!plan?.goal?.title?.trim() || !plan.goal.description?.trim() || !Array.isArray(plan.milestones) || plan.milestones.length === 0) throw new Error('Invalid ND-DSH project plan')
-  const tasks = plan.milestones.flatMap((milestone) => {
-    if (!milestone.title?.trim() || !Array.isArray(milestone.tasks) || milestone.tasks.length === 0) throw new Error('Every milestone needs a title and tasks')
-    return milestone.tasks
-  })
-  const titleMap = new Map<string, ProjectPlanInput['milestones'][number]['tasks'][number]>()
-  for (const task of tasks) {
-    const key = task.title.trim().toLowerCase()
-    if (!key) throw new Error('Every planned task needs a title')
-    if (titleMap.has(key)) throw new Error(`Duplicate planned task title: ${task.title}`)
-    titleMap.set(key, task)
-  }
-  const graph = new Map<string, string[]>()
-  for (const [key, task] of titleMap) {
-    const dependencies = (task.dependsOn ?? []).map((value) => value.trim().toLowerCase())
-    for (const dependency of dependencies) {
-      if (!titleMap.has(dependency)) throw new Error(`Unknown planned task dependency: ${dependency}`)
-      if (dependency === key) throw new Error(`Task cannot depend on itself: ${task.title}`)
-    }
-    if (task.workScopes !== undefined && (!Array.isArray(task.workScopes) || task.workScopes.some((value) => typeof value !== 'string' || !value.trim()))) throw new Error(`Invalid workScopes for planned task: ${task.title}`)
-    if (task.evidenceKind !== undefined && task.evidenceKind !== 'code' && task.evidenceKind !== 'artifact') throw new Error(`Invalid evidenceKind for planned task: ${task.title}`)
-    if (task.evidenceKind === 'artifact' && (!Array.isArray(task.artifactPaths) || task.artifactPaths.length === 0)) throw new Error(`Artifact planned task requires artifactPaths: ${task.title}`)
-    graph.set(key, dependencies)
-  }
-  const visiting = new Set<string>()
-  const visited = new Set<string>()
-  const visit = (key: string): void => {
-    if (visited.has(key)) return
-    if (visiting.has(key)) throw new Error(`Planned task dependency cycle detected at ${titleMap.get(key)?.title ?? key}`)
-    visiting.add(key)
-    for (const dependency of graph.get(key) ?? []) visit(dependency)
-    visiting.delete(key)
-    visited.add(key)
-  }
-  for (const key of graph.keys()) visit(key)
 }
 
 function delay(ms: number): Promise<void> {

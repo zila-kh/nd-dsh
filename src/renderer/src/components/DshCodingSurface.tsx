@@ -16,6 +16,15 @@ export function shouldShowDshNativeView(active: boolean, inspectOverlayVisible: 
 }
 
 /**
+ * The DSH view reports load failures and renderer crashes through its page
+ * title. Those are the only titles the header surfaces: the product name it
+ * also reports is redundant with the app's own chrome.
+ */
+export function isDshViewFailureTitle(title: string | undefined): boolean {
+  return typeof title === 'string' && /^(Load failed|UI renderer exited)/.test(title)
+}
+
+/**
  * Renderer-owned frame for the sandboxed DSH WebContentsView. The main
  * process owns navigation and security; this component only synchronizes the
  * visible rectangle and exposes narrow reload/open-external controls.
@@ -35,6 +44,7 @@ export function DshCodingSurface({ active, inspectOverlayVisible = false, state,
       : runtimeStatus && !runtimeStatus.sourceReady
         ? 'The DSH runtime is not set up on this install. Set it up in Settings → Capabilities, or reinstall ND.'
         : undefined)
+  const viewFailure = runtimeError ?? (isDshViewFailureTitle(state?.title) ? state?.title : undefined)
 
   useEffect(() => {
     let disposed = false
@@ -102,30 +112,23 @@ export function DshCodingSurface({ active, inspectOverlayVisible = false, state,
   return (
     <section className="flex h-full w-full min-h-0 min-w-0 flex-col bg-background" aria-label="DSH coding surface">
       <div className="flex h-[39px] shrink-0 items-center gap-2 border-b border-border-soft bg-secondary px-2">
-        <strong className="text-[11px] tracking-[0.04em] text-strong">
-          DSH coding
-          {runtimeStatus?.runtimeVersion && (
-            <span className="ml-1.5 font-mono font-normal text-[9px] text-faint tracking-normal">
-              v{runtimeStatus.runtimeVersion}
-            </span>
-          )}
-        </strong>
+        {runtimeStatus?.runtimeVersion && (
+          <span className="font-mono text-[9px] text-faint" title="DeepSeek Harness version">
+            v{runtimeStatus.runtimeVersion}
+          </span>
+        )}
         <BridgePill state={runtimeError ? 'unavailable' : state?.ready ? 'ready' : 'binding'} className="ml-1 py-1" title={runtimeError}>
           {runtimeError ? 'Runtime error' : state?.ready ? `Gateway :${state.port ?? ''}` : 'Starting runtime'}
         </BridgePill>
-        <span
-          role={runtimeError ? 'status' : undefined}
-          className={runtimeError
-            ? 'min-w-0 flex-1 truncate font-mono text-[9px] text-destructive'
-            : 'min-w-0 flex-1 truncate font-mono text-[9px] text-faint'}
-          title={runtimeError ?? state?.title ?? 'ND Harness'}
-        >
-          {runtimeError ?? state?.title ?? 'ND Harness'}
-        </span>
+        {viewFailure && (
+          <span role="status" className="min-w-0 flex-1 truncate font-mono text-[9px] text-destructive" title={viewFailure}>
+            {viewFailure}
+          </span>
+        )}
         <button
           type="button"
           aria-label="Reload DSH coding surface"
-          className="grid size-[27px] shrink-0 place-items-center rounded-[5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:text-fainter [&_svg]:size-[15px]"
+          className="ml-auto grid size-[27px] shrink-0 place-items-center rounded-[5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:text-fainter [&_svg]:size-[15px]"
           disabled={!state?.ready}
           onClick={reload}
           title="Reload DSH coding surface"

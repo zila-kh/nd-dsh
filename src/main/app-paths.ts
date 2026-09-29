@@ -38,9 +38,27 @@ export function bundledResourceRoot(): string {
   return app.isPackaged ? process.resourcesPath : projectRoot()
 }
 
+/** ND-owned Rust agent. The override is for source development only. */
+export function ndAgentBinPath(): string {
+  if (process.env.ND_AGENT_BINARY?.trim()) return resolve(process.env.ND_AGENT_BINARY)
+  const name = process.platform === 'win32' ? 'nd-agent.exe' : 'nd-agent'
+  return app.isPackaged
+    ? join(process.resourcesPath, 'nd-agent', name)
+    : join(projectRoot(), 'target', 'debug', name)
+}
+
 /** User-managed published DSH package installation owned by ND. */
 export function managedHarnessRoot(): string {
   return resolve(process.env.ND_DSH_MANAGED_RUNTIME_ROOT ?? join(app.getPath('userData'), 'runtimes/dsh'))
+}
+
+/**
+ * One npm global prefix where ND installs engine CLIs through the approved
+ * capability setup. Managed installs win over a user's own npm global bin so
+ * ND always runs the version it reviewed; deleting the directory uninstalls.
+ */
+export function managedEngineBinRoot(): string {
+  return resolve(process.env.ND_DSH_ENGINE_BIN_ROOT ?? join(app.getPath('userData'), 'runtimes/engine-clis'))
 }
 
 export function harnessRoot(): string {
@@ -153,9 +171,9 @@ export function zcodeBinPath(): string | undefined {
 /**
  * The Claude Code CLI binary. Claude Code is a user-installed first-party
  * product ND cannot redistribute, so discovery is the developer override,
- * then the documented install locations (native installer and npm global
- * bin), never a host `PATH` scan. `ND_DSH_CLAUDE_BINARY` remains a
- * developer-only override.
+ * then ND's reviewed managed install, then the documented install locations
+ * (native installer and npm global bin) — never a host `PATH` scan.
+ * `ND_DSH_CLAUDE_BINARY` remains a developer-only override.
  */
 export function claudeBinPath(): string | undefined {
   const override = process.env.ND_DSH_CLAUDE_BINARY
@@ -165,13 +183,16 @@ export function claudeBinPath(): string | undefined {
   }
   const home = process.env.USERPROFILE ?? process.env.HOME ?? ''
   const npmBin = process.env.APPDATA ? join(process.env.APPDATA, 'npm') : join(home, '.npm-global', 'bin')
+  const managed = managedEngineBinRoot()
   const defaultLocations = process.platform === 'win32'
     ? [
+        join(managed, 'claude.cmd'),
+        join(managed, 'claude'),
         join(home, '.local', 'bin', 'claude.exe'),
         join(npmBin, 'claude.cmd'),
         join(npmBin, 'claude'),
       ]
-    : [join(home, '.local', 'bin', 'claude'), join(npmBin, 'claude')]
+    : [join(managed, 'claude'), join(home, '.local', 'bin', 'claude'), join(npmBin, 'claude')]
   return defaultLocations.map((entry) => resolve(entry)).find((entry) => existsSync(entry))
 }
 
@@ -203,8 +224,9 @@ export function cursorBinPath(): string | undefined {
 /**
  * The Pi coding agent CLI binary (`pi`, npm `@mariozechner/pi-coding-agent`
  * and compatible forks such as Oh My Pi). Pi ships through npm, so discovery
- * is the developer override, then the npm global bin locations, never a host
- * `PATH` scan. `ND_DSH_PI_BINARY` remains a developer-only override.
+ * is the developer override, then ND's reviewed managed install, then the npm
+ * global bin locations, never a host `PATH` scan. `ND_DSH_PI_BINARY` remains
+ * a developer-only override.
  */
 export function piBinPath(): string | undefined {
   const override = process.env.ND_DSH_PI_BINARY
@@ -214,8 +236,9 @@ export function piBinPath(): string | undefined {
   }
   const home = process.env.USERPROFILE ?? process.env.HOME ?? ''
   const npmBin = process.env.APPDATA ? join(process.env.APPDATA, 'npm') : join(home, '.npm-global', 'bin')
+  const managed = managedEngineBinRoot()
   const defaultLocations = process.platform === 'win32'
-    ? [join(npmBin, 'pi.cmd'), join(npmBin, 'pi'), join(home, '.local', 'bin', 'pi.exe'), join(home, '.local', 'bin', 'pi')]
-    : [join(npmBin, 'pi'), join(home, '.local', 'bin', 'pi'), '/usr/local/bin/pi']
+    ? [join(managed, 'pi.cmd'), join(managed, 'pi'), join(npmBin, 'pi.cmd'), join(npmBin, 'pi'), join(home, '.local', 'bin', 'pi.exe'), join(home, '.local', 'bin', 'pi')]
+    : [join(managed, 'pi'), join(npmBin, 'pi'), join(home, '.local', 'bin', 'pi'), '/usr/local/bin/pi']
   return defaultLocations.map((entry) => resolve(entry)).find((entry) => existsSync(entry))
 }

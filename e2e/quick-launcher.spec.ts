@@ -183,6 +183,9 @@ test('main-process launcher event switches recent project context and exposes ca
   await expect(dialog.getByText('Capture External Screen', { exact: true })).toBeVisible()
   await expect(dialog.getByText('External Capture Tools', { exact: true })).toBeVisible()
   await expect(dialog.getByText('Capture Clipboard', { exact: true })).toBeVisible()
+  // Wallpaper Manager is personal-only, so a project-scoped launcher must not
+  // surface its native OS command.
+  await expect(dialog.getByText('Choose wallpaper', { exact: true })).toHaveCount(0)
   await expect(dialog.getByText(`${COMPANY_B} · ${PROJECT_B}`, { exact: true }).first()).toBeVisible()
   await page.keyboard.press('Escape')
 
@@ -201,6 +204,10 @@ test('launcher popup window toggles like Raycast and creates a task without open
   await expect(dialog).toBeVisible()
   const popupInput = dialog.getByPlaceholder('Search ND or type something to capture…')
   await expect(popupInput).toBeFocused()
+  // Built-in native extensions contribute through the same command registry as
+  // core actions; do not execute the wallpaper command in automation because it
+  // intentionally opens a real OS picker and changes the user's desktop.
+  await expect(dialog.getByText('Choose wallpaper', { exact: true })).toBeVisible()
 
   // The popup always opens on Personal: a typed task therefore needs an
   // explicit project context first, and never inherits the window's active one.

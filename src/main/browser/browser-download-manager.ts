@@ -67,6 +67,18 @@ export class BrowserDownloadManager {
     return true
   }
 
+  clearFinished(): number {
+    let removed = 0
+    for (const [id, record] of this.records) {
+      if (record.state === 'starting' || record.state === 'progressing') continue
+      if (this.items.has(id)) continue
+      this.records.delete(id)
+      removed += 1
+    }
+    if (removed > 0) this.onChanged()
+    return removed
+  }
+
   dispose(): void {
     this.browserSession.removeListener('will-download', this.handler)
     this.items.clear()

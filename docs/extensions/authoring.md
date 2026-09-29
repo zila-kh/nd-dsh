@@ -10,10 +10,16 @@ and executes inside its own trusted surfaces. Extensions never inject renderer
 code, and contributions only reach the allowlisted ND host methods listed in
 [ND_HOST_METHODS](../src/shared/extension-package.ts).
 
+Launcher commands from installed/activated extensions are adapted into the same
+ND Command Registry as core, company, and project commands. Extension authors
+do not register launcher code or React components; they contribute command data
+and the broker remains the execution boundary.
+
 ## 1. Manifest
 
-Start from [`examples/nd-extension-journal`](../examples/nd-extension-journal)
-and the JSON Schema at [`schema/nd-extension.schema.json`](../schema/nd-extension.schema.json).
+Start from [`examples/extension-counter/nd-extension.example.json`](../../examples/extension-counter/nd-extension.example.json)
+and the JSON Schema at [`schema/nd-extension.schema.json`](../../schema/nd-extension.schema.json).
+The older `examples/nd-extension-journal` folder is not in this tree.
 
 ```json
 {
@@ -81,6 +87,9 @@ and in the product.
 | `browser.openUrl` / `browser.search` | `browser.navigate` | Navigate the visible embedded ND browser |
 | `browser.openExternal` | `browser.openExternal` | Open an http(s) URL in the system browser |
 | `os.openTarget` | `os.launch` | Pick and open an app, file, or folder (user selection only; no shell strings) |
+| `os.wallpaper.chooseAndSet` | `os.wallpaper.write` | Pick an image in an ND-owned native dialog and set it as the host desktop wallpaper; Personal only |
+| `process.list` | `process.read` | List running processes in Personal with CPU and memory |
+| `process.quit` / `process.forceQuit` | `process.quit` | Quit a selected process from a fresh ND-issued list handle; ND confirms each action and protects its own processes; Personal only |
 | `chat.ask` | `chat.start` | Start an ND chat/agent turn from typed text |
 | `workflow.list` / `workflow.refresh` | `workflow.read` | Read (or refresh) the project's repository task board through the existing read-only mirror |
 
@@ -96,8 +105,9 @@ broker with the same authorization checks.
   and running it, clicking a capture button, selecting an app in a picker).
 - An **agent** invocation arrives through an opaque run credential bound to one
   context, engine, and permitted capability set. Sensitive reads
-  (`capture.screen`, `capture.area`, `clipboard.read`) always require an
-  explicit grant — remembered for routine use or granted once per action.
+  (`capture.screen`, `capture.area`, `clipboard.read`) and sensitive OS effects
+  such as `os.wallpaper.chooseAndSet` always require an explicit grant — remembered
+  for routine use or granted once per action.
 - Deny wins everywhere: an organization policy of `deny` blocks the action even
   for the user, and revoked grants, disabled activations, stale credentials, and
   cross-context calls fail closed.
@@ -131,11 +141,18 @@ broker with the same authorization checks.
 
 ## 7. Example: the ND-maintained packages
 
-`Daily Essentials` and `Project Workflow` ship with ND and use exactly these
-contracts — Daily Essentials proves personal daily use with zero
-companies/projects, and Project Workflow proves a globally installed package can
-be project-only. Validate them any time with:
+`Daily Essentials`, `Wallpaper Manager`, and `Project Workflow` ship with ND and
+use exactly these contracts. Wallpaper Manager is the first native-host proving
+package: it is Personal-only and permission-scoped. The separate
+`examples/nd-extension-wallpaper` sample is not in this tree. Validate the
+built-ins any time with:
 
 ```bash
 node scripts/validate-nd-extension.mjs --builtins
 ```
+
+`Quit Processes` is an optional ND-bundled package under
+`extensions/quit-process`. It appears in Settings → Extensions → Available and
+is installed only when selected, then activated for Personal separately. Its
+command uses `openViewId` to open the process view from either launcher, and its
+view uses `refreshIntervalMs` to refresh while open.

@@ -546,7 +546,7 @@ export function ModelSettings({ onError }: ModelSettingsProps) {
                   <button type="button" className={scopeButton} disabled={!apiKeyDraft.trim() || savingCredential} onClick={() => void saveCredential()}>{selected.hasApiKey ? 'Replace key' : 'Save key'}</button>
                   {selected.hasApiKey ? <button type="button" className={scopeButton} disabled={savingCredential} onClick={() => void clearCredential()}>Clear key</button> : null}
                 </div>
-                <span className="max-w-[300px] truncate text-[10px]/[1.45] text-(--models-muted)">Stored credentials are write-only from this screen. React receives only whether a credential exists; the key value remains in the trusted main process and OS-backed secure storage.</span>
+                <span className="max-w-[360px] text-[10px]/[1.45] text-(--models-muted)">Stored credentials are write-only from this screen. React receives only whether a credential exists; the key remains in the trusted main process and OS-backed secure storage. Beta scope: provider credentials belong to this ND desktop profile and are shared by projects that select the same provider; ND does not claim per-company or per-project credential isolation yet.</span>
               </div>
               <div className="flex flex-col gap-[5px]">
                 <div className="flex items-center justify-between">

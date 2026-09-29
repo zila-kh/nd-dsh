@@ -219,6 +219,14 @@ export default function LauncherPopupApp(): React.ReactNode {
       notify(plan.missing)
       return
     }
+    if (command.openViewId) {
+      void window.ndDsh.window?.handoffLauncherPopup?.(
+        'extension-view',
+        `${command.extensionId}:${command.openViewId}`,
+        selectedContext,
+      )
+      return
+    }
     if (command.host === 'capture.area') {
       void window.ndDsh.window?.handoffLauncherPopup?.('capture-tools', undefined, selectedContext)
       return
@@ -266,6 +274,10 @@ export default function LauncherPopupApp(): React.ReactNode {
         case 'os.openTarget':
           if (value.opened) toast(`Opened ${String(value.path)}`)
           hidePopup()
+          return
+        case 'os.wallpaper.chooseAndSet':
+          hidePopup()
+          if (value.changed) toast('Desktop wallpaper updated.')
           return
         case 'browser.openExternal':
           hidePopup()

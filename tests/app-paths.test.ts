@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { bundledResourceRoot, dshPatchPath, harnessRoot, presetSourceDir, projectRoot } from '../src/main/app-paths.js'
+import { bundledResourceRoot, claudeBinPath, dshPatchPath, harnessRoot, managedEngineBinRoot, piBinPath, presetSourceDir, projectRoot } from '../src/main/app-paths.js'
 
 /**
  * electron-builder splits a packaged ND install in two: the application code
@@ -29,7 +29,7 @@ vi.mock('electron', () => ({
 
 const RESOURCES = 'resources'
 const ARCHIVE = 'app.asar'
-const overrides = ['ND_DSH_PROJECT_ROOT', 'ND_DSH_HARNESS_ROOT', 'ND_DSH_PATCH', 'ND_DSH_PRESET_DIR', 'ND_DSH_MANAGED_RUNTIME_ROOT'] as const
+const overrides = ['ND_DSH_PROJECT_ROOT', 'ND_DSH_HARNESS_ROOT', 'ND_DSH_PATCH', 'ND_DSH_PRESET_DIR', 'ND_DSH_MANAGED_RUNTIME_ROOT', 'ND_DSH_ENGINE_BIN_ROOT', 'APPDATA'] as const
 
 let root = ''
 const savedEnvironment = new Map<string, string | undefined>()
@@ -98,5 +98,37 @@ describe('bundled runtime payload roots', () => {
 
     expect(dshPatchPath()).toBe(join(root, 'override.yml'))
     expect(presetSourceDir()).toBe(join(root, 'override-presets'))
+  })
+})
+
+describe('ND-managed engine CLI prefix', () => {
+  it('defaults under userData and honours the explicit override', () => {
+    packaged(false)
+
+    expect(managedEngineBinRoot()).toBe(join(electronState.userData, 'runtimes', 'engine-clis'))
+    process.env.ND_DSH_ENGINE_BIN_ROOT = join(root, 'extra-engine-clis')
+    expect(managedEngineBinRoot()).toBe(join(root, 'extra-engine-clis'))
+  })
+
+  it('takes precedence over the user npm global bin once ND has installed a CLI', () => {
+    packaged(false)
+    const managed = join(root, 'managed-engine-clis')
+    const npmBin = join(root, 'appdata', 'npm')
+    const piBinary = process.platform === 'win32' ? 'pi.cmd' : 'pi'
+    const claudeBinary = process.platform === 'win32' ? 'claude.cmd' : 'claude'
+    mkdirSync(managed, { recursive: true })
+    mkdirSync(npmBin, { recursive: true })
+    writeFileSync(join(npmBin, piBinary), '')
+    writeFileSync(join(npmBin, claudeBinary), '')
+    process.env.ND_DSH_ENGINE_BIN_ROOT = managed
+    process.env.APPDATA = join(root, 'appdata')
+
+    // No managed install yet: the user's own npm global bin still wins.
+    expect(piBinPath()).toBe(join(npmBin, piBinary))
+
+    writeFileSync(join(managed, piBinary), '')
+    writeFileSync(join(managed, claudeBinary), '')
+    expect(piBinPath()).toBe(join(managed, piBinary))
+    expect(claudeBinPath()).toBe(join(managed, claudeBinary))
   })
 })

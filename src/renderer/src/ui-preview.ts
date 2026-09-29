@@ -33,6 +33,7 @@ import {
 import type { DesignDesktopApi, DesignFreeformState, DesignProjectState } from '../../shared/design'
 import type { OrganizationDesktopApi, OrganizationMutation, OrganizationSnapshot } from '../../shared/organization'
 import type { WorkflowPluginsDesktopApi } from '../../shared/workflow-plugins'
+import type { WorkspaceProfile } from '../../shared/workspace-profile'
 
 type Listener<T> = (value: T) => void
 
@@ -190,6 +191,34 @@ let browserPlatform: BrowserPlatformState = {
   leases: [],
   downloads: [],
   extensions: [],
+  extensionCatalog: [
+    {
+      id: 'nd-browser-tools',
+      name: 'ND Browser Tools',
+      publisher: 'ND',
+      description: 'First-party browser tools that run entirely inside the ND built-in Chromium profile.',
+      packagePolicy: 'bundled',
+      compatibility: 'compatible',
+      bundleAvailable: true,
+      installed: false,
+      note: 'UI preview only.',
+    },
+    {
+      id: 'openai-chatgpt',
+      name: 'ChatGPT',
+      publisher: 'OpenAI',
+      description: 'Compatibility reference for the official standalone-Chrome extension, not the ND Method 2 runtime.',
+      storeId: 'hehggadaopoacecdllhhajmbjkdcmajg',
+      storeUrl: 'https://chromewebstore.google.com/detail/chatgpt/hehggadaopoacecdllhhajmbjkdcmajg?hl=en',
+      packagePolicy: 'reference-only',
+      compatibility: 'experimental',
+      bundleAvailable: false,
+      installed: false,
+      note: 'UI preview only.',
+    },
+  ],
+  browserUseEnabled: true,
+  developerMode: false,
   credentials: [],
   sitePermissions: [],
   approvals: [],
@@ -197,6 +226,7 @@ let browserPlatform: BrowserPlatformState = {
 }
 
 let theme: ThemeState = { mode: 'system', effective: matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark' }
+let workspaceProfile: WorkspaceProfile = 'general'
 
 let providers: ModelProvider[] = [
   { id: 'openai-prod', name: 'OpenAI', enabled: true, baseUrl: 'https://api.openai.com/v1', apiFormat: 'openai-responses', apiKey: '', hasApiKey: true, models: [{ id: 'gpt-5.6', context: '256k' }] },
@@ -587,6 +617,7 @@ const desktopApi: DesktopApi = {
     state: async () => ({ packages: [], activations: [], grants: [], audit: [], pendingApprovals: [] }),
     installLocal: async () => null,
     installFromPath: async () => previewExtensionsState(),
+    installAvailable: async () => previewExtensionsState(),
     update: async () => previewExtensionsState(),
     rollback: async () => previewExtensionsState(),
     uninstall: async () => previewExtensionsState(),
@@ -710,6 +741,34 @@ const desktopApi: DesktopApi = {
     installExtension: async () => null,
     setExtensionEnabled: async () => browserPlatform.extensions,
     removeExtension: async () => browserPlatform.extensions,
+    reloadExtensions: async () => browserPlatform.extensions,
+    setDeveloperMode: async (enabled) => {
+      browserPlatform = { ...browserPlatform, developerMode: enabled }
+      browserPlatformEvents.emit(browserPlatform)
+      return browserPlatform
+    },
+    setBrowserUseEnabled: async (enabled) => {
+      browserPlatform = { ...browserPlatform, browserUseEnabled: enabled }
+      browserPlatformEvents.emit(browserPlatform)
+      return browserPlatform
+    },
+    installCatalogExtension: async () => null,
+    openCatalogExtension: async (catalogId) => {
+      const item = browserPlatform.extensionCatalog.find((candidate) => candidate.id === catalogId)
+      if (!item) throw new Error('Preview browser extension catalog item not found')
+      if (!item.storeUrl) throw new Error('This built-in extension does not have an external catalog listing')
+      return desktopApi.browserPlatform.createTab('builtin', item.storeUrl)
+    },
+    showExtensionPopup: async (extensionId) => {
+      browserPlatform = { ...browserPlatform, extensionPopupId: extensionId }
+      browserPlatformEvents.emit(browserPlatform)
+      return browserPlatform
+    },
+    closeExtensionPopup: async () => {
+      browserPlatform = { ...browserPlatform, extensionPopupId: undefined }
+      browserPlatformEvents.emit(browserPlatform)
+      return browserPlatform
+    },
     saveCredential: async (input) => {
       const record = { id: `preview-credential-${Date.now()}`, origin: new URL(input.origin).origin, username: input.username, ...(input.label ? { label: input.label } : {}), createdAt: Date.now(), updatedAt: Date.now() }
       browserPlatform = { ...browserPlatform, credentials: [record, ...browserPlatform.credentials] }
@@ -743,6 +802,7 @@ const desktopApi: DesktopApi = {
       return record
     },
     resolveApproval: async () => true,
+    clearFinishedDownloads: async () => 0,
     onChanged: browserPlatformEvents.on,
   },
   workspace: {
@@ -790,6 +850,10 @@ const desktopApi: DesktopApi = {
     state: async () => ({ surface: 'workbench', view: { ready: false, loading: false, title: 'UI preview', visible: false } }),
     set: async (surface) => ({ surface, view: { ready: false, loading: false, title: 'UI preview', visible: false } }),
     onChanged: () => () => undefined,
+  },
+  workspaceProfile: {
+    get: async () => workspaceProfile,
+    set: async (profile) => { workspaceProfile = profile; return workspaceProfile },
   },
   dshView: {
     setBounds: async () => undefined,
@@ -918,7 +982,7 @@ function gatewayPreview(method: string) {
   if (method === 'session.create') return Promise.resolve({ ok: true, value: { sessionId: `preview-${Date.now()}` } })
   if (method === 'session.models') return Promise.resolve({ ok: true, value: { current: { provider: 'openai-prod', model: 'gpt-5.6', reasoningEffort: 'high' }, routable: true, groups: [{ id: 'openai-prod', name: 'OpenAI', models: [{ id: 'gpt-5.6', name: 'GPT-5.6', reasoning: { efforts: [{ id: 'medium', name: 'Medium' }, { id: 'high', name: 'High' }], defaultEffort: 'high' } }] }], failures: [] } })
   if (method === 'skill.list') return Promise.resolve({ ok: true, value: { skills: [{ name: 'live-browser', description: 'Inspect and verify the visible application.' }, { name: 'product-review', description: 'Review product changes against acceptance criteria.' }] } })
-  if (method === 'agentPreset.list') return Promise.resolve({ ok: true, value: { presets: [{ id: 'nd-dsh', name: 'ND-DSH', description: 'Full product delivery agent', trust: 'project', isDefault: true }, { id: 'code', name: 'Code', description: 'Plan, tool, check coding mode', trust: 'system' }, { id: 'cordis', name: 'Creator', description: 'Create and refine agent presets', trust: 'system' }] } })
+  if (method === 'agentPresets.list') return Promise.resolve({ ok: true, value: { presets: [{ id: 'nd-dsh', name: 'ND-DSH', description: 'Full product delivery agent', trust: 'project', isDefault: true }, { id: 'code', name: 'Code', description: 'Plan, tool, check coding mode', trust: 'system' }, { id: 'cordis', name: 'Creator', description: 'Create and refine agent presets', trust: 'system' }] } })
   return Promise.resolve({ ok: true, value: {} })
 }
 

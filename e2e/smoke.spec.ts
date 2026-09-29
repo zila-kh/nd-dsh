@@ -23,6 +23,13 @@ const rendererErrors: string[] = []
 
 test.beforeAll(async () => {
   launched = await launchApp()
+  // The OS clamps the window to the host display, which would make the pane
+  // measurements below depend on the machine running the suite. Pin the app's
+  // own default desktop size so the shipped layout is what gets asserted.
+  await launched.app.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0]?.setSize(1640, 980)
+  })
+  await expect.poll(() => launched.page.evaluate(() => window.innerWidth)).toBe(1640)
   launched.page.on('pageerror', (error) => rendererErrors.push(`pageerror: ${error.message}`))
   launched.page.on('console', (message) => {
     if (message.type() === 'error') rendererErrors.push(`console: ${message.text()}`)
@@ -33,16 +40,39 @@ test.afterAll(async () => {
   await closeApp(launched)
 })
 
-test('product shell boots with the full navigation', async () => {
+test('product shell boots in General and can enter the Coding workspace', async () => {
   const { page } = launched
   await expect(page.getByRole('banner').getByText('ND-DSH', { exact: true })).toBeVisible()
+  const profiles = page.getByRole('group', { name: 'Workspace profile' })
+  const general = profiles.getByRole('button', { name: 'GENERAL', exact: true })
+  const coding = profiles.getByRole('button', { name: 'CODING', exact: true })
+  await expect(general).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('group', { name: 'Coding surface' })).toHaveCount(0)
+  const navigation = page.getByRole('navigation', { name: 'ND-DSH navigation' })
+  for (const label of ['Home', 'Company', 'Agent', 'Design', 'Settings']) {
+    await expect(navigation.getByTitle(label)).toBeVisible()
+  }
+  await expect(navigation.getByTitle('QA')).toHaveCount(0)
+
+  await coding.click()
+  await expect(coding).toHaveAttribute('aria-pressed', 'true')
   const codingSurface = page.getByRole('group', { name: 'Coding surface' })
   await expect(codingSurface.getByRole('button', { name: 'ND', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await expect(codingSurface.getByRole('button', { name: 'DSH', exact: true })).toBeVisible()
+  await expect(navigation.getByTitle('QA')).toBeVisible()
+})
+
+test('persisted Coding keeps a QA deep link across renderer reload', async () => {
+  const { page } = launched
   const navigation = page.getByRole('navigation', { name: 'ND-DSH navigation' })
-  for (const label of ['Company', 'Agent', 'Design', 'QA', 'Settings']) {
-    await expect(navigation.getByTitle(label)).toBeVisible()
-  }
+  await navigation.getByTitle('QA').click()
+  await expect(page).toHaveURL(/#\/qa$/)
+
+  await page.reload()
+  const profiles = page.getByRole('group', { name: 'Workspace profile' })
+  await expect(profiles.getByRole('button', { name: 'CODING', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page).toHaveURL(/#\/qa$/)
+  await expect(page.getByRole('heading', { name: 'Project checks', exact: true })).toBeVisible()
 })
 
 test('header segment switches between ND and DSH coding surfaces', async () => {
@@ -61,9 +91,28 @@ test('header segment switches between ND and DSH coding surfaces', async () => {
   await expect(dshSurface.getByRole('button', { name: 'Reload DSH coding surface' })).toBeVisible()
   await expect(dshSurface.getByRole('button', { name: 'Open DSH coding surface externally' })).toBeVisible()
 
-  await nd.click()
-  await expect(nd).toHaveAttribute('aria-pressed', 'true')
+  const profiles = page.getByRole('group', { name: 'Workspace profile' })
+  await profiles.getByRole('button', { name: 'GENERAL', exact: true }).click()
+  await expect(profiles.getByRole('button', { name: 'GENERAL', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('group', { name: 'Coding surface' })).toHaveCount(0)
   await expect(page.getByRole('region', { name: 'DSH coding surface' })).toHaveCount(0)
+
+  const directDshAttempt = await page.evaluate(async () => {
+    const api = globalThis as typeof globalThis & {
+      ndDsh: { surface: { set(surface: 'dsh'): Promise<unknown> } }
+    }
+    try {
+      await api.ndDsh.surface.set('dsh')
+      return 'accepted'
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error)
+    }
+  })
+  expect(directDshAttempt).toContain('requires the Coding workspace profile')
+
+  await profiles.getByRole('button', { name: 'CODING', exact: true }).click()
+  const restoredCodingSurface = page.getByRole('group', { name: 'Coding surface' })
+  await expect(restoredCodingSurface.getByRole('button', { name: 'ND', exact: true })).toHaveAttribute('aria-pressed', 'true')
   expect(rendererErrors).toEqual([])
 })
 

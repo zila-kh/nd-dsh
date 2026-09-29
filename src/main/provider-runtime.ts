@@ -116,6 +116,10 @@ export function buildProviderRuntime(providers: readonly ModelProvider[]): Provi
       retryPolicy: {
         mode: 'normal',
         maxRetries,
+        // Harness classifies HTTP 429 as RATE_LIMIT and 5xx as SERVER.
+        // Keep the explicit normal-mode set here so a future upstream default
+        // change cannot silently remove ND's bounded beta retry behavior.
+        retryableCodes: ['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT'],
         backoff: {
           initialDelayMs: 500,
           maxDelayMs: 3000,

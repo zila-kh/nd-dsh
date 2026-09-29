@@ -114,6 +114,24 @@ export class OrganizationStrategyPlane {
     return clone(item)
   }
 
+  /**
+   * Hand a claimed run back when it could not do anything (a gate or budget held
+   * it, or it failed before creating work): the run is not counted, and the
+   * schedule retries soon instead of waiting a whole interval.
+   */
+  async releaseSchedule(id: string, outcome: CompanyScheduleOutcome, detail: string, retryInMs: number, now = Date.now()): Promise<void> {
+    await this.load()
+    const item = this.value.schedules.find((row) => row.id === id)
+    if (!item) return
+    item.runCount = Math.max(0, item.runCount - 1)
+    if (item.status === 'completed' && item.maxRuns !== undefined && item.runCount < item.maxRuns) item.status = 'active'
+    item.nextRunAt = now + Math.max(60_000, Math.min(retryInMs, item.intervalMinutes * 60_000))
+    item.lastOutcome = outcome
+    item.lastDetail = clean(detail)
+    item.updatedAt = now
+    await this.save()
+  }
+
   async finishSchedule(id: string, outcome: CompanyScheduleOutcome, detail: string): Promise<void> {
     await this.load()
     const item = this.value.schedules.find((row) => row.id === id)

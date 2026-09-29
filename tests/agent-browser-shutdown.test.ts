@@ -4,11 +4,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const electronState = vi.hoisted(() => ({ userData: '' }))
+const electronState = vi.hoisted(() => ({ userData: '', isPackaged: false }))
 vi.mock('electron', () => ({
   app: {
     getPath: () => electronState.userData,
-    isPackaged: false,
+    get isPackaged() { return electronState.isPackaged },
   },
 }))
 
@@ -23,10 +23,28 @@ import {
 const temporary: string[] = []
 
 afterEach(async () => {
+  electronState.isPackaged = false
   await Promise.all(temporary.splice(0).map((path) => rm(path, { recursive: true, force: true })))
 })
 
 describe('AgentBrowserClient shutdown ownership', () => {
+  it('resolves its packaged MCP entry beside app.asar in extraResources', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nd-agent-browser-packaged-path-'))
+    temporary.push(root)
+    electronState.userData = root
+    electronState.isPackaged = true
+    const previousResourcesPath = Object.getOwnPropertyDescriptor(process, 'resourcesPath')
+    Object.defineProperty(process, 'resourcesPath', { configurable: true, value: root })
+
+    try {
+      const client = new AgentBrowserClient(9_222, join(root, 'resources', 'app.asar'))
+      expect(client.entryPath).toBe(join(root, 'node_modules', 'agent-browser', 'bin', 'agent-browser.js'))
+    } finally {
+      if (previousResourcesPath) Object.defineProperty(process, 'resourcesPath', previousResourcesPath)
+      else Reflect.deleteProperty(process, 'resourcesPath')
+    }
+  })
+
   it('cleans an app-owned daemon even when another client started it before this wrapper touched the session', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nd-agent-browser-external-daemon-'))
     temporary.push(root)

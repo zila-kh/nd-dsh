@@ -39,6 +39,9 @@
           "browser.navigate",
           "browser.openExternal",
           "os.launch",
+          "os.wallpaper.write",
+          "process.read",
+          "process.quit",
           "chat.start",
           "workflow.read"
         ]
@@ -123,6 +126,7 @@
               "keywords": { "type": "array", "maxItems": 32, "items": { "type": "string", "maxLength": 64 } },
               "contexts": { "type": "array", "items": { "enum": ["personal", "company", "project"] } },
               "host": { "$ref": "#/$defs/hostMethod" },
+              "openViewId": { "type": "string", "maxLength": 128 },
               "startsAgent": { "type": "boolean" }
             }
           }
@@ -141,6 +145,7 @@
               "host": { "$ref": "#/$defs/hostMethod" },
               "itemTitleKey": { "type": "string", "maxLength": 64 },
               "itemBodyKey": { "type": "string", "maxLength": 64 },
+              "refreshIntervalMs": { "type": "integer", "minimum": 2000, "maximum": 60000 },
               "contexts": { "type": "array", "items": { "enum": ["personal", "company", "project"] } },
               "actions": {
                 "type": "array",
@@ -194,6 +199,10 @@
         "browser.search",
         "browser.openExternal",
         "os.openTarget",
+        "os.wallpaper.chooseAndSet",
+        "process.list",
+        "process.quit",
+        "process.forceQuit",
         "chat.ask",
         "workflow.list",
         "workflow.refresh"

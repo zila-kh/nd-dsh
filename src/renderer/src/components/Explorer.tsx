@@ -7,6 +7,11 @@ import { cn } from '../lib/utils'
 
 interface ExplorerProps {
   workspace: WorkspaceState | null
+  /**
+   * Whether the active root was selected by the user. The boot fallback root is
+   * a runtime cwd, never a project, so it is never listed as one here.
+   */
+  workspaceSelected: boolean
   selectedPath: string | undefined
   onWorkspaceChanged(workspace: WorkspaceState): void
   onOpenFile(path: string): void
@@ -40,7 +45,7 @@ function sameEntries(current: WorkspaceEntry[], next: WorkspaceEntry[]): boolean
   })
 }
 
-export function Explorer({ workspace, selectedPath, onWorkspaceChanged, onOpenFile, onOpenDiff, onError }: ExplorerProps) {
+export function Explorer({ workspace, workspaceSelected, selectedPath, onWorkspaceChanged, onOpenFile, onOpenDiff, onError }: ExplorerProps) {
   const [rootEntries, setRootEntries] = useState<WorkspaceEntry[]>([])
   const [error, setError] = useState<string>()
   const [activeTab, setActiveTab] = useState<ExplorerTab>('files')
@@ -68,7 +73,7 @@ export function Explorer({ workspace, selectedPath, onWorkspaceChanged, onOpenFi
   }, [])
 
   useEffect(() => {
-    if (!workspace || activeTab !== 'files') return
+    if (!workspace || !workspaceSelected || activeTab !== 'files') return
 
     let timer: ReturnType<typeof window.setTimeout> | undefined
     let disposed = false
@@ -129,7 +134,7 @@ export function Explorer({ workspace, selectedPath, onWorkspaceChanged, onOpenFi
       window.removeEventListener('focus', resume)
       document.removeEventListener('visibilitychange', resume)
     }
-  }, [activeTab, refresh, workspace?.root])
+  }, [activeTab, refresh, workspace?.root, workspaceSelected])
 
   useEffect(() => {
     const focusSearch = (): void => searchInputRef.current?.focus()
@@ -150,7 +155,7 @@ export function Explorer({ workspace, selectedPath, onWorkspaceChanged, onOpenFi
   useEffect(() => {
     if (activeTab !== 'search') return
     const query = searchQuery.trim()
-    if (!query || !workspace) {
+    if (!query || !workspace || !workspaceSelected) {
       setSearchResults([])
       setSearching(false)
       return
@@ -167,7 +172,7 @@ export function Explorer({ workspace, selectedPath, onWorkspaceChanged, onOpenFi
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [activeTab, searchQuery, workspace?.root])
+  }, [activeTab, searchQuery, workspace?.root, workspaceSelected])
 
   const pickWorkspace = async (): Promise<void> => {
     const next = await window.ndDsh.workspace.pick()
@@ -199,10 +204,10 @@ export function Explorer({ workspace, selectedPath, onWorkspaceChanged, onOpenFi
             <button
               className="flex min-w-0 flex-1 items-center gap-[5px] px-2 text-left text-[10px] font-semibold tracking-[0.05em] text-soft [&_svg]:size-3 [&_svg]:shrink-0"
               onClick={() => void pickWorkspace()}
-              title={workspace?.root ?? 'Open workspace'}
+              title={workspaceSelected && workspace ? workspace.root : 'Open workspace'}
             >
               <ChevronDownIcon />
-              <span className="min-w-0 truncate">{workspace?.name?.toUpperCase() ?? 'NO WORKSPACE'}</span>
+              <span className="min-w-0 truncate">{workspaceSelected && workspace ? workspace.name.toUpperCase() : 'NO WORKSPACE'}</span>
             </button>
             <button
               aria-label="Refresh files"
@@ -214,15 +219,27 @@ export function Explorer({ workspace, selectedPath, onWorkspaceChanged, onOpenFi
             </button>
           </div>
           <div className="min-h-0 flex-1 overflow-auto py-[3px] pb-2.5">
-            {error ? <div className="p-3 text-[10px]/[1.45] text-destructive">{error}</div> : null}
-            {rootEntries.map((entry) => (
-              <TreeEntry key={entry.relativePath} entry={entry} depth={0} selectedPath={selectedPath} onOpenFile={onOpenFile} />
-            ))}
-            {rootEntries.length === 0 && !error ? <div className="p-3 text-[10px]/[1.45] text-faint">This folder is empty.</div> : null}
-          </div>
-          <div className="border-t border-border-soft bg-surface-1">
-            <div className="h-[27px] border-b border-border-soft px-2.5 py-2 text-[9px] font-semibold tracking-[0.08em] text-faint">OUTLINE</div>
-            <div className="h-[27px] border-b border-border-soft px-2.5 py-2 text-[9px] font-semibold tracking-[0.08em] text-faint">TIMELINE</div>
+            {workspaceSelected ? (
+              <>
+                {error ? <div className="p-3 text-[10px]/[1.45] text-destructive">{error}</div> : null}
+                {rootEntries.map((entry) => (
+                  <TreeEntry key={entry.relativePath} entry={entry} depth={0} selectedPath={selectedPath} onOpenFile={onOpenFile} />
+                ))}
+                {rootEntries.length === 0 && !error ? <div className="p-3 text-[10px]/[1.45] text-faint">This folder is empty.</div> : null}
+              </>
+            ) : (
+              // Never list the boot fallback root as a project: the Explorer only
+              // shows a folder the user opened or the active project's workspace.
+              <div className="flex flex-col items-start gap-2 p-3">
+                <p className="m-0 text-[10px]/[1.45] text-faint">No project selected. Open a folder to browse its files.</p>
+                <button
+                  className="h-[22px] rounded-md border border-border-strong px-2 text-[10px] font-semibold text-soft transition-colors hover:bg-accent hover:text-foreground"
+                  onClick={() => void pickWorkspace()}
+                >
+                  Open folder
+                </button>
+              </div>
+            )}
           </div>
         </>
       )}
@@ -240,8 +257,8 @@ export function Explorer({ workspace, selectedPath, onWorkspaceChanged, onOpenFi
               className="h-7 w-full rounded-md border border-border-strong bg-background pl-7 pr-2 text-xs text-foreground outline-none placeholder:text-faint focus:border-primary/50"
             />
           </div>
-          {!workspace ? <p className="m-0 px-1 text-[10px] leading-relaxed text-faint">Open a workspace to search files.</p> : null}
-          {workspace && !searchQuery.trim() ? <p className="m-0 px-1 text-[10px] leading-relaxed text-faint">Type a filename or folder to search. Press Ctrl/Cmd+K from anywhere to focus.</p> : null}
+          {!workspace || !workspaceSelected ? <p className="m-0 px-1 text-[10px] leading-relaxed text-faint">Open a workspace to search files.</p> : null}
+          {workspace && workspaceSelected && !searchQuery.trim() ? <p className="m-0 px-1 text-[10px] leading-relaxed text-faint">Type a filename or folder to search. Press Ctrl/Cmd+K from anywhere to focus.</p> : null}
           {searching ? <div className="px-1 text-[10px] text-faint">Searching…</div> : null}
           {!searching && searchQuery.trim() && searchResults.length === 0 ? <div className="px-1 text-[10px] text-faint">No matching files.</div> : null}
           <div className="min-h-0 flex-1 overflow-auto">
@@ -265,7 +282,7 @@ export function Explorer({ workspace, selectedPath, onWorkspaceChanged, onOpenFi
 
       {activeTab === 'git' && (
         <SourceControlPanel
-          workspace={workspace}
+          workspace={workspaceSelected ? workspace : null}
           onOpenFile={onOpenFile}
           onOpenDiff={onOpenDiff}
           onError={onError}

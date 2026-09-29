@@ -157,6 +157,14 @@ if (!personaBlock.includes('prefix:')) {
 const presetMeta = await fs.readFile(join(root, 'configs/dsh/agent-presets/nd-dsh/preset.yml'), 'utf8')
 if (!presetMeta.includes('name: ND-DSH')) errors.push('configs/dsh/agent-presets/nd-dsh/preset.yml must name the ND-DSH preset')
 
+const mainProcess = await fs.readFile(join(root, 'src/main/index.ts'), 'utf8')
+if (!mainProcess.includes("app.commandLine.appendSwitch('remote-debugging-address', '127.0.0.1')")) {
+  errors.push('src/main/index.ts must bind Electron CDP to 127.0.0.1 only')
+}
+if (!mainProcess.includes("app.commandLine.appendSwitch('remote-debugging-port'")) {
+  errors.push('src/main/index.ts must keep the explicit Electron CDP port switch')
+}
+
 const harnessService = await fs.readFile(join(root, 'src/main/harness/harness-service.ts'), 'utf8')
 for (const needle of ["'--profile', 'web'", "'--patch'", "'--no-open'", "'--port'", '127.0.0.1']) {
   if (!harnessService.includes(needle)) errors.push(`src/main/harness/harness-service.ts must launch the web profile with ${needle}`)

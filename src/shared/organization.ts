@@ -18,6 +18,7 @@ export type OrganizationTeamEventKind =
   | 'dependency-unblocked'
 export type OrganizationRunKind = 'pm-plan' | 'task-execution' | 'task-review'
 export type OrganizationRunStatus = 'running' | 'completed' | 'failed'
+export type OrganizationSubagentMode = 'auto' | 'off'
 export type OrganizationScope = 'builtin' | 'company' | 'project' | 'team' | 'role' | 'agent'
 export type ProjectRuntimeState = 'stopped' | 'starting' | 'ready' | 'unreachable'
 
@@ -32,6 +33,12 @@ export interface Company {
   name: string
   mission: string
   autonomyLevel: OrganizationAutonomyLevel
+  /**
+   * Controls in-ticket child-agent delegation only. Company teams, parallel
+   * task dispatch and independent review remain separate control-plane concepts.
+   * Older snapshots omit this field and therefore resolve to "auto".
+   */
+  subagentMode?: OrganizationSubagentMode
   status: OrganizationEntityStatus
   createdAt: number
   updatedAt: number
@@ -186,6 +193,10 @@ export interface OrganizationTask {
   integrationState?: OrganizationIntegrationState
   integrationSummary?: string
   integratedHead?: string
+  /** Set when a recurring company schedule created this task. */
+  sourceScheduleId?: string
+  /** Why ND blocked the task, shown to the human until the task moves again. */
+  blockedReason?: string
   createdAt: number
   updatedAt: number
 }
@@ -299,7 +310,7 @@ export interface ProjectPlanInput {
 
 export type OrganizationMutation =
   | { type: 'company.create'; name: string; mission: string }
-  | { type: 'company.update'; id: string; patch: Partial<Pick<Company, 'name' | 'mission' | 'autonomyLevel' | 'status'>> }
+  | { type: 'company.update'; id: string; patch: Partial<Pick<Company, 'name' | 'mission' | 'autonomyLevel' | 'subagentMode' | 'status'>> }
   | { type: 'company.activate'; id: string }
   /**
    * Forget a company inside ND: the company and every record ND owns for it
@@ -326,7 +337,7 @@ export type OrganizationMutation =
   | { type: 'skill.create'; scope: Exclude<OrganizationScope, 'builtin'>; name: string; description: string; instructions: string; companyId?: string; projectId?: string; teamId?: string; roleId?: string; agentId?: string }
   | { type: 'workflow.create'; companyId: string; projectId?: string; name: string; steps: WorkflowStep[] }
   | { type: 'goal.create'; companyId: string; projectId: string; title: string; description: string }
-  | { type: 'task.create'; companyId: string; projectId: string; goalId?: string; milestoneId?: string; title: string; description: string; acceptanceCriteria?: string[]; priority?: TaskPriority; dependsOn?: string[]; assignedAgentId?: string; workScopes?: string[]; evidenceKind?: TaskEvidenceKind; artifactPaths?: string[] }
+  | { type: 'task.create'; companyId: string; projectId: string; goalId?: string; milestoneId?: string; title: string; description: string; acceptanceCriteria?: string[]; priority?: TaskPriority; dependsOn?: string[]; assignedAgentId?: string; workScopes?: string[]; evidenceKind?: TaskEvidenceKind; artifactPaths?: string[]; sourceScheduleId?: string }
   | { type: 'task.update'; id: string; patch: Partial<Pick<OrganizationTask, 'title' | 'description' | 'acceptanceCriteria' | 'priority' | 'status' | 'dependsOn' | 'assignedAgentId' | 'workScopes' | 'evidenceKind' | 'artifactPaths'>> }
   | { type: 'memory.add'; companyId: string; projectId?: string; title: string; content: string; tags?: string[] }
   | { type: 'policy.set'; companyId: string; action: string; effect: OrganizationPolicyEffect; description?: string }

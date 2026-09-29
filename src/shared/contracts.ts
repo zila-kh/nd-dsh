@@ -1,4 +1,5 @@
 import type { LauncherHandoffTarget, QuickLauncherShortcutMode } from './quick-launcher.js'
+import type { WorkspaceProfile } from './workspace-profile.js'
 
 export interface BrowserBounds {
   x: number
@@ -121,6 +122,14 @@ export type WorkspaceBinding = 'standalone' | 'project' | 'unlinked' | 'missing'
 export interface WorkspaceState {
   root: string
   name: string
+  /**
+   * True only when this root came from an explicit selection: the folder picker,
+   * a saved/open workspace, or the folder restored for a selected organization
+   * project. The boot fallback (`process.cwd()` / `ND_DSH_WORKSPACE`) is never a
+   * selection, so product surfaces must not present an unselected root as a
+   * project.
+   */
+  selectedByUser?: boolean
   binding?: WorkspaceBinding
   companyId?: string
   companyName?: string
@@ -246,9 +255,10 @@ export interface HarnessRunOptions {
   image?: HarnessRunImage
   permissionMode?: string
   /**
-   * Working directory for a session this run creates. Defaults to the active
-   * workspace; ND Home passes its managed per-chat folder. A path alone is not
-   * a sandbox — it only bounds what the engine treats as the project root.
+   * Exact working directory for this session/turn. It is used when a session
+   * is created and keeps the trusted prompt metadata aligned with an existing
+   * task worktree or ND Home chat directory. Defaults to the active workspace.
+   * A path alone is not a sandbox — higher-level workspace policy owns safety.
    */
   workspaceCwd?: string
 }
@@ -288,6 +298,16 @@ export interface CodingEngineCapabilities {
   persistentSessions: boolean
 }
 
+export type CodingEngineInstallPlatform = 'win32' | 'darwin' | 'linux'
+
+/** End-user install guidance for a third-party CLI engine; ND never installs it. */
+export interface CodingEngineInstallHelp {
+  /** Official install/download page; absolute https. */
+  url?: string
+  /** Copyable official command; a plain string is platform-agnostic. */
+  command?: string | Partial<Record<CodingEngineInstallPlatform, string>>
+}
+
 export interface CodingEngineDescriptor {
   id: string
   name: string
@@ -298,6 +318,7 @@ export interface CodingEngineDescriptor {
   capabilities: CodingEngineCapabilities
   /** Engine-owned execution guidance injected into organization worker prompts. */
   workerInstructions?: string
+  installHelp?: CodingEngineInstallHelp
 }
 
 /** A model selectable for an engine's native configuration; empty name means display the id. */
@@ -716,6 +737,11 @@ export interface DesktopApi {
     set(surface: DshSurface): Promise<SurfaceState>
     onChanged(listener: (state: SurfaceState) => void): () => void
   }
+  /** Human-facing workspace profile; never an execution/pause state. */
+  workspaceProfile: {
+    get(): Promise<WorkspaceProfile>
+    set(profile: WorkspaceProfile): Promise<WorkspaceProfile>
+  }
   dshView: {
     setBounds(bounds: BrowserBounds): Promise<void>
     setVisible(visible: boolean): Promise<void>
@@ -826,6 +852,8 @@ export const IPC = {
   surfaceState: 'surface:state',
   surfaceSet: 'surface:set',
   surfaceChangedEvent: 'surface:changed',
+  workspaceProfileGet: 'workspace-profile:get',
+  workspaceProfileSet: 'workspace-profile:set',
   dshViewSetBounds: 'dsh-view:set-bounds',
   dshViewSetVisible: 'dsh-view:set-visible',
   dshViewReload: 'dsh-view:reload',

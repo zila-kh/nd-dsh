@@ -4,7 +4,16 @@
 /// <reference lib="dom" />
 
 import { expect, test } from '@playwright/test'
+import type { WorkspaceState } from '../src/shared/contracts.js'
 import { closeApp, createWorkspaceDir, e2eModelConfig, E2E_PROVIDER_NAME, launchApp, type LaunchedApp } from './fixtures.js'
+
+// The evaluate callbacks below run in the renderer with the trusted preload
+// attached; declare only the narrow surface these probes touch.
+type RendererWindow = {
+  ndDsh: {
+    workspace: { state(): Promise<WorkspaceState> }
+  }
+}
 
 test.describe.configure({ mode: 'serial' })
 
@@ -33,8 +42,9 @@ test('QA: full work loop — company, project, PM plan, worker, reviewer, comple
   test.setTimeout(300_000) // PM plan + worker + reviewer can take several minutes
   const { page } = launched
 
-  // 1. App boots with full navigation
+  // 1. App boots in General; this coding QA journey explicitly opts into Coding.
   await expect(page.getByRole('banner').getByText('ND-DSH', { exact: true })).toBeVisible()
+  await page.getByRole('group', { name: 'Workspace profile' }).getByRole('button', { name: 'CODING', exact: true }).click()
   const navigation = page.getByRole('navigation', { name: 'ND-DSH navigation' })
   for (const label of ['Company', 'Agent', 'Design', 'QA', 'Settings']) {
     await expect(navigation.getByTitle(label)).toBeVisible()
@@ -48,6 +58,8 @@ test('QA: full work loop — company, project, PM plan, worker, reviewer, comple
   await dialog.getByPlaceholder('Company name').fill('QA Test Corp')
   await dialog.getByPlaceholder('Company mission').fill('Test the full ND-DSH work loop end-to-end.')
   await dialog.getByRole('button', { name: 'Create AI company' }).click()
+  // The dashboard opens on Work; the activity feed that confirms creation lives in Overview.
+  await page.getByRole('button', { name: 'Overview' }).click()
   await expect(page.getByText('Created QA Test Corp with a default AI workforce')).toBeVisible({ timeout: 10_000 })
 
   // 3. Create project
@@ -139,11 +151,36 @@ test('QA: Settings surfaces are accessible', async () => {
   await expect(page).toHaveURL(/#\/settings\?tab=general$/)
 
   // Verify settings section tabs are visible (they use role=tab)
-  for (const tab of ['General', 'Appearance', 'Models', 'Capabilities', 'Plugins', 'Coding engines', 'Agent presets']) {
+  for (const tab of ['General', 'Appearance', 'Models', 'Capabilities', 'Extensions', 'Coding engines', 'Agent presets']) {
     await expect(page.getByRole('tab', { name: tab })).toBeVisible()
   }
 
   // Verify no renderer errors
+  expect(rendererErrors).toEqual([])
+})
+
+test('QA: Copy diagnostics works through the real Settings UI without leaking workspace identity', async () => {
+  const { page } = launched
+  const workspace = await page.evaluate(async () => {
+    // This callback runs in the renderer, so the trusted preload API is only
+    // reachable through `window` here; module-scope helpers do not exist there.
+    const api = window as unknown as RendererWindow
+    return await api.ndDsh.workspace.state()
+  })
+
+  await page.getByRole('navigation', { name: 'ND-DSH navigation' }).getByTitle('Settings').click()
+  await page.getByRole('tablist', { name: 'General sub-tabs' }).getByRole('tab', { name: 'About', exact: true }).click()
+  const copy = page.getByRole('button', { name: 'Copy diagnostics', exact: true })
+  await expect(copy).toBeVisible()
+  await copy.click()
+  await expect(page.getByRole('button', { name: 'Copied', exact: true })).toBeVisible()
+
+  const report = await launched.app.evaluate(({ clipboard }) => clipboard.readText())
+  expect(report).toContain('ND-DSH Beta Diagnostics')
+  expect(report).toContain('Privacy: credentials, session ids, workspace paths, project names, and current browser URLs are intentionally omitted.')
+  expect(report).not.toContain(workspace.root)
+  if (workspace.projectId) expect(report).not.toContain(workspace.projectId)
+  if (workspace.projectName) expect(report).not.toContain(workspace.projectName)
   expect(rendererErrors).toEqual([])
 })
 

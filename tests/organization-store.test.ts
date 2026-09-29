@@ -95,6 +95,24 @@ describe('OrganizationStore', () => {
     expect(JSON.parse(await readFile(path, 'utf8')).version).toBe(1)
   })
 
+  it('coalesces concurrent saves while keeping every awaited mutation durable', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'nd-dsh-org-coalesce-'))
+    const path = join(dir, 'organization.json')
+    const store = new OrganizationStore(path)
+    const company = (await store.mutate({ type: 'company.create', name: 'Burst', mission: 'Save once' })).companies[0]!
+    const snapshots: number[] = []
+    store.setOnChanged((state) => snapshots.push(state.memory.length))
+
+    const baseline = (await store.state()).memory.length
+    await Promise.all(Array.from({ length: 8 }, (_, index) =>
+      store.mutate({ type: 'memory.add', companyId: company.id, title: `Note ${index}`, content: 'burst' })))
+
+    expect(snapshots.length).toBeLessThan(8)
+    expect(snapshots.at(-1)).toBe(baseline + 8)
+    const persisted = new OrganizationStore(path)
+    expect((await persisted.state()).memory.filter((item) => item.content === 'burst')).toHaveLength(8)
+  })
+
   it('stores project runtime fields and clears blank or invalid ones instead of persisting them', async () => {
     const store = await storeFixture()
     let state = await store.mutate({ type: 'company.create', name: 'Runtime Co', mission: 'Run the app under development' })

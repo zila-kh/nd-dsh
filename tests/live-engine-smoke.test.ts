@@ -1,7 +1,7 @@
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vitest'
 import { ClaudeCodeCliEngine } from '../src/main/engines/claude/claude-code-cli-engine.js'
 import { CursorCliEngine } from '../src/main/engines/cursor/cursor-cli-engine.js'
 import { PiCodingEngine } from '../src/main/engines/pi/pi-coding-engine.js'
@@ -9,6 +9,10 @@ import { ZcodeCliEngine } from '../src/main/engines/zcode/zcode-cli-engine.js'
 import { buildCodingEngineCatalog } from '../src/shared/coding-engines.js'
 import { claudeBinPath, cursorBinPath, piBinPath, zcodeBinPath } from '../src/main/app-paths.js'
 import type { DshEventFrame } from '../src/shared/contracts.js'
+
+vi.mock('electron', () => ({
+  app: { getPath: () => join(tmpdir(), 'nd-dsh-live-smoke-userdata') },
+}))
 
 /**
  * Live smoke tests against the real CLIs. Opt-in only — they spend real

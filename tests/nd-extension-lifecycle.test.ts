@@ -76,7 +76,13 @@ describe('ExtensionPackageStore lifecycle', () => {
   it('rejects package symlinks because they can escape the package root', async () => {
     await writePackage(sourceRoot, SAMPLE)
     await writeFile(join(sourceRoot, 'inside.txt'), 'ok', 'utf8')
-    await symlink(join(sourceRoot, 'inside.txt'), join(sourceRoot, 'link.txt'))
+    // Windows file symlinks need Developer Mode or admin rights; directory junctions do not.
+    if (process.platform === 'win32') {
+      await mkdir(join(sourceRoot, 'inside'))
+      await symlink(join(sourceRoot, 'inside'), join(sourceRoot, 'link'), 'junction')
+    } else {
+      await symlink(join(sourceRoot, 'inside.txt'), join(sourceRoot, 'link.txt'))
+    }
     const store = new ExtensionPackageStore(root)
     await expect(store.installFromDirectory(sourceRoot)).rejects.toThrow(/symbolic link/)
   })
@@ -96,11 +102,48 @@ describe('ExtensionPackageStore lifecycle', () => {
     expect(await store.manifestForVersion('nd.sample', '1.0.0')).toMatchObject({ id: 'nd.sample' })
   })
 
+  it('rejects a persisted snapshot whose declared permissions no longer cover its hosts', async () => {
+    await writePackage(sourceRoot, SAMPLE)
+    const store = new ExtensionPackageStore(root)
+    await store.installFromDirectory(sourceRoot)
+
+    const snapshotPath = join(root, 'packages', 'nd.sample', '1.0.0', 'nd-extension.json')
+    const tampered = JSON.parse(await readFile(snapshotPath, 'utf8')) as Record<string, unknown>
+    tampered.permissions = []
+    await writeFile(snapshotPath, JSON.stringify(tampered, null, 2), 'utf8')
+
+    await expect(store.manifestForVersion('nd.sample', '1.0.0')).rejects.toThrow(/permission re-validation/)
+  })
+
+  it('validates built-in packages through the same runtime rules before snapshotting', async () => {
+    const store = new ExtensionPackageStore(root)
+    const invalid = structuredClone(DAILY_ESSENTIALS_MANIFEST)
+    invalid.permissions = []
+    await expect(store.registerBuiltin(invalid)).rejects.toThrow(/Invalid built-in extension package/)
+    expect(await store.activeManifest(invalid.id)).toBeUndefined()
+  })
+
   it('refuses to uninstall ND-maintained packages but removes third-party snapshots', async () => {
     const store = new ExtensionPackageStore(root)
     await store.registerBuiltin(DAILY_ESSENTIALS_MANIFEST)
     await expect(store.uninstall(DAILY_ESSENTIALS_MANIFEST.id)).rejects.toThrow(/ND-maintained/)
     expect(await store.activeManifest(DAILY_ESSENTIALS_MANIFEST.id)).toBeTruthy()
+  })
+
+  it('drops a persisted package index entry with a permission gap on reload', async () => {
+    await writePackage(sourceRoot, SAMPLE)
+    const store = new ExtensionPackageStore(root)
+    await store.installFromDirectory(sourceRoot)
+
+    const indexPath = join(root, 'nd-extensions.json')
+    const index = JSON.parse(await readFile(indexPath, 'utf8')) as {
+      packages: Array<{ manifest: Record<string, unknown> }>
+    }
+    index.packages[0]!.manifest.permissions = []
+    await writeFile(indexPath, JSON.stringify(index, null, 2), 'utf8')
+
+    const reloaded = new ExtensionPackageStore(root)
+    expect(await reloaded.list()).toEqual([])
   })
 
   it('reloads installed packages from disk with the same active version', async () => {

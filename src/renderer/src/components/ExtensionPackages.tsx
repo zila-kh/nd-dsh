@@ -11,13 +11,15 @@ import { Badge } from './ui/badge'
 import { Button } from './ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog'
 import { Input } from './ui/input'
-import { describeContextForUi, type ContextOption } from '../lib/nd-context-model'
+import { describeContextForUi, optionIdForContext, type ContextOption } from '../lib/nd-context-model'
 import type { OrganizationSnapshot } from '../../../shared/organization'
 
 interface Props {
   state: NdExtensionsStateView
   organization: OrganizationSnapshot | null
   contexts: ContextOption[]
+  requestedView?: { extensionId: string; viewId: string; context: NdContext } | null
+  onRequestedViewHandled?(): void
   onError(message: string): void
   onChanged(): Promise<void>
 }
@@ -28,11 +30,18 @@ interface Props {
  * Installation is global; activation and grants are per context, and the two
  * are never implied by each other.
  */
-export function ExtensionPackagesCard({ state, organization, contexts, onError, onChanged }: Props): React.ReactNode {
+export function ExtensionPackagesCard({ state, organization, contexts, requestedView, onRequestedViewHandled, onError, onChanged }: Props): React.ReactNode {
   const [manageContextId, setManageContextId] = useState('personal')
   const manageContext = contexts.find((option) => option.id === manageContextId)?.context ?? { kind: 'personal' as const }
   const [view, setView] = useState<{ extensionId: string; viewId: string; context: NdContext } | null>(null)
   const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (!requestedView) return
+    setManageContextId(optionIdForContext(contexts, requestedView.context) ?? 'personal')
+    setView(requestedView)
+    onRequestedViewHandled?.()
+  }, [requestedView])
 
   const run = async (action: () => Promise<unknown>): Promise<void> => {
     setBusy(true)
@@ -77,6 +86,28 @@ export function ExtensionPackagesCard({ state, organization, contexts, onError, 
           </Button>
         </div>
       </div>
+
+      {(state.available?.length ?? 0) > 0 ? (
+        <div className="space-y-2 rounded-md border border-border-soft p-3">
+          <h4 className="text-xs font-semibold text-foreground">Available extensions</h4>
+          {state.available?.map((item) => {
+            const installed = state.packages.find((pack) => pack.id === item.id)
+            const updateAvailable = installed && installed.version !== item.version
+            return (
+              <div key={item.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border-soft bg-surface-0/40 p-2">
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-medium text-foreground">{item.name} · v{item.version}</div>
+                  <p className="text-[11px] text-faint">{item.description}</p>
+                  <p className="text-[10px] text-faint">Permissions: {item.permissions.join(', ') || 'none'}</p>
+                </div>
+                <Button size="sm" variant="outline" disabled={busy || !item.available || Boolean(installed && !updateAvailable)} onClick={() => void run(() => window.ndDsh.ndExtensions.installAvailable(item.id))}>
+                  {updateAvailable ? 'Update' : installed ? 'Installed' : item.available ? 'Install' : 'Unavailable'}
+                </Button>
+              </div>
+            )
+          })}
+        </div>
+      ) : null}
 
       {state.pendingApprovals.length > 0 ? (
         <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3">
@@ -319,6 +350,13 @@ function ExtensionViewDialog({
   const [data, setData] = useState<NdViewData | null>(null)
   const [selected, setSelected] = useState<{ title: string; body?: string } | null>(null)
   const [busy, setBusy] = useState(false)
+  const [query, setQuery] = useState('')
+  const [sortBy, setSortBy] = useState('name')
+
+  useEffect(() => {
+    setQuery('')
+    setSortBy('name')
+  }, [target])
 
   useEffect(() => {
     if (!target) {
@@ -332,6 +370,31 @@ function ExtensionViewDialog({
       .catch((cause) => { if (mounted) onError(cause instanceof Error ? cause.message : String(cause)) })
     return () => { mounted = false }
   }, [target])
+
+  useEffect(() => {
+    if (!target || !data?.refreshIntervalMs) return
+    let loading = false
+    let failed = false
+    const timer = setInterval(() => {
+      if (loading || failed) return
+      loading = true
+      void window.ndDsh.ndExtensions.loadView(target.extensionId, target.viewId, target.context)
+        .then(setData)
+        .catch((cause) => {
+          failed = true
+          onError(cause instanceof Error ? cause.message : String(cause))
+        })
+        .finally(() => { loading = false })
+    }, data.refreshIntervalMs)
+    return () => clearInterval(timer)
+  }, [target, data?.refreshIntervalMs])
+
+  const sortKeys = data?.rows[0]?.sortValues ? Object.keys(data.rows[0].sortValues) : []
+  const visibleRows = (data?.rows ?? [])
+    .filter((row) => !query.trim() || `${row.title} ${row.body ?? ''}`.toLowerCase().includes(query.trim().toLowerCase()))
+    .sort((left, right) => sortKeys.length === 0 ? 0 : sortBy === 'name'
+      ? left.title.localeCompare(right.title)
+      : (right.sortValues?.[sortBy] ?? -1) - (left.sortValues?.[sortBy] ?? -1))
 
   const runAction = async (actionId: string, host: string, row: { id: string; title: string }): Promise<void> => {
     if (!target) return
@@ -381,15 +444,30 @@ function ExtensionViewDialog({
             {target ? `${target.extensionId} · ${describeContextForUi(target.context, organization)}` : ''}
           </DialogDescription>
         </DialogHeader>
+        {data && !selected ? (
+          <div className="flex items-center gap-2">
+            <Input aria-label="Search extension view" placeholder="Search" value={query} onChange={(event) => setQuery(event.target.value)} className="h-8 flex-1 text-xs" />
+            {sortKeys.length > 0 ? (
+              <select aria-label="Sort extension view" value={sortBy} onChange={(event) => setSortBy(event.target.value)} className="h-8 rounded-md border border-border-soft bg-surface-0 px-2 text-xs">
+                <option value="name">Name</option>
+                {sortKeys.map((key) => <option key={key} value={key}>{key === 'cpu' ? 'CPU' : key === 'pid' ? 'PID' : key === 'memory' ? 'Memory' : key}</option>)}
+              </select>
+            ) : null}
+            <Button size="sm" variant="outline" disabled={busy} onClick={() => {
+              if (!target) return
+              void window.ndDsh.ndExtensions.loadView(target.extensionId, target.viewId, target.context).then(setData).catch((cause) => onError(cause instanceof Error ? cause.message : String(cause)))
+            }}>Refresh</Button>
+          </div>
+        ) : null}
         {selected ? (
           <div className="space-y-2">
             <h4 className="text-sm font-medium text-foreground">{selected.title}</h4>
             <p className="max-h-[320px] overflow-y-auto whitespace-pre-wrap text-xs text-soft">{selected.body}</p>
             <Button size="sm" variant="outline" onClick={() => setSelected(null)}>Back to list</Button>
           </div>
-        ) : data && data.rows.length > 0 ? (
+        ) : data && visibleRows.length > 0 ? (
           <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
-            {data.rows.map((row) => (
+            {visibleRows.map((row) => (
               <div key={row.id} className="rounded-md border border-border-soft bg-surface-0/40 p-2">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
@@ -401,7 +479,7 @@ function ExtensionViewDialog({
                 {data.actions.length > 0 ? (
                   <div className="mt-1.5 flex flex-wrap gap-1.5">
                     {data.actions.map((action) => (
-                      <Button key={action.id} size="sm" variant="ghost" className="h-6 px-2 text-[11px]" disabled={busy} onClick={() => void runAction(action.id, action.host, row)}>
+                      <Button key={action.id} size="sm" variant="ghost" className="h-6 px-2 text-[11px]" disabled={busy || row.actionsDisabled} onClick={() => void runAction(action.id, action.host, row)}>
                         {action.title}
                       </Button>
                     ))}
@@ -411,7 +489,7 @@ function ExtensionViewDialog({
             ))}
           </div>
         ) : (
-          <p className="text-xs text-faint">{data?.empty ?? 'This view has no rows yet.'}</p>
+          <p className="text-xs text-faint">{query && data?.rows.length ? 'No rows match your search.' : data?.empty ?? 'This view has no rows yet.'}</p>
         )}
       </DialogContent>
     </Dialog>

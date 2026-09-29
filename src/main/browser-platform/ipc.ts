@@ -1,6 +1,7 @@
 import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from 'electron'
 import {
   BROWSER_PLATFORM_IPC,
+  type BrowserExtensionInstallPreview,
   type BrowserSelection,
 } from '../../shared/browser-platform.js'
 import type { BrowserPlatformService } from './browser-platform-service.js'
@@ -42,18 +43,45 @@ export function registerBrowserPlatformIpc(
     service.openDownload(asString(downloadId, 'Download id', 512)))
   handle(BROWSER_PLATFORM_IPC.revealDownload, (downloadId) =>
     service.revealDownload(asString(downloadId, 'Download id', 512)))
+  handle(BROWSER_PLATFORM_IPC.clearFinishedDownloads, () => service.clearFinishedDownloads())
   handle(BROWSER_PLATFORM_IPC.installExtension, async () => {
     const result = await dialog.showOpenDialog(window, {
       title: 'Load unpacked browser extension',
       properties: ['openDirectory'],
     })
     const path = result.filePaths[0]
-    return result.canceled || !path ? null : service.installExtension(path)
+    if (result.canceled || !path) return null
+    const preview = await service.previewExtension(path)
+    if (!await confirmExtensionInstall(window, preview)) return null
+    return service.installExtension(path)
   })
   handle(BROWSER_PLATFORM_IPC.extensionEnabled, (extensionId, enabled) =>
     service.setExtensionEnabled(asString(extensionId, 'Extension id', 1_024), Boolean(enabled)))
   handle(BROWSER_PLATFORM_IPC.removeExtension, (extensionId) =>
     service.removeExtension(asString(extensionId, 'Extension id', 1_024)))
+  handle(BROWSER_PLATFORM_IPC.reloadExtensions, () => service.reloadExtensions())
+  handle(BROWSER_PLATFORM_IPC.developerMode, (enabled) => service.setDeveloperMode(Boolean(enabled)))
+  handle(BROWSER_PLATFORM_IPC.browserUseEnabled, (enabled) => service.setBrowserUseEnabled(Boolean(enabled)))
+  handle(BROWSER_PLATFORM_IPC.installCatalogExtension, async (catalogId) => {
+    const id = asString(catalogId, 'Browser extension catalog id', 512)
+    const item = (await service.state()).extensionCatalog.find((candidate) => candidate.id === id)
+    if (!item) throw new Error('Unknown built-in browser extension catalog item')
+    if (item.packagePolicy === 'reference-only') {
+      throw new Error(
+        `${item.name} is reference-only. Use Developer mode → Load unpacked to test a third-party folder without publisher verification.`,
+      )
+    }
+    if (!item.bundleAvailable) throw new Error(`${item.name} is missing from this ND build.`)
+
+    const preview = await service.previewCatalogExtension(id)
+    if (!await confirmExtensionInstall(window, preview, `${item.name} · ${item.publisher}`)) return null
+    return service.installCatalogExtension(id)
+  })
+  handle(BROWSER_PLATFORM_IPC.openCatalogExtension, (catalogId) =>
+    service.openCatalogExtension(asString(catalogId, 'Browser extension catalog id', 512)))
+  handle(BROWSER_PLATFORM_IPC.showExtensionPopup, (extensionId) =>
+    service.showExtensionPopup(asString(extensionId, 'Browser extension id', 1_024)))
+  handle(BROWSER_PLATFORM_IPC.closeExtensionPopup, () => service.closeExtensionPopup())
   handle(BROWSER_PLATFORM_IPC.saveCredential, (value) => {
     const input = object(value, 'Browser credential')
     return service.saveCredential({
@@ -87,6 +115,43 @@ export function registerBrowserPlatformIpc(
   return () => {
     for (const channel of channels) ipcMain.removeHandler(channel)
   }
+}
+
+async function confirmExtensionInstall(
+  window: BrowserWindow,
+  preview: BrowserExtensionInstallPreview,
+  catalogLabel?: string,
+): Promise<boolean> {
+  const permissions = preview.permissions.length > 0
+    ? preview.permissions.map((permission) => `• ${permission}`).join('\n')
+    : 'No extension API or host permissions declared.'
+  const compatibility = preview.compatibilityNotes.length > 0
+    ? preview.compatibilityNotes.map((note) => `• ${note}`).join('\n')
+    : 'No compatibility warnings detected for ND\'s documented Electron extension subset.'
+  const detail = [
+    catalogLabel ? `Catalog: ${catalogLabel}` : undefined,
+    `Manifest: MV${preview.manifestVersion ?? '?'} · ${preview.status}`,
+    '',
+    'Requested permissions:',
+    permissions,
+    '',
+    'Compatibility:',
+    compatibility,
+    '',
+    `Source: ${preview.path}`,
+  ].filter((line): line is string => line !== undefined).join('\n')
+
+  const result = await dialog.showMessageBox(window, {
+    type: preview.status === 'compatible' ? 'question' : 'warning',
+    buttons: ['Cancel', 'Load into ND browser'],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+    title: 'Load browser extension into ND?',
+    message: `${preview.name} ${preview.version}`,
+    detail,
+  })
+  return result.response === 1
 }
 
 function assertTrustedSender(event: IpcMainInvokeEvent, window: BrowserWindow): void {

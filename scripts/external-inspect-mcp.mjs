@@ -46,8 +46,9 @@ class CdpSession {
   }
 
   static async open(url) {
+    const safeUrl = assertLoopbackDebuggerUrl(url)
     return await new Promise((resolve, reject) => {
-      const socket = new WebSocket(url)
+      const socket = new WebSocket(safeUrl.toString())
       socket.addEventListener('open', () => resolve(new CdpSession(socket)), { once: true })
       socket.addEventListener('error', () => reject(new Error('could not attach to the debugger socket')), { once: true })
     })
@@ -64,6 +65,17 @@ class CdpSession {
   close() {
     try { this.socket.close() } catch { /* gone */ }
   }
+}
+
+function assertLoopbackDebuggerUrl(value) {
+  let parsed
+  try { parsed = new URL(value) } catch { throw new Error('debugger returned an invalid WebSocket URL') }
+  if (parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') throw new Error('debugger WebSocket URL must use ws/wss')
+  const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  if (!['127.0.0.1', 'localhost', '::1'].includes(hostname)) {
+    throw new Error('debugger WebSocket must remain on loopback')
+  }
+  return parsed
 }
 
 async function withPageTarget(port, run) {

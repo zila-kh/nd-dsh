@@ -18,8 +18,7 @@ import type {
 } from '../../shared/organization-control.js'
 import type { OrganizationRun, OrganizationRunKind, OrganizationRunReceipt, OrganizationSnapshot } from '../../shared/organization.js'
 import type { OrganizationStore } from './store.js'
-import { taskEvidenceWorkspace } from './task-worktree.js'
-import { captureWorkspaceEvidence } from './worktree-evidence.js'
+import { unavailableEvidenceCapturer, type WorkspaceEvidenceCapture } from './worktree-evidence.js'
 import type { ExecutionCoordinator, RuntimeAvailability, RuntimePoolClaim } from './execution-coordinator.js'
 import type { ComputeLedger } from '../compute/compute-ledger.js'
 
@@ -64,12 +63,16 @@ export class OrganizationControlPlane {
   private loaded = false
   private value: OrganizationControlSnapshot = clone(EMPTY)
   private saveChain: Promise<void> = Promise.resolve()
+  private pendingSave: Promise<void> | undefined
   private onChanged: ((state: OrganizationControlSnapshot) => void) | undefined
 
   constructor(
     private readonly filePath: string,
     private readonly store: Pick<OrganizationStore, 'state' | 'taskContext'>,
     private readonly computeLedger?: Pick<ComputeLedger, 'cashSummary' | 'management'>,
+    /** Exact task-worktree capture; without nd-core every receipt is inexact and review fails closed. */
+    private readonly captureTaskEvidence: (projectWorkspace: string | undefined, taskId: string) => Promise<WorkspaceEvidenceCapture> =
+      (projectWorkspace) => unavailableEvidenceCapturer(projectWorkspace),
   ) {}
 
   setOnChanged(listener: ((state: OrganizationControlSnapshot) => void) | undefined): void {
@@ -267,8 +270,7 @@ export class OrganizationControlPlane {
     const latest = this.value.evidence.find((item) => item.taskId === taskId && item.status === 'pending_review')
     if (!latest) return null
     const context = await this.store.taskContext(taskId)
-    const workspace = await taskEvidenceWorkspace(context.project.workspacePath, taskId)
-    const current = await captureWorkspaceEvidence(workspace)
+    const current = await this.captureTaskEvidence(context.project.workspacePath, taskId)
     latest.status = !latest.exact || !current.exact
       ? 'failed'
       : current.fingerprint === latest.fingerprint ? 'verified' : 'stale'
@@ -304,9 +306,14 @@ export class OrganizationControlPlane {
         id: item.id, kind: item.kind as 'gate' | 'action', companyId: item.companyId,
         ...(item.projectId ? { projectId: item.projectId } : {}), title: item.title, detail: item.question, createdAt: item.createdAt,
       })),
-      ...scopedRuns.filter((item) => item.status === 'failed').slice(0, 8).map((item) => ({
+      // Only a failure that is still the latest attempt needs the human; one that
+      // was already retried (or whose task has since completed) is history.
+      ...scopedRuns.filter((item) => item.status === 'failed' && isLatestAttempt(item, scopedRuns)
+        && (!item.taskId || scopedTasks.find((task) => task.id === item.taskId)?.status !== 'completed')).slice(0, 8).map((item) => ({
         id: `run:${item.id}`, kind: 'failed-run' as const, companyId: item.companyId, projectId: item.projectId,
-        ...(item.taskId ? { taskId: item.taskId } : {}), title: `${item.kind} failed`, detail: item.error ?? 'Run failed.', createdAt: item.completedAt ?? item.startedAt,
+        ...(item.taskId ? { taskId: item.taskId } : {}), runKind: item.kind,
+        title: `${runKindTitle(item.kind)} failed${item.taskId ? ` · ${scopedTasks.find((task) => task.id === item.taskId)?.title ?? 'task'}` : ''}`,
+        detail: item.error ?? 'Run failed.', createdAt: item.completedAt ?? item.startedAt,
       })),
       ...scopedEvidence.filter((item) => item.status === 'stale' || item.status === 'failed').slice(0, 8).map((item) => ({
         id: `evidence:${item.id}`, kind: 'stale-evidence' as const, companyId: item.companyId, projectId: item.projectId,
@@ -417,8 +424,7 @@ export class OrganizationControlPlane {
 
   private async ensureEvidence(taskId: string): Promise<boolean> {
     const context = await this.store.taskContext(taskId)
-    const workspace = await taskEvidenceWorkspace(context.project.workspacePath, taskId)
-    const capture = await captureWorkspaceEvidence(workspace)
+    const capture = await this.captureTaskEvidence(context.project.workspacePath, taskId)
     const existing = this.value.evidence.find((item) => item.taskId === taskId && item.status === 'pending_review' && item.fingerprint === capture.fingerprint)
     if (existing) return false
     this.value.evidence.unshift({
@@ -613,10 +619,13 @@ export class OrganizationControlPlane {
     this.loaded = true
   }
 
-  private async save(): Promise<void> {
-    const snapshot = clone(this.value)
-    const serialized = `${JSON.stringify(snapshot, null, 2)}\n`
+  /** Durable once settled; saves requested during an in-flight write share the next one. */
+  private save(): Promise<void> {
+    if (this.pendingSave) return this.pendingSave
     const write = this.saveChain.catch(() => undefined).then(async () => {
+      this.pendingSave = undefined
+      const snapshot = clone(this.value)
+      const serialized = `${JSON.stringify(snapshot)}\n`
       await fs.mkdir(dirname(this.filePath), { recursive: true })
       const temp = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`
       try {
@@ -626,8 +635,9 @@ export class OrganizationControlPlane {
         await fs.rm(temp, { force: true }).catch(() => undefined)
         throw error
       }
-      this.onChanged?.(clone(snapshot))
+      this.onChanged?.(snapshot)
     })
+    this.pendingSave = write
     this.saveChain = write
     return write
   }
@@ -648,6 +658,21 @@ function normalize(value: unknown): OrganizationControlSnapshot {
     if (!Number.isFinite(budget.monthlyWindowStartedAt)) budget.monthlyWindowStartedAt = startOfUtcMonth(now)
   }
   return normalized
+}
+
+/** A run is the latest attempt when no newer run of the same kind targets the same task (or project plan). */
+function isLatestAttempt(run: OrganizationRun, runs: OrganizationRun[]): boolean {
+  return !runs.some((other) => other.id !== run.id
+    && other.kind === run.kind
+    && other.projectId === run.projectId
+    && other.taskId === run.taskId
+    && other.startedAt > run.startedAt)
+}
+
+function runKindTitle(kind: OrganizationRunKind): string {
+  if (kind === 'pm-plan') return 'AI PM plan'
+  if (kind === 'task-review') return 'AI review'
+  return 'Task run'
 }
 
 function actionForRun(kind: OrganizationRunKind): OrganizationControlAction {

@@ -109,10 +109,17 @@ export function GatewaySettings({ onError }: GatewaySettingsProps) {
           <div className={rowStack}>
             <strong className={rowTitle}>Use ND for</strong>
             <span className={rowDesc}>Choose how much ND should add when an app has a supported connection method.</span>
+            <span className={rowPathText}>Full ND needs a supported ND app connector and is not available in this build.</span>
           </div>
           <div className="flex shrink-0 gap-1">
             {(['llm-only', 'nd-enhanced', 'full-nd'] as const).map((value) => (
-              <SettingsButton key={value} active={mode === value} disabled={busy || value === 'full-nd'} onClick={() => setMode(value)}>
+              <SettingsButton
+                key={value}
+                active={mode === value}
+                disabled={busy || value === 'full-nd'}
+                title={value === 'full-nd' ? 'Full ND requires a supported ND app connector; it is not available in this build.' : undefined}
+                onClick={() => setMode(value)}
+              >
                 {value === 'llm-only' ? 'LLM only' : value === 'nd-enhanced' ? 'ND Enhanced' : 'Full ND'}
               </SettingsButton>
             ))}

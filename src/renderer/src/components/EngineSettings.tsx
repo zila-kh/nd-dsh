@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { CodingEngineDescriptor } from '../../../shared/contracts'
 import { ND_HARNESS_ENGINE_ID } from '../../../shared/coding-engines'
+import { EngineInstallHelp } from './engine-install-help'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 import {
   SettingsRow,
@@ -25,6 +26,7 @@ interface EngineSettingsProps {
 export function EngineSettings({ onError }: EngineSettingsProps) {
   const [engines, setEngines] = useState<CodingEngineDescriptor[]>([])
   const [loading, setLoading] = useState(true)
+  const [retrying, setRetrying] = useState(false)
   const [preferredEngine, setPreferredEngine] = useState<string>(() => {
     try {
       return localStorage.getItem(PREFERRED_CHAT_ENGINE_STORAGE_KEY) || ND_HARNESS_ENGINE_ID
@@ -64,25 +66,25 @@ export function EngineSettings({ onError }: EngineSettingsProps) {
     }
   }
 
-  useEffect(() => {
-    let mounted = true
-    void window.ndDsh.engines.list()
-      .then((value) => {
-        if (mounted) setEngines(value)
-      })
-      .catch((cause) => onError(cause instanceof Error ? cause.message : String(cause)))
-      .finally(() => {
-        if (mounted) setLoading(false)
-      })
-    return () => { mounted = false }
+  // Detection re-runs on every list() call, so this also serves the per-card Re-check.
+  const refresh = useCallback(async (): Promise<void> => {
+    setRetrying(true)
+    try {
+      setEngines(await window.ndDsh.engines.list())
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setRetrying(false)
+      setLoading(false)
+    }
   }, [onError])
+
+  useEffect(() => {
+    void refresh()
+  }, [refresh])
 
   return (
     <div className="min-h-0 overflow-auto px-[26px] pb-[42px] pt-1.5">
-      <TokenToolOptimizationSettings onError={onError} />
-      <TokenSaverSettings onError={onError} />
-      <GatewaySettings onError={onError} />
-
       <SettingsSection title="Coding engines">
         <div className="space-y-1.5">
           <SettingsRow>
@@ -129,6 +131,14 @@ export function EngineSettings({ onError }: EngineSettingsProps) {
                 <span className={rowDesc}>{engine.description}</span>
                 <span className={rowPathText}>{capabilitySummary(engine)}</span>
                 {!engine.available && engine.unavailableReason ? <span className={rowPathText}>{engine.unavailableReason}</span> : null}
+                {!engine.available ? (
+                  <EngineInstallHelp
+                    help={engine.installHelp}
+                    retrying={retrying}
+                    onRetry={() => void refresh()}
+                    onError={onError}
+                  />
+                ) : null}
               </div>
               <div className="flex shrink-0 flex-col items-end gap-[3px]">
                 <StatusChip good={engine.available} warn={!engine.available}>{engine.available ? 'Available' : 'Unavailable'}</StatusChip>
@@ -167,6 +177,10 @@ export function EngineSettings({ onError }: EngineSettingsProps) {
           </SettingsRow>
         </div>
       </SettingsSection>
+
+      <TokenToolOptimizationSettings onError={onError} />
+      <TokenSaverSettings onError={onError} />
+      <GatewaySettings onError={onError} />
     </div>
   )
 }

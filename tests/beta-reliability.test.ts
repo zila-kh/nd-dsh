@@ -133,6 +133,8 @@ describe('beta execution reliability', () => {
   it('classifies transient provider failures without retrying auth or deterministic failures', () => {
     expect(isRetryableExecutionFailure('Provider returned 502 Bad Gateway')).toBe(true)
     expect(isRetryableExecutionFailure('gateway-unreachable: ECONNRESET')).toBe(true)
+    expect(isRetryableExecutionFailure('HTTP 429 Too Many Requests')).toBe(true)
+    expect(isRetryableExecutionFailure('rate_limit: quota temporarily exhausted')).toBe(true)
     expect(isRetryableExecutionFailure('401 unauthorized invalid api key')).toBe(false)
     expect(isRetryableExecutionFailure('Machine verification failed: tests red')).toBe(false)
     expect(isRetryableExecutionFailure('Project workspace has uncommitted human changes')).toBe(false)
@@ -181,6 +183,23 @@ describe('beta execution reliability', () => {
     const state = await store.state()
     expect(state.runs.find((item) => item.id === run.runId)?.status).toBe('failed')
     expect(state.tasks.find((item) => item.id === task.id)?.status).toBe('blocked')
+  })
+
+  it('returns a hung review to the review queue instead of leaving it reviewing forever', async () => {
+    const { store, task, orchestrator } = await organizationFixture()
+    await store.markForReview(task.id, 'Worker finished.')
+    const review = await orchestrator.reviewTask(task.id)
+    expect((await store.state()).tasks.find((item) => item.id === task.id)?.reviewSessionId).toBe(review.sessionId)
+
+    const recovered = await orchestrator.reconcileStalledRuns(Date.now() + 11 * 60 * 1_000)
+
+    expect(recovered).toBe(1)
+    const state = await store.state()
+    expect(state.runs.find((item) => item.id === review.runId)).toMatchObject({ status: 'failed' })
+    expect(state.runs.find((item) => item.id === review.runId)?.error).toMatch(/Review stalled/)
+    const after = state.tasks.find((item) => item.id === task.id)!
+    expect(after.status).toBe('review')
+    expect(after.reviewSessionId).toBeUndefined()
   })
 
   it('cancels one of two isolated parallel runs without stopping the other', async () => {

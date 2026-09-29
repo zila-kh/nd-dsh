@@ -1,0 +1,40 @@
+{
+  "protocol": "nd.extension/1",
+  "id": "nd.quit-process",
+  "name": "Quit Processes",
+  "description": "Inspect running processes and quit a selected process from ND.",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "contexts": ["personal"],
+  "permissions": ["process.read", "process.quit"],
+  "settings": [],
+  "contributions": {
+    "tools": [],
+    "skills": [],
+    "commands": [{
+      "id": "open-processes",
+      "title": "Quit Processes",
+      "description": "Open the live process list.",
+      "keywords": ["activity monitor", "task manager", "kill process"],
+      "host": "process.list",
+      "openViewId": "processes",
+      "contexts": ["personal"]
+    }],
+    "views": [{
+      "id": "processes",
+      "title": "Running processes",
+      "description": "No processes are available. Refresh to try again.",
+      "kind": "list",
+      "host": "process.list",
+      "itemTitleKey": "title",
+      "itemBodyKey": "detail",
+      "refreshIntervalMs": 3000,
+      "contexts": ["personal"],
+      "actions": [
+        { "id": "quit", "title": "Quit", "host": "process.quit" },
+        { "id": "force-quit", "title": "Force quit", "host": "process.forceQuit" }
+      ]
+    }],
+    "workflows": []
+  }
+}

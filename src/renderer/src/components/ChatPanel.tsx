@@ -1,5 +1,5 @@
 import { foldEvent, foldHistory, type HistoryEventEnvelope } from '../../../shared/chat-events'
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type KeyboardEvent, type ReactNode, Fragment } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
 import type {
   CodingEngineDescriptor,
   DshEventFrame,
@@ -15,9 +15,10 @@ import type {
   SessionSummary,
   WorkspaceSuggestion,
 } from '../../../shared/contracts'
-import { ANTIGRAVITY_ENGINE_ID, CHATGPT_WEB_ENGINE_ID, CODEX_CLI_ENGINE_ID, ND_HARNESS_ENGINE_ID, ZCODE_CLI_ENGINE_ID } from '../../../shared/coding-engines'
+import { ANTIGRAVITY_ENGINE_ID, CHATGPT_WEB_ENGINE_ID, CODEX_CLI_ENGINE_ID, ND_HARNESS_ENGINE_ID, ND_NATIVE_ENGINE_ID, ZCODE_CLI_ENGINE_ID } from '../../../shared/coding-engines'
 import { DisplayGroup, groupEntries, parseFileChanges, toolPreview, type ContextBlock } from '../../../shared/chat-grouping'
 import { filterSessionsInProjectScope, isSessionInProjectScope } from '../../../shared/session-project-scope'
+import { buildSessionTree, type SessionTreeNode } from '../../../shared/session-tree'
 import type { SettingsTab } from '../lib/settings-route'
 import { splitAssistantSegments, type ReviewVerdict } from '../../../shared/structured-output'
 import type { ProjectPlanInput } from '../../../shared/organization'
@@ -72,6 +73,13 @@ interface ChatPanelProps {
   status: HarnessStatus | null
   workspaceRoot?: string | undefined
   workspaceName?: string
+  /**
+   * Whether the active root was selected by the user. The boot fallback root is
+   * a runtime cwd, never a project, so the sidebar must not present it as one.
+   */
+  workspaceSelected?: boolean
+  /** Opens the folder picker from the unselected empty state. */
+  onOpenWorkspace?(): void
   sessionsCollapsed: boolean
   /** Run attribution for scoping the sidebar to the active project's sessions. */
   sessionProjectScope?: { activeProjectId?: string | undefined; sessionProjects: Readonly<Record<string, string>> }
@@ -84,6 +92,9 @@ interface ChatPanelProps {
   onOpenFile?(path: string): void
   externalPrompt?: { id: string; text: string } | null
   onExternalPromptConsumed?(): void
+  /** One-shot request from another surface (Home, Settings → presets) to select a session. */
+  sessionOpenRequest?: { id: string; sessionId: string } | null
+  onSessionOpenConsumed?(): void
   /** Bumped by the titlebar when a picked element is staged or removed. */
   elementAttachmentVersion?: number
 }
@@ -121,6 +132,8 @@ interface MentionItem {
 }
 
 const MENTION_MENU_LIMIT = 12
+const SESSION_LIST_TIMEOUT_MS = 10_000
+const SESSION_LIST_TIMEOUT_MESSAGE = 'Timed out waiting for session list'
 
 type PingEntry = { testing: true } | ProviderPingResult
 type ModelMenuPane = 'root' | 'model' | 'effort'
@@ -130,8 +143,9 @@ function fileMentionTag(relativePath: string): string {
   return extension ? extension.toUpperCase().slice(0, 5) : 'FILE'
 }
 
-export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollapsed, sessionProjectScope, projects, onSelectProject, onError, onOpenSettings, onOpenFile, onOpenLink, externalPrompt, onExternalPromptConsumed, elementAttachmentVersion, onGitEditableChange }: ChatPanelProps) {
+export function ChatPanel({ status, workspaceRoot, workspaceName, workspaceSelected, onOpenWorkspace, sessionsCollapsed, sessionProjectScope, projects, onSelectProject, onError, onOpenSettings, onOpenFile, onOpenLink, externalPrompt, onExternalPromptConsumed, sessionOpenRequest, onSessionOpenConsumed, elementAttachmentVersion, onGitEditableChange }: ChatPanelProps) {
   const [sessions, setSessions] = useState<SessionSummary[]>([])
+  const [collapsedSessionParents, setCollapsedSessionParents] = useState<Set<string>>(new Set())
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [terminalOpen, setTerminalOpen] = useState(false)
   const [threads, setThreads] = useState<Record<string, ThreadEntry[]>>({})
@@ -144,6 +158,10 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
   const [permissionMode, setPermissionMode] = useState('workspace-write')
   const [prompt, setPrompt] = useState('')
   const [harnessSessionsLoaded, setHarnessSessionsLoaded] = useState(false)
+  const [sessionListError, setSessionListError] = useState<string | null>(null)
+  const sessionListRequestRef = useRef<Promise<void> | null>(null)
+  const sessionListRerunRef = useRef(false)
+  const sessionListUserInitiatedRef = useRef(false)
   const [engineSessionsLoaded, setEngineSessionsLoaded] = useState(false)
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false)
   const [modelMenuOpen, setModelMenuOpen] = useState(false)
@@ -214,6 +232,9 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // Session id another surface explicitly asked to open; the archived-view
+  // fallback must reveal it instead of bouncing to a different chat.
+  const explicitSessionOpenRef = useRef<string | null>(null)
 
   // Composer grows with its content up to the CSS max-height, then scrolls.
   const autosizeComposer = (): void => {
@@ -269,7 +290,7 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
       ? draftEngineId
       : ND_HARNESS_ENGINE_ID
   const onHarnessThread = activeEngineId === ND_HARNESS_ENGINE_ID
-  const supportsEngineModels = activeEngineId === ANTIGRAVITY_ENGINE_ID || activeEngineId === CODEX_CLI_ENGINE_ID || activeEngineId === ZCODE_CLI_ENGINE_ID
+  const supportsEngineModels = activeEngineId === ANTIGRAVITY_ENGINE_ID || activeEngineId === CODEX_CLI_ENGINE_ID || activeEngineId === ZCODE_CLI_ENGINE_ID || activeEngineId === ND_NATIVE_ENGINE_ID
   const engineModel = engineModelSelections[activeEngineId] ?? null
   const setEngineModel = (model: string | null): void => {
     setEngineModelSelections((current) => ({ ...current, [activeEngineId]: model }))
@@ -306,21 +327,20 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
   const activeProjectId = sessionProjectScope?.activeProjectId
   const sessionProjects = sessionProjectScope?.sessionProjects ?? EMPTY_SESSION_PROJECTS
   const visibleSessions = useMemo(
-    () => filterSessionsInProjectScope(
-      sessions.filter((session) => (showArchived ? session.archived === true : session.archived !== true)),
-      activeProjectId,
-      sessionProjects,
-    ),
+    () => filterSessionsInProjectScope(sessions, activeProjectId, sessionProjects)
+      .filter((session) => (showArchived ? session.archived === true : session.archived !== true)),
     [sessions, showArchived, activeProjectId, sessionProjects],
   )
   const visibleEngineSessions = useMemo(
-    () => filterSessionsInProjectScope(
-      engineSessions.filter((session) => (showArchived ? session.archived === true : session.archived !== true)),
-      activeProjectId,
-      sessionProjects,
-    ),
+    () => filterSessionsInProjectScope(engineSessions, activeProjectId, sessionProjects)
+      .filter((session) => (showArchived ? session.archived === true : session.archived !== true)),
     [engineSessions, showArchived, activeProjectId, sessionProjects],
   )
+  const visibleHarnessSessions = useMemo(
+    () => visibleSessions.filter((session) => !session.blank || session.sessionId === activeSessionId),
+    [visibleSessions, activeSessionId],
+  )
+  const sessionTree = useMemo(() => buildSessionTree(visibleHarnessSessions), [visibleHarnessSessions])
   const archiveableIds = useMemo(
     () => showArchived ? [] : archiveableVisibleSessionIds(visibleSessions, visibleEngineSessions, activeSessionId),
     [showArchived, visibleSessions, visibleEngineSessions, activeSessionId],
@@ -330,13 +350,14 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
     || (engineSessionsLoaded && visibleEngineSessions.length > 0)
     || (harnessSessionsLoaded && visibleSessions.length > 0)
 
-  const refreshSessions = useCallback(async (): Promise<void> => {
+  const loadSessionListOnce = useCallback(async (): Promise<void> => {
+    let timer: ReturnType<typeof setTimeout> | undefined
     try {
       const result = await Promise.race([
         window.ndDsh.dsh.rpc('session.list', {}),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Timed out waiting for session list')), 10_000),
-        ),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(SESSION_LIST_TIMEOUT_MESSAGE)), SESSION_LIST_TIMEOUT_MS)
+        }),
       ])
       const items = ((result.value ?? {}) as { items?: SessionSummary[] }).items ?? []
       setSessions(items)
@@ -349,6 +370,7 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
         return next
       })
       setHarnessSessionsLoaded(true)
+      setSessionListError(null)
       setActiveSessionId((current) => {
         if (current !== null) return current
         if (draftEngineId !== null) return null
@@ -356,9 +378,36 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
       })
     } catch (cause) {
       setHarnessSessionsLoaded(true)
-      onError(cause instanceof Error ? cause.message : String(cause))
+      const message = cause instanceof Error ? cause.message : String(cause)
+      setSessionListError(message)
+      // Background refreshes keep the last list and report inline; only an explicit refresh raises a toast.
+      if (sessionListUserInitiatedRef.current) onError(message)
+    } finally {
+      clearTimeout(timer)
     }
   }, [onError, draftEngineId])
+
+  /** Coalesces overlapping refreshes into one request plus at most one follow-up. */
+  const refreshSessions = useCallback((options: { userInitiated?: boolean } = {}): Promise<void> => {
+    if (options.userInitiated) sessionListUserInitiatedRef.current = true
+    if (sessionListRequestRef.current) {
+      sessionListRerunRef.current = true
+      return sessionListRequestRef.current
+    }
+    const request = (async () => {
+      try {
+        do {
+          sessionListRerunRef.current = false
+          await loadSessionListOnce()
+        } while (sessionListRerunRef.current)
+      } finally {
+        sessionListRequestRef.current = null
+        sessionListUserInitiatedRef.current = false
+      }
+    })()
+    sessionListRequestRef.current = request
+    return request
+  }, [loadSessionListOnce])
 
   const loadHistory = useCallback(async (sessionId: string): Promise<void> => {
     try {
@@ -405,6 +454,20 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
   useEffect(() => {
     void refreshEngineSessions()
   }, [refreshEngineSessions])
+
+  // Another surface asked to open a specific session (Home chat card, Settings →
+  // presets). Refresh both lists first so a just-created session exists in the
+  // sidebar, then select it; consuming the request happens up front so a parent
+  // re-render can never replay it.
+  useEffect(() => {
+    if (!sessionOpenRequest) return
+    onSessionOpenConsumed?.()
+    explicitSessionOpenRef.current = sessionOpenRequest.sessionId
+    setShowArchived(false)
+    setActiveSessionId(sessionOpenRequest.sessionId)
+    void refreshSessions()
+    void refreshEngineSessions()
+  }, [sessionOpenRequest, onSessionOpenConsumed, refreshSessions, refreshEngineSessions])
 
   /** Restore a non-harness thread by replaying its stored session events. */
   const loadEngineTranscript = useCallback(async (sessionId: string): Promise<void> => {
@@ -607,6 +670,11 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
       || engineSessions.some((session) => session.sessionId === activeSessionId && session.archived === true)
     const activeOutOfProject = !isSessionInProjectScope(activeSessionId, activeProjectId, sessionProjects)
     if (!activeArchived && !activeOutOfProject) return
+    if (activeArchived && explicitSessionOpenRef.current === activeSessionId) {
+      explicitSessionOpenRef.current = null
+      setShowArchived(true)
+      return
+    }
     const nextHarness = visibleSessions.find((session) => !session.blank)
     const nextEngine = visibleEngineSessions[0]
     setDraftEngineId(null)
@@ -1006,15 +1074,21 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
 
   // Prompt that produced a given entry — walks back to the nearest user
   // message so Retry on an assistant bubble resends the right turn.
-  function lastPromptBefore(list: ThreadEntry[], entryId: string): string | undefined {
-    const index = list.findIndex((item) => item.id === entryId)
-    if (index === -1) return undefined
-    for (let i = index; i >= 0; i--) {
-      const item = list[i]!
-      if (item.kind === 'user') return item.text
+  // One pass per entries change; the feed renders on every streamed event.
+  const feed = useMemo(() => {
+    const groups = groupEntries(entries)
+    const promptAtEntry = new Map<string, string>()
+    let lastPrompt: string | undefined
+    for (const item of entries) {
+      if (item.kind === 'user') lastPrompt = item.text
+      if (lastPrompt !== undefined) promptAtEntry.set(item.id, lastPrompt)
     }
-    return undefined
-  }
+    let lastAssistantIndex = -1
+    groups.forEach((group, index) => {
+      if (group.kind === 'entry' && group.entry.kind === 'assistant') lastAssistantIndex = index
+    })
+    return { groups, promptAtEntry, lastAssistantIndex }
+  }, [entries])
 
   // ChatGPT-style scroll: follow the newest content only while the user is
   // already at (or near) the bottom; scrolling up to read wins.
@@ -1146,6 +1220,7 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
   const setSessionPermission = async (mode: string): Promise<void> => {
     setPermissionMode(mode)
     setPermissionMenuOpen(false)
+    if (activeEngineId === ND_NATIVE_ENGINE_ID) return
     try {
       await window.ndDsh.harness.setPermissionMode(mode)
       if (onHarnessThread) {
@@ -1204,6 +1279,21 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
     }
   }
 
+  // Feed rows are memoized, so the handlers they receive must keep one identity
+  // while still calling the latest closures.
+  const feedHandlerRef = useRef({ answerApproval, retry, openAntigravityAccountTerminal, onOpenFile, onOpenLink })
+  feedHandlerRef.current = { answerApproval, retry, openAntigravityAccountTerminal, onOpenFile, onOpenLink }
+  const feedHandlers = useMemo(() => ({
+    answerApproval: (entry: Extract<ThreadEntry, { kind: 'approval' }>, outcome: 'allowed-once' | 'rejected') =>
+      feedHandlerRef.current.answerApproval(entry, outcome),
+    retry: (retryPrompt: string) => feedHandlerRef.current.retry(retryPrompt),
+    switchModel: () => { setModelMenuOpen(true); setModelMenuPane('root') },
+    switchAccount: () => { void feedHandlerRef.current.openAntigravityAccountTerminal() },
+    configureZcodeModel: () => setZcodeConfigOpen(true),
+    openFile: (path: string) => feedHandlerRef.current.onOpenFile?.(path),
+    openLink: (url: string) => feedHandlerRef.current.onOpenLink?.(url),
+  }), [])
+
   const markResolved = (id: string, kind: 'approval' | 'question', outcome: string): void => {
     if (!activeSessionId) return
     setThreads((current) => {
@@ -1259,6 +1349,56 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
     return cleanThreadTitle(typeof title === 'string' ? title : undefined)
   }
 
+  const renderSessionNode = (node: SessionTreeNode, depth = 0): ReactNode => {
+    const session = node.session
+    const childCount = countSessionDescendants(node)
+    const runningChildren = countRunningSessionDescendants(node, busySessions)
+    const collapsed = collapsedSessionParents.has(session.sessionId)
+    const hasChildren = childCount > 0
+    const summary = hasChildren
+      ? runningChildren > 0
+        ? `${runningChildren}/${childCount} active`
+        : `${childCount} subagent${childCount === 1 ? '' : 's'}`
+      : sessionTime(session)
+
+    return (
+      <div key={session.sessionId}>
+        <div className="flex min-w-0 items-center gap-0.5" style={{ paddingLeft: Math.min(depth, 6) * 10 }}>
+          {hasChildren ? (
+            <button
+              type="button"
+              className="flex size-5 shrink-0 items-center justify-center rounded text-faint transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-3"
+              aria-label={collapsed ? 'Expand subagents' : 'Collapse subagents'}
+              title={collapsed ? 'Expand subagents' : 'Collapse subagents'}
+              onClick={() => setCollapsedSessionParents((current) => {
+                const next = new Set(current)
+                if (next.has(session.sessionId)) next.delete(session.sessionId)
+                else next.add(session.sessionId)
+                return next
+              })}
+            >
+              {collapsed ? <ChevronRightIcon /> : <ChevronDownIcon />}
+            </button>
+          ) : depth > 0 ? <span className="size-5 shrink-0" /> : null}
+          <div className="min-w-0 flex-1">
+            <SessionCard
+              active={activeSessionId === session.sessionId}
+              busy={busySessions.has(session.sessionId) || Boolean(session.running) || runningChildren > 0}
+              title={sessionTitle(session)}
+              time={summary}
+              engineChip={session.origin === 'subagent' ? 'subagent' : undefined}
+              cardTitle={session.origin === 'subagent' ? 'Subagent session' : hasChildren ? 'Main agent session with subagents' : undefined}
+              archived={session.archived === true}
+              onToggleArchive={() => void setSessionArchived(session.sessionId, session.archived !== true)}
+              onClick={() => selectSession(session)}
+            />
+          </div>
+        </div>
+        {!collapsed && node.children.map((child) => renderSessionNode(child, depth + 1))}
+      </div>
+    )
+  }
+
   return (
     <div className="flex h-full w-full min-h-0 min-w-0 flex-1 flex-row overflow-hidden">
       <aside className={cn('flex h-full min-h-0 w-[185px] shrink-0 grow-0 basis-[185px] flex-col overflow-hidden border-r border-border-soft bg-sidebar', sessionsCollapsed && 'hidden')}>
@@ -1303,7 +1443,7 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
           <div className="mb-1.5 flex items-center justify-between">
             <span className="text-[11px] font-semibold text-faint">Workspaces</span>
             <div className="flex items-center gap-1">
-              <button className="grid size-[22px] place-items-center rounded-[5px] text-faint transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[13px]" title="Refresh sessions" onClick={() => { void refreshSessions(); void refreshEngineSessions() }}>
+              <button className="grid size-[22px] place-items-center rounded-[5px] text-faint transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[13px]" title="Refresh sessions" onClick={() => { void refreshSessions({ userInitiated: true }); void refreshEngineSessions() }}>
                 <SearchIcon />
               </button>
               {archiveableIds.length > 0 ? (
@@ -1338,10 +1478,26 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
             </div>
           </div>
 
-          <div className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium text-foreground [&_svg]:size-3.5 [&_svg]:shrink-0 [&_svg]:text-folder">
-            <FolderIcon />
-            <span className="truncate">{workspaceName ?? 'workspace'}</span>
-          </div>
+          {workspaceSelected ? (
+            <div className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium text-foreground [&_svg]:size-3.5 [&_svg]:shrink-0 [&_svg]:text-folder">
+              <FolderIcon />
+              <span className="truncate">{workspaceName ?? 'workspace'}</span>
+            </div>
+          ) : (
+            // The boot fallback root is a runtime cwd, not a project. Present an
+            // explicit empty state instead of a default project row.
+            <div className="flex flex-col items-start gap-1.5 rounded-md px-2 py-1.5">
+              <p className="m-0 text-[10px]/[1.45] text-faint">No project selected. Open a folder to work in a workspace.</p>
+              {onOpenWorkspace ? (
+                <button
+                  className="h-[22px] rounded-md border border-border-strong px-2 text-[10px] font-semibold text-soft transition-colors hover:bg-accent hover:text-foreground"
+                  onClick={() => onOpenWorkspace()}
+                >
+                  Open folder
+                </button>
+              ) : null}
+            </div>
+          )}
 
           {projects && projects.length > 0 ? (
             <div className="mt-1 flex flex-col gap-0.5">
@@ -1367,24 +1523,24 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
           ) : null}
 
           <div className="mt-1.5 flex flex-col gap-1">
+            {sessionListError ? (
+              <div role="status" className="flex items-center justify-between gap-2 rounded-md border border-border-soft px-2 py-1.5 text-[10px]/[1.45] text-faint">
+                <span>{sessionListError === SESSION_LIST_TIMEOUT_MESSAGE ? `ND Harness is slow to list chats${sessions.length ? '; showing the last known list' : ''}.` : `Couldn't refresh chats: ${sessionListError}`}</span>
+                <button
+                  className="h-[20px] shrink-0 rounded-md border border-border-strong px-2 text-[10px] font-semibold text-soft transition-colors hover:bg-accent hover:text-foreground"
+                  onClick={() => void refreshSessions({ userInitiated: true })}
+                >
+                  Retry
+                </button>
+              </div>
+            ) : null}
             {!sessionsLoaded ? (
               <div className="px-0.5 py-2 text-[10px]/[1.5] text-faint">Loading sessions…</div>
             ) : visibleSessions.length === 0 && visibleEngineSessions.length === 0 ? (
               <div className="px-0.5 py-2 text-[10px]/[1.5] text-faint">{showArchived ? 'No archived chats' : 'No sessions yet'}</div>
             ) : (
               <>
-                {visibleSessions.filter((session) => !session.blank || session.sessionId === activeSessionId).map((session) => (
-                  <SessionCard
-                    key={session.sessionId}
-                    active={activeSessionId === session.sessionId}
-                    busy={busySessions.has(session.sessionId) || Boolean(session.running)}
-                    title={sessionTitle(session)}
-                    time={sessionTime(session)}
-                    archived={session.archived === true}
-                    onToggleArchive={() => void setSessionArchived(session.sessionId, session.archived !== true)}
-                    onClick={() => selectSession(session)}
-                  />
-                ))}
+                {sessionTree.map((node) => renderSessionNode(node))}
                 {visibleEngineSessions.map((session) => (
                   <SessionCard
                     key={session.sessionId}
@@ -1598,37 +1754,37 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
               <p className="m-0 max-w-[300px] text-[9px]/[1.6]">Ask anything about this workspace — open files, inspect the browser, or plan company goals. Inspect context usage and thread activity with the Context badge.</p>
             </div>
           ) : null}
-          {groupEntries(entries).map((group, index, groups) => {
-            const isLastAssistant = group.kind === 'entry'
-              && group.entry.kind === 'assistant'
-              && groups.slice(index + 1).every((later) => later.kind !== 'entry' || later.entry.kind !== 'assistant')
-            const entryRetryPrompt = group.kind === 'entry' && group.entry.kind === 'user' ? group.entry.text : lastPromptBefore(entries, group.key)
+          {feed.groups.map((group, index) => {
+            const isLastAssistant = index === feed.lastAssistantIndex
+            const entryRetryPrompt = group.kind === 'entry' && group.entry.kind === 'user' ? group.entry.text : feed.promptAtEntry.get(group.key)
+            // Off-screen rows skip layout and paint; `auto` remembers each row's
+            // rendered height so scrolling back does not jump.
             return (
-              <Fragment key={group.key}>
+              <div key={group.key} className="[content-visibility:auto] [contain-intrinsic-size:auto_80px]">
                 {group.kind === 'tool-group' ? (
-                  <ToolGroupView group={group} {...(onOpenFile ? { onOpenFile } : {})} />
+                  <ToolGroupView group={group} {...(onOpenFile ? { onOpenFile: feedHandlers.openFile } : {})} />
                 ) : group.kind === 'reasoning-group' ? (
                   <ReasoningCard text={group.text} />
                 ) : group.kind === 'context-group' ? (
                   <ContextCard blocks={group.blocks} />
                 ) : (
-                  <ThreadEntryView
+                  <MemoThreadEntryView
                     entry={group.entry}
                     isLastAssistant={isLastAssistant}
                     {...(entryRetryPrompt ? { retryPrompt: entryRetryPrompt } : {})}
-                    onAnswerApproval={answerApproval}
-                    onRetry={retry}
-                    onSwitchModel={() => { setModelMenuOpen(true); setModelMenuPane('root') }}
-                    onSwitchAccount={() => void openAntigravityAccountTerminal()}
+                    onAnswerApproval={feedHandlers.answerApproval}
+                    onRetry={feedHandlers.retry}
+                    onSwitchModel={feedHandlers.switchModel}
+                    onSwitchAccount={feedHandlers.switchAccount}
                     {...(group.kind === 'entry' && group.entry.kind === 'notice' && group.entry.tone === 'error'
                       && ZCODE_MODEL_CONFIG_MISSING.test(group.entry.text) && activeEngineId === ZCODE_CLI_ENGINE_ID
-                      ? { onConfigureModel: () => setZcodeConfigOpen(true) }
+                      ? { onConfigureModel: feedHandlers.configureZcodeModel }
                       : {})}
-                    {...(onOpenFile ? { onOpenFile } : {})}
-                    {...(onOpenLink ? { onOpenLink } : {})}
+                    {...(onOpenFile ? { onOpenFile: feedHandlers.openFile } : {})}
+                    {...(onOpenLink ? { onOpenLink: feedHandlers.openLink } : {})}
                   />
                 )}
-              </Fragment>
+              </div>
             )
           })}
           {busy ? (
@@ -1836,11 +1992,12 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
                   setPermissionMenuOpen(false); setModelMenuOpen(false); setEngineModelMenuOpen(false); setContextMenuOpen(false)
                   requestAnimationFrame(() => { textareaRef.current?.focus(); textareaRef.current?.setSelectionRange(next.caret, next.caret) })
                 }}><SparkIcon /> Skills</button>
-              {onHarnessThread || activeEngineId === ANTIGRAVITY_ENGINE_ID ? (
+              {onHarnessThread || activeEngineId === ANTIGRAVITY_ENGINE_ID || activeEngineId === ND_NATIVE_ENGINE_ID ? (
                 <div className="relative">
                   <button
                     className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-[#f59e0b]/30 bg-[#f59e0b]/10 px-1.5 py-[3px] text-[10px] font-medium text-[#f59e0b] transition-colors hover:bg-[#f59e0b]/20 [&_svg]:size-3"
                     onClick={() => { setPermissionMenuOpen(!permissionMenuOpen); setModelMenuOpen(false); setModelMenuPane('root'); closeMention() }}
+                    title={activeEngineId === ND_NATIVE_ENGINE_ID ? 'Permission mode for the next ND Agent turn' : undefined}
                   >
                     <ShieldIcon />
                     <span>{PERMISSION_MODES.find((mode) => mode.id === permissionMode)?.label ?? permissionMode}</span>
@@ -2147,6 +2304,19 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, sessionsCollap
   )
 }
 
+function countSessionDescendants(node: SessionTreeNode): number {
+  return node.children.reduce((count, child) => count + 1 + countSessionDescendants(child), 0)
+}
+
+function countRunningSessionDescendants(node: SessionTreeNode, busySessions: ReadonlySet<string>): number {
+  return node.children.reduce(
+    (count, child) => count
+      + (child.session.running || busySessions.has(child.session.sessionId) ? 1 : 0)
+      + countRunningSessionDescendants(child, busySessions),
+    0,
+  )
+}
+
 /**
  * Session thread card in the left sidebar. The card stays a plain select
  * button; Archive/Unarchive is a single-click action button that swaps in
@@ -2157,8 +2327,8 @@ function SessionCard({ active, busy, title, time, engineChip, cardTitle, archive
   busy: boolean
   title: string
   time: string
-  engineChip?: string
-  cardTitle?: string
+  engineChip?: string | undefined
+  cardTitle?: string | undefined
   archived?: boolean
   onToggleArchive(): void
   onClick(): void
@@ -2310,6 +2480,9 @@ interface ThreadEntryViewProps {
   /** Opens the ND GUI for the engine's own model config (ZCode CLI provider setup). */
   onConfigureModel?(): void
 }
+
+/** Streaming replaces only the changed entry, so every other row skips re-rendering. */
+const MemoThreadEntryView = memo(ThreadEntryView)
 
 function ThreadEntryView({ entry, isLastAssistant, retryPrompt, onAnswerApproval, onOpenFile, onOpenLink, onRetry, onSwitchModel, onSwitchAccount, onConfigureModel }: ThreadEntryViewProps) {
   switch (entry.kind) {

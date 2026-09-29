@@ -8,6 +8,7 @@ import type { OrganizationMutation, OrganizationSnapshot } from '../shared/organ
 import { USAGE_IPC, summarizeUsage, type UsageAttribution, type UsageScope, type UsageSummary } from '../shared/usage.js'
 import { WORKFLOW_PLUGINS_IPC } from '../shared/workflow-plugins.js'
 import { isLauncherHandoffTarget, isQuickLauncherShortcutMode } from '../shared/quick-launcher.js'
+import { isWorkspaceProfile } from '../shared/workspace-profile.js'
 import { asNdContext, isNdContext } from '../shared/nd-context.js'
 import type { LauncherPopupController } from './launcher-popup.js'
 import { projectRoot, presetSourceDir } from './app-paths.js'
@@ -19,6 +20,8 @@ import type { CapabilityRegistry } from './capabilities/capability-registry.js'
 import type { DshSurfaceController } from './dsh/dsh-surface.js'
 import type { CodingEngineRegistry } from './engines/coding-engine-registry.js'
 import type { EngineSessionRouter } from './engines/engine-session-router.js'
+import type { NdNativeToolBroker } from './engines/nd-native/nd-native-tool-broker.js'
+import { nativeExtensionProjectContext } from './engines/nd-native/native-extension-context.js'
 import { readZcodeCliConfig, writeZcodeCliConfig } from './engines/zcode/zcode-config.js'
 import type { ZcodeCliConfigUpdate } from '../shared/zcode-config.js'
 import { ExtensionDemoService } from './extensions/extension-demo-service.js'
@@ -55,6 +58,7 @@ interface IpcDependencies {
   engines: CodingEngineRegistry
   capabilities: CapabilityRegistry
   engineRouter: EngineSessionRouter
+  nativeToolBroker?: Pick<NdNativeToolBroker, 'setExtensionInvoker'>
   harness: HarnessService
   projectWorkspace: ProjectWorkspaceCoordinator
   workspaces: WorkspaceRegistry
@@ -77,7 +81,9 @@ interface IpcDependencies {
 
 type Handler = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown | Promise<unknown>
 
-const GATEWAY_METHOD_PATTERN = /^[a-z]+\.[a-zA-Z][a-zA-Z0-9]*$/
+// The namespace segment is camelCase upstream too (agentPresets.list,
+// settings.update), not lowercase-only.
+const GATEWAY_METHOD_PATTERN = /^[a-z][a-zA-Z0-9]*\.[a-zA-Z][a-zA-Z0-9]*$/
 const GATEWAY_METHOD_MAX_LENGTH = 64
 
 const APP_INSPECT_PROMPT = [
@@ -224,6 +230,26 @@ export function registerIpc(deps: IpcDependencies): () => void {
     state: invocationState,
     host: nativeHost,
     organization: deps.organizationStore,
+  })
+  deps.nativeToolBroker?.setExtensionInvoker(async ({ sessionId, cwd, worktree, extensionId, contributionId, input }) => {
+    const organization = await deps.organizationStore.state()
+    const context = nativeExtensionProjectContext(organization, sessionId, cwd, worktree)
+    const credential = invocationBroker.mintRunCredential({
+      sessionId,
+      engineId: 'nd-native',
+      context,
+      ttlMs: 60_000,
+    })
+    try {
+      return await invocationBroker.invokeAsAgent({
+        token: credential.token,
+        extensionId,
+        contributionId,
+        input,
+      })
+    } finally {
+      invocationBroker.revokeRunCredential(credential.token)
+    }
   })
   const disposeNdExtensionIpc = registerNdExtensionIpc({
     window: deps.window,
@@ -683,6 +709,12 @@ export function registerIpc(deps: IpcDependencies): () => void {
   handle(IPC.dshViewSetVisible, (_event, visible) => deps.dshSurface.setVisible(Boolean(visible)))
   handle(IPC.dshViewReload, () => deps.dshSurface.reload())
 
+  handle(IPC.workspaceProfileGet, () => deps.theme.workspaceProfile())
+  handle(IPC.workspaceProfileSet, (_event, value: unknown) => {
+    if (!isWorkspaceProfile(value)) throw new Error(`Unknown workspace profile: ${String(value)}`)
+    return deps.theme.setWorkspaceProfile(value)
+  })
+
   // Theme reads are admitted from the launcher popup too: it renders the same
   // themed card chrome but never mutates the preference.
   handleLauncherSurface(IPC.themeState, () => deps.theme.state())
@@ -724,6 +756,7 @@ export function registerIpc(deps: IpcDependencies): () => void {
   handle(IPC.qaStop, () => deps.qa.stop())
 
   return () => {
+    deps.nativeToolBroker?.setExtensionInvoker(undefined)
     extensionStore.setOnChanged(undefined)
     disposeExtensionIpc()
     disposeNdExtensionIpc()
@@ -962,6 +995,7 @@ function asRunOptions(value: unknown): HarnessRunOptions {
   if (provider !== undefined && (typeof provider !== 'string' || !provider.trim() || provider.length > 256)) throw new Error('provider must be a short non-empty string')
   const model = record.model
   if (model !== undefined && (typeof model !== 'string' || !model.trim() || model.length > 256)) throw new Error('model must be a short non-empty string')
+  const permissionMode = record.permissionMode === undefined ? undefined : asPermissionMode(record.permissionMode)
   const workspaceCwd = record.workspaceCwd
   if (workspaceCwd !== undefined && (typeof workspaceCwd !== 'string' || !workspaceCwd.trim() || workspaceCwd.length > 4_096)) {
     throw new Error('workspaceCwd must be a short non-empty path')
@@ -973,6 +1007,7 @@ function asRunOptions(value: unknown): HarnessRunOptions {
     ...(typeof engineId === 'string' ? { engineId: engineId.trim() } : {}),
     ...(typeof provider === 'string' ? { provider: provider.trim() } : {}),
     ...(typeof model === 'string' ? { model: model.trim() } : {}),
+    ...(permissionMode !== undefined ? { permissionMode } : {}),
     ...(typeof workspaceCwd === 'string' ? { workspaceCwd: workspaceCwd.trim() } : {}),
   }
 }

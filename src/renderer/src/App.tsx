@@ -46,6 +46,7 @@ import {
 } from './lib/nd-context-model'
 import type { LauncherHandoffTarget } from '../../shared/quick-launcher'
 import type { NdContext } from '../../shared/nd-context'
+import type { WorkspaceProfile } from '../../shared/workspace-profile'
 import type {
   NdCaptureResultView,
   NdCommandView,
@@ -76,6 +77,25 @@ const CHAT_MIN_PX = 580
 const CHAT_DEFAULT_PX = 640
 const CHAT_MIN_PX_SIDEBAR_COLLAPSED = 420
 const WORKSPACE_MIN_PX = 480
+const CHAT_SEPARATOR_PX = 5
+/**
+ * Width the workbench needs to render its three-pane surfaces (Design) at the
+ * minimums they declare: 208 + 228 for the side panes plus the center's 40%.
+ */
+const WORKSPACE_PREFERRED_PX = 744
+
+/**
+ * The window opens narrower than the 1640 px default on small displays. The
+ * chat column then starts smaller — with its sessions sidebar collapsed once it
+ * would fall under its expanded minimum — so the workbench keeps enough width
+ * for its own pane minimums. At desktop widths this is the shipped default.
+ * Dragging the separator still overrides the width.
+ */
+function initialChatLayout(): { width: number; sessionsCollapsed: boolean } {
+  const forWorkbench = window.innerWidth - CHAT_SEPARATOR_PX - WORKSPACE_PREFERRED_PX
+  const width = Math.max(CHAT_MIN_PX_SIDEBAR_COLLAPSED, Math.min(CHAT_DEFAULT_PX, forWorkbench))
+  return { width, sessionsCollapsed: width < CHAT_MIN_PX }
+}
 
 function viewFromHash(): ProductView {
   const route = window.location.hash.replace(/^#\/?/, '').split(/[/?]/)[0]
@@ -140,6 +160,11 @@ export default function App() {
   const [browserState, setBrowserState] = useState<BrowserState | null>(null)
   const [harnessStatus, setHarnessStatus] = useState<HarnessStatus | null>(null)
   const [surface, setSurface] = useState<DshSurface>('workbench')
+  // Unknown until the trusted main-process preference is loaded. Do not assume
+  // General here: doing so would redirect an existing Coding user's deep link
+  // (for example #/qa) before their persisted profile arrives.
+  const [workspaceProfile, setWorkspaceProfile] = useState<WorkspaceProfile | null>(null)
+  const [workspaceProfilePending, setWorkspaceProfilePending] = useState(false)
   const [dshView, setDshView] = useState<DshViewState | null>(null)
   const [selectedFile, setSelectedFile] = useState<WorkspaceFile | null>(null)
   const [openFileTabs, setOpenFileTabs] = useState<WorkspaceFile[]>([])
@@ -154,10 +179,12 @@ export default function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(settingsTabFromLocation)
   const [settingsSubTabs, setSettingsSubTabs] = useState<SettingsSubTabs>(settingsSubTabsFromLocation)
   const [agentPane, setAgentPane] = useState<AgentPane>('files')
-  const [sessionsCollapsed, setSessionsCollapsed] = useState(false)
+  const [initialChat] = useState(initialChatLayout)
+  const [sessionsCollapsed, setSessionsCollapsed] = useState(initialChat.sessionsCollapsed)
   const [gitEditable, setGitEditable] = useState(false)
   const [workspaceCollapsed, setWorkspaceCollapsed] = useState(false)
   const [externalPrompt, setExternalPrompt] = useState<{ id: string; text: string } | null>(null)
+  const [sessionOpenRequest, setSessionOpenRequest] = useState<{ id: string; sessionId: string } | null>(null)
   const [theme, setTheme] = useState<ThemeState | null>(null)
   const [appInspectCountdown, setAppInspectCountdown] = useState<number | null>(null)
   const [appInspectInFlight, setAppInspectInFlight] = useState(false)
@@ -175,6 +202,7 @@ export default function App() {
   // explicit context selector (Personal by default, independent of the active
   // company/project selection).
   const [ndExtensions, setNdExtensions] = useState<NdExtensionsStateView | null>(null)
+  const [extensionViewRequest, setExtensionViewRequest] = useState<{ extensionId: string; viewId: string; context: NdContext } | null>(null)
   const [homeState, setHomeState] = useState<NdHomeStateView | null>(null)
   const [homeBusy, setHomeBusy] = useState(false)
   const [launcherContextId, setLauncherContextId] = useState('personal')
@@ -184,7 +212,8 @@ export default function App() {
   const [elementAttachmentVersion, setElementAttachmentVersion] = useState(0)
   const appInspectTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
 
-  const notify = useCallback((message: string) => toast(message, { duration: 5000 }), [])
+  // Keyed by message so a repeating failure refreshes one toast instead of stacking copies.
+  const notify = useCallback((message: string) => toast(message, { id: message, duration: 5000 }), [])
 
   const pillDragRef = useRef<{ x: number; y: number } | null>(null)
 
@@ -557,6 +586,7 @@ export default function App() {
         setSurface(state.surface)
         setDshView(state.view)
       }),
+      window.ndDsh.workspaceProfile.get().then(setWorkspaceProfile),
     ]).catch((cause) => notify(errorMessage(cause)))
 
     const offWorkspace = window.ndDsh.workspace.onState((next) => {
@@ -654,6 +684,22 @@ export default function App() {
     switchToWorkbench('settings')
   }
 
+  const selectWorkspaceProfile = (next: WorkspaceProfile): void => {
+    if (workspaceProfilePending || next === workspaceProfile) return
+    // Commit in main before changing renderer-visible scope. This keeps the
+    // Coding-only DSH button from becoming clickable before the persisted
+    // profile guard has accepted Coding.
+    setWorkspaceProfilePending(true)
+    void window.ndDsh.workspaceProfile.set(next)
+      .then(setWorkspaceProfile)
+      .catch((cause) => notify(errorMessage(cause)))
+      .finally(() => setWorkspaceProfilePending(false))
+  }
+
+  useEffect(() => {
+    if (workspaceProfile === 'general' && view === 'qa') setView('home')
+  }, [workspaceProfile, view])
+
   const selectTheme = (mode: ThemeMode): void => {
     void window.ndDsh.theme.set(mode).then(setTheme).catch((cause) => notify(errorMessage(cause)))
   }
@@ -663,6 +709,13 @@ export default function App() {
     setSelectedFile(null)
     setOpenFileTabs([])
     setActiveDiff(null)
+  }
+
+  /** Opens the folder picker from the unselected sidebar/Explorer empty states. */
+  const openWorkspaceFolder = (): void => {
+    void window.ndDsh.workspace.pick()
+      .then((next) => changeWorkspace(next))
+      .catch((cause) => notify(errorMessage(cause)))
   }
 
   const openLink = async (url: string): Promise<void> => {
@@ -719,6 +772,12 @@ export default function App() {
     switchToWorkbench('agent')
   }
 
+  /** Opens an existing session in the Agent workbench from another surface. */
+  const openSession = (sessionId: string): void => {
+    setSessionOpenRequest({ id: crypto.randomUUID(), sessionId })
+    switchToWorkbench('agent')
+  }
+
   const company = orgState?.companies.find((item) => item.id === orgState.activeCompanyId) ?? orgState?.companies[0] ?? null
   const companyProjects = orgState && company ? orgState.projects.filter((item) => item.companyId === company.id) : []
   const companyRemovalTarget = useMemo(() => {
@@ -745,11 +804,20 @@ export default function App() {
     return map
   }, [orgState])
 
-  const headerWorkspaceLabel = orgState && company
-    ? (project ? (workspace?.projectName ?? project.name ?? workspace?.name ?? 'No workspace') : 'No project')
-    : (workspace?.projectName ?? workspace?.name ?? 'No workspace')
+  // The boot fallback root is a runtime cwd, never a project: only a folder the
+  // user opened — or the workspace of a selected organization project — may be
+  // presented as one.
+  const workspaceSelected = workspace?.selectedByUser === true
 
-  const showGitControls = Boolean(
+  // An unselected boot root is a runtime cwd, not a project: the title bar stays
+  // neutral until the user opens a folder or selects an organization project.
+  const headerWorkspaceLabel = !workspaceSelected
+    ? 'No project'
+    : orgState && company
+      ? (project ? (workspace?.projectName ?? project.name ?? workspace?.name ?? 'No workspace') : 'No project')
+      : (workspace?.projectName ?? workspace?.name ?? 'No workspace')
+
+  const showGitControls = workspaceProfile === 'coding' && workspaceSelected && Boolean(
     workspace?.root && (!orgState || (project && (!workspace.projectId || workspace.projectId === project.id)))
   )
 
@@ -930,6 +998,9 @@ export default function App() {
       case 'os.openTarget':
         if (result.opened) notify(`Opened ${String(result.path)}`)
         return
+      case 'os.wallpaper.chooseAndSet':
+        if (result.changed) notify('Desktop wallpaper updated.')
+        return
       case 'browser.openExternal':
         notify('Opened in your system browser.')
         return
@@ -961,12 +1032,25 @@ export default function App() {
       notify(plan.missing)
       return
     }
+    if (command.openViewId) {
+      setExtensionViewRequest({ extensionId: command.extensionId, viewId: command.openViewId, context })
+      setSettingsTab('extensions')
+      setView('settings')
+      return
+    }
     if (command.host === 'capture.area') {
       await openLocalAreaCapture()
       return
     }
     try {
-      const result = await invokeDailyEssentials(command.contributionId, 'command', context, plan.input)
+      const result = await window.ndDsh.ndExtensions.invoke({
+        extensionId: command.extensionId,
+        contributionId: command.contributionId,
+        contributionKind: 'command',
+        context,
+        caller: 'user',
+        input: plan.input,
+      })
       if (handleInvocationFailure(result)) return
       await applyHostEffect(command.host, result.value)
     } catch (cause) {
@@ -1079,11 +1163,19 @@ export default function App() {
         case 'capture-clipboard':
           void captureClipboardToNote(context)
           return
+        case 'extension-view': {
+          const match = /^([a-z0-9][a-z0-9._-]{1,127}):([a-z0-9][a-z0-9._-]{0,127})$/.exec(text ?? '')
+          if (!match) return
+          setExtensionViewRequest({ extensionId: match[1]!, viewId: match[2]!, context })
+          setSettingsTab('extensions')
+          setView('settings')
+          return
+        }
       }
     }
   })
 
-  const navItems: Array<{ id: ProductView; label: string; icon: ReactNode }> = [
+  const allNavItems: Array<{ id: ProductView; label: string; icon: ReactNode }> = [
     { id: 'home', label: 'Home', icon: <HomeIcon /> },
     { id: 'company', label: 'Company', icon: <CompanyIcon /> },
     { id: 'agent', label: 'Agent', icon: <SparkIcon /> },
@@ -1091,6 +1183,9 @@ export default function App() {
     { id: 'qa', label: 'QA', icon: <QualityIcon /> },
     { id: 'settings', label: 'Settings', icon: <SettingsIcon /> },
   ]
+  const navItems = workspaceProfile === 'coding'
+    ? allNavItems
+    : allNavItems.filter((item) => item.id !== 'qa')
 
   if (inspectScope === 'external') {
     return (
@@ -1249,38 +1344,64 @@ export default function App() {
             <span className="grid size-6 shrink-0 place-items-center rounded-[7px] border border-primary/30 bg-primary/10 text-sm font-extrabold tracking-[0.08em] text-primary">ND</span>
             <div
               role="group"
-              aria-label="Coding surface"
+              aria-label="Workspace profile"
               className="app-no-drag flex h-7 shrink-0 items-center rounded-lg border border-border-soft bg-inset p-[2px] shadow-[inset_0_1px_2px_rgba(0,0,0,0.18)]"
             >
-              <button
-                type="button"
-                aria-pressed={surface === 'workbench'}
-                className={cn(
-                  'grid h-[22px] min-w-[32px] place-items-center rounded-md border px-1.5 text-[9px] font-extrabold tracking-[0.08em] transition-[color,background-color,border-color,box-shadow]',
-                  surface === 'workbench'
-                    ? 'border-primary/25 bg-primary/12 text-primary shadow-[0_1px_3px_rgba(0,0,0,0.2)]'
-                    : 'border-transparent text-faint hover:bg-accent hover:text-foreground',
-                )}
-                title="Use the ND coding workbench"
-                onClick={() => selectSurface('workbench')}
-              >
-                ND
-              </button>
-              <button
-                type="button"
-                aria-pressed={surface === 'dsh'}
-                className={cn(
-                  'grid h-[22px] min-w-[36px] place-items-center rounded-md border px-1.5 text-[9px] font-extrabold tracking-[0.08em] transition-[color,background-color,border-color,box-shadow]',
-                  surface === 'dsh'
-                    ? 'border-primary/25 bg-primary/12 text-primary shadow-[0_1px_3px_rgba(0,0,0,0.2)]'
-                    : 'border-transparent text-faint hover:bg-accent hover:text-foreground',
-                )}
-                title="Use the DSH coding surface"
-                onClick={() => selectSurface('dsh')}
-              >
-                DSH
-              </button>
+              {(['general', 'coding'] as const).map((profile) => (
+                <button
+                  key={profile}
+                  type="button"
+                  aria-pressed={workspaceProfile === profile}
+                  disabled={workspaceProfile === null || workspaceProfilePending}
+                  className={cn(
+                    'grid h-[22px] min-w-[52px] place-items-center rounded-md border px-2 text-[9px] font-extrabold tracking-[0.06em] transition-[color,background-color,border-color,box-shadow] disabled:cursor-not-allowed disabled:opacity-50',
+                    workspaceProfile === profile
+                      ? 'border-primary/25 bg-primary/12 text-primary shadow-[0_1px_3px_rgba(0,0,0,0.2)]'
+                      : 'border-transparent text-faint hover:bg-accent hover:text-foreground',
+                  )}
+                  title={profile === 'general' ? 'General workspace for everyday AI work and extensions' : 'Coding workspace with developer tools and coding surfaces'}
+                  onClick={() => selectWorkspaceProfile(profile)}
+                >
+                  {profile === 'general' ? 'GENERAL' : 'CODING'}
+                </button>
+              ))}
             </div>
+            {workspaceProfile === 'coding' ? (
+              <div
+                role="group"
+                aria-label="Coding surface"
+                className="app-no-drag flex h-7 shrink-0 items-center rounded-lg border border-border-soft bg-inset p-[2px] shadow-[inset_0_1px_2px_rgba(0,0,0,0.18)]"
+              >
+                <button
+                  type="button"
+                  aria-pressed={surface === 'workbench'}
+                  className={cn(
+                    'grid h-[22px] min-w-[32px] place-items-center rounded-md border px-1.5 text-[9px] font-extrabold tracking-[0.08em] transition-[color,background-color,border-color,box-shadow]',
+                    surface === 'workbench'
+                      ? 'border-primary/25 bg-primary/12 text-primary shadow-[0_1px_3px_rgba(0,0,0,0.2)]'
+                      : 'border-transparent text-faint hover:bg-accent hover:text-foreground',
+                  )}
+                  title="Use the ND coding workbench"
+                  onClick={() => selectSurface('workbench')}
+                >
+                  ND
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={surface === 'dsh'}
+                  className={cn(
+                    'grid h-[22px] min-w-[36px] place-items-center rounded-md border px-1.5 text-[9px] font-extrabold tracking-[0.08em] transition-[color,background-color,border-color,box-shadow]',
+                    surface === 'dsh'
+                      ? 'border-primary/25 bg-primary/12 text-primary shadow-[0_1px_3px_rgba(0,0,0,0.2)]'
+                      : 'border-transparent text-faint hover:bg-accent hover:text-foreground',
+                  )}
+                  title="Use the DSH coding surface"
+                  onClick={() => selectSurface('dsh')}
+                >
+                  DSH
+                </button>
+              </div>
+            ) : null}
             <div className="flex min-w-0 flex-col">
               <strong className="text-[15px] tracking-[0.06em] text-strong">ND-DSH</strong>
               <span className="overflow-hidden text-xs text-faint text-ellipsis whitespace-nowrap">
@@ -1455,7 +1576,7 @@ export default function App() {
       </header>
 
       <main className="relative min-h-0 min-w-0 overflow-hidden bg-surface-0">
-        {surface === 'dsh' ? (
+        {workspaceProfile === 'coding' && surface === 'dsh' ? (
           <SurfaceErrorBoundary label="ND Harness" resetKey={surface} onError={notify}>
             <DshCodingSurface active inspectOverlayVisible={inspectOverlayVisible} state={dshView} onNotify={notify} />
           </SurfaceErrorBoundary>
@@ -1463,7 +1584,7 @@ export default function App() {
           <>
             <div className={cn('h-full w-full', view === 'settings' ? 'hidden' : 'block')}>
               <Group orientation="horizontal" className="h-full w-full">
-            <Panel className="flex min-w-0 flex-col overflow-hidden" defaultSize={CHAT_DEFAULT_PX} minSize={sessionsCollapsed ? CHAT_MIN_PX_SIDEBAR_COLLAPSED : CHAT_MIN_PX}>
+            <Panel className="flex min-w-0 flex-col overflow-hidden" defaultSize={initialChat.width} minSize={sessionsCollapsed ? CHAT_MIN_PX_SIDEBAR_COLLAPSED : CHAT_MIN_PX}>
               <SurfaceErrorBoundary label="Chat" resetKey={workspace?.root ?? 'workspace-loading'} onError={notify}>
                 <ChatPanel
                   key={workspace?.root ?? 'workspace-loading'}
@@ -1471,6 +1592,8 @@ export default function App() {
                   workspaceRoot={workspace?.root}
                   onGitEditableChange={setGitEditable}
                   {...(workspace?.projectName || workspace?.name ? { workspaceName: workspace.projectName ?? workspace.name } : {})}
+                  workspaceSelected={workspaceSelected}
+                  onOpenWorkspace={openWorkspaceFolder}
                   sessionProjectScope={{ activeProjectId: project?.id, sessionProjects: runSessionProjects }}
                   {...(companyProjects.length ? {
                     projects: companyProjects.map((item) => ({
@@ -1488,6 +1611,8 @@ export default function App() {
                   onOpenLink={(url) => void openLink(url)}
                   externalPrompt={externalPrompt}
                   onExternalPromptConsumed={() => setExternalPrompt(null)}
+                  sessionOpenRequest={sessionOpenRequest}
+                  onSessionOpenConsumed={() => setSessionOpenRequest(null)}
                   elementAttachmentVersion={elementAttachmentVersion}
                 />
               </SurfaceErrorBoundary>
@@ -1512,10 +1637,7 @@ export default function App() {
                       onCopyCapture={(captureId) => runHomeCaptureAction('capture-copy', captureId)}
                       onExportCapture={(captureId) => runHomeCaptureAction('capture-export', captureId)}
                       onAskWithCapture={askWithCapture}
-                      onOpenChat={(sessionId) => {
-                        switchToWorkbench('agent')
-                        void sessionId
-                      }}
+                      onOpenChat={openSession}
                       onStartChat={(prompt) => startContextChat(prompt?.trim() || 'Hello ND — this is my personal space.', { kind: 'personal' })}
                     />
                   ) : null}
@@ -1597,6 +1719,7 @@ export default function App() {
                           <SurfaceErrorBoundary label="Files" resetKey={workspace?.root ?? ''} onError={notify}>
                             <Explorer
                               workspace={workspace}
+                              workspaceSelected={workspaceSelected}
                               selectedPath={selectedFile?.relativePath}
                               onWorkspaceChanged={changeWorkspace}
                               onOpenFile={(path) => void openFile(path)}
@@ -1611,8 +1734,17 @@ export default function App() {
                         <BrowserPane
                           active={view === 'agent'}
                           state={browserState}
-                          onSnapshot={() => notify('Browser snapshot captured from the live page.')}
+                          onSnapshot={(result) => {
+                            navigator.clipboard.writeText(result)
+                              .then(() => notify('Browser snapshot copied to the clipboard.'))
+                              .catch(() => notify('Browser snapshot captured, but copying to the clipboard failed.'))
+                          }}
                           onError={notify}
+                          onOpenSettings={() => {
+                            setSettingsTab('general')
+                            setSettingsSubTabs((current) => ({ ...current, general: 'browser' }))
+                            switchToWorkbench('settings')
+                          }}
                         />
                       </SurfaceErrorBoundary>
                     )}
@@ -1625,11 +1757,13 @@ export default function App() {
                   <DesignView
                     active={view === 'design'}
                     workspace={workspace}
+                    workspaceSelected={workspaceSelected}
                     browser={browserState}
                     harness={harnessStatus}
                     onWorkspaceChanged={changeWorkspace}
                     onAskAgent={askAgent}
                     onError={notify}
+                    onNotify={notify}
                   />
                 </SurfaceErrorBoundary>
               </section>
@@ -1654,17 +1788,24 @@ export default function App() {
                   harness={harnessStatus}
                   browser={browserState}
                   onError={notify}
+                  onOpenBrowser={() => {
+                    switchToWorkbench('agent')
+                    setAgentPane('browser')
+                  }}
                   tab={settingsTab}
                   onSelectTab={setSettingsTab}
                   subTab={settingsSubTabs.general}
                   onSelectSubTab={(subTab) => setSettingsSubTabs((current) => ({ ...current, general: subTab }))}
                   capabilitySubTab={settingsSubTabs.capabilities}
                   onSelectCapabilitySubTab={(subTab) => setSettingsSubTabs((current) => ({ ...current, capabilities: subTab }))}
+                  onOpenSession={openSession}
                   extensionsExtra={ndExtensions ? (
                     <ExtensionPackagesCard
                       state={ndExtensions}
                       organization={orgState}
                       contexts={extensionContextOptions}
+                      requestedView={extensionViewRequest}
+                      onRequestedViewHandled={() => setExtensionViewRequest(null)}
                       onError={notify}
                       onChanged={async () => {
                         setNdExtensions(await window.ndDsh.ndExtensions.state())

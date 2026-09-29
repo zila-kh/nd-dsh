@@ -129,3 +129,23 @@ test('extension packages install with Personal activation and project-only comma
 
   expect(rendererErrors).toEqual([])
 })
+
+test('Quit Processes appears in Available and installs only on demand', async () => {
+  const before = await extensionState()
+  expect(before.available?.find((item) => item.id === 'nd.quit-process')).toMatchObject({ available: true, installed: false })
+
+  await launched.page.getByLabel('ND-DSH navigation').getByRole('button', { name: 'Settings' }).click()
+  await launched.page.getByRole('tab', { name: 'Extensions' }).click()
+  await launched.page.getByRole('heading', { name: 'Available extensions' }).locator('..').getByRole('button', { name: 'Install', exact: true }).click()
+  await expect.poll(async () => (await extensionState()).packages.some((item) => item.id === 'nd.quit-process')).toBe(true)
+
+  await launched.page.evaluate(async () => {
+    await (globalThis as NdPlatformWindow).ndDsh.ndExtensions.setActivation('nd.quit-process', { kind: 'personal' }, true)
+  })
+  const open = launched.page.getByRole('button', { name: 'Open Running processes' })
+  await expect(open).toBeEnabled()
+  await open.click()
+  await expect(launched.page.getByRole('dialog', { name: 'Running processes' })).toBeVisible()
+  await expect(launched.page.getByText(/PID \d+ · CPU/).first()).toBeVisible()
+  expect(rendererErrors).toEqual([])
+})

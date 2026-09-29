@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import process from 'node:process'
 import type { DshSurface, EffectiveTheme, ThemeMode, ThemeState } from '../shared/contracts.js'
 import { DEFAULT_QUICK_LAUNCHER_SHORTCUT_MODE, isQuickLauncherShortcutMode, type QuickLauncherShortcutMode } from '../shared/quick-launcher.js'
+import { DEFAULT_WORKSPACE_PROFILE, isWorkspaceProfile, type WorkspaceProfile } from '../shared/workspace-profile.js'
 
 const SETTINGS_FILE = 'settings.json'
 const DEFAULT_PERMISSION_MODE = 'workspace-write'
@@ -13,6 +14,7 @@ interface PersistedSettings {
   surface?: DshSurface
   permissionMode?: string
   quickLauncherMode?: QuickLauncherShortcutMode
+  workspaceProfile?: WorkspaceProfile
 }
 
 export const PERMISSION_MODES = ['read-only', 'workspace-write', 'danger-full-access'] as const
@@ -54,6 +56,7 @@ export class ThemeService {
   private surfaceValue: DshSurface
   private permissionModeValue: string
   private quickLauncherModeValue: QuickLauncherShortcutMode
+  private workspaceProfileValue: WorkspaceProfile
   private window: BrowserWindow | undefined
   private setViewBackground: ((color: string) => void) | undefined
   private onChanged: ((state: ThemeState) => void) | undefined
@@ -65,6 +68,8 @@ export class ThemeService {
     this.surfaceValue = this.readSurface()
     this.permissionModeValue = process.env.ND_DSH_PERMISSION_MODE?.trim() || this.readPermissionMode()
     this.quickLauncherModeValue = this.readQuickLauncherMode()
+    this.workspaceProfileValue = this.readWorkspaceProfile()
+    if (this.workspaceProfileValue === 'general' && this.surfaceValue === 'dsh') this.surfaceValue = 'workbench'
     nativeTheme.themeSource = this.mode
     nativeTheme.on('updated', () => this.emit())
   }
@@ -89,6 +94,7 @@ export class ThemeService {
 
   setSurface(surface: DshSurface): DshSurface {
     if (!VALID_SURFACES.includes(surface)) throw new Error(`Unknown surface: ${surface}`)
+    if (this.workspaceProfileValue === 'general' && surface === 'dsh') throw new Error('DSH coding surface requires the Coding workspace profile')
     this.surfaceValue = surface
     this.persist()
     this.onSurfaceChanged?.(surface)
@@ -106,6 +112,21 @@ export class ThemeService {
     this.permissionModeValue = mode
     this.persist()
     return mode
+  }
+
+  workspaceProfile(): WorkspaceProfile {
+    return this.workspaceProfileValue
+  }
+
+  setWorkspaceProfile(profile: WorkspaceProfile): WorkspaceProfile {
+    if (!isWorkspaceProfile(profile)) throw new Error(`Unknown workspace profile: ${String(profile)}`)
+    this.workspaceProfileValue = profile
+    if (profile === 'general' && this.surfaceValue === 'dsh') {
+      this.surfaceValue = 'workbench'
+      this.onSurfaceChanged?.(this.surfaceValue)
+    }
+    this.persist()
+    return profile
   }
 
   quickLauncherMode(): QuickLauncherShortcutMode {
@@ -191,6 +212,17 @@ export class ThemeService {
     return DEFAULT_PERMISSION_MODE
   }
 
+  private readWorkspaceProfile(): WorkspaceProfile {
+    try {
+      const settings = JSON.parse(readFileSync(this.settingsPath, 'utf8')) as PersistedSettings
+      if (isWorkspaceProfile(settings.workspaceProfile)) return settings.workspaceProfile
+      if (settings.surface && VALID_SURFACES.includes(settings.surface)) return 'coding'
+    } catch {
+      // Missing settings means a fresh install, whose broadest audience is General.
+    }
+    return DEFAULT_WORKSPACE_PROFILE
+  }
+
   private readQuickLauncherMode(): QuickLauncherShortcutMode {
     try {
       const settings = JSON.parse(readFileSync(this.settingsPath, 'utf8')) as PersistedSettings
@@ -208,6 +240,7 @@ export class ThemeService {
         surface: this.surfaceValue,
         permissionMode: this.permissionModeValue,
         quickLauncherMode: this.quickLauncherModeValue,
+        workspaceProfile: this.workspaceProfileValue,
       }
       writeFileSync(this.settingsPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8')
     } catch (error) {

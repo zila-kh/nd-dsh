@@ -1,10 +1,22 @@
 import { randomUUID } from 'node:crypto'
-import { app, BrowserWindow, WebContentsView, session, type Rectangle, type Session, type WebContents } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  ipcMain,
+  WebContentsView,
+  session,
+  type IpcMainInvokeEvent,
+  type Rectangle,
+  type Session,
+  type WebContents,
+} from 'electron'
 import { join } from 'node:path'
-import type {
-  BrowserDownloadRecord,
-  BrowserSiteToolDescriptor,
-  BrowserTabDescriptor,
+import {
+  BROWSER_EXTENSION_POPUP_IPC,
+  type BrowserDownloadRecord,
+  type BrowserExtensionPopupContext,
+  type BrowserSiteToolDescriptor,
+  type BrowserTabDescriptor,
 } from '../../shared/browser-platform.js'
 import type { BrowserBounds, BrowserState, UiAnnotation, UiTarget } from '../../shared/contracts.js'
 import { AgentBrowserClient } from './agent-browser-client.js'
@@ -22,6 +34,35 @@ const BROWSER_PARTITION = 'persist:nd-dsh-browser'
 export interface BrowserControllerOptions {
   reservedOrigin?: () => string | undefined
   dataPath?: string
+  extensionRuntimePreload?: string
+}
+
+const EXTENSION_RUNTIME_PRELOAD_ID = 'nd-extension-runtime'
+
+interface BrowserExtensionPopupRuntime {
+  extensionId: string
+  view: WebContentsView
+  // `view.webContents` reads as undefined once the popup closes itself; this
+  // reference stays safe to query.
+  contents: WebContents
+  hostWebContentsId: number
+  preferredWidth?: number
+  preferredHeight?: number
+}
+
+// ipcMain allows one handler per channel; a replacement controller (window
+// re-created on activate) takes ownership while the old one tears down.
+let extensionPopupContextOwner: BrowserController | undefined
+let extensionPopupContextRegistered = false
+
+function claimExtensionPopupContext(controller: BrowserController): void {
+  extensionPopupContextOwner = controller
+  if (extensionPopupContextRegistered) return
+  extensionPopupContextRegistered = true
+  ipcMain.handle(BROWSER_EXTENSION_POPUP_IPC.context, (event) => {
+    if (!extensionPopupContextOwner) throw new Error('No extension popup is open')
+    return extensionPopupContextOwner.extensionPopupContext(event)
+  })
 }
 
 interface BrowserTabRuntime {
@@ -52,6 +93,8 @@ export class BrowserController {
   private readonly permissionStore: BrowserPermissionStore
   private readonly downloads: BrowserDownloadManager
   private readonly reservedOrigin: (() => string | undefined) | undefined
+  private readonly extensionRuntimePreload: string | undefined
+  private extensionPopup: BrowserExtensionPopupRuntime | undefined
   private activeTabIdValue: string
   private bounds: Rectangle = { x: 0, y: 0, width: 0, height: 0 }
   private visible = false
@@ -69,7 +112,17 @@ export class BrowserController {
     options: BrowserControllerOptions = {},
   ) {
     this.reservedOrigin = options.reservedOrigin
+    this.extensionRuntimePreload = options.extensionRuntimePreload
     this.browserSessionValue = session.fromPartition(BROWSER_PARTITION)
+    claimExtensionPopupContext(this)
+    if (this.extensionRuntimePreload
+      && !this.browserSessionValue.getPreloadScripts().some((script) => script.id === EXTENSION_RUNTIME_PRELOAD_ID)) {
+      this.browserSessionValue.registerPreloadScript({
+        id: EXTENSION_RUNTIME_PRELOAD_ID,
+        type: 'service-worker',
+        filePath: this.extensionRuntimePreload,
+      })
+    }
 
     this.agentBrowser = new AgentBrowserClient(cdpPort, projectRoot)
     const dataPath = options.dataPath ?? app.getPath('userData')
@@ -106,6 +159,130 @@ export class BrowserController {
 
   activeTabId(): string {
     return this.activeTabIdValue
+  }
+
+  extensionPopupId(): string | undefined {
+    return this.extensionPopup?.extensionId
+  }
+
+  async showExtensionPopup(extensionId: string, popupPath: string): Promise<void> {
+    if (this.destroying) throw new Error('Built-in browser is shutting down')
+    const cleanId = extensionId.trim()
+    const cleanPath = popupPath.trim().replace(/^\/+/, '')
+    if (!/^[a-p]{32}$/i.test(cleanId) && !/^[a-z0-9_-]{8,128}$/i.test(cleanId)) {
+      throw new Error('Browser extension id is invalid')
+    }
+    if (!cleanPath) throw new Error('Browser extension does not declare an action popup')
+
+    const base = `chrome-extension://${cleanId}/`
+    const popupUrl = new URL(cleanPath, base)
+    if (popupUrl.protocol !== 'chrome-extension:' || popupUrl.host !== cleanId) {
+      throw new Error('Browser extension popup must stay inside its extension origin')
+    }
+
+    this.closeExtensionPopup()
+    const hostContents = this.activeTab().view.webContents
+    const view = new WebContentsView({
+      webPreferences: {
+        session: this.browserSessionValue,
+        ...(this.extensionRuntimePreload ? { preload: this.extensionRuntimePreload } : {}),
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: true,
+        webSecurity: true,
+        allowRunningInsecureContent: false,
+        enablePreferredSizeMode: true,
+        focusOnNavigation: false,
+      },
+    })
+    view.webContents.setUserAgent(sanitizeBrowserUserAgent(app.userAgentFallback))
+    view.webContents.setWindowOpenHandler(({ url }) => {
+      if (isAllowedBrowserUrl(url)) void this.createTab(url, true).catch(() => undefined)
+      return { action: 'deny' }
+    })
+    view.webContents.on('will-navigate', (event, url) => {
+      try {
+        const target = new URL(url)
+        if (target.protocol === 'chrome-extension:' && target.host === cleanId) return
+        event.preventDefault()
+        if (isAllowedBrowserUrl(url)) void this.createTab(url, true).catch(() => undefined)
+      } catch {
+        event.preventDefault()
+      }
+    })
+    view.webContents.on('render-process-gone', () => {
+      if (this.extensionPopup?.view === view) this.closeExtensionPopup()
+    })
+    view.webContents.on('destroyed', () => {
+      if (this.extensionPopup?.view === view) this.closeExtensionPopup()
+    })
+    view.webContents.on('blur', () => {
+      if (this.extensionPopup?.view === view) this.closeExtensionPopup()
+    })
+    view.webContents.on('preferred-size-changed', (_event, preferredSize) => {
+      const popup = this.extensionPopup
+      if (!popup || popup.view !== view) return
+      popup.preferredWidth = preferredSize.width
+      popup.preferredHeight = preferredSize.height
+      this.syncExtensionPopupBounds()
+    })
+
+    this.window.contentView.addChildView(view)
+    this.extensionPopup = { extensionId: cleanId, view, contents: view.webContents, hostWebContentsId: hostContents.id }
+    this.syncExtensionPopupBounds()
+    view.setVisible(false)
+    // Electron's chrome.tabs.query({ active: true }) matches the focused WebContents.
+    // The runtime preload corrects the popup's own view; extension service workers
+    // still see Electron's semantics, so the page tab holds focus while the popup initializes.
+    if (this.visible && !hostContents.isDestroyed()) hostContents.focus()
+    try {
+      await view.webContents.loadURL(popupUrl.toString())
+      if (this.extensionPopup?.view === view && this.visible) {
+        view.setVisible(true)
+        view.webContents.focus()
+        this.emitState()
+      }
+    } catch (cause) {
+      // A newer popup (or a close) may have replaced this one mid-load; leave it alone.
+      if (this.extensionPopup?.view !== view) return
+      this.closeExtensionPopup()
+      throw cause
+    }
+  }
+
+  extensionPopupContext(event: IpcMainInvokeEvent): BrowserExtensionPopupContext {
+    const popup = this.extensionPopup
+    const frame = event.senderFrame
+    const trusted = Boolean(
+      popup
+      && !popup.contents.isDestroyed()
+      && event.sender === popup.contents
+      && frame
+      && frame === event.sender.mainFrame
+      && URL.canParse(frame.url)
+      && new URL(frame.url).protocol === 'chrome-extension:'
+      && new URL(frame.url).host === popup.extensionId,
+    )
+    if (!popup || !trusted) throw new Error('Extension popup context is only available to the open extension popup')
+    return {
+      hostTabId: popup.hostWebContentsId,
+      tabIds: [...this.tabs.values()]
+        .filter((tab) => !tab.view.webContents.isDestroyed())
+        .map((tab) => tab.view.webContents.id),
+      windowId: this.window.id,
+    }
+  }
+
+  closeExtensionPopup(): void {
+    const popup = this.extensionPopup
+    this.extensionPopup = undefined
+    if (!popup) return
+    try {
+      if (!this.window.isDestroyed()) this.window.contentView.removeChildView(popup.view)
+    } catch {
+    }
+    if (!popup.contents.isDestroyed()) popup.contents.close()
+    if (!this.destroying) this.emitState()
   }
 
   setTabClosedListener(listener: ((tabId: string) => void) | undefined): void {
@@ -167,6 +344,7 @@ export class BrowserController {
 
   async activateTab(tabId: string): Promise<BrowserTabDescriptor> {
     const tab = this.requireTab(tabId)
+    this.closeExtensionPopup()
     if (this.activeTabIdValue === tabId) return this.describeTab(tab)
     const previous = this.activeTab()
     if (previous.state.inspectMode) await previous.inspector.stop().catch(() => undefined)
@@ -187,6 +365,7 @@ export class BrowserController {
   async closeTab(tabId: string): Promise<boolean> {
     const tab = this.tabs.get(tabId)
     if (!tab) return false
+    if (this.extensionPopup?.hostWebContentsId === tab.view.webContents.id) this.closeExtensionPopup()
     const wasActive = tabId === this.activeTabIdValue
     if (wasActive && this.binding) await this.binding.catch(() => undefined)
     await Promise.allSettled([tab.inspector.stop(), tab.annotator.cancel()])
@@ -246,11 +425,16 @@ export class BrowserController {
       height: Math.max(0, Math.round(bounds.height)),
     }
     this.activeTab().view.setBounds(this.bounds)
+    this.syncExtensionPopupBounds()
   }
 
   async setVisible(visible: boolean): Promise<void> {
     this.visible = visible
+    if (!visible) this.closeExtensionPopup()
     this.syncViewVisibility()
+    if (visible && this.extensionPopup && !this.extensionPopup.contents.isDestroyed()) {
+      this.extensionPopup.contents.focus()
+    }
     this.emitState()
   }
 
@@ -259,6 +443,7 @@ export class BrowserController {
   }
 
   async navigate(input: string, tabId = this.activeTabIdValue): Promise<BrowserState> {
+    this.closeExtensionPopup()
     const tab = this.requireTab(tabId)
     const url = normalizeBrowserUrl(input)
     this.assertNotSelfHosted(url)
@@ -267,6 +452,7 @@ export class BrowserController {
   }
 
   async back(tabId = this.activeTabIdValue): Promise<BrowserState> {
+    this.closeExtensionPopup()
     const tab = this.requireTab(tabId)
     const history = tab.view.webContents.navigationHistory
     if (history.canGoBack()) history.goBack()
@@ -274,6 +460,7 @@ export class BrowserController {
   }
 
   async forward(tabId = this.activeTabIdValue): Promise<BrowserState> {
+    this.closeExtensionPopup()
     const tab = this.requireTab(tabId)
     const history = tab.view.webContents.navigationHistory
     if (history.canGoForward()) history.goForward()
@@ -281,6 +468,7 @@ export class BrowserController {
   }
 
   async reload(tabId = this.activeTabIdValue): Promise<BrowserState> {
+    this.closeExtensionPopup()
     this.requireTab(tabId).view.webContents.reload()
     return this.state()
   }
@@ -337,6 +525,10 @@ export class BrowserController {
 
   cancelDownload(downloadId: string): boolean {
     return this.downloads.cancel(downloadId)
+  }
+
+  clearFinishedDownloads(): number {
+    return this.downloads.clearFinished()
   }
 
   async snapshot(): Promise<unknown> {
@@ -550,6 +742,8 @@ export class BrowserController {
 
   private async destroyInternal(): Promise<void> {
     this.destroying = true
+    this.closeExtensionPopup()
+    if (extensionPopupContextOwner === this) extensionPopupContextOwner = undefined
     this.onStateChanged = undefined
     this.onTabClosed = undefined
     const binding = this.binding
@@ -754,6 +948,25 @@ export class BrowserController {
       tab.view.setBounds(this.bounds)
       tab.view.setVisible(active && this.visible)
     }
+    if (this.extensionPopup) {
+      this.syncExtensionPopupBounds()
+      this.extensionPopup.view.setVisible(this.visible)
+    }
+  }
+
+  private syncExtensionPopupBounds(): void {
+    const popup = this.extensionPopup
+    if (!popup) return
+    const margin = 8
+    const availableWidth = Math.max(1, this.bounds.width - margin * 2)
+    const availableHeight = Math.max(1, this.bounds.height - margin * 2)
+    const requestedWidth = popup.preferredWidth ?? 360
+    const requestedHeight = popup.preferredHeight ?? 420
+    const width = Math.min(availableWidth, Math.max(240, Math.min(420, requestedWidth)))
+    const height = Math.min(availableHeight, Math.max(120, Math.min(520, requestedHeight)))
+    const x = Math.max(this.bounds.x + margin, this.bounds.x + this.bounds.width - width - margin)
+    const y = this.bounds.y + margin
+    popup.view.setBounds({ x, y, width, height })
   }
 
   private assertNotSelfHosted(url: string): void {
