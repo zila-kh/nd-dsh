@@ -39,6 +39,7 @@ export function OrganizationCollaborationCenter({ companyId, projectId, onAskAge
   const [messageDraft, setMessageDraft] = useState({ body: '', taskId: '' })
   const [decisionDraft, setDecisionDraft] = useState({ title: '', summary: '', rationale: '', taskId: '' })
   const [approvalTaskId, setApprovalTaskId] = useState('')
+  const [approvalComment, setApprovalComment] = useState('')
 
   useEffect(() => {
     let mounted = true
@@ -57,8 +58,12 @@ export function OrganizationCollaborationCenter({ companyId, projectId, onAskAge
     const off = window.ndDshOrganization.onChanged((next) => {
       if (!mounted) return
       setState(next)
-      const activeStillExists = (next.members ?? []).some((item) => item.id === activeMemberId && item.status === 'active')
-      if (!activeStillExists) setActiveMemberId((next.members ?? []).find((item) => item.companyId === companyId && item.status === 'active')?.id ?? '')
+      setActiveMemberId((current) => {
+        const activeStillExists = (next.members ?? []).some((item) => item.id === current && item.status === 'active')
+        return activeStillExists
+          ? current
+          : (next.members ?? []).find((item) => item.companyId === companyId && item.status === 'active')?.id ?? ''
+      })
     })
     const offControl = window.ndDshControl.onChanged(() => {
       void window.ndDshControl.management(projectId)
@@ -66,7 +71,14 @@ export function OrganizationCollaborationCenter({ companyId, projectId, onAskAge
         .catch((cause) => onError(errorMessage(cause)))
     })
     return () => { mounted = false; off(); offControl() }
-  }, [activeMemberId, companyId, onError, projectId])
+  }, [companyId, onError, projectId])
+
+  useEffect(() => {
+    setApprovalTaskId('')
+    setApprovalComment('')
+    setMessageDraft((current) => ({ ...current, taskId: '' }))
+    setDecisionDraft((current) => ({ ...current, taskId: '' }))
+  }, [projectId])
 
   const project = state?.projects.find((item) => item.id === projectId && item.companyId === companyId)
   const members = useMemo(() => (state?.members ?? []).filter((item) => item.companyId === companyId), [state, companyId])
@@ -82,7 +94,7 @@ export function OrganizationCollaborationCenter({ companyId, projectId, onAskAge
   const blockedTasks = tasks.filter((item) => item.status === 'blocked').length
   const reviewTasks = tasks.filter((item) => item.status === 'review').length
   const newSignals = management?.metrics.newSignals ?? 0
-  const needsYou = pendingApprovals + mentioned.length + managementNeedsYou + reviewTasks
+  const needsYou = pendingApprovals + managementNeedsYou + reviewTasks + blockedTasks + newSignals
 
   async function act(key: string, fn: () => Promise<unknown>): Promise<void> {
     if (busy) return
@@ -156,12 +168,16 @@ export function OrganizationCollaborationCenter({ companyId, projectId, onAskAge
 
   async function resolveApproval(id: string, verdict: OrganizationApprovalVerdictKind): Promise<void> {
     if (!activeMember) return
-    await act(`approval-${id}-${verdict}`, () => window.ndDshOrganization.mutate({
-      type: 'approval.resolve',
-      id,
-      actorMemberId: activeMember.id,
-      verdict,
-    }))
+    await act(`approval-${id}-${verdict}`, async () => {
+      await window.ndDshOrganization.mutate({
+        type: 'approval.resolve',
+        id,
+        actorMemberId: activeMember.id,
+        verdict,
+        ...(approvalComment.trim() ? { comment: approvalComment.trim() } : {}),
+      })
+      setApprovalComment('')
+    })
   }
 
   if (!projectId || !project) {
@@ -236,7 +252,7 @@ export function OrganizationCollaborationCenter({ companyId, projectId, onAskAge
         <CollabCard title="Needs You" badge={String(needsYou)}>
           <div className="grid grid-cols-2 gap-2">
             <Metric label="Pending approvals" value={pendingApprovals} />
-            <Metric label="Mentions" value={mentioned.length} />
+            <Metric label="Mentions (history)" value={mentioned.length} />
             <Metric label="Control actions" value={managementNeedsYou} />
             <Metric label="Review tasks" value={reviewTasks} />
             <Metric label="Blocked tasks" value={blockedTasks} />
@@ -254,6 +270,12 @@ export function OrganizationCollaborationCenter({ companyId, projectId, onAskAge
             <button className={primaryButton} disabled={busy !== null || !approvalTaskId || !activeMember} onClick={() => void requestApproval()}>Request</button>
           </div>
           <p className="m-0 mt-1 text-[10px] text-faint">Request integration approval before merge-back. It binds to the exact checkpoint; changed or already-integrated work fails closed because approval never pretends to undo code.</p>
+          <input
+            className={cn(input, 'mt-2 w-full')}
+            placeholder="Approval note / reason (recommended for changes or rejection)"
+            value={approvalComment}
+            onChange={(event) => setApprovalComment(event.target.value)}
+          />
 
           <div className="mt-2 grid gap-2">
             {approvals.slice(0, 8).map((item) => (
