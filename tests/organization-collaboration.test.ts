@@ -115,9 +115,19 @@ describe('local team collaboration', () => {
     expect(request.targetRevision).toBe('checkpoint-a')
 
     await store.updateRunProvenance(run.id, { checkpointCommit: 'checkpoint-b' })
+    expect(((await store.state()).approvalRequests ?? [])[0]?.status).toBe('cancelled')
     await expect(store.mutate({ type: 'approval.resolve', id: request.id, actorMemberId: owner.id, verdict: 'approve' }))
-      .rejects.toThrow(/stale/i)
-    expect(((await store.state()).approvalRequests ?? [])[0]?.status).toBe('pending')
+      .rejects.toThrow(/no longer pending/i)
+    await expect(store.mutate({
+      type: 'approval.request',
+      companyId: company.id,
+      projectId: project.id,
+      taskId: task.id,
+      requesterMemberId: owner.id,
+      targetKind: 'task-review',
+      targetId: task.id,
+      targetRevision: 'checkpoint-a',
+    })).rejects.toThrow(/stale/i)
   })
 
   it('fails closed when an integration approval is requested or resolved after merge-back', async () => {
@@ -144,9 +154,10 @@ describe('local team collaboration', () => {
     })
     const pending = (state.approvalRequests ?? [])[0]!
     await store.markIntegrated(task.id, 'checkpoint-integrated')
+    expect(((await store.state()).approvalRequests ?? []).find((item) => item.id === pending.id)?.status).toBe('cancelled')
 
     await expect(store.mutate({ type: 'approval.resolve', id: pending.id, actorMemberId: owner.id, verdict: 'request_changes' }))
-      .rejects.toThrow(/already been integrated/i)
+      .rejects.toThrow(/no longer pending/i)
 
     await expect(store.mutate({
       type: 'approval.request',

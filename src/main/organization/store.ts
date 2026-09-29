@@ -266,7 +266,11 @@ export class OrganizationStore {
     await this.load()
     const run = must(this.value.runs.find((item) => item.id === runId), 'Organization run')
     if (patch.runtimePermitId !== undefined) run.runtimePermitId = clean(patch.runtimePermitId)
-    if (patch.checkpointCommit !== undefined) run.checkpointCommit = clean(patch.checkpointCommit)
+    if (patch.checkpointCommit !== undefined) {
+      const checkpoint = clean(patch.checkpointCommit)
+      run.checkpointCommit = checkpoint
+      if (run.taskId) this.cancelStaleApprovals(run.taskId, checkpoint)
+    }
     await this.save()
   }
 
@@ -453,6 +457,7 @@ export class OrganizationStore {
     task.integratedHead = clean(head)
     delete task.integrationSummary
     task.updatedAt = Date.now()
+    this.cancelPendingIntegrationApprovals(task.id)
     this.activity(task.companyId, task.projectId, 'task.integrated', `Integrated “${task.title}” at ${short(task.integratedHead)}.`)
     this.teamEvent(task, 'progress', `“${task.title}” integrated at ${short(task.integratedHead)}.`)
     await this.save()
@@ -908,7 +913,12 @@ export class OrganizationStore {
     if (input.targetKind === 'integration' && task?.integrationState === 'integrated') {
       throw new Error('Task is already integrated; an integration approval cannot undo merged work. Create a follow-up task or decision instead.')
     }
-    const revision = input.targetRevision?.trim() || (task ? this.latestCheckpoint(task.id) : undefined)
+    const latestRevision = task ? this.latestCheckpoint(task.id) : undefined
+    const requestedRevision = input.targetRevision?.trim()
+    if (task && requestedRevision && latestRevision && requestedRevision !== latestRevision) {
+      throw new Error(`Approval target is stale: requested checkpoint ${requestedRevision}, current checkpoint is ${latestRevision}`)
+    }
+    const revision = requestedRevision || latestRevision
     if ((input.targetKind === 'task-review' || input.targetKind === 'integration') && !revision) {
       throw new Error('Checkpoint-bound approval requires a task checkpoint')
     }
@@ -993,6 +1003,26 @@ export class OrganizationStore {
 
   private latestCheckpoint(taskId: string): string | undefined {
     return this.value.runs.find((item) => item.taskId === taskId && item.checkpointCommit)?.checkpointCommit
+  }
+
+  private cancelStaleApprovals(taskId: string, checkpoint: string): void {
+    const now = Date.now()
+    for (const request of this.value.approvalRequests) {
+      if (request.taskId !== taskId || request.status !== 'pending' || !request.targetRevision || request.targetRevision === checkpoint) continue
+      request.status = 'cancelled'
+      request.resolvedAt = now
+      this.activity(request.companyId, request.projectId, 'approval.cancelled', `Cancelled stale ${request.targetKind} approval after checkpoint changed.`)
+    }
+  }
+
+  private cancelPendingIntegrationApprovals(taskId: string): void {
+    const now = Date.now()
+    for (const request of this.value.approvalRequests) {
+      if (request.taskId !== taskId || request.targetKind !== 'integration' || request.status !== 'pending') continue
+      request.status = 'cancelled'
+      request.resolvedAt = now
+      this.activity(request.companyId, request.projectId, 'approval.cancelled', 'Cancelled integration approval because the checkpoint was already integrated.')
+    }
   }
 
   private seedRole(companyId: string, name: string, responsibility: string, systemPrompt: string, skillIds: string[]): OrganizationRole { const role = { id: randomUUID(), companyId, name, responsibility, systemPrompt, skillIds }; this.value.roles.push(role); return role }
