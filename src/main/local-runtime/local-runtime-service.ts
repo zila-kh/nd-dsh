@@ -33,6 +33,10 @@ export class LocalRuntimeService {
 
   async initialize(): Promise<LocalRuntimeState> {
     await this.load()
+    if ((!this.settingsValue.alwaysOn || !this.canManageStartAtLogin()) && this.settingsValue.startAtLogin) {
+      this.settingsValue.startAtLogin = false
+      await this.save()
+    }
     this.applyLoginItem()
     return this.state()
   }
@@ -83,9 +87,11 @@ export class LocalRuntimeService {
 
   async state(): Promise<LocalRuntimeState> {
     await this.load()
-    const supported = this.platform === 'win32' || this.platform === 'darwin'
-    const applied = supported && this.appPort.isPackaged
-      ? this.appPort.getLoginItemSettings(this.platform === 'win32' ? { args: ['--background'] } : undefined).openAtLogin
+    const supported = this.canManageStartAtLogin()
+    const applied = supported
+      ? (this.platform === 'win32'
+          ? this.appPort.getLoginItemSettings({ args: ['--background'] }).openAtLogin
+          : this.appPort.getLoginItemSettings().openAtLogin)
       : false
     return {
       settings: { ...this.settingsValue },
@@ -106,8 +112,7 @@ export class LocalRuntimeService {
       ...(patch.alwaysOn !== undefined ? { alwaysOn: Boolean(patch.alwaysOn) } : {}),
       ...(patch.startAtLogin !== undefined ? { startAtLogin: Boolean(patch.startAtLogin) } : {}),
     }
-    const loginItemPlatformSupported = this.platform === 'win32' || this.platform === 'darwin'
-    if ((!this.settingsValue.alwaysOn || !loginItemPlatformSupported) && this.settingsValue.startAtLogin) {
+    if ((!this.settingsValue.alwaysOn || !this.canManageStartAtLogin()) && this.settingsValue.startAtLogin) {
       this.settingsValue.startAtLogin = false
     }
     await this.save()
@@ -149,9 +154,12 @@ export class LocalRuntimeService {
     }
   }
 
+  private canManageStartAtLogin(): boolean {
+    return this.appPort.isPackaged && (this.platform === 'win32' || this.platform === 'darwin')
+  }
+
   private applyLoginItem(): void {
-    const supported = this.platform === 'win32' || this.platform === 'darwin'
-    if (!supported || !this.appPort.isPackaged) return
+    if (!this.canManageStartAtLogin()) return
     try {
       this.appPort.setLoginItemSettings({
         openAtLogin: this.settingsValue.alwaysOn && this.settingsValue.startAtLogin,

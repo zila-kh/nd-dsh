@@ -14,6 +14,7 @@ async function fixture(
   initialOpenAtLogin = false,
   platform: NodeJS.Platform = 'win32',
   wasOpenedAtLogin = false,
+  isPackaged = true,
 ) {
   const root = await mkdtemp(join(tmpdir(), 'nd-local-runtime-'))
   temporary.push(root)
@@ -24,7 +25,7 @@ async function fixture(
     openAtLogin = settings.openAtLogin
   })
   const appPort: LocalRuntimeAppPort = {
-    isPackaged: true,
+    isPackaged,
     getLoginItemSettings,
     setLoginItemSettings,
   }
@@ -94,6 +95,17 @@ describe('LocalRuntimeService', () => {
     expect(service.shouldLaunchInBackground(['nd-dsh'])).toBe(true)
     expect(setLoginItemSettings).toHaveBeenLastCalledWith({ openAtLogin: true })
     expect(getLoginItemSettings).toHaveBeenCalledWith()
+  })
+
+  it('does not advertise start-at-login from an unpackaged dev build', async () => {
+    const { service, setLoginItemSettings } = await fixture(false, 'win32', false, false)
+    await service.initialize()
+    const state = await service.update({ alwaysOn: true, startAtLogin: true })
+    expect(state.settings.alwaysOn).toBe(true)
+    expect(state.settings.startAtLogin).toBe(false)
+    expect(state.startAtLoginSupported).toBe(false)
+    expect(state.startAtLoginApplied).toBe(false)
+    expect(setLoginItemSettings).not.toHaveBeenCalled()
   })
 
   it('does not claim unsupported Linux start-at-login integration', async () => {
