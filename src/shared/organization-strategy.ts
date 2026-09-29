@@ -184,6 +184,9 @@ export interface OrganizationStrategyProjection {
   activeAnchors: OrganizationStrategicAnchor[]
   activeKnowledge: OrganizationCompanyKnowledge[]
   schedules: OrganizationCompanySchedule[]
+  heartbeats: OrganizationHeartbeat[]
+  triggers: OrganizationAutomationTrigger[]
+  skillCandidates: OrganizationSkillCandidate[]
   recentAudit: OrganizationActionAuditReceipt[]
   release?: OrganizationReleaseReadiness
   metrics: {

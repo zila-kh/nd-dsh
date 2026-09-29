@@ -58,12 +58,12 @@ export function OrganizationCollaborationCenter({ companyId, projectId, onAskAge
   }, [activeMemberId, companyId, onError])
 
   const project = state?.projects.find((item) => item.id === projectId && item.companyId === companyId)
-  const members = useMemo(() => state?.members.filter((item) => item.companyId === companyId) ?? [], [state, companyId])
+  const members = useMemo(() => (state?.members ?? []).filter((item) => item.companyId === companyId), [state, companyId])
   const agents = useMemo(() => state?.agents.filter((item) => item.companyId === companyId) ?? [], [state, companyId])
   const tasks = useMemo(() => state?.tasks.filter((item) => item.projectId === projectId) ?? [], [state, projectId])
-  const messages = useMemo(() => state?.messages.filter((item) => item.projectId === projectId).slice().sort((a, b) => a.createdAt - b.createdAt) ?? [], [state, projectId])
-  const decisions = useMemo(() => state?.decisions.filter((item) => item.projectId === projectId).slice().sort((a, b) => b.createdAt - a.createdAt) ?? [], [state, projectId])
-  const approvals = useMemo(() => state?.approvalRequests.filter((item) => item.projectId === projectId).slice().sort((a, b) => b.createdAt - a.createdAt) ?? [], [state, projectId])
+  const messages = useMemo(() => (state?.messages ?? []).filter((item) => item.projectId === projectId).slice().sort((a, b) => a.createdAt - b.createdAt), [state, projectId])
+  const decisions = useMemo(() => (state?.decisions ?? []).filter((item) => item.projectId === projectId).slice().sort((a, b) => b.createdAt - a.createdAt), [state, projectId])
+  const approvals = useMemo(() => (state?.approvalRequests ?? []).filter((item) => item.projectId === projectId).slice().sort((a, b) => b.createdAt - a.createdAt), [state, projectId])
   const activeMember = members.find((item) => item.id === activeMemberId && item.status === 'active')
   const mentioned = messages.filter((item) => activeMemberId && item.mentionActorIds.includes(activeMemberId))
   const needsYou = approvals.filter((item) => item.status === 'pending').length + mentioned.length

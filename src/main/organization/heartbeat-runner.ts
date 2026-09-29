@@ -23,7 +23,7 @@ export async function runDueHeartbeats(deps: HeartbeatRunnerDeps): Promise<void>
       const [organization, control] = await Promise.all([deps.store.state(), deps.control.state()])
       const blocked = organization.tasks.filter((item) => item.projectId === heartbeat.projectId && item.status === 'blocked')
       const failed = organization.runs.filter((item) => item.projectId === heartbeat.projectId && item.status === 'failed').slice(0, 5)
-      const approvals = organization.approvalRequests.filter((item) => item.projectId === heartbeat.projectId && item.status === 'pending')
+      const approvals = (organization.approvalRequests ?? []).filter((item) => item.projectId === heartbeat.projectId && item.status === 'pending')
       const openHuman = control.humanActions.filter((item) => item.projectId === heartbeat.projectId && item.status === 'open')
       const issues = [
         ...(blocked.length ? [`${blocked.length} blocked task(s)`] : []),

@@ -25,7 +25,15 @@ import type {
 import { taskMetricsRecorder } from '../metrics/task-metrics.js'
 import { BUILTIN_SKILLS, defaultPolicies, defaultWorkflow } from './defaults.js'
 
-const EMPTY: OrganizationSnapshot = {
+type DurableOrganizationSnapshot = OrganizationSnapshot & {
+  members: NonNullable<OrganizationSnapshot['members']>
+  messages: NonNullable<OrganizationSnapshot['messages']>
+  decisions: NonNullable<OrganizationSnapshot['decisions']>
+  approvalRequests: NonNullable<OrganizationSnapshot['approvalRequests']>
+  approvalVerdicts: NonNullable<OrganizationSnapshot['approvalVerdicts']>
+}
+
+const EMPTY: DurableOrganizationSnapshot = {
   version: 1,
   companies: [], projects: [], roles: [], teams: [], agents: [], skills: BUILTIN_SKILLS,
   workflows: [], goals: [], milestones: [], tasks: [], memory: [], policies: [], activity: [], runs: [],
@@ -42,7 +50,7 @@ export class OrganizationStore {
   private loadPromise: Promise<void> | undefined
   private saveChain: Promise<void> = Promise.resolve()
   private pendingSave: Promise<void> | undefined
-  private value: OrganizationSnapshot = clone(EMPTY)
+  private value: DurableOrganizationSnapshot = clone(EMPTY)
   private onChanged: ((state: OrganizationSnapshot) => void) | undefined
 
   constructor(private readonly filePath: string) {}
@@ -1050,7 +1058,7 @@ export class OrganizationStore {
   private activity(companyId: string, projectId: string | undefined, type: string, message: string): void { const row: OrganizationActivity = { id: randomUUID(), companyId, type, message, createdAt: Date.now(), ...(projectId ? { projectId } : {}) }; this.value.activity.unshift(row); this.value.activity = this.value.activity.slice(0, 500) }
 }
 
-function normalizeSnapshot(value: unknown): OrganizationSnapshot {
+function normalizeSnapshot(value: unknown): DurableOrganizationSnapshot {
   if (!value || typeof value !== 'object') throw new Error('Organization snapshot must be a JSON object')
   const record = value as Record<string, unknown>
   if (record.version !== 1) throw new Error(`Unsupported organization snapshot version: ${String(record.version)}`)
@@ -1063,7 +1071,16 @@ function normalizeSnapshot(value: unknown): OrganizationSnapshot {
     }
   }
   const parsed = record as unknown as OrganizationSnapshot
-  return { ...clone(EMPTY), ...parsed, skills: mergeBuiltins(parsed.skills) }
+  return {
+    ...clone(EMPTY),
+    ...parsed,
+    members: parsed.members ?? [],
+    messages: parsed.messages ?? [],
+    decisions: parsed.decisions ?? [],
+    approvalRequests: parsed.approvalRequests ?? [],
+    approvalVerdicts: parsed.approvalVerdicts ?? [],
+    skills: mergeBuiltins(parsed.skills),
+  }
 }
 
 async function writeAtomic(path: string, content: string): Promise<void> {

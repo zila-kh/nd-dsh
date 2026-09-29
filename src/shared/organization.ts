@@ -361,12 +361,12 @@ export interface OrganizationSnapshot {
   activity: OrganizationActivity[]
   runs: OrganizationRun[]
   /** Local human identities for attribution. These are not remote authentication principals. */
-  members: OrganizationMember[]
+  members?: OrganizationMember[]
   /** Durable human-grade project/task/review collaboration. */
-  messages: OrganizationMessage[]
-  decisions: OrganizationDecision[]
-  approvalRequests: OrganizationApprovalRequest[]
-  approvalVerdicts: OrganizationApprovalVerdict[]
+  messages?: OrganizationMessage[]
+  decisions?: OrganizationDecision[]
+  approvalRequests?: OrganizationApprovalRequest[]
+  approvalVerdicts?: OrganizationApprovalVerdict[]
   /** Structured machine-oriented team/task handoffs. Missing in older v1 snapshots and normalized to []. */
   coordination: OrganizationTeamEvent[]
 }
