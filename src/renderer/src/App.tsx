@@ -57,10 +57,12 @@ import type {
 import { pickSelfElement } from './lib/self-element-picker'
 import {
   capabilitySubTabFromLocation,
+  enginesSubTabFromLocation,
   generalSubTabFromLocation,
   settingsHash,
   settingsTabFromLocation,
   type CapabilitySubTab,
+  type EnginesSubTab,
   type GeneralSubTab,
   type SettingsTab,
 } from './lib/settings-route'
@@ -108,19 +110,23 @@ function hashForView(view: ProductView, settingsTab: SettingsTab, settingsSubTab
     ? settingsSubTabs.general
     : settingsTab === 'capabilities'
       ? settingsSubTabs.capabilities
-      : undefined
+      : settingsTab === 'engines'
+        ? settingsSubTabs.engines
+        : undefined
   return settingsHash(settingsTab, subTab)
 }
 
 interface SettingsSubTabs {
   general: GeneralSubTab
   capabilities: CapabilitySubTab
+  engines: EnginesSubTab
 }
 
 function settingsSubTabsFromLocation(): SettingsSubTabs {
   return {
     general: generalSubTabFromLocation(),
     capabilities: capabilitySubTabFromLocation(),
+    engines: enginesSubTabFromLocation(),
   }
 }
 
@@ -1798,6 +1804,8 @@ export default function App() {
                   onSelectSubTab={(subTab) => setSettingsSubTabs((current) => ({ ...current, general: subTab }))}
                   capabilitySubTab={settingsSubTabs.capabilities}
                   onSelectCapabilitySubTab={(subTab) => setSettingsSubTabs((current) => ({ ...current, capabilities: subTab }))}
+                  enginesSubTab={settingsSubTabs.engines}
+                  onSelectEnginesSubTab={(subTab) => setSettingsSubTabs((current) => ({ ...current, engines: subTab }))}
                   onOpenSession={openSession}
                   extensionsExtra={ndExtensions ? (
                     <ExtensionPackagesCard

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { capabilitySubTabFromLocation, generalSubTabFromLocation, settingsHash, settingsTabFromLocation } from '../src/renderer/src/lib/settings-route.js'
+import { capabilitySubTabFromLocation, enginesSubTabFromLocation, generalSubTabFromLocation, settingsHash, settingsTabFromLocation } from '../src/renderer/src/lib/settings-route.js'
 
 describe('settings route', () => {
   it('builds addressable model and extension settings tabs', () => {
@@ -29,6 +29,13 @@ describe('settings route', () => {
     expect(capabilitySubTabFromLocation({ hash: '#/settings?tab=capabilities&subtab=context', search: '' })).toBe('context')
     expect(capabilitySubTabFromLocation({ hash: '#/settings?tab=capabilities&subtab=lifecycle', search: '' })).toBe('lifecycle')
     expect(capabilitySubTabFromLocation({ hash: '#/settings?tab=capabilities', search: '' })).toBe('engine')
+  })
+
+  it('parses coding engines sub-tabs', () => {
+    expect(enginesSubTabFromLocation({ hash: '#/settings?tab=engines&subtab=gateway', search: '' })).toBe('gateway')
+    expect(enginesSubTabFromLocation({ hash: '#/settings?tab=engines&subtab=tokens', search: '' })).toBe('tokens')
+    expect(enginesSubTabFromLocation({ hash: '#/settings?tab=engines&subtab=token', search: '' })).toBe('tokens')
+    expect(enginesSubTabFromLocation({ hash: '#/settings?tab=engines', search: '' })).toBe('engines')
   })
 
   it('accepts plural aliases and a regular query string', () => {

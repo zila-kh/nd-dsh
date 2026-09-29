@@ -132,11 +132,14 @@ test('Engine settings: coding engine surface shows ND control plane', async () =
   await page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab', { name: 'Coding engines', exact: true }).click()
   await expect(page).toHaveURL(/#\/settings\?tab=engines$/)
 
-  // ND control plane row is always present.
+  // ND control plane row is always present on the default Engines sub-tab.
   await expect(page.getByText('ND control plane', { exact: true })).toBeVisible()
   await expect(page.getByText('Provider-neutral', { exact: true })).toBeVisible()
 
-  // Gateway settings are nested inside engine settings (heading is "ND Gateway").
+  // The Gateway lives on its own sub-tab; switch there to confirm it exists.
+  const enginesSubTabs = page.getByRole('tablist', { name: 'Coding engines sub-tabs' })
+  await enginesSubTabs.getByRole('tab', { name: 'Gateway', exact: true }).click()
+  await expect(page).toHaveURL(/#\/settings\?tab=engines&subtab=gateway$/)
   await expect(page.getByRole('heading', { name: 'ND Gateway' })).toBeVisible()
 
   expect(rendererErrors).toEqual([])
@@ -146,8 +149,9 @@ test('Engine settings: coding engine surface shows ND control plane', async () =
 
 test('Gateway settings: gateway state surface renders without errors', async () => {
   const { page } = launched
-  // Gateway is reachable within the Coding engines tab.
+  // Gateway is its own sub-tab within the Coding engines tab.
   await page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab', { name: 'Coding engines', exact: true }).click()
+  await page.getByRole('tablist', { name: 'Coding engines sub-tabs' }).getByRole('tab', { name: 'Gateway', exact: true }).click()
 
   // Gateway section title.
   await expect(page.getByRole('heading', { name: 'ND Gateway' })).toBeVisible()

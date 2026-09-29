@@ -1,4 +1,4 @@
-import type { CapabilitySubTab, GeneralSubTab, SettingsTab } from './settings-route.js'
+import type { CapabilitySubTab, EnginesSubTab, GeneralSubTab, SettingsTab } from './settings-route.js'
 
 export interface SettingsSearchEntry {
   id: string
@@ -7,6 +7,7 @@ export interface SettingsSearchEntry {
   tab: SettingsTab
   subTab?: GeneralSubTab
   capabilitySubTab?: CapabilitySubTab
+  enginesSubTab?: EnginesSubTab
   keywords: string[]
 }
 
@@ -33,8 +34,9 @@ export const SETTINGS_SEARCH_ENTRIES: SettingsSearchEntry[] = [
   { id: 'capabilities-lifecycle', title: 'Lifecycle providers', section: 'Capabilities · Lifecycle', tab: 'capabilities', capabilitySubTab: 'lifecycle', keywords: ['lifecycle', 'approved setup'] },
   { id: 'extensions-packages', title: 'ND extension packages', section: 'Extensions', tab: 'extensions', keywords: ['extension', 'package', 'activation', 'grant', 'context', 'install'] },
   { id: 'plugins-manager', title: 'Agent plugins (MCP, skills, commands, hooks)', section: 'Plugins', tab: 'plugins', keywords: ['plugin', 'mcp', 'skill', 'command', 'hook', 'subagent'] },
-  { id: 'engines', title: 'Coding engines', section: 'Coding engines', tab: 'engines', keywords: ['engine', 'codex', 'agy', 'antigravity', 'harness', 'default chat'] },
-  { id: 'engines-gateway', title: 'ND Gateway', section: 'Coding engines', tab: 'engines', keywords: ['gateway', 'codex', 'chatgpt', 'external apps'] },
+  { id: 'engines', title: 'Coding engines', section: 'Coding engines · Engines', tab: 'engines', enginesSubTab: 'engines', keywords: ['engine', 'codex', 'agy', 'antigravity', 'harness', 'default chat'] },
+  { id: 'engines-gateway', title: 'ND Gateway', section: 'Coding engines · Gateway', tab: 'engines', enginesSubTab: 'gateway', keywords: ['gateway', 'codex', 'chatgpt', 'external apps'] },
+  { id: 'engines-tokens', title: 'Token efficiency (saver & tool optimization)', section: 'Coding engines · Token efficiency', tab: 'engines', enginesSubTab: 'tokens', keywords: ['token', 'saver', 'optimization', 'tool call', 'context budget'] },
   { id: 'presets', title: 'Agent presets', section: 'Agent presets', tab: 'presets', keywords: ['preset', 'agent', 'notes', 'links'] },
 ]
 

@@ -23,8 +23,10 @@ import { WorkspaceSettings } from './WorkspaceSettings'
 import { searchSettings, type SettingsSearchEntry } from '../lib/settings-search'
 import { cn } from '../lib/utils'
 import {
+  enginesSubTabFromLocation,
   generalSubTabFromLocation,
   type CapabilitySubTab,
+  type EnginesSubTab,
   type GeneralSubTab,
   type SettingsTab,
 } from '../lib/settings-route'
@@ -44,6 +46,8 @@ interface SettingsPaneProps {
   onSelectSubTab?: (subTab: GeneralSubTab) => void
   capabilitySubTab?: CapabilitySubTab
   onSelectCapabilitySubTab?: (subTab: CapabilitySubTab) => void
+  enginesSubTab?: EnginesSubTab
+  onSelectEnginesSubTab?: (subTab: EnginesSubTab) => void
   /** Opens an existing chat session in the Agent workbench. */
   onOpenSession?(sessionId: string): void
   /** ND extension packages management, rendered above the agent-capability catalog. */
@@ -83,6 +87,8 @@ export function SettingsPane({
   onSelectSubTab,
   capabilitySubTab,
   onSelectCapabilitySubTab,
+  enginesSubTab: propEnginesSubTab,
+  onSelectEnginesSubTab,
   onOpenSession,
   extensionsExtra,
 }: SettingsPaneProps) {
@@ -103,6 +109,7 @@ export function SettingsPane({
     onSelectTab(entry.tab)
     if (entry.subTab) handleSelectSubTab(entry.subTab)
     if (entry.capabilitySubTab && onSelectCapabilitySubTab) onSelectCapabilitySubTab(entry.capabilitySubTab)
+    if (entry.enginesSubTab && onSelectEnginesSubTab) onSelectEnginesSubTab(entry.enginesSubTab)
     setSearch('')
   }
 
@@ -189,7 +196,11 @@ export function SettingsPane({
         ) : tab === 'plugins' ? (
           <ExtensionSettings onError={onError} />
         ) : tab === 'engines' ? (
-          <EngineSettings onError={onError} />
+          <EngineSettings
+            onError={onError}
+            {...(propEnginesSubTab !== undefined ? { subTab: propEnginesSubTab } : {})}
+            {...(onSelectEnginesSubTab !== undefined ? { onSelectSubTab: onSelectEnginesSubTab } : {})}
+          />
         ) : tab === 'presets' ? (
           <PresetSettings onError={onError} {...(onOpenSession ? { onOpenSession } : {})} />
         ) : tab === 'appearance' ? (
