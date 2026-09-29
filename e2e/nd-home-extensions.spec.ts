@@ -136,7 +136,12 @@ test('Quit Processes appears in Available and installs only on demand', async ()
 
   await launched.page.getByLabel('ND-DSH navigation').getByRole('button', { name: 'Settings' }).click()
   await launched.page.getByRole('tab', { name: 'Extensions' }).click()
-  await launched.page.getByRole('heading', { name: 'Available extensions' }).locator('..').getByRole('button', { name: 'Install', exact: true }).click()
+  // Scope to the Quit Processes card row: the plugins catalog below also renders an Install button.
+  await launched.page
+    .locator('div.flex-wrap', { hasText: 'Quit Processes' })
+    .getByRole('button', { name: 'Install', exact: true })
+    .first()
+    .click()
   await expect.poll(async () => (await extensionState()).packages.some((item) => item.id === 'nd.quit-process')).toBe(true)
 
   await launched.page.evaluate(async () => {
