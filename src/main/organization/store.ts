@@ -915,6 +915,25 @@ export class OrganizationStore {
     const status = input.verdict === 'approve' ? 'approved' : input.verdict === 'request_changes' ? 'changes_requested' : 'rejected'
     request.status = status
     request.resolvedAt = Date.now()
+    if (request.taskId) {
+      const task = this.task(request.taskId)
+      if (input.verdict === 'request_changes') {
+        task.status = 'ready'
+        task.integrationState = 'pending'
+        delete task.integrationSummary
+        delete task.integratedHead
+        delete task.blockedReason
+        task.updatedAt = request.resolvedAt
+        this.teamEvent(task, 'blocker', `Human changes requested for “${task.title}”.`)
+        this.refreshProject(task.projectId)
+      } else if (input.verdict === 'reject') {
+        task.status = 'blocked'
+        task.blockedReason = input.comment?.trim().slice(0, 2_000) || 'Rejected by explicit human approval.'
+        task.updatedAt = request.resolvedAt
+        this.teamEvent(task, 'blocker', `Human rejected approval for “${task.title}”.`)
+        this.refreshProject(task.projectId)
+      }
+    }
     this.value.approvalVerdicts.push({
       id: randomUUID(),
       requestId: request.id,

@@ -151,6 +151,6 @@ describe('local team collaboration', () => {
     })
     expect(state.approvalRequests[0]?.status).toBe('changes_requested')
     expect(state.approvalVerdicts[0]).toMatchObject({ verdict: 'request_changes', actor: { kind: 'human', id: owner.id } })
-    expect(state.tasks[0]?.status).toBe('backlog')
+    expect(state.tasks[0]?.status).toBe('ready')
   })
 })
