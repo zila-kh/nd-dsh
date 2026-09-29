@@ -110,6 +110,7 @@ describe('ND Agent trusted tool broker', () => {
     })).resolves.toEqual({ ok: true, value: { items: [] } })
     expect(invoke).toHaveBeenCalledWith({
       sessionId: 'nd-native-one',
+      cwd: project,
       extensionId: 'example.tools',
       contributionId: 'project.read',
       input: { query: 'todo' },
@@ -127,6 +128,37 @@ describe('ND Agent trusted tool broker', () => {
   it('fails closed for shell because cwd is not an OS sandbox', async () => {
     const { broker } = fixture()
     await expect(broker.call({ sessionId: 'nd-native-one', cwd: project, name: 'nd_shell', arguments: { command: 'echo hello' } })).rejects.toThrow(/not an OS sandbox/)
+  })
+
+  it('marks a dispatched write uncertain when the host response fails', async () => {
+    const { broker, request } = fixture()
+    request.mockImplementation(async (method: string) => {
+      if (method === 'workspace.write') throw new Error('core transport closed')
+      return { ok: true }
+    })
+    await expect(broker.call({
+      sessionId: 'nd-native-one',
+      cwd: project,
+      name: 'nd_workspace_write',
+      arguments: { path: 'src/app.ts', data: 'changed' },
+    })).rejects.toThrow(/transport closed/)
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      'effectJournal.append',
+      'workspace.write',
+      'effectJournal.append',
+    ])
+    expect(request.mock.calls[2]?.[1]).toMatchObject({ state: 'uncertain' })
+  })
+
+  it('keeps a pre-dispatch write validation error definite', async () => {
+    const { broker, request } = fixture()
+    await expect(broker.call({
+      sessionId: 'nd-native-one',
+      cwd: project,
+      name: 'nd_workspace_write',
+      arguments: { path: '../outside.txt', data: 'blocked' },
+    })).rejects.toThrow(/escapes the session root/)
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ state: 'failed' })
   })
 
   it('marks an interrupted effect uncertain without dispatching the tool again', async () => {

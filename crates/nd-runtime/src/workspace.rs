@@ -315,14 +315,17 @@ pub fn write(params: WriteParams) -> Result<WriteResult> {
 
     let requested_target = parent.join(file_name);
     let (target, replaced, permissions) = match fs::symlink_metadata(&requested_target) {
-        Ok(metadata) => {
+        Ok(_) => {
             let canonical = fs::canonicalize(&requested_target)
                 .context("workspace write target is unavailable")?;
             ensure_inside(&root, &canonical)?;
-            if !fs::metadata(&canonical)?.is_file() {
+            let target_metadata = fs::metadata(&canonical)?;
+            if !target_metadata.is_file() {
                 bail!("workspace write target is not a file");
             }
-            (canonical, true, Some(metadata.permissions()))
+            // If the requested path is a safe in-workspace symlink, preserve the
+            // resolved file's permissions rather than the symlink's metadata.
+            (canonical, true, Some(target_metadata.permissions()))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             (requested_target, false, None)

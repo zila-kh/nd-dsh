@@ -9,6 +9,7 @@ import type { NativeToolRequest, NdNativeEngine } from './nd-native-engine.js'
 
 export type NativeExtensionInvoker = (request: {
   sessionId: string
+  cwd: string
   extensionId: string
   contributionId: string
   input: Record<string, unknown>
@@ -80,6 +81,7 @@ export class NdNativeToolBroker {
       idempotencyKey: `nd-agent:${request.sessionId}:${receipt}`,
       data: { name: request.name, workspace: session.cwd },
     }, 5_000)
+    let effectDispatched = false
     try {
       let result: unknown
       switch (request.name) {
@@ -97,6 +99,7 @@ export class NdNativeToolBroker {
           const method = stringArg(args, 'method')
           if (!method.startsWith('browser.')) throw new Error('ND Agent browser method is invalid')
           const params = recordArg(args, 'params')
+          effectDispatched = true
           result = await this.options.browser.callAgent(method, {
             ...params,
             targetId: BUILTIN_BROWSER_TARGET_ID,
@@ -104,23 +107,32 @@ export class NdNativeToolBroker {
           })
           break
         }
-        case 'nd_workspace_write':
+        case 'nd_workspace_write': {
+          const path = relativeWorkspacePath(session.cwd, args, 'path')
+          const data = stringArg(args, 'data')
+          effectDispatched = true
           result = await this.options.core.request('workspace.write', {
             root: session.cwd,
-            path: relativeWorkspacePath(session.cwd, args, 'path'),
-            data: stringArg(args, 'data'),
+            path,
+            data,
           }, 15_000)
           break
+        }
         case 'nd_git':
-          result = await this.git(session.cwd, args)
+          result = await this.git(session.cwd, args, () => { effectDispatched = true })
           break
         case 'nd_extension_call':
           if (!this.extensionInvoker) throw new Error('ND extension policy bridge is unavailable')
+          const extensionId = stringArg(args, 'extensionId')
+          const contributionId = stringArg(args, 'contributionId')
+          const input = args.input === undefined ? {} : recordArg(args, 'input')
+          effectDispatched = true
           result = await this.extensionInvoker({
             sessionId: request.sessionId,
-            extensionId: stringArg(args, 'extensionId'),
-            contributionId: stringArg(args, 'contributionId'),
-            input: args.input === undefined ? {} : recordArg(args, 'input'),
+            cwd: session.cwd,
+            extensionId,
+            contributionId,
+            input,
           })
           break
         case 'nd_shell':
@@ -131,14 +143,15 @@ export class NdNativeToolBroker {
       await this.finish(request, receipt, 'complete')
       return result
     } catch (error) {
-      // A browser call can have taken effect before its transport fails. Keep
-      // that outcome uncertain; the broker must never replay it implicitly.
-      await this.finish(request, receipt, request.name === 'nd_browser_call' ? 'uncertain' : 'failed').catch(() => undefined)
+      // Once a state-changing host request has been dispatched, a transport
+      // failure cannot prove whether the effect committed. Record uncertainty
+      // instead of "failed" so recovery never treats the action as replayable.
+      await this.finish(request, receipt, effectDispatched ? 'uncertain' : 'failed').catch(() => undefined)
       throw error
     }
   }
 
-  private async git(cwd: string, args: Record<string, unknown>): Promise<unknown> {
+  private async git(cwd: string, args: Record<string, unknown>, markEffectDispatched: () => void): Promise<unknown> {
     const operation = stringArg(args, 'operation')
     switch (operation) {
       case 'status':
@@ -160,6 +173,7 @@ export class NdNativeToolBroker {
         const paths = stringArrayArg(args, 'paths', 64)
           .map((path) => validateWorkspaceRelative(cwd, path))
         if (paths.length === 0) throw new Error('ND Agent Git add requires at least one path')
+        markEffectDispatched()
         return this.options.core.request('git.exec', {
           cwd,
           args: ['add', '--', ...paths],

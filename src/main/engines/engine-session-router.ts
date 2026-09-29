@@ -503,7 +503,8 @@ export class EngineSessionRouter {
       if (!nativePrivateSelectionEnabled()) {
         throw new Error('ND Agent is private; set ND_DSH_NATIVE_PRIVATE_SELECTION=1 only after running the milestone validation gate')
       }
-      if (!this.directEngines.has(engineId)) throw new Error('ND Agent runtime is unavailable')
+      const native = this.directEngines.get(engineId) as NdNativeEngine | undefined
+      if (!native?.ready()) throw new Error('ND Agent runtime is unavailable')
       return
     }
     if (

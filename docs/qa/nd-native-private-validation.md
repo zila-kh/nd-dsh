@@ -42,7 +42,7 @@ Use one disposable real project and the same provider/model where possible.
 | Git status/diff/add | record | record |
 | Visible-browser navigate/read | record | record |
 | Explicit skill invocation | record | record |
-| Governed extension call | record | record |
+| Governed native-host command/view extension call | record | record |
 | Cancel live provider turn | record | record |
 | Restart and continue session | record | record |
 
@@ -53,7 +53,7 @@ Capture completion/failure, wall time, provider/model, input/output usage, and t
 - Interrupt ND Core after an effect intent and before receipt; restart and verify the effect is marked `uncertain` and not replayed.
 - Try `../`, absolute paths, missing write parent directories, and a symlink/junction escape.
 - Request an unsupported Git operation and `nd_shell`; both must fail closed.
-- Exercise an extension contribution that requires approval. Approval/grant state must come from the existing InvocationBroker.
+- Exercise a native-host command/view extension contribution that requires approval. Approval/grant state must come from the existing InvocationBroker. Confirm an executable MCP `tool` contribution is rejected as unavailable instead of being routed to a placeholder native host.
 - Cancel while the provider is connected but has not produced a response chunk.
 
 ## 5. Packaged gate

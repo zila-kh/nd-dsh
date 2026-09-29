@@ -21,6 +21,7 @@ import type { DshSurfaceController } from './dsh/dsh-surface.js'
 import type { CodingEngineRegistry } from './engines/coding-engine-registry.js'
 import type { EngineSessionRouter } from './engines/engine-session-router.js'
 import type { NdNativeToolBroker } from './engines/nd-native/nd-native-tool-broker.js'
+import { nativeExtensionProjectContext } from './engines/nd-native/native-extension-context.js'
 import { readZcodeCliConfig, writeZcodeCliConfig } from './engines/zcode/zcode-config.js'
 import type { ZcodeCliConfigUpdate } from '../shared/zcode-config.js'
 import { ExtensionDemoService } from './extensions/extension-demo-service.js'
@@ -230,15 +231,13 @@ export function registerIpc(deps: IpcDependencies): () => void {
     host: nativeHost,
     organization: deps.organizationStore,
   })
-  deps.nativeToolBroker?.setExtensionInvoker(async ({ sessionId, extensionId, contributionId, input }) => {
+  deps.nativeToolBroker?.setExtensionInvoker(async ({ sessionId, cwd, extensionId, contributionId, input }) => {
     const organization = await deps.organizationStore.state()
-    const projectId = organization.activeProjectId
-    const project = organization.projects.find((item) => item.id === projectId)
-    if (!projectId || !project) throw new Error('ND Agent extension calls require an active project context')
+    const context = nativeExtensionProjectContext(organization, sessionId, cwd)
     const credential = invocationBroker.mintRunCredential({
       sessionId,
       engineId: 'nd-native',
-      context: { kind: 'project', companyId: project.companyId, projectId },
+      context,
       ttlMs: 60_000,
     })
     try {
@@ -757,6 +756,7 @@ export function registerIpc(deps: IpcDependencies): () => void {
   handle(IPC.qaStop, () => deps.qa.stop())
 
   return () => {
+    deps.nativeToolBroker?.setExtensionInvoker(undefined)
     extensionStore.setOnChanged(undefined)
     disposeExtensionIpc()
     disposeNdExtensionIpc()

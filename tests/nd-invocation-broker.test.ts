@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { DAILY_ESSENTIALS_MANIFEST, PROJECT_WORKFLOW_MANIFEST, WALLPAPER_MANAGER_MANIFEST } from '../src/shared/builtin-extension-packages.js'
+import { ND_EXTENSION_API_VERSION, ND_EXTENSION_PROTOCOL, type NdExtensionManifest } from '../src/shared/extension-package.js'
 import { ExtensionPackageStore } from '../src/main/extensions/package-store.js'
 import { InvocationStateStore } from '../src/main/extensions/invocation-state.js'
 import { NativeHostRegistry } from '../src/main/extensions/native-host.js'
@@ -51,6 +52,26 @@ afterEach(async () => {
 const personal = { kind: 'personal' } as const
 const company = { kind: 'company', companyId: 'c1' } as const
 const project = { kind: 'project', companyId: 'c1', projectId: 'p1' } as const
+
+const EXECUTABLE_TOOL_MANIFEST: NdExtensionManifest = {
+  protocol: ND_EXTENSION_PROTOCOL,
+  id: 'nd.test-executable-tool',
+  name: 'Executable Tool Test',
+  description: 'Test-only MCP tool package.',
+  version: '1.0.0',
+  apiVersion: ND_EXTENSION_API_VERSION,
+  contexts: ['personal'],
+  permissions: [],
+  settings: [],
+  contributions: {
+    tools: [{ id: 'echo-tool', title: 'Echo tool', contexts: ['personal'], toolName: 'echo' }],
+    skills: [],
+    commands: [],
+    views: [],
+    workflows: [],
+  },
+  executable: { kind: 'mcp-stdio', command: 'node', args: ['tool.js'], env: {} },
+}
 
 function invoke(overrides: Partial<Parameters<InvocationBroker['invoke']>[0]>) {
   return broker.invoke({
@@ -198,6 +219,20 @@ describe('InvocationBroker authorization', () => {
     broker.revokeSessionCredentials('sess-1')
     const revoked = await broker.invokeAsAgent({ token: credential.token, extensionId: DAILY_ESSENTIALS_MANIFEST.id, contributionId: 'quick-note', input: { text: 'late' } })
     expect(revoked).toMatchObject({ ok: false, error: { code: 'denied' } })
+  })
+
+  it('does not misroute executable MCP tool contributions through native host placeholders', async () => {
+    await packages.registerBuiltin(EXECUTABLE_TOOL_MANIFEST)
+    await state.setActivation(EXECUTABLE_TOOL_MANIFEST.id, personal, true)
+    const credential = broker.mintRunCredential({ sessionId: 'sess-tool', engineId: 'nd-native', context: personal })
+    const result = await broker.invokeAsAgent({
+      token: credential.token,
+      extensionId: EXECUTABLE_TOOL_MANIFEST.id,
+      contributionId: 'echo-tool',
+      input: { text: 'hello' },
+    })
+    expect(result).toMatchObject({ ok: false, error: { code: 'unavailable' } })
+    expect(calls).toHaveLength(0)
   })
 
   it('expires run credentials and rejects unknown tokens', async () => {

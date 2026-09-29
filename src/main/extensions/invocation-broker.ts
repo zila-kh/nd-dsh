@@ -365,8 +365,15 @@ export class InvocationBroker {
     if (!credential) return failure('denied', 'This run credential is stale or unknown')
     const manifest = await this.deps.packages.activeManifest(params.extensionId)
     if (!manifest) return failure('unavailable', `Extension package is not installed: ${params.extensionId}`)
-    const contribution = resolveContribution(manifest, 'tool', params.contributionId)
-      ?? resolveContribution(manifest, 'command', params.contributionId)
+    // Executable `tool` contributions belong to the package MCP runtime.
+    // They cannot be routed through NativeHostRegistry: resolveContribution()
+    // uses a placeholder host for catalog typing, not an execution mapping.
+    // Keep this bridge limited to deterministic native-host command/view
+    // contributions until the dedicated MCP agent bridge is wired.
+    if (manifest.contributions.tools.some((item) => item.id === params.contributionId)) {
+      return failure('unavailable', 'Executable extension tools are not available through the ND native-host bridge yet')
+    }
+    const contribution = resolveContribution(manifest, 'command', params.contributionId)
       ?? resolveContribution(manifest, 'view', params.contributionId)
     if (!contribution) return failure('invalid', `Unknown contribution ${params.contributionId}`)
     if (credential.allowed.length > 0 && !credential.allowed.includes(contribution.host)) {

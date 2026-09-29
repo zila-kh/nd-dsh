@@ -61,7 +61,7 @@ const TOOLS: &[(&str, &str, &str)] = &[
     ),
     (
         "nd_extension_call",
-        "Invoke an installed ND extension contribution through ND's policy and grant broker",
+        "Invoke an installed ND extension native-host command or view through ND's policy and grant broker",
         r#"{"type":"object","properties":{"extensionId":{"type":"string"},"contributionId":{"type":"string"},"input":{"type":"object"}},"required":["extensionId","contributionId"]}"#,
     ),
 ];
