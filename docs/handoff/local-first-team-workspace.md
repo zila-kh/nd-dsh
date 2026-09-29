@@ -21,6 +21,7 @@ The local product now owns the collaboration and automation semantics. Cloud/syn
 - durable decisions with supersession;
 - checkpoint-bound explicit approval requests;
 - approve / request changes / reject verdicts;
+- integration approvals fail closed once merge-back already happened, so verdicts never pretend to undo merged code;
 - chat/reactions do not imply approval;
 - stale checkpoint approval is rejected;
 - request-changes returns a task to ready/rework state;
@@ -137,7 +138,8 @@ The implementation preserves:
 7. stale-approval rejection;
 8. local secrets remain outside collaboration data by default;
 9. scheduled/event work re-enters the same control plane as manual work;
-10. automation does not become a second authority.
+10. automation does not become a second authority;
+11. integration approval is currently a pre-integration collaboration gate/record; mandatory orchestrator pause-and-resume enforcement remains a separate bridge and is not falsely claimed by this milestone.
 
 ## OpenClaw / Hermes mapping
 

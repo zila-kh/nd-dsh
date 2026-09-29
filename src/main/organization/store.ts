@@ -905,6 +905,9 @@ export class OrganizationStore {
     const task = input.taskId ? this.task(input.taskId) : undefined
     if (task && task.projectId !== input.projectId) throw new Error('Approval task crosses project boundary')
     if ((input.targetKind === 'task-review' || input.targetKind === 'integration') && !task) throw new Error('Task approval requires a task')
+    if (input.targetKind === 'integration' && task?.integrationState === 'integrated') {
+      throw new Error('Task is already integrated; an integration approval cannot undo merged work. Create a follow-up task or decision instead.')
+    }
     const revision = input.targetRevision?.trim() || (task ? this.latestCheckpoint(task.id) : undefined)
     if ((input.targetKind === 'task-review' || input.targetKind === 'integration') && !revision) {
       throw new Error('Checkpoint-bound approval requires a task checkpoint')
@@ -933,6 +936,10 @@ export class OrganizationStore {
     const request = must(this.value.approvalRequests.find((item) => item.id === input.id), 'Approval request')
     if (request.status !== 'pending') throw new Error('Approval request is no longer pending')
     const member = this.member(input.actorMemberId, request.companyId)
+    const approvalTask = request.taskId ? this.task(request.taskId) : undefined
+    if (request.targetKind === 'integration' && approvalTask?.integrationState === 'integrated') {
+      throw new Error('Integration approval is no longer actionable because the checkpoint has already been integrated.')
+    }
     if (request.taskId && request.targetRevision) {
       const current = this.latestCheckpoint(request.taskId)
       if (current !== request.targetRevision) {
@@ -943,7 +950,7 @@ export class OrganizationStore {
     request.status = status
     request.resolvedAt = Date.now()
     if (request.taskId) {
-      const task = this.task(request.taskId)
+      const task = approvalTask ?? this.task(request.taskId)
       if (input.verdict === 'request_changes') {
         task.status = 'ready'
         task.integrationState = 'pending'

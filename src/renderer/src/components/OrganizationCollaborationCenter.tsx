@@ -249,11 +249,11 @@ export function OrganizationCollaborationCenter({ companyId, projectId, onAskAge
           <div className="grid grid-cols-[1fr_auto] gap-2">
             <select className={input} value={approvalTaskId} onChange={(event) => setApprovalTaskId(event.target.value)}>
               <option value="">Choose checkpointed task…</option>
-              {tasks.filter((task) => latestCheckpoint(task, state)).map((task) => <option key={task.id} value={task.id}>{task.title} · {latestCheckpoint(task, state)}</option>)}
+              {tasks.filter((task) => latestCheckpoint(task, state) && task.integrationState !== 'integrated').map((task) => <option key={task.id} value={task.id}>{task.title} · {latestCheckpoint(task, state)}</option>)}
             </select>
             <button className={primaryButton} disabled={busy !== null || !approvalTaskId || !activeMember} onClick={() => void requestApproval()}>Request</button>
           </div>
-          <p className="m-0 mt-1 text-[10px] text-faint">Requests bind to the task's exact current checkpoint. A changed checkpoint makes the approval stale.</p>
+          <p className="m-0 mt-1 text-[10px] text-faint">Request integration approval before merge-back. It binds to the exact checkpoint; changed or already-integrated work fails closed because approval never pretends to undo code.</p>
 
           <div className="mt-2 grid gap-2">
             {approvals.slice(0, 8).map((item) => (

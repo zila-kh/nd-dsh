@@ -120,6 +120,45 @@ describe('local team collaboration', () => {
     expect(((await store.state()).approvalRequests ?? [])[0]?.status).toBe('pending')
   })
 
+  it('fails closed when an integration approval is requested or resolved after merge-back', async () => {
+    const { store, company, project, owner } = await fixture()
+    let state = await store.mutate({ type: 'task.create', companyId: company.id, projectId: project.id, title: 'Merged task', description: 'Checkpoint then integrate' })
+    const task = state.tasks[0]!
+    const run = await store.beginRun('task-execution', company.id, project.id, 'session-integrated', task.id, undefined, {
+      parallelTask: true,
+      engineId: 'nd-native',
+      workspaceKind: 'git-worktree',
+      workspaceRoot: '/tmp/task-integrated',
+      baselineCommit: 'base',
+    })
+    await store.updateRunProvenance(run.id, { checkpointCommit: 'checkpoint-integrated' })
+
+    state = await store.mutate({
+      type: 'approval.request',
+      companyId: company.id,
+      projectId: project.id,
+      taskId: task.id,
+      requesterMemberId: owner.id,
+      targetKind: 'integration',
+      targetId: task.id,
+    })
+    const pending = (state.approvalRequests ?? [])[0]!
+    await store.markIntegrated(task.id, 'checkpoint-integrated')
+
+    await expect(store.mutate({ type: 'approval.resolve', id: pending.id, actorMemberId: owner.id, verdict: 'request_changes' }))
+      .rejects.toThrow(/already been integrated/i)
+
+    await expect(store.mutate({
+      type: 'approval.request',
+      companyId: company.id,
+      projectId: project.id,
+      taskId: task.id,
+      requesterMemberId: owner.id,
+      targetKind: 'integration',
+      targetId: task.id,
+    })).rejects.toThrow(/already integrated/i)
+  })
+
   it('records explicit human verdicts independently from agent review state', async () => {
     const { store, company, project, owner } = await fixture()
     let state = await store.mutate({ type: 'task.create', companyId: company.id, projectId: project.id, title: 'UI', description: 'Polish team view' })
