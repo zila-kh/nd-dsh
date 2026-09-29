@@ -7,6 +7,13 @@ import type { WorkspaceService } from '../../workspace/workspace-service.js'
 import { sessionInWorkspace } from '../../workspace/path-utils.js'
 import type { NativeToolRequest, NdNativeEngine } from './nd-native-engine.js'
 
+export type NativeExtensionInvoker = (request: {
+  sessionId: string
+  extensionId: string
+  contributionId: string
+  input: Record<string, unknown>
+}) => Promise<unknown>
+
 export interface NativeToolBrokerOptions {
   core: Pick<CoreClient, 'request'>
   browser: Pick<BrowserPlatformService, 'callAgent' | 'issueSessionAccess'>
@@ -18,7 +25,13 @@ export interface NativeToolBrokerOptions {
 /** The Rust worker proposes actions; this trusted host resolves its session and
  * workspace binding before crossing any ND service boundary. */
 export class NdNativeToolBroker {
+  private extensionInvoker: NativeExtensionInvoker | undefined
+
   constructor(private readonly options: NativeToolBrokerOptions) {}
+
+  setExtensionInvoker(invoker: NativeExtensionInvoker | undefined): void {
+    this.extensionInvoker = invoker
+  }
 
   /** An intent without a terminal receipt may already have reached the host.
    * Mark it uncertain at startup and never dispatch it again. */
@@ -92,10 +105,26 @@ export class NdNativeToolBroker {
           break
         }
         case 'nd_workspace_write':
-        case 'nd_shell':
+          result = await this.options.core.request('workspace.write', {
+            root: session.cwd,
+            path: relativeWorkspacePath(session.cwd, args, 'path'),
+            data: stringArg(args, 'data'),
+          }, 15_000)
+          break
         case 'nd_git':
+          result = await this.git(session.cwd, args)
+          break
         case 'nd_extension_call':
-          throw new Error(`${request.name} is unavailable until the native workspace effect sandbox is verified`)
+          if (!this.extensionInvoker) throw new Error('ND extension policy bridge is unavailable')
+          result = await this.extensionInvoker({
+            sessionId: request.sessionId,
+            extensionId: stringArg(args, 'extensionId'),
+            contributionId: stringArg(args, 'contributionId'),
+            input: args.input === undefined ? {} : recordArg(args, 'input'),
+          })
+          break
+        case 'nd_shell':
+          throw new Error('nd_shell is unavailable: a working directory is not an OS sandbox')
         default:
           throw new Error('Unknown ND Agent tool')
       }
@@ -106,6 +135,39 @@ export class NdNativeToolBroker {
       // that outcome uncertain; the broker must never replay it implicitly.
       await this.finish(request, receipt, request.name === 'nd_browser_call' ? 'uncertain' : 'failed').catch(() => undefined)
       throw error
+    }
+  }
+
+  private async git(cwd: string, args: Record<string, unknown>): Promise<unknown> {
+    const operation = stringArg(args, 'operation')
+    switch (operation) {
+      case 'status':
+        return this.options.core.request('git.status', { cwd }, 15_000)
+      case 'log':
+        return this.options.core.request('git.log', {
+          cwd,
+          limit: integerArg(args, 'limit', 20, 1, 100),
+        }, 15_000)
+      case 'diff': {
+        const path = relativeWorkspacePath(cwd, args, 'path')
+        return this.options.core.request('git.exec', {
+          cwd,
+          args: ['diff', '--', path],
+          maxOutputBytes: 2 * 1024 * 1024,
+        }, 30_000)
+      }
+      case 'add': {
+        const paths = stringArrayArg(args, 'paths', 64)
+          .map((path) => validateWorkspaceRelative(cwd, path))
+        if (paths.length === 0) throw new Error('ND Agent Git add requires at least one path')
+        return this.options.core.request('git.exec', {
+          cwd,
+          args: ['add', '--', ...paths],
+          maxOutputBytes: 1024 * 1024,
+        }, 30_000)
+      }
+      default:
+        throw new Error('ND Agent Git operation is not allowed')
     }
   }
 
@@ -128,4 +190,34 @@ function recordArg(args: Record<string, unknown>, key: string): Record<string, u
   const value = args[key]
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`ND Agent ${key} must be an object`)
   return value as Record<string, unknown>
+}
+
+function relativeWorkspacePath(root: string, args: Record<string, unknown>, key: string): string {
+  return validateWorkspaceRelative(root, stringArg(args, key))
+}
+
+function validateWorkspaceRelative(root: string, value: string): string {
+  if (value.includes('\0')) throw new Error('ND Agent workspace path contains an invalid byte')
+  const target = resolve(root, value)
+  if (!sessionInWorkspace(root, target) || target === resolve(root)) {
+    throw new Error('ND Agent workspace path escapes the session root')
+  }
+  return value
+}
+
+function stringArrayArg(args: Record<string, unknown>, key: string, max: number): string[] {
+  const value = args[key]
+  if (!Array.isArray(value) || value.length > max || value.some((item) => typeof item !== 'string' || !item.trim())) {
+    throw new Error(`ND Agent ${key} must be a non-empty string array with at most ${max} entries`)
+  }
+  return value as string[]
+}
+
+function integerArg(args: Record<string, unknown>, key: string, fallback: number, min: number, max: number): number {
+  const value = args[key]
+  if (value === undefined) return fallback
+  if (!Number.isInteger(value) || (value as number) < min || (value as number) > max) {
+    throw new Error(`ND Agent ${key} must be an integer between ${min} and ${max}`)
+  }
+  return value as number
 }

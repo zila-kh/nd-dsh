@@ -18,7 +18,7 @@
     "preview": "electron-vite preview",
     "typecheck": "node node_modules/typescript/bin/tsc --noEmit -p tsconfig.node.json && node node_modules/typescript/bin/tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
-    "test:engines": "vitest run tests/coding-engines.test.ts tests/coding-engine-routing.test.ts tests/engine-session-router.test.ts tests/extra-coding-engines.test.ts tests/agent-cli-engines.test.ts tests/nd-skill-service.test.ts tests/workspace-context.test.ts tests/harness-session-scope.test.ts tests/session-project-scope.test.ts tests/session-tree.test.ts",
+    "test:engines": "vitest run tests/coding-engines.test.ts tests/coding-engine-routing.test.ts tests/engine-session-router.test.ts tests/extra-coding-engines.test.ts tests/agent-cli-engines.test.ts tests/nd-skill-service.test.ts tests/nd-native-tool-broker.test.ts tests/nd-native-selection-gate.test.ts tests/workspace-context.test.ts tests/harness-session-scope.test.ts tests/session-project-scope.test.ts tests/session-tree.test.ts",
     "test:launcher": "vitest run tests/quick-launcher.test.ts",
     "e2e": "playwright test",
     "e2e:launcher": "playwright test e2e/quick-launcher.spec.ts",

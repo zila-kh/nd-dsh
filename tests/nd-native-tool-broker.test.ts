@@ -43,6 +43,79 @@ describe('ND Agent trusted tool broker', () => {
     expect(request.mock.calls[1]?.[1]).toMatchObject({ root: project, path: 'a.txt', maxBytes: 1024 * 1024 })
   })
 
+  it('journals and dispatches an atomic workspace write only after workspace validation', async () => {
+    const { broker, request } = fixture()
+    await broker.call({
+      sessionId: 'nd-native-one',
+      cwd: project,
+      name: 'nd_workspace_write',
+      arguments: { path: 'src/app.ts', data: 'export const ok = true\n' },
+    })
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      'effectJournal.append',
+      'workspace.write',
+      'effectJournal.append',
+    ])
+    expect(request.mock.calls[1]?.[1]).toMatchObject({
+      root: project,
+      path: 'src/app.ts',
+      data: 'export const ok = true\n',
+    })
+  })
+
+  it('rejects workspace-write traversal before ND Core sees the write', async () => {
+    const { broker, request } = fixture()
+    await expect(broker.call({
+      sessionId: 'nd-native-one',
+      cwd: project,
+      name: 'nd_workspace_write',
+      arguments: { path: '../outside.txt', data: 'blocked' },
+    })).rejects.toThrow(/escapes the session root/)
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      'effectJournal.append',
+      'effectJournal.append',
+    ])
+  })
+
+  it('limits Git to broker-constructed workspace operations', async () => {
+    const { broker, request } = fixture()
+    await broker.call({
+      sessionId: 'nd-native-one',
+      cwd: project,
+      name: 'nd_git',
+      arguments: { operation: 'diff', path: 'src/app.ts' },
+    })
+    expect(request.mock.calls[1]).toEqual([
+      'git.exec',
+      expect.objectContaining({ cwd: project, args: ['diff', '--', 'src/app.ts'] }),
+      30_000,
+    ])
+    await expect(broker.call({
+      sessionId: 'nd-native-one',
+      cwd: project,
+      name: 'nd_git',
+      arguments: { operation: 'commit', message: 'unsafe' },
+    })).rejects.toThrow(/not allowed/)
+  })
+
+  it('routes extension calls through the injected governed policy bridge', async () => {
+    const { broker } = fixture()
+    const invoke = vi.fn(async () => ({ ok: true, value: { items: [] } }))
+    broker.setExtensionInvoker(invoke)
+    await expect(broker.call({
+      sessionId: 'nd-native-one',
+      cwd: project,
+      name: 'nd_extension_call',
+      arguments: { extensionId: 'example.tools', contributionId: 'project.read', input: { query: 'todo' } },
+    })).resolves.toEqual({ ok: true, value: { items: [] } })
+    expect(invoke).toHaveBeenCalledWith({
+      sessionId: 'nd-native-one',
+      extensionId: 'example.tools',
+      contributionId: 'project.read',
+      input: { query: 'todo' },
+    })
+  })
+
   it('injects browser access in the trusted host and blocks other method families', async () => {
     const { broker, callAgent } = fixture()
     await broker.call({ sessionId: 'nd-native-one', cwd: project, name: 'nd_browser_call', arguments: { method: 'browser.targets', params: {} } })
@@ -51,9 +124,9 @@ describe('ND Agent trusted tool broker', () => {
     expect(callAgent).toHaveBeenCalledTimes(1)
   })
 
-  it('fails closed for native effects that have no verified sandbox', async () => {
+  it('fails closed for shell because cwd is not an OS sandbox', async () => {
     const { broker } = fixture()
-    await expect(broker.call({ sessionId: 'nd-native-one', cwd: project, name: 'nd_shell', arguments: { command: 'echo hello' } })).rejects.toThrow(/unavailable/)
+    await expect(broker.call({ sessionId: 'nd-native-one', cwd: project, name: 'nd_shell', arguments: { command: 'echo hello' } })).rejects.toThrow(/not an OS sandbox/)
   })
 
   it('marks an interrupted effect uncertain without dispatching the tool again', async () => {

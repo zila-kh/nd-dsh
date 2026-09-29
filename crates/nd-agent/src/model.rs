@@ -1,10 +1,12 @@
 use crate::session::{Message, ToolCall};
 use anyhow::{Context, Result, bail};
-use reqwest::blocking::Client;
+use futures_util::StreamExt;
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 #[derive(Clone, Debug, Deserialize)]
@@ -46,6 +48,21 @@ const TOOLS: &[(&str, &str, &str)] = &[
         "nd_browser_call",
         "Use ND's visible browser through its governed browser platform",
         r#"{"type":"object","properties":{"method":{"type":"string"},"params":{"type":"object"}},"required":["method","params"]}"#,
+    ),
+    (
+        "nd_workspace_write",
+        "Atomically create or replace a UTF-8 file in an existing workspace directory",
+        r#"{"type":"object","properties":{"path":{"type":"string"},"data":{"type":"string"}},"required":["path","data"]}"#,
+    ),
+    (
+        "nd_git",
+        "Run one governed Git operation in the session workspace",
+        r#"{"type":"object","properties":{"operation":{"type":"string","enum":["status","diff","log","add"]},"path":{"type":"string"},"paths":{"type":"array","items":{"type":"string"},"maxItems":64},"limit":{"type":"integer","minimum":1,"maximum":100}},"required":["operation"]}"#,
+    ),
+    (
+        "nd_extension_call",
+        "Invoke an installed ND extension contribution through ND's policy and grant broker",
+        r#"{"type":"object","properties":{"extensionId":{"type":"string"},"contributionId":{"type":"string"},"input":{"type":"object"}},"required":["extensionId","contributionId"]}"#,
     ),
 ];
 
@@ -203,12 +220,31 @@ fn endpoint(route: &ModelRoute) -> Result<String> {
 }
 
 /// A model request is retried only before any streamed output has been emitted.
-/// Tool effects are never retried by this layer.
+/// Cancellation is observed while connecting and while streaming response bytes:
+/// dropping the in-flight future closes the provider request instead of waiting for
+/// the provider's overall timeout.
 pub fn complete(
     route: &ModelRoute,
     messages: &[Message],
+    cancel: Arc<AtomicBool>,
     mut on_text: impl FnMut(&str),
 ) -> Result<ModelTurn> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("create ND model runtime")?;
+    runtime.block_on(complete_async(route, messages, &cancel, &mut on_text))
+}
+
+async fn complete_async(
+    route: &ModelRoute,
+    messages: &[Message],
+    cancel: &AtomicBool,
+    on_text: &mut impl FnMut(&str),
+) -> Result<ModelTurn> {
+    if cancel.load(Ordering::SeqCst) {
+        bail!("ND agent turn canceled");
+    }
     let client = Client::builder()
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(180))
@@ -216,7 +252,11 @@ pub fn complete(
     let url = endpoint(route)?;
     let body = request_body(route, messages)?;
     let mut last_error = None;
+
     for attempt in 0..3 {
+        if cancel.load(Ordering::SeqCst) {
+            bail!("ND agent turn canceled");
+        }
         let mut request = client.post(&url).json(&body);
         if !route.api_key.is_empty() {
             if route.format == "anthropic-messages" {
@@ -230,31 +270,67 @@ pub fn complete(
         for (name, value) in &route.headers {
             request = request.header(name.as_str(), value.as_str());
         }
-        match request.send() {
-            Ok(response) if response.status().is_success() => {
-                let mut parser = StreamParser::new(&route.format);
-                let mut reader = BufReader::new(response);
-                let mut line = String::new();
-                loop {
-                    line.clear();
-                    if reader.read_line(&mut line)? == 0 {
-                        break;
-                    }
-                    if let Some(data) = line.trim_end().strip_prefix("data: ") {
-                        if data == "[DONE]" {
-                            break;
-                        }
-                        let value: Value =
-                            serde_json::from_str(data).context("invalid model SSE data")?;
-                        if value.get("error").is_some() || value["type"] == "error" {
-                            bail!("model provider reported a streaming error");
-                        }
-                        if let Some(delta) = parser.push(&value)? {
-                            on_text(&delta);
+
+        let response = {
+            let send = request.send();
+            tokio::pin!(send);
+            loop {
+                tokio::select! {
+                    result = &mut send => break result,
+                    _ = tokio::time::sleep(Duration::from_millis(50)) => {
+                        if cancel.load(Ordering::SeqCst) {
+                            bail!("ND agent turn canceled");
                         }
                     }
                 }
-                return parser.finish();
+            }
+        };
+
+        match response {
+            Ok(response) if response.status().is_success() => {
+                let mut parser = StreamParser::new(&route.format);
+                let mut stream = response.bytes_stream();
+                let mut emitted_output = false;
+                let mut pending = Vec::<u8>::new();
+                let mut done = false;
+                while !done {
+                    let next = loop {
+                        tokio::select! {
+                            value = stream.next() => break value,
+                            _ = tokio::time::sleep(Duration::from_millis(50)) => {
+                                if cancel.load(Ordering::SeqCst) {
+                                    bail!("ND agent turn canceled");
+                                }
+                            }
+                        }
+                    };
+                    let Some(chunk) = next else { break };
+                    let chunk = chunk.map_err(|_| anyhow::anyhow!("model transport stream failed"))?;
+                    pending.extend_from_slice(&chunk);
+                    while let Some(index) = pending.iter().position(|byte| *byte == b'\n') {
+                        let mut line = pending.drain(..=index).collect::<Vec<_>>();
+                        while matches!(line.last(), Some(b'\n' | b'\r')) {
+                            line.pop();
+                        }
+                        let (line_done, emitted) = consume_sse_line(&line, &mut parser, on_text)?;
+                        done = line_done;
+                        emitted_output |= emitted;
+                        if done {
+                            break;
+                        }
+                    }
+                }
+                if !done && !pending.is_empty() {
+                    let (_, emitted) = consume_sse_line(&pending, &mut parser, on_text)?;
+                    emitted_output |= emitted;
+                }
+                match parser.finish() {
+                    Ok(turn) => return Ok(turn),
+                    Err(error) if !emitted_output && attempt < 2 => {
+                        last_error = Some(error.to_string());
+                    }
+                    Err(error) => return Err(error),
+                }
             }
             Ok(response) => {
                 let status = response.status();
@@ -265,19 +341,50 @@ pub fn complete(
                 }
             }
             Err(_error) => {
-                // reqwest errors can include the full provider URL, including
+                // Transport errors can include the full provider URL, including
                 // credentials that a user placed in its query string.
                 last_error = Some("model transport request failed".to_owned());
             }
         }
         if attempt < 2 {
-            std::thread::sleep(Duration::from_millis(250 * (1 << attempt)));
+            let backoff = tokio::time::sleep(Duration::from_millis(250 * (1 << attempt)));
+            tokio::pin!(backoff);
+            loop {
+                tokio::select! {
+                    _ = &mut backoff => break,
+                    _ = tokio::time::sleep(Duration::from_millis(50)) => {
+                        if cancel.load(Ordering::SeqCst) {
+                            bail!("ND agent turn canceled");
+                        }
+                    }
+                }
+            }
         }
     }
-    bail!(
-        "{}",
-        last_error.unwrap_or_else(|| "model request failed".to_owned())
-    )
+    bail!("{}", last_error.unwrap_or_else(|| "model request failed".to_owned()))
+}
+
+fn consume_sse_line(
+    line: &[u8],
+    parser: &mut StreamParser,
+    on_text: &mut impl FnMut(&str),
+) -> Result<(bool, bool)> {
+    let line = std::str::from_utf8(line).context("invalid model SSE encoding")?;
+    let Some(data) = line.strip_prefix("data: ") else {
+        return Ok((false, false));
+    };
+    if data == "[DONE]" {
+        return Ok((true, false));
+    }
+    let value: Value = serde_json::from_str(data).context("invalid model SSE data")?;
+    if value.get("error").is_some() || value["type"] == "error" {
+        bail!("model provider reported a streaming error");
+    }
+    if let Some(delta) = parser.push(&value)? {
+        on_text(&delta);
+        return Ok((false, true));
+    }
+    Ok((false, false))
 }
 
 #[derive(Default)]
@@ -544,6 +651,41 @@ mod tests {
     }
 
     #[test]
+    fn cancels_while_waiting_for_provider_response() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (_socket, _) = listener.accept().unwrap();
+            thread::sleep(Duration::from_secs(2));
+        });
+        let route = ModelRoute {
+            provider: "test".to_owned(),
+            model: "test-model".to_owned(),
+            base_url: format!("http://{address}"),
+            api_key: String::new(),
+            format: "openai-completions".to_owned(),
+            headers: BTreeMap::new(),
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = Arc::clone(&cancel);
+        let started = std::time::Instant::now();
+        let worker = thread::spawn(move || {
+            complete(
+                &route,
+                &[Message::text("user", "wait")],
+                worker_cancel,
+                |_| {},
+            )
+        });
+        thread::sleep(Duration::from_millis(100));
+        cancel.store(true, Ordering::SeqCst);
+        let error = worker.join().unwrap().unwrap_err();
+        assert!(format!("{error:#}").contains("canceled"));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        server.join().unwrap();
+    }
+
+    #[test]
     fn streams_a_deterministic_openai_compatible_provider() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -569,9 +711,14 @@ mod tests {
             headers: BTreeMap::new(),
         };
         let mut chunks = Vec::new();
-        let turn = complete(&route, &[Message::text("user", "say hello")], |chunk| {
-            chunks.push(chunk.to_owned())
-        })
+        let turn = complete(
+            &route,
+            &[Message::text("user", "say hello")],
+            Arc::new(AtomicBool::new(false)),
+            |chunk| {
+                chunks.push(chunk.to_owned())
+            },
+        )
         .unwrap();
         let request = server.join().unwrap();
         assert!(request.contains("POST /v1/chat/completions"));

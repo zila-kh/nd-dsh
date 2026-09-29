@@ -49,6 +49,7 @@ import { TRANSCRIPT_EVENT_TYPES } from './agent-cli/agent-cli-support.js'
 import type { PiCodingEngine } from './pi/pi-coding-engine.js'
 import type { ZcodeCliEngine } from './zcode/zcode-cli-engine.js'
 import type { NdNativeEngine } from './nd-native/nd-native-engine.js'
+import { nativePrivateSelectionEnabled } from './nd-native/native-selection-gate.js'
 
 const STRUCTURED_TRANSCRIPT_ENGINE_IDS = new Set([
   OPENCODE_CLI_ENGINE_ID,
@@ -499,7 +500,11 @@ export class EngineSessionRouter {
 
   private assertKnownEngine(engineId: string): void {
     if (engineId === ND_NATIVE_ENGINE_ID) {
-      throw new Error('ND Agent is still in private workflow verification')
+      if (!nativePrivateSelectionEnabled()) {
+        throw new Error('ND Agent is private; set ND_DSH_NATIVE_PRIVATE_SELECTION=1 only after running the milestone validation gate')
+      }
+      if (!this.directEngines.has(engineId)) throw new Error('ND Agent runtime is unavailable')
+      return
     }
     if (
       engineId === ND_HARNESS_ENGINE_ID

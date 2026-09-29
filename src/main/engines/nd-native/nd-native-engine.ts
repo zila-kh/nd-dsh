@@ -7,6 +7,7 @@ import { ND_NATIVE_ENGINE_ID } from '../../../shared/coding-engines.js'
 import { ndAgentBinPath } from '../../app-paths.js'
 import type { ProviderStore } from '../../providers.js'
 import { noteModelUsage } from '../../metrics/task-metrics.js'
+import { tokenSaverRuntime } from '../../token-saver/token-saver-runtime.js'
 
 interface RpcPending {
   resolve(value: unknown): void
@@ -86,7 +87,9 @@ export class NdNativeEngine {
     const selectedProvider = slash > 0 && !options.provider ? options.model!.slice(0, slash) : options.provider
     const selectedModel = slash > 0 && !options.provider ? options.model!.slice(slash + 1) : options.model
     const route = this.options.providers.nativeAgentRoute(selectedProvider, selectedModel)
-    await this.rpc('turn.start', { sessionId, prompt, cwd: options.cwd, route })
+    const tokenSaver = tokenSaverRuntime()?.settings()
+    const compactContext = tokenSaver ? tokenSaver.ndEnabled && tokenSaver.mode !== 'off' : true
+    await this.rpc('turn.start', { sessionId, prompt, cwd: options.cwd, route, compactContext })
     return { sessionId }
   }
 

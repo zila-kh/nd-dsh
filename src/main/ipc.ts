@@ -20,6 +20,7 @@ import type { CapabilityRegistry } from './capabilities/capability-registry.js'
 import type { DshSurfaceController } from './dsh/dsh-surface.js'
 import type { CodingEngineRegistry } from './engines/coding-engine-registry.js'
 import type { EngineSessionRouter } from './engines/engine-session-router.js'
+import type { NdNativeToolBroker } from './engines/nd-native/nd-native-tool-broker.js'
 import { readZcodeCliConfig, writeZcodeCliConfig } from './engines/zcode/zcode-config.js'
 import type { ZcodeCliConfigUpdate } from '../shared/zcode-config.js'
 import { ExtensionDemoService } from './extensions/extension-demo-service.js'
@@ -56,6 +57,7 @@ interface IpcDependencies {
   engines: CodingEngineRegistry
   capabilities: CapabilityRegistry
   engineRouter: EngineSessionRouter
+  nativeToolBroker?: Pick<NdNativeToolBroker, 'setExtensionInvoker'>
   harness: HarnessService
   projectWorkspace: ProjectWorkspaceCoordinator
   workspaces: WorkspaceRegistry
@@ -227,6 +229,28 @@ export function registerIpc(deps: IpcDependencies): () => void {
     state: invocationState,
     host: nativeHost,
     organization: deps.organizationStore,
+  })
+  deps.nativeToolBroker?.setExtensionInvoker(async ({ sessionId, extensionId, contributionId, input }) => {
+    const organization = await deps.organizationStore.state()
+    const projectId = organization.activeProjectId
+    const project = organization.projects.find((item) => item.id === projectId)
+    if (!projectId || !project) throw new Error('ND Agent extension calls require an active project context')
+    const credential = invocationBroker.mintRunCredential({
+      sessionId,
+      engineId: 'nd-native',
+      context: { kind: 'project', companyId: project.companyId, projectId },
+      ttlMs: 60_000,
+    })
+    try {
+      return await invocationBroker.invokeAsAgent({
+        token: credential.token,
+        extensionId,
+        contributionId,
+        input,
+      })
+    } finally {
+      invocationBroker.revokeRunCredential(credential.token)
+    }
   })
   const disposeNdExtensionIpc = registerNdExtensionIpc({
     window: deps.window,

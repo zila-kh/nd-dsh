@@ -190,6 +190,7 @@ impl AgentServer {
         let prompt = required_string(params, "prompt")?;
         let route: ModelRoute = serde_json::from_value(params["route"].clone())
             .context("missing or invalid ND model route")?;
+        let compact_context = params["compactContext"].as_bool().unwrap_or(true);
         let session = self.store.get(&session_id)?;
         let flag = Arc::new(AtomicBool::new(false));
         {
@@ -218,6 +219,14 @@ impl AgentServer {
                 json!({ "message": {
                 "role": "user", "content": [{ "type": "text", "text": prompt }] } }),
             )?;
+            if session.compact_messages(compact_context) {
+                let message_count = session.messages.len();
+                self.record(
+                    &mut session,
+                    "context/compacted",
+                    json!({ "mode": "token-saver", "messages": message_count }),
+                )?;
+            }
             self.store.save(&session)?;
         }
         self.cancellation
@@ -228,7 +237,7 @@ impl AgentServer {
         let server = Arc::clone(self);
         let worker_session_id = session_id.clone();
         std::thread::spawn(move || {
-            let outcome = server.run_turn(&session, &route, &flag);
+            let outcome = server.run_turn(&session, &route, &flag, compact_context);
             if let Err(error) = outcome {
                 if let Ok(mut session) = session.lock() {
                     let _ = server.record(
@@ -261,15 +270,27 @@ impl AgentServer {
         &self,
         session: &Arc<Mutex<Session>>,
         route: &ModelRoute,
-        flag: &AtomicBool,
+        flag: &Arc<AtomicBool>,
+        compact_context: bool,
     ) -> Result<()> {
         for _ in 0..MAX_TOOL_ROUNDS {
             if flag.load(Ordering::SeqCst) {
                 bail!("ND agent turn canceled");
             }
-            let messages = session.lock().unwrap().messages.clone();
-            let session_id = session.lock().unwrap().id.clone();
-            let turn = complete(route, &messages, |text| {
+            let (messages, session_id) = {
+                let mut session = session.lock().unwrap();
+                if session.compact_messages(compact_context) {
+                    let message_count = session.messages.len();
+                    self.record(
+                        &mut session,
+                        "context/compacted",
+                        json!({ "mode": "token-saver", "messages": message_count }),
+                    )?;
+                    self.store.save(&session)?;
+                }
+                (session.messages.clone(), session.id.clone())
+            };
+            let turn = complete(route, &messages, Arc::clone(flag), |text| {
                 if !flag.load(Ordering::SeqCst) {
                     let event = {
                         let mut session = session.lock().unwrap();
