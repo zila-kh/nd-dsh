@@ -104,7 +104,7 @@ When Always-On is enabled, closing the main ND window hides it rather than destr
 
 continue running while the user is logged in.
 
-Packaged Windows/macOS builds can start ND hidden at login with `--background`.
+Packaged Windows builds use the `--background` login-item argument. On macOS, where Electron login-item arguments are Windows-only, ND detects `wasOpenedAtLogin` and hides the window itself. macOS login-item behavior should be validated on a packaged, signed/notarized build.
 
 Linux currently reports start-at-login as unsupported instead of claiming integration that does not exist.
 

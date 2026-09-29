@@ -10,20 +10,25 @@ afterEach(async () => {
   await Promise.all(temporary.splice(0).map((path) => rm(path, { recursive: true, force: true })))
 })
 
-async function fixture(initialOpenAtLogin = false) {
+async function fixture(
+  initialOpenAtLogin = false,
+  platform: NodeJS.Platform = 'win32',
+  wasOpenedAtLogin = false,
+) {
   const root = await mkdtemp(join(tmpdir(), 'nd-local-runtime-'))
   temporary.push(root)
   const path = join(root, 'local-runtime.json')
   let openAtLogin = initialOpenAtLogin
+  const getLoginItemSettings = vi.fn((_options?: { args?: string[] }) => ({ openAtLogin, wasOpenedAtLogin }))
   const setLoginItemSettings = vi.fn((settings: { openAtLogin: boolean }) => {
     openAtLogin = settings.openAtLogin
   })
   const appPort: LocalRuntimeAppPort = {
     isPackaged: true,
-    getLoginItemSettings: () => ({ openAtLogin }),
+    getLoginItemSettings,
     setLoginItemSettings,
   }
-  return { path, appPort, setLoginItemSettings, service: new LocalRuntimeService(path, appPort, 'win32') }
+  return { path, appPort, getLoginItemSettings, setLoginItemSettings, service: new LocalRuntimeService(path, appPort, platform) }
 }
 
 describe('LocalRuntimeService', () => {
@@ -71,6 +76,24 @@ describe('LocalRuntimeService', () => {
     expect(state.lastHeartbeatTickAt).toBe(200)
     expect(state.lastEventTickAt).toBe(300)
     expect(changed.at(-1)).toBe(3)
+  })
+
+  it('starts hidden from the Windows login argument only when Always-On is enabled', async () => {
+    const { service } = await fixture(false, 'win32')
+    await service.initialize()
+    expect(service.shouldLaunchInBackground(['nd-dsh', '--background'])).toBe(false)
+    await service.update({ alwaysOn: true })
+    expect(service.shouldLaunchInBackground(['nd-dsh', '--background'])).toBe(true)
+    expect(service.shouldLaunchInBackground(['nd-dsh'])).toBe(false)
+  })
+
+  it('detects a packaged macOS login launch without relying on Windows-only args', async () => {
+    const { service, getLoginItemSettings, setLoginItemSettings } = await fixture(false, 'darwin', true)
+    await service.initialize()
+    await service.update({ alwaysOn: true, startAtLogin: true })
+    expect(service.shouldLaunchInBackground(['nd-dsh'])).toBe(true)
+    expect(setLoginItemSettings).toHaveBeenLastCalledWith({ openAtLogin: true })
+    expect(getLoginItemSettings).toHaveBeenCalledWith()
   })
 
   it('does not claim unsupported Linux start-at-login integration', async () => {

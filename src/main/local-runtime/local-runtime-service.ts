@@ -11,7 +11,7 @@ const DEFAULT_SETTINGS: LocalRuntimeSettings = {
 
 export interface LocalRuntimeAppPort {
   isPackaged: boolean
-  getLoginItemSettings(options?: { args?: string[] }): { openAtLogin: boolean }
+  getLoginItemSettings(options?: { args?: string[] }): { openAtLogin: boolean; wasOpenedAtLogin?: boolean }
   setLoginItemSettings(settings: { openAtLogin: boolean; args?: string[] }): void
 }
 
@@ -49,6 +49,17 @@ export class LocalRuntimeService {
     return this.settingsValue.alwaysOn
   }
 
+  shouldLaunchInBackground(argv: readonly string[]): boolean {
+    if (!this.settingsValue.alwaysOn) return false
+    if (argv.includes('--background')) return true
+    if (this.platform !== 'darwin' || !this.appPort.isPackaged) return false
+    try {
+      return this.appPort.getLoginItemSettings().wasOpenedAtLogin === true
+    } catch {
+      return false
+    }
+  }
+
   setBackground(background: boolean): void {
     if (this.background === background) return
     this.background = background
@@ -74,7 +85,7 @@ export class LocalRuntimeService {
     await this.load()
     const supported = this.platform === 'win32' || this.platform === 'darwin'
     const applied = supported && this.appPort.isPackaged
-      ? this.appPort.getLoginItemSettings({ args: ['--background'] }).openAtLogin
+      ? this.appPort.getLoginItemSettings(this.platform === 'win32' ? { args: ['--background'] } : undefined).openAtLogin
       : false
     return {
       settings: { ...this.settingsValue },
@@ -144,7 +155,7 @@ export class LocalRuntimeService {
     try {
       this.appPort.setLoginItemSettings({
         openAtLogin: this.settingsValue.alwaysOn && this.settingsValue.startAtLogin,
-        args: ['--background'],
+        ...(this.platform === 'win32' ? { args: ['--background'] } : {}),
       })
     } catch (error) {
       console.warn('Failed to apply ND start-at-login setting:', error)

@@ -619,7 +619,7 @@ async function createWindow(cdpPort: number): Promise<void> {
     }
   })
 
-  const launchInBackground = process.argv.includes('--background') && localRuntime.isAlwaysOn()
+  const launchInBackground = localRuntime.shouldLaunchInBackground(process.argv)
   window.once('ready-to-show', () => {
     if (launchInBackground) {
       window.hide()
