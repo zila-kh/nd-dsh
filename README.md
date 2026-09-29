@@ -274,11 +274,19 @@ Review the resulting runtime/config compatibility against the ND overlay and ada
 
 ## Project status
 
-**ND-DSH is a Developer Preview / Private Beta.** Supervised source-build and staged-runtime workflows are available, but a signed public installer, installed-app coverage, and a broad compatibility guarantee are still pending; expect breaking changes.
+**ND-DSH is a Developer Preview / Private Beta.** The current private artifact is a local Windows portable build, `ND-DSH-0.1.1-private-beta-x64.exe`. It is not a signed public installer, and there is no update channel.
 
-What exists today is a real running slice: the app runs on actual desktop/runtime state with no production fallback to mock companies, fake sessions, fake workspaces, or a localhost demo page, and the renderer fails closed if its trusted desktop bridges are missing. As of 2026-09-24 every locally-runnable gate is green on the current tree: repository verification, typecheck, 841 unit tests, Rust `core:test`, the full Playwright sweep, a real-user production E2E journey across companies/parallel modes/restart, a portable Windows build with packaged runtime smoke and a forced-core-crash cleanup proof, and benchmark contract/budget checks against the committed baseline. Release validation that needs a Windows CI runner is explicitly tracked as [blocked-0004](docs/tasks/blocked-0004-windows-release-validation.md).
+Read these three documents, in this order:
 
-A **Public Beta** still requires the remaining P0 gates — restored CI with runner-attested release evidence, signed installers with an update channel, a clean-machine offline runtime proof, installed-app E2E against the packaged artifact, and the real-Chrome companion smoke. The ordered checklist lives in [`docs/plan/beta-release-readiness.md`](docs/plan/beta-release-readiness.md); normalized action metadata for policy enforcement beyond Harness approval frames remains the pre-GA gate.
+| Question | Document |
+| --- | --- |
+| What does this private build actually ship? | [`docs/architecture.md`](docs/architecture.md) |
+| What is the full product, including gaps? | [`docs/prd-full.md`](docs/prd-full.md) |
+| What passed, what failed, and what is still missing? | [`docs/plan/release-0.0.1-checklist.md`](docs/plan/release-0.0.1-checklist.md) |
+
+The app runs on real desktop state and fails closed when its trusted bridges are missing. On 2026-09-29, unit tests passed (1013), the Playwright suite had no failing spec, and a portable build plus packaged smoke passed for `0.1.0`. The same day's live-model journey did not finish its first chat turn, so that loop is not claimed green on this tree. Runner-attested Windows CI remains [blocked-0004](docs/tasks/blocked-0004-windows-release-validation.md).
+
+A **Public Beta** still requires restored CI, signed installers with an update channel, a clean-machine install, installed-app E2E, and the real-Chrome companion smoke. The ordered plan is [`docs/plan/beta-release-readiness.md`](docs/plan/beta-release-readiness.md). The area-by-area gate definitions stay in [`docs/plan/beta-release-gate.md`](docs/plan/beta-release-gate.md); treat the checklist above as the newer pass/fail record.
 
 ## What we ship and what's planned
 
@@ -299,7 +307,7 @@ A **Public Beta** still requires the remaining P0 gates — restored CI with run
 | In-app browser extension runtime | 🧪 Beta | Extensions load into the ND-owned browser session with in-app toolbar/action popups; broader compatibility is evidence-gated and never falls back to external Chrome |
 | ND Pencil | 🚢 Shipped | Native Freeform design surface (bundled `resources/nd-pencil`, sandboxed child view) editing the active project's real source — see [`docs/nd-pencil.md`](docs/nd-pencil.md) |
 | Policy gate | 🚢 Shipped | Main-process DENY/ALLOW/ASK enforcement for approval-bearing organization runs |
-| Packaging & installers | 🛠 Planned | Portable Windows build with bundled runtime (ND Core, Harness closure, ND Pencil, agent-browser) verified locally; signed/notarized installers, an update channel, and clean-machine offline install are still pending |
+| Packaging & installers | 🧪 Beta | Private Windows portable `0.1.1` with bundled ND Core, Harness, ND Pencil, and agent-browser. Signed installers, an update channel, and a clean-machine install are still pending |
 | Codex onboarding | 🛠 Planned | Native authentication and health checks in first-run onboarding |
 | More execution providers | 🛠 Planned | Additional local/offline and remote/cloud workers behind the same ND task/workspace/evidence contract |
 | Broader company templates | 🛠 Planned | Non-coding business roles once the software-company loop is reliable |
@@ -356,4 +364,4 @@ Released under the **MIT License** — see [`LICENSE`](LICENSE). DeepSeek Harnes
 
 ---
 
-> **ND-DSH** — General + Coding workspaces on one governed local-first AI platform. Replaceable models and coding engines. · *Developer Preview / Private Beta.* · [Architecture](docs/architecture.md) · [Roadmap](docs/roadmap.md) · MIT License
+> **ND-DSH** — General + Coding workspaces on one governed local-first AI platform. Replaceable models and coding engines. · *Developer Preview / Private Beta.* · [Architecture](docs/architecture.md) · [Full PRD](docs/prd-full.md) · [Release checklist](docs/plan/release-0.0.1-checklist.md) · [Roadmap](docs/roadmap.md) · MIT License

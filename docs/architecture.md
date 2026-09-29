@@ -2,6 +2,20 @@
 
 ND-DSH is the product and control plane. Model vendors and coding runtimes are replaceable execution dependencies.
 
+## Private Windows build
+
+The private release is a local portable `.exe` (`ND-DSH-<version>-private-beta-x64.exe`). It is not a signed public installer and has no update channel.
+
+The diagrams below are the product architecture, including boundaries that are designed but not shipped. In this private build, these are **not** user-facing features, and the product must not present them as working:
+
+- Team / admin web portal
+- Cloud sync
+- Arbitrary Chrome Web Store extension parity (only the compatibility subset that the built-in browser actually loads)
+- A coding engine that is not installed on the machine (OpenCode, Goose, JCode, Hermes, Codex, Claude Code, Cursor, ZCode, Antigravity and Pi appear only when their CLI is present)
+- Workflow-template authoring in the product UI (internal workflow behavior exists; users do not create or edit templates)
+
+Provider API keys are desktop-global for this private build: one ND desktop is one trusted operator. Local models are supported by pointing an OpenAI-compatible provider at a local endpoint (for example Ollama); there is no separate bundled local-model runtime.
+
 ## Ownership
 
 | Subsystem | Product owner | Runtime implementation |
@@ -80,7 +94,7 @@ flowchart TB
       CK[Context & Knowledge<br/>company · project · team · docs · conversations]
       AS[Agent System<br/>main agent · subagents · planner · execution · audit]
       WS[Workflow System<br/>templates · approvals · automation rules]
-      MP[Model & Provider Layer<br/>OpenAI-compatible · provider-native · local · budgets]
+      MP[Model & Provider Layer<br/>OpenAI-compatible · provider-native · local endpoint · budgets]
       SG[Security & Governance<br/>permissions · secrets · push guard · access control]
     end
 
@@ -122,8 +136,8 @@ flowchart TB
       BA[Browser Automation]
       TC[Terminal Commands]
       API[External APIs]
-      CS[Cloud / Sync — optional]
-      WP[Team / Admin Web Portal]
+      CS[Cloud / Sync — not in this release]
+      WP[Team / Admin Web Portal — not in this release]
     end
 
     ARCH --> EXEC
@@ -212,7 +226,7 @@ AI employee
    |
    +-- model route --------> DeepSeek / OpenAI-style / Anthropic-style / catalog / gateway
    |
-   `-- coding engine ------> ND Harness / Codex CLI / future engine
+   `-- coding engine ------> ND Harness, or an installed CLI (Codex, ZCode, Claude Code, Cursor, Antigravity, Pi, OpenCode, Goose, JCode, Hermes)
 ```
 
 `src/main/provider-runtime.ts` compiles enabled ND provider settings into provider+model routes. DeepSeek remains a seeded compatibility route; the company/task domain does not depend on it.
@@ -334,13 +348,13 @@ Delegated Codex remains a one-shot Harness-backed route. ND does not claim brows
 
 ## Public-beta release gates
 
-Passing source CI is necessary but not sufficient for a public desktop release. Before publishing installers, ND still needs:
+A private Windows portable build can bundle the Harness runtime, agent-browser, ND Core, and third-party notices. That build is not a public release. Before publishing installers, ND still needs:
 
-- packaged/bundled Node-compatible Harness and agent-browser runtime assets
 - macOS signing/notarization and Windows signing
-- installed-app E2E on supported platforms
+- an installer with uninstall behavior, an app icon, and an update channel that preserves user state
+- installed-app E2E on a clean machine, not only a developer checkout
 - Codex authentication/health onboarding UX
 - normalized action metadata for policy enforcement beyond Harness approval frames
-- update/release provenance, SBOM/notices, and crash provenance policy
+- runner-attested release evidence (GitHub Actions is parked) and a crash provenance policy
 
 These are release engineering and policy-completeness gates, not mock functionality; the product runtime used by the desktop is real.

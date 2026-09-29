@@ -61,7 +61,7 @@ test('capture redesigned settings surfaces', async () => {
   await page.screenshot({ path: `${SHOT_DIR}/browser-settings.png` })
 
   // Extension manager drawer.
-  await page.getByRole('button', { name: 'Manage', exact: true }).click()
+  await page.getByLabel('Settings', { exact: true }).getByRole('button', { name: 'Manage', exact: true }).click()
   await expect(page.getByText('Built-in catalog')).toBeVisible()
   await page.screenshot({ path: `${SHOT_DIR}/extensions-drawer.png` })
 

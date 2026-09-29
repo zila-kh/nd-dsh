@@ -5,8 +5,8 @@
 | | |
 | --- | --- |
 | Document | Full PRD / feature inventory for new developers |
-| Status | **Developer Preview / Private Beta — source builds only.** Public Beta remains blocked on the P0 release gates in §8. |
-| Updated | 2026-09-22 |
+| Status | **Developer Preview / Private Beta.** A local Windows portable exe exists (`0.1.1`). Public Beta remains blocked on the P0 release gates in §8. Current pass/fail record: [`plan/release-0.0.1-checklist.md`](plan/release-0.0.1-checklist.md). |
+| Updated | 2026-09-29 |
 | Audience | New developers joining ND-DSH who need the complete feature picture without reading every file |
 | Related docs | [`../README.md`](../README.md) · [`architecture.md`](architecture.md) · [`ai-company-os.md`](ai-company-os.md) · [`coding-engine-architecture.md`](coding-engine-architecture.md) · [`provider-architecture.md`](provider-architecture.md) · [`roadmap.md`](roadmap.md) · [`plan/token-saver.md`](plan/token-saver.md) · [`qa/token-saver-manual.md`](qa/token-saver-manual.md) |
 | License | MIT |

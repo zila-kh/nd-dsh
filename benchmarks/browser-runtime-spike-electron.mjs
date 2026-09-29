@@ -1,6 +1,7 @@
 import { app, BrowserWindow, WebContentsView, safeStorage, session } from 'electron'
 import { createServer } from 'node:http'
-import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtempSync } from 'node:fs'
+import { access, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
@@ -10,7 +11,7 @@ const output = process.argv[2]
 if (!output) throw new Error('output path is required')
 
 const root = process.cwd()
-const userData = await mkdtemp(join(tmpdir(), 'nd-dsh-browser-runtime-spike-'))
+const userData = mkdtempSync(join(tmpdir(), 'nd-dsh-browser-runtime-spike-'))
 app.setPath('userData', userData)
 
 const failures = []
@@ -21,112 +22,117 @@ const recordFailure = (label, cause) => failures.push({
   message: cause instanceof Error ? cause.message : String(cause),
 })
 
-await app.whenReady()
+let window
+// Awaiting whenReady at module top level can deadlock an ESM Electron entry, so the probe runs from its callback.
+app.whenReady().then(run)
 
-const server = await startFixtureServer()
-const origin = `http://127.0.0.1:${server.address().port}`
-const partition = 'persist:nd-dsh-browser-runtime-spike'
-const browserSession = session.fromPartition(partition)
-const window = new BrowserWindow({
-  show: false,
-  width: 1280,
-  height: 800,
-  webPreferences: {
-    nodeIntegration: false,
-    contextIsolation: true,
-    sandbox: true,
-    webSecurity: true,
-  },
-})
-const views = []
-
-try {
-  const capabilities = {
-    runtime: {
-      electron: process.versions.electron,
-      chromium: process.versions.chrome,
-      node: process.versions.node,
-      platform: process.platform,
-      arch: process.arch,
-      safeStorageAvailable: safeStorage.isEncryptionAvailable(),
+async function run() {
+  const server = await startFixtureServer()
+  const origin = `http://127.0.0.1:${server.address().port}`
+  const partition = 'persist:nd-dsh-browser-runtime-spike'
+  const browserSession = session.fromPartition(partition)
+  window = new BrowserWindow({
+    show: false,
+    width: 1280,
+    height: 800,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
     },
-    session: await probeSession(browserSession, origin),
-    extensions: await probeExtensions(browserSession, origin, window),
-    tabs: await probeTabs(browserSession, origin, window, views),
-    webMcp: await probeWebMcp(browserSession, origin, window),
+  })
+  const views = []
+
+  try {
+    const capabilities = {
+      runtime: {
+        electron: process.versions.electron,
+        chromium: process.versions.chrome,
+        node: process.versions.node,
+        platform: process.platform,
+        arch: process.arch,
+        safeStorageAvailable: safeStorage.isEncryptionAvailable(),
+      },
+      session: await probeSession(browserSession, origin),
+      extensions: await probeExtensions(browserSession, origin, window),
+      tabs: await probeTabs(browserSession, origin, window, views),
+      webMcp: await probeWebMcp(browserSession, origin, window),
+    }
+
+    const coreBrowserPass = Boolean(
+      capabilities.session.cookies
+      && capabilities.session.history
+      && capabilities.session.storageClear
+      && capabilities.session.download,
+    )
+    const extensionBaselinePass = Boolean(
+      capabilities.extensions.mv2?.contentScript
+        && capabilities.extensions.mv2?.runtimeMessaging
+      || capabilities.extensions.mv3?.contentScript
+        && capabilities.extensions.mv3?.runtimeMessaging,
+    )
+    const multiTabPass = capabilities.tabs.points.every((point) => point.loaded === point.count)
+
+    let decision = 'B-candidate'
+    if (!coreBrowserPass || !extensionBaselinePass || !multiTabPass) decision = 'C-candidate'
+    else if (capabilities.extensions.mv3?.runtimeMessaging && capabilities.webMcp.documentPresent) decision = 'A-candidate'
+
+    const result = {
+      schemaVersion: 1,
+      kind: 'nd-builtin-browser-runtime-spike',
+      timestamp: new Date().toISOString(),
+      status: failures.length ? 'completed-with-probe-errors' : 'pass',
+      decision,
+      decisionMeaning: {
+        'A-candidate': 'Electron satisfied this automated baseline, including the MV3/runtime and WebMCP presence probes. Manual representative-extension and credential UX review is still required.',
+        'B-candidate': 'Electron satisfied the core browser baseline and at least one extension execution path, but compatibility breadth remains limited or unproven.',
+        'C-candidate': 'Electron failed at least one required baseline; evaluate a different Chromium-grade built-in runtime before continuing.',
+      }[decision],
+      requirements: {
+        coreBrowserPass,
+        extensionBaselinePass,
+        extensionActionPopupPass: Boolean(
+          capabilities.extensions.mv3ActionPopup?.popupLoaded
+          && capabilities.extensions.mv3ActionPopup?.runtimeAvailable
+          && capabilities.extensions.mv3ActionPopup?.storageAvailable
+          && capabilities.extensions.mv3ActionPopup?.tabsQueryAvailable
+          && capabilities.extensions.mv3ActionPopup?.tabsReloadAvailable
+          && capabilities.extensions.mv3ActionPopup?.activeTabMatchesHost,
+        ),
+        multiTabPass,
+        credentialVaultPrimitiveAvailable: capabilities.runtime.safeStorageAvailable,
+        webMcpNavigatorPresent: capabilities.webMcp.documentPresent,
+      },
+      capabilities,
+      observations,
+      failures,
+    }
+
+    await writeFile(output, JSON.stringify(result, null, 2) + '\n', 'utf8')
+  } catch (cause) {
+    recordFailure('fatal', cause)
+    await writeFile(output, JSON.stringify({
+      schemaVersion: 1,
+      kind: 'nd-builtin-browser-runtime-spike',
+      timestamp: new Date().toISOString(),
+      status: 'failed',
+      failures,
+    }, null, 2) + '\n', 'utf8')
+    process.exitCode = 1
+  } finally {
+    for (const view of views) {
+      try {
+        window.contentView.removeChildView(view)
+        if (!view.webContents.isDestroyed()) view.webContents.close()
+      } catch {}
+    }
+    if (!window.isDestroyed()) window.destroy()
+    server.closeAllConnections()
+    await new Promise((resolvePromise) => server.close(resolvePromise))
+    await Promise.allSettled(temporary.map((path) => rm(path, { recursive: true, force: true })))
+    app.quit()
   }
-
-  const coreBrowserPass = Boolean(
-    capabilities.session.cookies
-    && capabilities.session.history
-    && capabilities.session.storageClear
-    && capabilities.session.download,
-  )
-  const extensionBaselinePass = Boolean(
-    capabilities.extensions.mv2?.contentScript
-      && capabilities.extensions.mv2?.runtimeMessaging
-    || capabilities.extensions.mv3?.contentScript
-      && capabilities.extensions.mv3?.runtimeMessaging,
-  )
-  const multiTabPass = capabilities.tabs.points.every((point) => point.loaded === point.count)
-
-  let decision = 'B-candidate'
-  if (!coreBrowserPass || !extensionBaselinePass || !multiTabPass) decision = 'C-candidate'
-  else if (capabilities.extensions.mv3?.runtimeMessaging && capabilities.webMcp.documentPresent) decision = 'A-candidate'
-
-  const result = {
-    schemaVersion: 1,
-    kind: 'nd-builtin-browser-runtime-spike',
-    timestamp: new Date().toISOString(),
-    status: failures.length ? 'completed-with-probe-errors' : 'pass',
-    decision,
-    decisionMeaning: {
-      'A-candidate': 'Electron satisfied this automated baseline, including the MV3/runtime and WebMCP presence probes. Manual representative-extension and credential UX review is still required.',
-      'B-candidate': 'Electron satisfied the core browser baseline and at least one extension execution path, but compatibility breadth remains limited or unproven.',
-      'C-candidate': 'Electron failed at least one required baseline; evaluate a different Chromium-grade built-in runtime before continuing.',
-    }[decision],
-    requirements: {
-      coreBrowserPass,
-      extensionBaselinePass,
-      extensionActionPopupPass: Boolean(
-        capabilities.extensions.mv3ActionPopup?.popupLoaded
-        && capabilities.extensions.mv3ActionPopup?.runtimeAvailable
-        && capabilities.extensions.mv3ActionPopup?.storageAvailable
-        && capabilities.extensions.mv3ActionPopup?.tabsQueryAvailable
-        && capabilities.extensions.mv3ActionPopup?.tabsReloadAvailable
-        && capabilities.extensions.mv3ActionPopup?.activeTabMatchesHost,
-      ),
-      multiTabPass,
-      credentialVaultPrimitiveAvailable: capabilities.runtime.safeStorageAvailable,
-      webMcpNavigatorPresent: capabilities.webMcp.documentPresent,
-    },
-    capabilities,
-    observations,
-    failures,
-  }
-
-  await writeFile(output, JSON.stringify(result, null, 2) + '\n', 'utf8')
-} catch (cause) {
-  recordFailure('fatal', cause)
-  await writeFile(output, JSON.stringify({
-    schemaVersion: 1,
-    kind: 'nd-builtin-browser-runtime-spike',
-    timestamp: new Date().toISOString(),
-    status: 'failed',
-    failures,
-  }, null, 2) + '\n', 'utf8')
-  process.exitCode = 1
-} finally {
-  for (const view of views) {
-    try {
-      window.contentView.removeChildView(view)
-      if (!view.webContents.isDestroyed()) view.webContents.close()
-    } catch {}
-  }
-  if (!window.isDestroyed()) window.destroy()
-  await new Promise((resolvePromise) => server.close(resolvePromise))
-  await Promise.allSettled(temporary.map((path) => rm(path, { recursive: true, force: true })))
-  app.quit()
 }
 
 async function probeSession(ses, origin) {
@@ -149,8 +155,8 @@ async function probeSession(ses, origin) {
 
   const view = createView(ses, window)
   try {
-    await view.webContents.loadURL(origin + '/history/a')
-    await view.webContents.loadURL(origin + '/history/b')
+    await bounded('session.history.a', view.webContents.loadURL(origin + '/history/a'))
+    await bounded('session.history.b', view.webContents.loadURL(origin + '/history/b'))
     result.history = view.webContents.navigationHistory.canGoBack()
     result.details.historyEntries = view.webContents.navigationHistory.getAllEntries().map((entry) => entry.url)
   } catch (cause) {
@@ -219,19 +225,19 @@ async function loadAndExerciseExtension(label, extensionPath, ses, origin, hostW
   let extension
   try {
     const started = performance.now()
-    extension = await ses.extensions.loadExtension(extensionPath, { allowFileAccess: false })
+    extension = await bounded('extension.' + label + '.load', ses.extensions.loadExtension(extensionPath, { allowFileAccess: false }))
     result.loadMs = performance.now() - started
     result.loaded = true
     result.id = extension.id
 
     const view = createView(ses, hostWindow)
     try {
-      await view.webContents.loadURL(origin + '/extension/' + label)
+      await bounded('extension.' + label + '.page', view.webContents.loadURL(origin + '/extension/' + label))
       await wait(500)
-      const dataset = await view.webContents.executeJavaScript(`({
+      const dataset = await bounded('extension.' + label + '.inspect', view.webContents.executeJavaScript(`({
         content: document.documentElement.dataset.ndSpike${label === 'mv2' ? 'Mv2' : 'Mv3'}Content || '',
         runtime: document.documentElement.dataset.ndSpike${label === 'mv2' ? 'Mv2' : 'Mv3'}Runtime || ''
-      })`)
+      })`))
       result.contentScript = dataset.content === 'ok'
       result.runtimeMessaging = dataset.runtime === 'ok'
     } finally {
@@ -269,29 +275,29 @@ async function loadAndExerciseActionPopup(extensionPath, ses, origin, hostWindow
   }
   let extension
   try {
-    extension = await ses.extensions.loadExtension(extensionPath, { allowFileAccess: false })
+    extension = await bounded('extension.popup.load', ses.extensions.loadExtension(extensionPath, { allowFileAccess: false }))
     result.loaded = true
     result.id = extension.id
     const hostView = createView(ses, hostWindow)
     const view = createView(ses, hostWindow)
     try {
-      await hostView.webContents.loadURL(origin + '/extension/popup-host')
+      await bounded('extension.popup.host', hostView.webContents.loadURL(origin + '/extension/popup-host'))
       hostView.setVisible(true)
       hostView.webContents.focus()
       await wait(50)
 
-      await view.webContents.loadURL(`chrome-extension://${extension.id}/popup.html`)
+      await bounded('extension.popup.page', view.webContents.loadURL(`chrome-extension://${extension.id}/popup.html`))
       view.setVisible(true)
       view.webContents.focus()
       await wait(250)
-      const state = await view.webContents.executeJavaScript(`({
+      const state = await bounded('extension.popup.inspect', view.webContents.executeJavaScript(`({
         runtime: document.documentElement.dataset.ndPopupRuntime || '',
         storage: document.documentElement.dataset.ndPopupStorage || '',
         tabs: document.documentElement.dataset.ndPopupTabs || '',
         tabsReload: document.documentElement.dataset.ndPopupTabsReload || '',
         activeTabUrl: document.documentElement.dataset.ndPopupActiveTabUrl || '',
         status: document.getElementById('status')?.textContent || ''
-      })`)
+      })`))
       result.popupLoaded = state.status === 'ready'
       result.runtimeAvailable = state.runtime === 'ok'
       result.storageAvailable = state.storage === 'ok'
@@ -325,7 +331,7 @@ async function probeTabs(ses, origin, hostWindow, retainedViews) {
     while (retainedViews.length < count) {
       const view = createView(ses, hostWindow)
       retainedViews.push(view)
-      await view.webContents.loadURL(origin + '/tab/' + retainedViews.length)
+      await bounded('tabs.load', view.webContents.loadURL(origin + '/tab/' + retainedViews.length))
     }
     await wait(150)
     const metrics = app.getAppMetrics()
@@ -345,11 +351,11 @@ async function probeTabs(ses, origin, hostWindow, retainedViews) {
 async function probeWebMcp(ses, origin, hostWindow) {
   const view = createView(ses, hostWindow)
   try {
-    await view.webContents.loadURL(origin + '/webmcp')
-    const state = await view.webContents.executeJavaScript(`({
+    await bounded('webmcp.page', view.webContents.loadURL(origin + '/webmcp'))
+    const state = await bounded('webmcp.inspect', view.webContents.executeJavaScript(`({
       documentPresent: 'modelContext' in document,
       type: typeof document.modelContext
-    })`)
+    })`))
     return {
       documentPresent: state.documentPresent === true,
       type: state.type,
@@ -393,6 +399,15 @@ function sumFinite(values) {
 
 function wait(ms) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, ms))
+}
+
+// Every page/extension step is bounded so a stuck probe fails by name instead of hanging the release gate.
+function bounded(label, promise, ms = 15_000) {
+  let timer
+  const timeout = new Promise((_resolvePromise, reject) => {
+    timer = setTimeout(() => reject(new Error(label + ' timed out after ' + ms + ' ms')), ms)
+  })
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
 }
 
 function startFixtureServer() {

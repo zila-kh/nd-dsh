@@ -1,5 +1,7 @@
 # Command Registry + Native Extension — manual QA gate
 
+> `examples/nd-extension-wallpaper` is not in this tree. Validate the bundled packages with `node scripts/validate-nd-extension.mjs --builtins`. Current release status: [release-0.0.1-checklist.md](../plan/release-0.0.1-checklist.md).
+
 Branch: `feat/magibar-command-native-extensions`  
 PRD: 0008  
 Task: 0045

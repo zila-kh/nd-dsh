@@ -132,6 +132,8 @@ interface MentionItem {
 }
 
 const MENTION_MENU_LIMIT = 12
+const SESSION_LIST_TIMEOUT_MS = 10_000
+const SESSION_LIST_TIMEOUT_MESSAGE = 'Timed out waiting for session list'
 
 type PingEntry = { testing: true } | ProviderPingResult
 type ModelMenuPane = 'root' | 'model' | 'effort'
@@ -156,6 +158,10 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, workspaceSelec
   const [permissionMode, setPermissionMode] = useState('workspace-write')
   const [prompt, setPrompt] = useState('')
   const [harnessSessionsLoaded, setHarnessSessionsLoaded] = useState(false)
+  const [sessionListError, setSessionListError] = useState<string | null>(null)
+  const sessionListRequestRef = useRef<Promise<void> | null>(null)
+  const sessionListRerunRef = useRef(false)
+  const sessionListUserInitiatedRef = useRef(false)
   const [engineSessionsLoaded, setEngineSessionsLoaded] = useState(false)
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false)
   const [modelMenuOpen, setModelMenuOpen] = useState(false)
@@ -344,13 +350,14 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, workspaceSelec
     || (engineSessionsLoaded && visibleEngineSessions.length > 0)
     || (harnessSessionsLoaded && visibleSessions.length > 0)
 
-  const refreshSessions = useCallback(async (): Promise<void> => {
+  const loadSessionListOnce = useCallback(async (): Promise<void> => {
+    let timer: ReturnType<typeof setTimeout> | undefined
     try {
       const result = await Promise.race([
         window.ndDsh.dsh.rpc('session.list', {}),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Timed out waiting for session list')), 10_000),
-        ),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(SESSION_LIST_TIMEOUT_MESSAGE)), SESSION_LIST_TIMEOUT_MS)
+        }),
       ])
       const items = ((result.value ?? {}) as { items?: SessionSummary[] }).items ?? []
       setSessions(items)
@@ -363,6 +370,7 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, workspaceSelec
         return next
       })
       setHarnessSessionsLoaded(true)
+      setSessionListError(null)
       setActiveSessionId((current) => {
         if (current !== null) return current
         if (draftEngineId !== null) return null
@@ -370,9 +378,36 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, workspaceSelec
       })
     } catch (cause) {
       setHarnessSessionsLoaded(true)
-      onError(cause instanceof Error ? cause.message : String(cause))
+      const message = cause instanceof Error ? cause.message : String(cause)
+      setSessionListError(message)
+      // Background refreshes keep the last list and report inline; only an explicit refresh raises a toast.
+      if (sessionListUserInitiatedRef.current) onError(message)
+    } finally {
+      clearTimeout(timer)
     }
   }, [onError, draftEngineId])
+
+  /** Coalesces overlapping refreshes into one request plus at most one follow-up. */
+  const refreshSessions = useCallback((options: { userInitiated?: boolean } = {}): Promise<void> => {
+    if (options.userInitiated) sessionListUserInitiatedRef.current = true
+    if (sessionListRequestRef.current) {
+      sessionListRerunRef.current = true
+      return sessionListRequestRef.current
+    }
+    const request = (async () => {
+      try {
+        do {
+          sessionListRerunRef.current = false
+          await loadSessionListOnce()
+        } while (sessionListRerunRef.current)
+      } finally {
+        sessionListRequestRef.current = null
+        sessionListUserInitiatedRef.current = false
+      }
+    })()
+    sessionListRequestRef.current = request
+    return request
+  }, [loadSessionListOnce])
 
   const loadHistory = useCallback(async (sessionId: string): Promise<void> => {
     try {
@@ -1407,7 +1442,7 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, workspaceSelec
           <div className="mb-1.5 flex items-center justify-between">
             <span className="text-[11px] font-semibold text-faint">Workspaces</span>
             <div className="flex items-center gap-1">
-              <button className="grid size-[22px] place-items-center rounded-[5px] text-faint transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[13px]" title="Refresh sessions" onClick={() => { void refreshSessions(); void refreshEngineSessions() }}>
+              <button className="grid size-[22px] place-items-center rounded-[5px] text-faint transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[13px]" title="Refresh sessions" onClick={() => { void refreshSessions({ userInitiated: true }); void refreshEngineSessions() }}>
                 <SearchIcon />
               </button>
               {archiveableIds.length > 0 ? (
@@ -1487,6 +1522,17 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, workspaceSelec
           ) : null}
 
           <div className="mt-1.5 flex flex-col gap-1">
+            {sessionListError ? (
+              <div role="status" className="flex items-center justify-between gap-2 rounded-md border border-border-soft px-2 py-1.5 text-[10px]/[1.45] text-faint">
+                <span>{sessionListError === SESSION_LIST_TIMEOUT_MESSAGE ? `ND Harness is slow to list chats${sessions.length ? '; showing the last known list' : ''}.` : `Couldn't refresh chats: ${sessionListError}`}</span>
+                <button
+                  className="h-[20px] shrink-0 rounded-md border border-border-strong px-2 text-[10px] font-semibold text-soft transition-colors hover:bg-accent hover:text-foreground"
+                  onClick={() => void refreshSessions({ userInitiated: true })}
+                >
+                  Retry
+                </button>
+              </div>
+            ) : null}
             {!sessionsLoaded ? (
               <div className="px-0.5 py-2 text-[10px]/[1.5] text-faint">Loading sessions…</div>
             ) : visibleSessions.length === 0 && visibleEngineSessions.length === 0 ? (

@@ -212,7 +212,8 @@ export default function App() {
   const [elementAttachmentVersion, setElementAttachmentVersion] = useState(0)
   const appInspectTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
 
-  const notify = useCallback((message: string) => toast(message, { duration: 5000 }), [])
+  // Keyed by message so a repeating failure refreshes one toast instead of stacking copies.
+  const notify = useCallback((message: string) => toast(message, { id: message, duration: 5000 }), [])
 
   const pillDragRef = useRef<{ x: number; y: number } | null>(null)
 

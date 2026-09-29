@@ -46,7 +46,13 @@ async function createRealGitRepo(): Promise<string> {
   return repo
 }
 
-describe('Live Antigravity (agy) Autonomous Loop', () => {
+/**
+ * Opt-in only, like tests/antigravity-live.test.ts:
+ *   ND_DSH_LIVE_ANTIGRAVITY=1 pnpm vitest run tests/real-world-agy-autonomous-loop.test.ts
+ */
+const enabled = process.env.ND_DSH_LIVE_ANTIGRAVITY === '1'
+
+describe.skipIf(!enabled)('Live Antigravity (agy) Autonomous Loop', () => {
   it('drives real agy CLI in an isolated Git worktree, runs machine verification, and merges to main', async () => {
     const bin = antigravityBinPath()
     expect(bin, 'Antigravity CLI (agy) must be present').toBeTruthy()

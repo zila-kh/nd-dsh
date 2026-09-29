@@ -1,5 +1,7 @@
 # Beta release gate — checklist and current standing
 
+> **Current numbers live in [release-0.0.1-checklist.md](release-0.0.1-checklist.md) (2026-09-29, private `0.1.1`).** This file is the area-by-area pass/fail definition. The attestation counts below are the 2026-09-26/28 record, not today's run.
+>
 > Updated: 2026-09-28 · Last fully attested baseline: `feat/token-tool-routing` (`8ad0782`) on 2026-09-26 (`pnpm typecheck` clean; **855 passed / 8 skipped** unit tests). The current beta-hardening branch adds new gates/tests that are **implemented but not yet locally attested**; the local-PC handoff in [beta-three-layer-validation.md](../qa/beta-three-layer-validation.md) must produce fresh RC evidence before any GO.
 >
 > 2026-09-28: the hardening branch is synced with `main` (`1cc7939`, includes the workspace-profile and native-extension slices). Local gates on the merged tree: `pnpm verify` PASS, `pnpm typecheck` PASS (after typing the Settings diagnostics window probe in `e2e/qa-functional.spec.ts`), `pnpm test` **968 passed / 1 known CRLF environmental failure / 8 skipped**, `pnpm build` PASS, and `e2e/quick-launcher.spec.ts` + `e2e/nd-home-extensions.spec.ts` **7/7 passed** (only the known teardown-watchdog noise after the run). Rows 21–24 cover the surfaces merged from `main`; the RC-level evidence (automated runner, clean machine, Chrome companion, 24 h soak, Human drills) is still owed.

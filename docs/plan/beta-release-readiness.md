@@ -1,5 +1,7 @@
 # Beta release readiness — execution plan
 
+> **Current pass/fail record: [release-0.0.1-checklist.md](release-0.0.1-checklist.md) (2026-09-29).** This file remains the ordered plan. Its "local validation pending" note is older than that checklist.
+>
 > Updated: 2026-09-28  
 > Basis: current `main` plus beta-hardening changes on `feat/beta-release-stability-plan-2026-09-27` (synced with `main` at `1cc7939`). Last fully attested baseline is 2026-09-26; the new hardening changes remain **local-PC validation pending**.  
 > Goal: get ND-DSH to a **Beta Stable** release candidate without requiring every planned feature to be finished. Beta-exposed features must be predictable, recoverable, scoped correctly, and diagnosable.

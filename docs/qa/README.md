@@ -1,6 +1,6 @@
 # QA notes
 
-This folder mixes dated evidence with operator manuals; only the first is a snapshot.
+Current private-release status is [release-0.0.1-checklist.md](../plan/release-0.0.1-checklist.md). This folder mixes dated evidence with operator manuals; only the first item below is a snapshot.
 
 - [`beta-v1-handoff.md`](beta-v1-handoff.md) — **historical (2026-08-28, PR #12).** Its CI baseline predates the Rust runtime migration, the unified browser platform, and the decision to park Actions; do not treat it as current verification. Kept for audit context.
 - [`beta-three-layer-validation.md`](beta-three-layer-validation.md) — current Beta Stable operator handoff: Unit + E2E + Human evidence, with a machine-checked release record.
