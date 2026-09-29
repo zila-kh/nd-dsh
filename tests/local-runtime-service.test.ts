@@ -97,6 +97,17 @@ describe('LocalRuntimeService', () => {
     expect(getLoginItemSettings).toHaveBeenCalledWith()
   })
 
+  it('keeps local runtime available when the OS login-item status read fails', async () => {
+    const { path, appPort } = await fixture(false, 'win32')
+    appPort.getLoginItemSettings = () => { throw new Error('OS login registry unavailable') }
+    const service = new LocalRuntimeService(path, appPort, 'win32')
+    await expect(service.initialize()).resolves.toMatchObject({
+      settings: { alwaysOn: false, startAtLogin: false },
+      startAtLoginSupported: true,
+      startAtLoginApplied: false,
+    })
+  })
+
   it('does not advertise start-at-login from an unpackaged dev build', async () => {
     const { service, setLoginItemSettings } = await fixture(false, 'win32', false, false)
     await service.initialize()

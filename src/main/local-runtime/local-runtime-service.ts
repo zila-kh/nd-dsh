@@ -88,11 +88,16 @@ export class LocalRuntimeService {
   async state(): Promise<LocalRuntimeState> {
     await this.load()
     const supported = this.canManageStartAtLogin()
-    const applied = supported
-      ? (this.platform === 'win32'
+    let applied = false
+    if (supported) {
+      try {
+        applied = this.platform === 'win32'
           ? this.appPort.getLoginItemSettings({ args: ['--background'] }).openAtLogin
-          : this.appPort.getLoginItemSettings().openAtLogin)
-      : false
+          : this.appPort.getLoginItemSettings().openAtLogin
+      } catch (error) {
+        console.warn('Failed to read ND start-at-login state:', error)
+      }
+    }
     return {
       settings: { ...this.settingsValue },
       startedAt: this.startedAt,
