@@ -2,7 +2,7 @@
 
 Status: **draft; local-first execution order selected**
 Branch: `feat/nd-cloud-platform-draft`
-Baseline: `main@b8132fa` (2026-09-29)
+Baseline: `main@da6d836` (2026-09-29)
 
 ## Current decision
 
@@ -154,6 +154,40 @@ Current organization truth is primarily in atomic JSON snapshots. Team-workspace
 
 The first UI slice does not need to wait for every legacy domain to move to SQLite, but the local-team milestone is not considered scalable/durable until collaboration state is on the transactional store.
 
+## Local autonomy runtime — OpenClaw/Hermes inspiration
+
+Local-first does not mean foreground-only. ND should be able to keep a company operating safely while the visible desktop window is closed.
+
+Reference patterns are adapted, not embedded:
+
+- OpenClaw-style persistent local runtime, scheduling, heartbeat and event automation;
+- Hermes-style persistent agent routines, skill use, memory and learned-skill candidates;
+- ND remains the authority for tasks, leases, isolated workspaces, checkpoints, review, approval, policy and audit.
+
+The local autonomy model is:
+
+```text
+ND Desktop
+   |
+   v
+Always-On Local Runtime
+   |
+   +-- Scheduler: once / interval / cron / agent routine
+   +-- Heartbeat: cheap deterministic attention scan
+   +-- Event triggers: organization activity -> governed task/signal
+   +-- Skill candidates: propose -> evidence -> explicit promotion/rejection
+   |
+   v
+ND Control Plane
+   |
+   v
+Task -> Lease -> Workspace -> Agent -> Checkpoint -> Verify -> Review -> Approval
+```
+
+The first implementation may keep Electron as the background host to preserve the current trusted IPC/runtime boundary. A later `nd-agentd` extraction may make the runtime crash-independent, but it must not create a second task or policy authority.
+
+24/7 autonomy never means unlimited permission. Scheduled, heartbeat-triggered and event-triggered work must still obey the same budgets, runtime permits, task isolation, review and approval policy as manually started work.
+
 ## Local Web boundary
 
 Desktop and Local Web are two clients of the same local authority:
@@ -285,14 +319,27 @@ M2  durability
 M3  Local Web parity
     same collaboration views/commands over loopback transport
 
-M4  reliability proof
-    restart/recovery/conflict/stale-approval/policy/E2E/manual QA
+M4  Always-On local runtime
+    background host + optional start-at-login + runtime liveness
+
+M5  automation v2
+    once + interval + cron + timezone + agent routines
+
+M6  heartbeat + event triggers
+    cheap attention scan + governed task/signal automation
+
+M7  gated skill learning
+    candidate + evidence + explicit promote/reject
+
+M8  reliability proof
+    window-closed operation + restart/recovery/conflict/stale-approval/policy/E2E/manual QA
 
 ---- local milestone gate ----
 
-M5  optional sync protocol design
-M6  optional ND Cloud/customer Web
-M7  optional ND Admin/hosted registry
+M9   optional crash-independent nd-agentd extraction
+M10  optional sync protocol design
+M11  optional ND Cloud/customer Web
+M12  optional ND Admin/hosted registry
 ```
 
-Do not start M5-M7 as implementation work until the local milestone gate is accepted.
+Do not start M9-M12 as implementation work until the local milestone gate is accepted.
