@@ -6,7 +6,6 @@
  *  Adapted for ND-DSH: VS Code API dependencies removed, ND house style applied.
  *--------------------------------------------------------------------------------------------*/
 
-import { spawn as processSpawn, type ChildProcess } from 'node:child_process'
 import type { CoreClient } from '../core/core-client.js'
 import { isNdCoreDeadlineError } from '../core/core-protocol.js'
 
@@ -153,278 +152,11 @@ export function* splitInChunks(array: string[], maxChunkLength: number): Iterabl
   }
 }
 
-export interface CoAuthor {
-  readonly name: string
-  readonly email: string
-}
-
-export interface CommitShortStat {
-  readonly files: number
-  readonly insertions: number
-  readonly deletions: number
-}
-
-export interface Commit {
-  hash: string
-  message: string
-  parents: string[]
-  authorDate?: Date | undefined
-  authorName?: string | undefined
-  authorEmail?: string | undefined
-  commitDate?: Date | undefined
-  refNames: string[]
-  shortStat?: CommitShortStat | undefined
-  coAuthors?: CoAuthor[] | undefined
-}
-
-const COMMIT_FORMAT = '%H%n%aN%n%aE%n%at%n%ct%n%P%n%D%n%B'
-
-const commitRegex = /([0-9a-f]{40})\n(.*)\n(.*)\n(.*)\n(.*)\n(.*)\n(.*)(?:\n([^]*?))?(?:\x00)(?:\n((?:.*)files? changed(?:.*))$)?/gm
-
-export function parseGitCommits(data: string): Commit[] {
-  const commits: Commit[] = []
-
-  let ref
-  let authorName
-  let authorEmail
-  let authorDate
-  let commitDate
-  let parents
-  let refNames
-  let message
-  let shortStat
-  let match
-
-  do {
-    match = commitRegex.exec(data)
-    if (match === null) {
-      break
-    }
-
-    [, ref, authorName, authorEmail, authorDate, commitDate, parents, refNames, message, shortStat] = match
-
-    if (ref === undefined || refNames === undefined || message === undefined) {
-      break
-    }
-
-    if (message[message.length - 1] === '\n') {
-      message = message.substr(0, message.length - 1)
-    }
-
-    // Stop excessive memory usage by using substr -- https://bugs.chromium.org/p/v8/issues/detail?id=2869
-    commits.push({
-      hash: ` ${ref}`.substr(1),
-      message: ` ${message}`.substr(1),
-      parents: parents ? parents.split(' ') : [],
-      authorDate: new Date(Number(authorDate) * 1000),
-      authorName: ` ${authorName}`.substr(1),
-      authorEmail: ` ${authorEmail}`.substr(1),
-      commitDate: new Date(Number(commitDate) * 1000),
-      refNames: refNames.split(',').map(s => s.trim()),
-      shortStat: shortStat ? parseGitDiffShortStat(shortStat) : undefined,
-      coAuthors: parseCoAuthors(message),
-    })
-  } while (true)
-
-  return commits
-}
-
-const coAuthorRegex = /^Co-authored-by:\s*(.+?)\s*<([^>]+)>\s*$/gim
-
-export function parseCoAuthors(message: string): CoAuthor[] {
-  const coAuthors: CoAuthor[] = []
-  let match
-
-  coAuthorRegex.lastIndex = 0
-  while ((match = coAuthorRegex.exec(message)) !== null) {
-    const name = match[1]?.trim()
-    const email = match[2]?.trim()
-    if (name && email) {
-      coAuthors.push({ name, email })
-    }
-  }
-
-  return coAuthors
-}
-
-const diffShortStatRegex = /(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?/
-
-function parseGitDiffShortStat(data: string): CommitShortStat {
-  const matches = data.trim().match(diffShortStatRegex)
-
-  if (!matches) {
-    return { files: 0, insertions: 0, deletions: 0 }
-  }
-
-  const [, files, insertions = undefined, deletions = undefined] = matches
-  return { files: parseInt(files ?? '0'), insertions: parseInt(insertions ?? '0'), deletions: parseInt(deletions ?? '0') }
-}
-
 export interface IFileStatus {
   x: string
   y: string
   path: string
   rename: string | undefined
-}
-
-export class GitStatusParser {
-  private lastRaw = ''
-  private result: IFileStatus[] = []
-
-  get status(): IFileStatus[] {
-    return this.result
-  }
-
-  update(raw: string): void {
-    let i = 0
-    let nextI: number | undefined
-
-    raw = this.lastRaw + raw
-
-    while ((nextI = this.parseEntry(raw, i)) !== undefined) {
-      i = nextI
-    }
-
-    this.lastRaw = raw.substr(i)
-  }
-
-  private parseEntry(raw: string, i: number): number | undefined {
-    if (i + 4 >= raw.length) {
-      return
-    }
-
-    let lastIndex: number
-    const entry: IFileStatus = {
-      x: raw.charAt(i++),
-      y: raw.charAt(i++),
-      rename: undefined,
-      path: '',
-    }
-
-    // space
-    i++
-
-    if (entry.x === 'R' || entry.y === 'R' || entry.x === 'C') {
-      lastIndex = raw.indexOf('\0', i)
-
-      if (lastIndex === -1) {
-        return
-      }
-
-      entry.rename = raw.substring(i, lastIndex)
-      i = lastIndex + 1
-    }
-
-    lastIndex = raw.indexOf('\0', i)
-
-    if (lastIndex === -1) {
-      return
-    }
-
-    entry.path = raw.substring(i, lastIndex)
-
-    // If path ends with slash, it must be a nested git repo
-    if (entry.path[entry.path.length - 1] !== '/') {
-      this.result.push(entry)
-    }
-
-    return lastIndex + 1
-  }
-}
-
-interface GitConfigSection {
-  name: string
-  subSectionName?: string | undefined
-  properties: { [key: string]: string }
-}
-
-class GitConfigParser {
-  private static readonly _lineSeparator = /\r?\n/
-
-  private static readonly _propertyRegex = /^\s*(\w+)\s*=\s*"?([^"]+)"?$/
-  private static readonly _sectionRegex = /^\s*\[\s*([^\]]+?)\s*("([^"]+)")?\]\s*$/
-
-  static parse(raw: string): GitConfigSection[] {
-    const config: { sections: GitConfigSection[] } = { sections: [] }
-    let section: GitConfigSection = { name: 'DEFAULT', properties: {} }
-
-    const addSection = (section?: GitConfigSection) => {
-      if (!section) { return }
-      config.sections.push(section)
-    }
-
-    for (const line of raw.split(GitConfigParser._lineSeparator)) {
-      // Section
-      const sectionName = line.match(GitConfigParser._sectionRegex)
-      if (sectionName?.length === 4 && sectionName[1] !== undefined) {
-        addSection(section)
-        section = { name: sectionName[1], subSectionName: sectionName[3], properties: {} }
-
-        continue
-      }
-
-      // Property
-      const propertyMatch = line.match(GitConfigParser._propertyRegex)
-      const propertyKey = propertyMatch?.[1]
-      const propertyValue = propertyMatch?.[2]
-      if (propertyKey !== undefined && propertyValue !== undefined && !Object.keys(section.properties).includes(propertyKey)) {
-        section.properties[propertyKey] = propertyValue
-      }
-    }
-
-    addSection(section)
-
-    return config.sections
-  }
-}
-
-export function parseGitmodules(raw: string): Submodule[] {
-  const result: Submodule[] = []
-
-  for (const submoduleSection of GitConfigParser.parse(raw).filter(s => s.name === 'submodule')) {
-    const path = submoduleSection.properties['path']
-    const url = submoduleSection.properties['url']
-    if (submoduleSection.subSectionName && path !== undefined && url !== undefined) {
-      result.push({
-        name: submoduleSection.subSectionName,
-        path,
-        url,
-      })
-    }
-  }
-
-  return result
-}
-
-export interface Submodule {
-  name: string
-  path: string
-  url: string
-}
-
-export interface MutableRemote {
-  name: string
-  fetchUrl: string
-  pushUrl: string
-  isReadOnly: boolean
-}
-
-export function parseGitRemotes(raw: string): MutableRemote[] {
-  const remotes: MutableRemote[] = []
-
-  for (const remoteSection of GitConfigParser.parse(raw).filter(s => s.name === 'remote')) {
-    const url = remoteSection.subSectionName ? remoteSection.properties['url'] : undefined
-    if (remoteSection.subSectionName && url !== undefined) {
-      remotes.push({
-        name: remoteSection.subSectionName,
-        fetchUrl: url,
-        pushUrl: remoteSection.properties['pushurl'] ?? url,
-        isReadOnly: false,
-      })
-    }
-  }
-
-  return remotes
 }
 
 export interface GitExecutionResult {
@@ -458,42 +190,23 @@ export interface GitExecOptions {
   timeoutMs?: number
 }
 
-/**
- * Narrow injection seam for spawning the git binary. Intentionally looser than
- * node's overloaded `spawn` so tests can substitute scripted children.
- */
-export type GitSpawnFunction = (
-  gitPath: string,
-  args: string[],
-  options: GitProcessSpawnOptions,
-) => ChildProcess
-
-export interface GitProcessSpawnOptions {
-  stdio: ['pipe', 'pipe', 'pipe']
-  env: NodeJS.ProcessEnv
-  windowsHide: boolean
-  cwd?: string
-}
-
 export interface GitCliOptions {
   /** Absolute path or binary name; defaults to ND_DSH_GIT_BINARY or `git` on PATH. */
   gitPath?: string
   env?: Record<string, string>
-  spawnProcess?: GitSpawnFunction
-  core?: Pick<CoreClient, 'request'>
+  /** nd-core owns Git process execution and porcelain/log parsing. */
+  core: Pick<CoreClient, 'request'>
   onOutput?(output: string): void
 }
 
 export class GitCli {
   readonly path: string
   private readonly extraEnv: Record<string, string>
-  private readonly spawnProcess: GitSpawnFunction
-  private readonly core: Pick<CoreClient, 'request'> | undefined
+  private readonly core: Pick<CoreClient, 'request'>
   private readonly onOutput: ((output: string) => void) | undefined
 
-  constructor(options: GitCliOptions = {}) {
+  constructor(options: GitCliOptions) {
     this.path = options.gitPath ?? process.env.ND_DSH_GIT_BINARY ?? 'git'
-    this.spawnProcess = options.spawnProcess ?? processSpawn
     this.core = options.core
     this.onOutput = options.onOutput
     this.extraEnv = {
@@ -517,9 +230,7 @@ export class GitCli {
 
   async exec(cwd: string, args: string[], options: GitExecOptions = {}): Promise<GitExecutionResult> {
     const startedAt = Date.now()
-    const buffered = this.core
-      ? await this.execCore(cwd, args, options)
-      : await this.execLegacy(cwd, args, options)
+    const buffered = await this.execCore(cwd, args, options)
 
     if (this.onOutput) {
       this.onOutput(`> git ${args.join(' ')} [${Date.now() - startedAt}ms]\n`)
@@ -542,7 +253,6 @@ export class GitCli {
   }
 
   private async execCore(cwd: string, args: string[], options: GitExecOptions): Promise<GitExecutionResult> {
-    if (!this.core) throw new Error('ND Core Git backend is unavailable.')
     const timeoutMs = options.timeoutMs ?? 60_000
     // nd-core stops at this deadline and answers with `deadline_exceeded`; the
     // client's own tolerance is only the later backstop for a sidecar that stopped
@@ -573,28 +283,11 @@ export class GitCli {
     return { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr }
   }
 
-  private async execLegacy(cwd: string, args: string[], options: GitExecOptions): Promise<GitExecutionResult> {
-    const child = this.spawn(args, cwd, options.env)
-    if (options.input !== undefined) child.stdin?.end(options.input, 'utf8')
-    else child.stdin?.end()
-    return await this.buffer(child, options.timeoutMs)
-  }
-
   status(cwd: string): Promise<GitExecutionResult> {
     return this.exec(cwd, ['status', '-z', '-uall'], { env: { GIT_OPTIONAL_LOCKS: '0' } })
   }
 
-  log(cwd: string, limit: number): Promise<GitExecutionResult> {
-    return this.exec(cwd, ['log', `-n${limit}`, `--format=${COMMIT_FORMAT}`])
-  }
-
   async statusEntries(cwd: string): Promise<IFileStatus[]> {
-    if (!this.core) {
-      const result = await this.status(cwd)
-      const parser = new GitStatusParser()
-      parser.update(result.stdout)
-      return parser.status
-    }
     const startedAt = Date.now()
     const result = await this.core.request<CoreGitParsedResult & { entries: IFileStatus[] }>('git.status', {
       cwd: sanitizePath(cwd),
@@ -606,16 +299,6 @@ export class GitCli {
   }
 
   async logEntries(cwd: string, limit: number): Promise<ParsedGitCommit[]> {
-    if (!this.core) {
-      const result = await this.log(cwd, limit)
-      return parseGitCommits(result.stdout).map((commit) => ({
-        hash: commit.hash,
-        message: commit.message,
-        authorName: commit.authorName ?? '',
-        authorEmail: commit.authorEmail ?? '',
-        authorTimestamp: Math.floor((commit.authorDate ?? commit.commitDate ?? new Date(0)).getTime() / 1000),
-      }))
-    }
     const startedAt = Date.now()
     const result = await this.core.request<CoreGitParsedResult & { commits: ParsedGitCommit[] }>('git.log', {
       cwd: sanitizePath(cwd),
@@ -649,41 +332,4 @@ export class GitCli {
     }
   }
 
-  private spawn(args: string[], cwd: string | undefined, envOverride?: Record<string, string>): ChildProcess {
-    if (!this.path) {
-      throw new Error('git could not be found in the system.')
-    }
-
-    const spawnOptions: GitProcessSpawnOptions = {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, ...this.extraEnv, ...envOverride },
-      windowsHide: true,
-    }
-    if (cwd) spawnOptions.cwd = sanitizePath(cwd)
-
-    return this.spawnProcess(this.path, args, spawnOptions)
-  }
-
-  private buffer(child: ChildProcess, timeoutMs?: number): Promise<GitExecutionResult> {
-    return new Promise((resolve, reject) => {
-      const stdout: Buffer[] = []
-      const stderr: Buffer[] = []
-      const timer = timeoutMs === undefined ? undefined : setTimeout(() => {
-        reject(new Error('Git operation timed out. Please try again.'))
-        child.kill()
-      }, timeoutMs)
-
-      child.stdout?.on('data', (chunk: Buffer) => stdout.push(chunk))
-      child.stderr?.on('data', (chunk: Buffer) => stderr.push(chunk))
-      child.on('error', (error) => { clearTimeout(timer); reject(error) })
-      child.on('exit', (exitCode) => {
-        clearTimeout(timer)
-        resolve({
-          exitCode: exitCode ?? -1,
-          stdout: Buffer.concat(stdout).toString('utf8'),
-          stderr: Buffer.concat(stderr).toString('utf8'),
-        })
-      })
-    })
-  }
 }

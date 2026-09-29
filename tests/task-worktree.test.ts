@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
-import { TaskIntegrationConflictError, TaskWorktreeManager, taskEvidenceWorkspace } from '../src/main/organization/task-worktree.js'
+import { TaskIntegrationConflictError, TaskWorktreeManager } from '../src/main/organization/task-worktree.js'
 
 const exec = promisify(execFile)
 const temporary: string[] = []
@@ -45,7 +45,7 @@ describe('TaskWorktreeManager', () => {
     await writeFile(join(worktree.root, 'app.ts'), 'export const value = 2\n')
     expect(await readFile(join(repo, 'app.ts'), 'utf8')).toContain('value = 1')
     await manager.checkpoint(worktree, 'Update app')
-    expect(await taskEvidenceWorkspace(repo, 'task-1')).toBe(worktree.root)
+    expect((await manager.existing(repo, 'task-1'))?.root).toBe(worktree.root)
 
     const integrated = await manager.integrate(repo, 'task-1')
     expect(integrated.merged).toBe(true)
@@ -67,7 +67,7 @@ describe('TaskWorktreeManager', () => {
     expect((await exec('git', ['rev-parse', 'HEAD'], { cwd: workspace })).stdout.trim()).toBeTruthy()
     await writeFile(join(worktree.root, 'app.ts'), 'export const ready = true\n')
     await manager.checkpoint(worktree, 'Bootstrap app')
-    expect(await taskEvidenceWorkspace(workspace, 'first-task')).toBe(worktree.root)
+    expect((await manager.existing(workspace, 'first-task'))?.root).toBe(worktree.root)
 
     await manager.integrate(workspace, 'first-task')
     expect(await readFile(join(workspace, 'app.ts'), 'utf8')).toContain('ready = true')

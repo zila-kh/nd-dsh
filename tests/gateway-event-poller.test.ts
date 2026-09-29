@@ -161,6 +161,33 @@ describe('GatewayEventPoller', () => {
     poller.stop()
   })
 
+  it('stops re-reading history shortly after a turn is observed finishing', async () => {
+    const sessions = new Map<string, FakeSession>([['s1', { running: false, events: [] }]])
+    const clock = { value: 1_000 }
+    const { poller, frames, calls } = harness(sessions, clock)
+    await poller.requestTick()
+
+    sessions.get('s1')!.running = true
+    await poller.requestTick()
+    sessions.get('s1')!.running = false
+    sessions.get('s1')!.events!.push({ type: 'assistant/message', seq: 1, data: {} })
+    await poller.requestTick() // finish observed: the final delta is still read
+    expect(frames.filter((frame) => frame.kind === 'session-event').map((frame) => frame.event?.seq)).toEqual([1])
+
+    sessions.get('s1')!.events!.push({ type: 'usage/summary', seq: 2, data: {} })
+    clock.value += 1_000
+    await poller.requestTick() // inside the grace window: trailing events still arrive
+    expect(frames.filter((frame) => frame.kind === 'session-event').map((frame) => frame.event?.seq)).toEqual([1, 2])
+
+    clock.value += 2_000
+    await poller.requestTick() // grace expired
+    const historyReads = calls.filter((method) => method === 'session.history').length
+    clock.value += 1_000
+    await poller.requestTick()
+    expect(calls.filter((method) => method === 'session.history').length).toBe(historyReads)
+    poller.stop()
+  })
+
   it('synthesizes the completion flip when a prompted turn starts and ends between two polls', async () => {
     const sessions = new Map<string, FakeSession>([['s1', { running: false, events: [] }]])
     const clock = { value: 1_000 }

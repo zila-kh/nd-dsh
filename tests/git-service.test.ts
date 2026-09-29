@@ -1,11 +1,8 @@
-import { EventEmitter } from 'node:events'
 import { mkdtemp, mkdir, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { PassThrough } from 'node:stream'
 import { beforeEach, describe, expect, it } from 'vitest'
-import type { ChildProcess } from 'node:child_process'
-import type { GitSpawnFunction } from '../src/main/git/git-cli.js'
+import type { IFileStatus, ParsedGitCommit } from '../src/main/git/git-cli.js'
 import { GitService } from '../src/main/git/git-service.js'
 import type { WorkspaceState } from '../src/shared/contracts.js'
 
@@ -15,17 +12,13 @@ const NESTED_ROOT = 'C:/workspaces/demo/examples'
 const LOCAL_SHA = '2222222222222222222222222222222222222222'
 const REMOTE_SHA = '3333333333333333333333333333333333333333'
 
-const COMMIT_LOG = [
-  '1111111111111111111111111111111111111111',
-  'Jane Doe',
-  'jane@example.com',
-  '1700000000',
-  '1700000000',
-  '',
-  'main',
-  'Latest commit',
-  '\x00',
-].join('\n')
+const HEAD_COMMITS: ParsedGitCommit[] = [{
+  hash: '1111111111111111111111111111111111111111',
+  message: 'Latest commit',
+  authorName: 'Jane Doe',
+  authorEmail: 'jane@example.com',
+  authorTimestamp: 1_700_000_000,
+}]
 
 const DIRTY_STATUS = [
   'A  staged.txt',
@@ -41,38 +34,35 @@ type FakeGitResponse = {
   stdout?: string
   stderr?: string
   stdoutSequence?: string[]
+  /** Parsed history nd-core returns for `git.log`. */
+  commits?: ParsedGitCommit[]
   delayMs?: number
 }
 
-/** Scripted stand-in for the git binary: each spawn records its argv and answers from `script`. */
+interface CoreGitParams { cwd: string; args?: string[]; env?: Record<string, string> }
+
+/** Scripted stand-in for nd-core's Git methods: each call records its argv and answers from `script`. */
 class FakeGit {
-  readonly calls: Array<{ args: string[]; env: NodeJS.ProcessEnv | undefined; cwd: string | undefined }> = []
+  readonly calls: Array<{ args: string[]; env: Record<string, string> | undefined; cwd: string | undefined }> = []
   script: FakeGitResponse[] = []
 
-  spawn: GitSpawnFunction = (_path, args, options) => {
-    const record = { args, env: options.env, cwd: options.cwd }
-    this.calls.push(record)
-    const response = this.script.find((candidate) => candidate.match.every((token) => args.includes(token)))
-      ?? { match: [], stdout: '' }
-    const emitter = new EventEmitter()
-    const child = emitter as unknown as Record<string, unknown>
-    const stdout = new PassThrough()
-    const stderr = new PassThrough()
-    child.stdout = stdout
-    child.stderr = stderr
-    child.stdin = new PassThrough()
-    const complete = () => {
-      const sequenceOutput = response.stdoutSequence?.shift()
-      if (response.stderr !== undefined) stderr.write(response.stderr)
-      if (sequenceOutput !== undefined) stdout.write(sequenceOutput)
-      else if (response.stdout !== undefined) stdout.write(response.stdout)
-      stdout.end()
-      stderr.end()
-      emitter.emit('exit', response.exitCode ?? 0, null)
-    }
-    if (response.delayMs) setTimeout(complete, response.delayMs)
-    else process.nextTick(complete)
-    return child as unknown as ChildProcess
+  readonly core = {
+    request: async <T>(method: string, params: unknown): Promise<T> => {
+      const { cwd, env, args: execArgs } = params as CoreGitParams
+      const args = method === 'git.status' ? ['status', '-z', '-uall'] : method === 'git.log' ? ['log'] : execArgs ?? []
+      this.calls.push({ args, env, cwd })
+      const response = this.script.find((candidate) => candidate.match.every((token) => args.includes(token)))
+        ?? { match: [], stdout: '' }
+      if (response.delayMs) await new Promise((resolve) => setTimeout(resolve, response.delayMs))
+      const exitCode = response.exitCode ?? 0
+      const stdout = response.stdoutSequence?.shift() ?? response.stdout ?? ''
+      const stderr = response.stderr ?? ''
+      const base = { exitCode, stderr, durationMs: 1, truncated: false }
+      if (method === 'git.status') return { ...base, entries: exitCode === 0 ? parsePorcelain(stdout) : [] } as T
+      if (method === 'git.log') return { ...base, commits: exitCode === 0 ? response.commits ?? [] : [] } as T
+      if (method === 'git.exec') return { ...base, stdout } as T
+      throw new Error('Unexpected core method: ' + method)
+    },
   }
 
   argsOf(...tokens: string[]): string[] | undefined {
@@ -85,13 +75,30 @@ class FakeGit {
   }
 }
 
+/** `git status -z` entries in nd-core's shape: for `R NEW\0OLD\0`, `rename` holds NEW. */
+function parsePorcelain(raw: string): IFileStatus[] {
+  const fields = raw.split('\0')
+  const entries: IFileStatus[] = []
+  for (let index = 0; index < fields.length; index++) {
+    const field = fields[index]!
+    if (!field) continue
+    const x = field[0]!
+    const y = field[1]!
+    const first = field.slice(3)
+    const renamed = x === 'R' || y === 'R' || x === 'C'
+    const entry = renamed ? { x, y, path: fields[++index]!, rename: first } : { x, y, path: first, rename: undefined }
+    if (!entry.path.endsWith('/')) entries.push(entry)
+  }
+  return entries
+}
+
 function createService(fake: FakeGit, root = ROOT): GitService {
   const workspace = {
     state(): WorkspaceState {
       return { root, name: 'demo' }
     },
   }
-  return new GitService(workspace, { gitPath: '/fake/git', spawnProcess: fake.spawn })
+  return new GitService(workspace, { gitPath: '/fake/git', core: fake.core })
 }
 
 function repositoryScript(): FakeGitResponse[] {
@@ -100,7 +107,7 @@ function repositoryScript(): FakeGitResponse[] {
     { match: ['status'], stdout: DIRTY_STATUS },
     { match: ['symbolic-ref'], stdout: 'main\n' },
     { match: ['for-each-ref'], stdout: 'main\x00origin/main\x00[ahead 2]\nfeature\x00\x00\n' },
-    { match: ['log'], stdout: COMMIT_LOG },
+    { match: ['log'], commits: HEAD_COMMITS },
     { match: ['remote'], stdout: 'origin\r\n' },
   ]
 }
@@ -162,7 +169,7 @@ describe('GitService snapshot', () => {
         return { root: ROOT, name: 'demo', binding: 'unlinked', projectId: 'project-without-folder' }
       },
     }
-    const service = new GitService(workspace, { gitPath: '/fake/git', spawnProcess: fake.spawn })
+    const service = new GitService(workspace, { gitPath: '/fake/git', core: fake.core })
 
     const state = await service.refresh()
 
@@ -180,11 +187,11 @@ describe('GitService snapshot', () => {
       { match: ['status'], stdout: DIRTY_STATUS, delayMs: 25 },
       { match: ['symbolic-ref'], stdout: 'main\n' },
       { match: ['for-each-ref'], stdout: 'main\x00\x00\n' },
-      { match: ['log'], stdout: COMMIT_LOG },
+      { match: ['log'], commits: HEAD_COMMITS },
       { match: ['remote'], stdout: 'origin\n' },
     ]
     const workspace = { state: (): WorkspaceState => context }
-    const service = new GitService(workspace, { gitPath: '/fake/git', spawnProcess: fake.spawn })
+    const service = new GitService(workspace, { gitPath: '/fake/git', core: fake.core })
 
     const previous = service.refresh()
     context = { ...context, binding: 'unlinked', projectId: 'second-project' }

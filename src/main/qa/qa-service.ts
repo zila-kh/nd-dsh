@@ -56,8 +56,10 @@ interface SuiteView {
 export interface QaServiceOptions {
   /** Defaults to the resolved ND-DSH checkout (host of the internal suites). */
   root?: string
-  /** Injectable for tests. */
+  /** nd-core spawn in desktop production; Node spawn is the test/standalone default. */
   spawnProcess?: typeof spawn
+  /** Tree teardown matching `spawnProcess`; defaults to the Node taskkill/process-group path. */
+  stopProcess?: (child: ChildProcess) => Promise<void>
   now?: () => number
 }
 
@@ -80,6 +82,7 @@ interface SuiteRuntime {
 export class QaService {
   private readonly root: string
   private readonly spawnProcess: typeof spawn
+  private readonly stopProcess: (child: ChildProcess) => Promise<void>
   private readonly now: () => number
   private readonly runtimes = new Map<QaSuiteId, SuiteRuntime>()
   private listener: ((event: QaEvent) => void) | undefined
@@ -92,6 +95,7 @@ export class QaService {
   constructor(options: QaServiceOptions = {}) {
     this.root = options.root ?? projectRoot()
     this.spawnProcess = options.spawnProcess ?? spawn
+    this.stopProcess = options.stopProcess ?? ((child) => killProcessTree(child, STOP_GRACE_MS))
     this.now = options.now ?? Date.now
   }
 
@@ -132,17 +136,15 @@ export class QaService {
     this.activeSuite = suiteId
     this.emit({ kind: 'state', state: this.state() })
 
-    const spawnFile = internal ? process.execPath : check!.file
-    const spawnArgs = internal
-      ? [join(this.root, internal.entryRelativePath), ...internal.command.slice(1)]
-      : [...check!.args]
-    const child = this.spawnProcess(spawnFile, spawnArgs, {
+    const invocation = internal
+      ? { command: process.execPath, args: [join(this.root, internal.entryRelativePath), ...internal.command.slice(1)], verbatim: false }
+      : projectCheckInvocation(check!)
+    const child = this.spawnProcess(invocation.command, invocation.args, {
       cwd: internal ? this.root : this.projectWorkspaceRoot!,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: runnerEnvironment(internal !== undefined),
       windowsHide: true,
-      // npm/pnpm/yarn/bun are .cmd shims on Windows and need a shell to resolve.
-      shell: internal === undefined && process.platform === 'win32',
+      windowsVerbatimArguments: invocation.verbatim,
       // A process group lets POSIX teardown take the whole tree down; Windows uses taskkill /T instead.
       detached: process.platform !== 'win32',
     })
@@ -195,7 +197,7 @@ export class QaService {
     const child = this.child
     if (!child) return this.state()
     this.stopping = true
-    await killProcessTree(child, STOP_GRACE_MS)
+    await this.stopProcess(child)
     return this.state()
   }
 
@@ -253,6 +255,20 @@ export class QaService {
 
   private emit(event: QaEvent): void {
     this.listener?.(event)
+  }
+}
+
+/**
+ * npm/pnpm/yarn/bun are .cmd shims on Windows and need cmd.exe to resolve. The
+ * shell is spelled out rather than using `shell: true` because nd-core spawns an
+ * executable plus argv and has no shell option.
+ */
+function projectCheckInvocation(check: ProjectCheck): { command: string; args: string[]; verbatim: boolean } {
+  if (process.platform !== 'win32') return { command: check.file, args: [...check.args], verbatim: false }
+  return {
+    command: process.env.COMSPEC?.trim() || 'cmd.exe',
+    args: ['/d', '/s', '/c', `"${[check.file, ...check.args].join(' ')}"`],
+    verbatim: true,
   }
 }
 

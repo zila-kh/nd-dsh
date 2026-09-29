@@ -4,6 +4,7 @@ import {
   ORGANIZATION_CONTROL_IPC,
   type OrganizationControlAction,
   type OrganizationControlMutation,
+  type OrganizationControlSnapshot,
 } from '../../shared/organization-control.js'
 import { ORGANIZATION_IPC, type OrganizationMutation, type OrganizationSnapshot } from '../../shared/organization.js'
 import {
@@ -18,6 +19,7 @@ import { OrganizationControlPlane, taskDispatchAvailability } from './control-pl
 import type { ExecutionCoordinator, RuntimePermit } from './execution-coordinator.js'
 import type { OrganizationOrchestrator } from './orchestrator.js'
 import { materializeOrganizationSignal } from './signal-materializer.js'
+import { runDueSchedules } from './schedule-runner.js'
 import { OrganizationStrategyPlane } from './strategy-plane.js'
 import type { OrganizationStore } from './store.js'
 
@@ -45,7 +47,12 @@ export function registerOrganizationIpc(
 ): () => void {
   const channels: string[] = []
   const computeLedger = new ComputeLedger(join(app.getPath('userData'), 'compute-usage.jsonl'))
-  const control = new OrganizationControlPlane(join(app.getPath('userData'), 'organization-control.json'), store, computeLedger)
+  const control = new OrganizationControlPlane(
+    join(app.getPath('userData'), 'organization-control.json'),
+    store,
+    computeLedger,
+    (projectWorkspace, taskId) => orchestrator.captureTaskEvidence(projectWorkspace, taskId),
+  )
   const strategy = new OrganizationStrategyPlane(join(app.getPath('userData'), 'organization-strategy.json'), store)
   control.setOnChanged((state) => {
     if (!window.isDestroyed()) window.webContents.send(ORGANIZATION_CONTROL_IPC.changed, state)
@@ -75,14 +82,14 @@ export function registerOrganizationIpc(
   }, 1_500)
   reconcileTimer.unref()
 
-  // Recurring company intent is only a wake-up mechanism. Every due tick still
-  // passes through OrganizationControlPlane.shouldRun() and the guarded
-  // orchestrator, so a timer never becomes an independent authority source.
+  // Recurring company work: every due tick passes OrganizationControlPlane.shouldRun()
+  // before it creates a task, and only the guarded orchestrator can start one, so
+  // a timer never becomes an independent authority source.
   let scheduleBusy = false
   const scheduleTimer = setInterval(() => {
     if (scheduleBusy) return
     scheduleBusy = true
-    void runDueSchedules(strategy, control, orchestrator)
+    void runDueSchedules({ strategy, control, store, orchestrator })
       .catch((error) => console.warn('Organization scheduled work failed:', error instanceof Error ? error.message : String(error)))
       .finally(() => { scheduleBusy = false })
   }, 15_000)
@@ -245,45 +252,6 @@ async function projectLatestStrategyMemory(
   })
 }
 
-async function runDueSchedules(
-  strategy: OrganizationStrategyPlane,
-  control: OrganizationControlPlane,
-  orchestrator: OrganizationOrchestrator,
-): Promise<void> {
-  for (const candidate of await strategy.dueSchedules()) {
-    const schedule = await strategy.beginSchedule(candidate.id)
-    if (!schedule) continue
-    try {
-      const decision = await control.shouldRun(schedule.projectId, 'workflow.continue')
-      if (decision.route !== 'ready') {
-        await strategy.finishSchedule(schedule.id, 'skipped', decision.reason)
-        await strategy.mutate({
-          type: 'action.record', companyId: schedule.companyId, projectId: schedule.projectId,
-          action: 'workflow.continue', target: `schedule:${schedule.id}`, scope: schedule.projectId,
-          risk: 'low', externality: 'internal', destructiveLevel: 'none', decision: 'deny', reason: decision.reason,
-        })
-        continue
-      }
-      const receipt = await orchestrator.runNext(schedule.projectId, false)
-      const detail = receipt ? `Dispatched ${receipt.kind} run ${receipt.runId}.` : 'No runnable work was available.'
-      await strategy.finishSchedule(schedule.id, 'success', detail)
-      await strategy.mutate({
-        type: 'action.record', companyId: schedule.companyId, projectId: schedule.projectId,
-        action: 'workflow.continue', target: `schedule:${schedule.id}`, scope: schedule.projectId,
-        risk: 'low', externality: 'internal', destructiveLevel: 'none', decision: 'allow', reason: 'Scheduled company continuation passed current ND control gates.', result: detail,
-      })
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
-      await strategy.finishSchedule(schedule.id, 'failed', detail)
-      await strategy.mutate({
-        type: 'action.record', companyId: schedule.companyId, projectId: schedule.projectId,
-        action: 'workflow.continue', target: `schedule:${schedule.id}`, scope: schedule.projectId,
-        risk: 'low', externality: 'internal', destructiveLevel: 'none', decision: 'deny', reason: 'Scheduled continuation failed closed.', result: detail,
-      })
-    }
-  }
-}
-
 function guardOrchestrator(
   orchestrator: OrganizationOrchestrator,
   store: OrganizationStore,
@@ -419,10 +387,22 @@ async function bindRuntimePermit(
 }
 
 async function reconcileControlState(store: OrganizationStore, control: OrganizationControlPlane): Promise<void> {
-  await control.state()
+  const controlState = await control.state()
   const organization = await store.state()
-  for (const project of organization.projects) {
-    await assertProjectCompletionEvidence(store, control, project.id, false)
+  const newestReceipt = new Map<string, OrganizationControlSnapshot['evidence'][number]>()
+  for (const receipt of controlState.evidence) {
+    if (!newestReceipt.has(receipt.taskId)) newestReceipt.set(receipt.taskId, receipt)
+  }
+  // Runs every tick, so only projects with a completed task whose newest receipt is
+  // still unverified pay for the per-project evidence pass.
+  const projectIds = new Set<string>()
+  for (const task of organization.tasks) {
+    if (task.status !== 'completed') continue
+    const receipt = newestReceipt.get(task.id)
+    if (receipt && receipt.status !== 'verified') projectIds.add(task.projectId)
+  }
+  for (const projectId of projectIds) {
+    await assertProjectCompletionEvidence(store, control, projectId, false)
   }
 }
 

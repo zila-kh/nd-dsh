@@ -193,6 +193,10 @@ export interface OrganizationTask {
   integrationState?: OrganizationIntegrationState
   integrationSummary?: string
   integratedHead?: string
+  /** Set when a recurring company schedule created this task. */
+  sourceScheduleId?: string
+  /** Why ND blocked the task, shown to the human until the task moves again. */
+  blockedReason?: string
   createdAt: number
   updatedAt: number
 }
@@ -333,7 +337,7 @@ export type OrganizationMutation =
   | { type: 'skill.create'; scope: Exclude<OrganizationScope, 'builtin'>; name: string; description: string; instructions: string; companyId?: string; projectId?: string; teamId?: string; roleId?: string; agentId?: string }
   | { type: 'workflow.create'; companyId: string; projectId?: string; name: string; steps: WorkflowStep[] }
   | { type: 'goal.create'; companyId: string; projectId: string; title: string; description: string }
-  | { type: 'task.create'; companyId: string; projectId: string; goalId?: string; milestoneId?: string; title: string; description: string; acceptanceCriteria?: string[]; priority?: TaskPriority; dependsOn?: string[]; assignedAgentId?: string; workScopes?: string[]; evidenceKind?: TaskEvidenceKind; artifactPaths?: string[] }
+  | { type: 'task.create'; companyId: string; projectId: string; goalId?: string; milestoneId?: string; title: string; description: string; acceptanceCriteria?: string[]; priority?: TaskPriority; dependsOn?: string[]; assignedAgentId?: string; workScopes?: string[]; evidenceKind?: TaskEvidenceKind; artifactPaths?: string[]; sourceScheduleId?: string }
   | { type: 'task.update'; id: string; patch: Partial<Pick<OrganizationTask, 'title' | 'description' | 'acceptanceCriteria' | 'priority' | 'status' | 'dependsOn' | 'assignedAgentId' | 'workScopes' | 'evidenceKind' | 'artifactPaths'>> }
   | { type: 'memory.add'; companyId: string; projectId?: string; title: string; content: string; tags?: string[] }
   | { type: 'policy.set'; companyId: string; action: string; effect: OrganizationPolicyEffect; description?: string }

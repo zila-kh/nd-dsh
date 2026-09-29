@@ -40,6 +40,7 @@ export class OrganizationStore {
   private loaded = false
   private loadPromise: Promise<void> | undefined
   private saveChain: Promise<void> = Promise.resolve()
+  private pendingSave: Promise<void> | undefined
   private value: OrganizationSnapshot = clone(EMPTY)
   private onChanged: ((state: OrganizationSnapshot) => void) | undefined
 
@@ -82,7 +83,7 @@ export class OrganizationStore {
     return clone(this.value)
   }
 
-  async applyPlan(projectId: string, plan: ProjectPlanInput): Promise<void> {
+  async applyPlan(projectId: string, plan: ProjectPlanInput, adjustments: string[] = []): Promise<void> {
     await this.load()
     const project = this.project(projectId)
     const companyId = project.companyId
@@ -114,7 +115,10 @@ export class OrganizationStore {
     }
     for (const item of plan.memory ?? []) this.addMemory({ companyId, projectId, title: item.title, content: item.content, ...(item.tags ? { tags: item.tags } : {}), source: 'pm' })
     this.refreshProject(projectId)
-    this.activity(companyId, projectId, 'pm.plan', `AI PM created “${plan.goal.title}” with ${plan.milestones.length} milestone(s).`)
+    const repaired = adjustments.length
+      ? ` ND repaired ${adjustments.length} plan issue(s): ${adjustments.slice(0, 5).join(' ')}${adjustments.length > 5 ? ' …' : ''}`
+      : ''
+    this.activity(companyId, projectId, 'pm.plan', `AI PM created “${plan.goal.title}” with ${plan.milestones.length} milestone(s).${repaired}`)
     await this.save()
   }
 
@@ -311,12 +315,23 @@ export class OrganizationStore {
   async markExecution(taskId: string, sessionId: string): Promise<void> {
     await this.load()
     const task = this.task(taskId)
-    task.status = 'in_progress'; task.executionSessionId = sessionId; delete task.reviewSessionId
+    task.status = 'in_progress'; task.executionSessionId = sessionId; delete task.reviewSessionId; delete task.blockedReason
     task.integrationState = 'pending'; delete task.integrationSummary; delete task.integratedHead
     task.updatedAt = Date.now()
     this.setAgent(task.assignedAgentId, 'working', task.id, sessionId)
     this.activity(task.companyId, task.projectId, 'task.execute', `Started “${task.title}”.`)
     this.teamEvent(task, 'progress', `Execution started for “${task.title}”.`)
+    await this.save()
+  }
+
+  async blockTask(taskId: string, reason: string): Promise<void> {
+    await this.load()
+    const task = this.task(taskId)
+    task.status = 'blocked'
+    task.blockedReason = reason.trim().slice(0, 2_000) || 'Blocked by ND.'
+    task.updatedAt = Date.now()
+    this.activity(task.companyId, task.projectId, 'task.blocked', `Blocked “${task.title}”: ${task.blockedReason}`)
+    this.refreshProject(task.projectId)
     await this.save()
   }
 
@@ -508,10 +523,18 @@ export class OrganizationStore {
     return normalizeSnapshot(parsed)
   }
 
-  private async save(): Promise<void> {
-    const snapshot = clone(this.value)
-    const serialized = `${JSON.stringify(snapshot, null, 2)}\n`
+  /**
+   * Durable once the returned promise settles. Saves requested while a write is in
+   * flight share the next write, which snapshots state when it starts, so a burst
+   * of mutations costs one snapshot, one serialization, and one listener update
+   * instead of one per mutation.
+   */
+  private save(): Promise<void> {
+    if (this.pendingSave) return this.pendingSave
     const write = this.saveChain.catch(() => undefined).then(async () => {
+      this.pendingSave = undefined
+      const snapshot = clone(this.value)
+      const serialized = `${JSON.stringify(snapshot)}\n`
       await fs.mkdir(dirname(this.filePath), { recursive: true })
       await writeAtomic(this.filePath, serialized)
       try {
@@ -519,8 +542,9 @@ export class OrganizationStore {
       } catch (error) {
         console.warn('Failed to persist organization backup:', error)
       }
-      this.onChanged?.(clone(snapshot))
+      this.onChanged?.(snapshot)
     })
+    this.pendingSave = write
     this.saveChain = write
     return write
   }
@@ -665,7 +689,7 @@ export class OrganizationStore {
     const agent = input.assignedAgentId ? this.value.agents.find((item) => item.id === input.assignedAgentId) : this.pickAgent(input.companyId)
     if (agent?.teamId && !project.teamIds.includes(agent.teamId)) project.teamIds.push(agent.teamId)
     const now = Date.now()
-    this.value.tasks.push({ id: randomUUID(), companyId: input.companyId, projectId: input.projectId, title: clean(input.title), description: clean(input.description), acceptanceCriteria: input.acceptanceCriteria?.map(clean).filter(Boolean) ?? ['Requested outcome is implemented and verified.'], priority: input.priority ?? 'medium', status: 'backlog', dependsOn: input.dependsOn ?? [], ...(input.goalId ? { goalId: input.goalId } : {}), ...(input.milestoneId ? { milestoneId: input.milestoneId } : {}), ...(agent ? { assignedAgentId: agent.id } : {}), ...taskExecutionHints(input), createdAt: now, updatedAt: now })
+    this.value.tasks.push({ id: randomUUID(), companyId: input.companyId, projectId: input.projectId, title: clean(input.title), description: clean(input.description), acceptanceCriteria: input.acceptanceCriteria?.map(clean).filter(Boolean) ?? ['Requested outcome is implemented and verified.'], priority: input.priority ?? 'medium', status: 'backlog', dependsOn: input.dependsOn ?? [], ...(input.goalId ? { goalId: input.goalId } : {}), ...(input.milestoneId ? { milestoneId: input.milestoneId } : {}), ...(agent ? { assignedAgentId: agent.id } : {}), ...taskExecutionHints(input), ...(input.sourceScheduleId ? { sourceScheduleId: clean(input.sourceScheduleId) } : {}), createdAt: now, updatedAt: now })
     this.refreshProject(input.projectId)
   }
   private updateTask(id: string, patch: Extract<OrganizationMutation, { type: 'task.update' }>['patch']): void {
@@ -682,6 +706,7 @@ export class OrganizationStore {
     const effectiveArtifacts = nextPatch.artifactPaths ?? task.artifactPaths ?? []
     if (effectiveEvidence === 'artifact' && effectiveArtifacts.length === 0) throw new Error('Artifact tasks require at least one artifact path')
     Object.assign(task, nextPatch)
+    if (task.status !== 'blocked') delete task.blockedReason
     task.updatedAt = Date.now()
     this.refreshProject(task.projectId)
   }

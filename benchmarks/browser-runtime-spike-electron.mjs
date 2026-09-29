@@ -88,6 +88,14 @@ try {
     requirements: {
       coreBrowserPass,
       extensionBaselinePass,
+      extensionActionPopupPass: Boolean(
+        capabilities.extensions.mv3ActionPopup?.popupLoaded
+        && capabilities.extensions.mv3ActionPopup?.runtimeAvailable
+        && capabilities.extensions.mv3ActionPopup?.storageAvailable
+        && capabilities.extensions.mv3ActionPopup?.tabsQueryAvailable
+        && capabilities.extensions.mv3ActionPopup?.tabsReloadAvailable
+        && capabilities.extensions.mv3ActionPopup?.activeTabMatchesHost,
+      ),
       multiTabPass,
       credentialVaultPrimitiveAvailable: capabilities.runtime.safeStorageAvailable,
       webMcpNavigatorPresent: capabilities.webMcp.documentPresent,
@@ -182,8 +190,14 @@ async function probeExtensions(ses, origin, hostWindow) {
   const result = {
     mv2: await loadAndExerciseExtension('mv2', resolve(root, 'tests/fixtures/browser-runtime-spike/extensions/mv2-baseline'), ses, origin, hostWindow),
     mv3: await loadAndExerciseExtension('mv3', resolve(root, 'tests/fixtures/browser-runtime-spike/extensions/mv3-service-worker'), ses, origin, hostWindow),
+    mv3ActionPopup: await loadAndExerciseActionPopup(
+      resolve(root, 'tests/fixtures/browser-runtime-spike/extensions/mv3-action-popup'),
+      ses,
+      origin,
+      hostWindow,
+    ),
   }
-  result.loadedExtensionsAfterCleanup = ses.getAllExtensions().map((extension) => ({
+  result.loadedExtensionsAfterCleanup = ses.extensions.getAllExtensions().map((extension) => ({
     id: extension.id,
     name: extension.name,
     version: extension.version,
@@ -205,7 +219,7 @@ async function loadAndExerciseExtension(label, extensionPath, ses, origin, hostW
   let extension
   try {
     const started = performance.now()
-    extension = await ses.loadExtension(extensionPath, { allowFileAccess: false })
+    extension = await ses.extensions.loadExtension(extensionPath, { allowFileAccess: false })
     result.loadMs = performance.now() - started
     result.loaded = true
     result.id = extension.id
@@ -229,10 +243,76 @@ async function loadAndExerciseExtension(label, extensionPath, ses, origin, hostW
   } finally {
     if (extension?.id) {
       try {
-        ses.removeExtension(extension.id)
-        result.removed = !ses.getAllExtensions().some((item) => item.id === extension.id)
+        ses.extensions.removeExtension(extension.id)
+        result.removed = !ses.extensions.getAllExtensions().some((item) => item.id === extension.id)
       } catch (cause) {
         recordFailure('extension.' + label + '.remove', cause)
+      }
+    }
+  }
+  return result
+}
+
+async function loadAndExerciseActionPopup(extensionPath, ses, origin, hostWindow) {
+  const result = {
+    loaded: false,
+    popupLoaded: false,
+    runtimeAvailable: false,
+    storageAvailable: false,
+    tabsQueryAvailable: false,
+    tabsReloadAvailable: false,
+    activeTabMatchesHost: false,
+    activeTabUrl: '',
+    removed: false,
+    id: null,
+    error: null,
+  }
+  let extension
+  try {
+    extension = await ses.extensions.loadExtension(extensionPath, { allowFileAccess: false })
+    result.loaded = true
+    result.id = extension.id
+    const hostView = createView(ses, hostWindow)
+    const view = createView(ses, hostWindow)
+    try {
+      await hostView.webContents.loadURL(origin + '/extension/popup-host')
+      hostView.setVisible(true)
+      hostView.webContents.focus()
+      await wait(50)
+
+      await view.webContents.loadURL(`chrome-extension://${extension.id}/popup.html`)
+      view.setVisible(true)
+      view.webContents.focus()
+      await wait(250)
+      const state = await view.webContents.executeJavaScript(`({
+        runtime: document.documentElement.dataset.ndPopupRuntime || '',
+        storage: document.documentElement.dataset.ndPopupStorage || '',
+        tabs: document.documentElement.dataset.ndPopupTabs || '',
+        tabsReload: document.documentElement.dataset.ndPopupTabsReload || '',
+        activeTabUrl: document.documentElement.dataset.ndPopupActiveTabUrl || '',
+        status: document.getElementById('status')?.textContent || ''
+      })`)
+      result.popupLoaded = state.status === 'ready'
+      result.runtimeAvailable = state.runtime === 'ok'
+      result.storageAvailable = state.storage === 'ok'
+      result.tabsQueryAvailable = state.tabs === 'ok'
+      result.tabsReloadAvailable = state.tabsReload === 'ok'
+      result.activeTabUrl = state.activeTabUrl
+      result.activeTabMatchesHost = typeof state.activeTabUrl === 'string' && state.activeTabUrl.startsWith(origin)
+    } finally {
+      destroyView(view, hostWindow)
+      destroyView(hostView, hostWindow)
+    }
+  } catch (cause) {
+    result.error = cause instanceof Error ? cause.message : String(cause)
+    observations.push({ label: 'extension-mv3-action-popup', outcome: 'unsupported-or-failed', detail: result.error })
+  } finally {
+    if (extension?.id) {
+      try {
+        ses.extensions.removeExtension(extension.id)
+        result.removed = !ses.extensions.getAllExtensions().some((item) => item.id === extension.id)
+      } catch (cause) {
+        recordFailure('extension.mv3-action-popup.remove', cause)
       }
     }
   }

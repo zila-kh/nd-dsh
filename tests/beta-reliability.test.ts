@@ -185,6 +185,23 @@ describe('beta execution reliability', () => {
     expect(state.tasks.find((item) => item.id === task.id)?.status).toBe('blocked')
   })
 
+  it('returns a hung review to the review queue instead of leaving it reviewing forever', async () => {
+    const { store, task, orchestrator } = await organizationFixture()
+    await store.markForReview(task.id, 'Worker finished.')
+    const review = await orchestrator.reviewTask(task.id)
+    expect((await store.state()).tasks.find((item) => item.id === task.id)?.reviewSessionId).toBe(review.sessionId)
+
+    const recovered = await orchestrator.reconcileStalledRuns(Date.now() + 11 * 60 * 1_000)
+
+    expect(recovered).toBe(1)
+    const state = await store.state()
+    expect(state.runs.find((item) => item.id === review.runId)).toMatchObject({ status: 'failed' })
+    expect(state.runs.find((item) => item.id === review.runId)?.error).toMatch(/Review stalled/)
+    const after = state.tasks.find((item) => item.id === task.id)!
+    expect(after.status).toBe('review')
+    expect(after.reviewSessionId).toBeUndefined()
+  })
+
   it('cancels one of two isolated parallel runs without stopping the other', async () => {
     const { store, company, project, task, engineRuns, orchestrator } = await organizationFixture()
     let state = await store.mutate({

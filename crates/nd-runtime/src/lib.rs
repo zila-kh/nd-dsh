@@ -8,6 +8,7 @@ pub mod deadline;
 pub mod decision;
 pub mod dispatcher;
 pub mod effect_journal;
+pub mod evidence;
 pub mod git;
 pub mod metrics;
 pub mod process;

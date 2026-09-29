@@ -312,7 +312,7 @@ Let me know if you need any adjustments.`
     expect(state.tasks[0]?.status).toBe('in_progress')
   })
 
-  it('reports specific validation diagnostic when plan has cyclic dependency', async () => {
+  it('repairs a cyclic plan instead of rejecting it, and records the repair', async () => {
     const { store, project, orchestrator } = await fixture()
     const planRun = await orchestrator.planProject(project.id)
 
@@ -335,7 +335,39 @@ Let me know if you need any adjustments.`
 
     const state = await store.state()
     const run = state.runs.find((item) => item.id === planRun.runId)!
+    expect(run.status).toBe('completed')
+    const taskA = state.tasks.find((item) => item.title === 'Task A')!
+    const taskB = state.tasks.find((item) => item.title === 'Task B')!
+    expect(taskA.dependsOn).toEqual([taskB.id])
+    expect(taskB.dependsOn).toEqual([])
+    expect(state.activity.find((item) => item.type === 'pm.plan')?.message).toMatch(/repaired 1 plan issue/)
+  })
+
+  it('keeps every milestone when the model repeats the milestones key (seen live with MiMo)', async () => {
+    const { store, project, orchestrator } = await fixture()
+    const planRun = await orchestrator.planProject(project.id)
+    const output = '<nd-dsh-plan>{"goal":{"title":"Board","description":"x"},'
+      + '"milestones":[{"title":"Foundation","description":"","tasks":[{"title":"Scaffold app","description":"s"}]}],'
+      + '"milestones":[{"title":"Core","description":"","tasks":[{"title":"Build form","description":"f","dependsOn":["Scaffold app"]}]}]}</nd-dsh-plan>'
+    await orchestrator.handleHarnessEvent(assistant(planRun.sessionId, output))
+    await orchestrator.handleHarnessEvent(stopped(planRun.sessionId))
+
+    const state = await store.state()
+    expect(state.runs.find((item) => item.id === planRun.runId)?.status).toBe('completed')
+    expect(state.milestones.filter((item) => item.projectId === project.id).map((item) => item.title)).toEqual(['Foundation', 'Core'])
+    const scaffold = state.tasks.find((item) => item.title === 'Scaffold app')!
+    expect(state.tasks.find((item) => item.title === 'Build form')?.dependsOn).toEqual([scaffold.id])
+    expect(state.activity.find((item) => item.type === 'pm.plan')?.message).toMatch(/Merged 1 repeated/)
+  })
+
+  it('still fails a plan that has no tasks, with a specific diagnostic', async () => {
+    const { store, project, orchestrator } = await fixture()
+    const planRun = await orchestrator.planProject(project.id)
+    await orchestrator.handleHarnessEvent(assistant(planRun.sessionId, '<nd-dsh-plan>{"goal":{"title":"Empty","description":"x"},"milestones":[{"title":"M1","tasks":[]}]}</nd-dsh-plan>'))
+    await orchestrator.handleHarnessEvent(stopped(planRun.sessionId))
+
+    const run = (await store.state()).runs.find((item) => item.id === planRun.runId)!
     expect(run.status).toBe('failed')
-    expect(run.error).toContain('Planned task dependency cycle detected')
+    expect(run.error).toContain('contains no tasks')
   })
 })

@@ -4,6 +4,7 @@ import { createReadStream } from 'node:fs'
 import { promises as fs } from 'node:fs'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
+import type { WorktreeGitRunner } from './task-worktree.js'
 
 const execFileAsync = promisify(execFile)
 const MAX_CAPTURE_CHARS = 32_000
@@ -32,6 +33,8 @@ export interface VerificationEvidence {
 export interface VerificationProcessRuntime {
   spawnProcess: typeof spawn
   stopProcess(child: ChildProcess): Promise<void>
+  /** Git for the checkpoint capture/restore around the command; nd-core `git.exec` in desktop production. */
+  runGit?: WorktreeGitRunner
 }
 
 /**
@@ -49,10 +52,11 @@ export async function runVerification(command: string | undefined, cwd: string |
   if (!cleaned) return finish({ status: 'skipped', startedAt, reason: 'Project has no configured test command.' })
   if (!cwd) return finish({ status: 'failed', command: cleaned, startedAt, reason: 'Configured verification command has no project workspace.' })
 
+  const runGit = runtime?.runGit ?? git
   let managedBaseline: string | undefined
   if (isManagedTaskWorktree(cwd)) {
     try {
-      managedBaseline = await captureManagedBaseline(cwd)
+      managedBaseline = await captureManagedBaseline(cwd, runGit)
     } catch (error) {
       return finish({ status: 'failed', command: cleaned, cwd, startedAt, reason: `Verification preflight failed: ${errorMessage(error)}` })
     }
@@ -98,7 +102,7 @@ export async function runVerification(command: string | undefined, cwd: string |
       let result = value
       if (managedBaseline) {
         try {
-          await restoreManagedBaseline(cwd, managedBaseline)
+          await restoreManagedBaseline(cwd, managedBaseline, runGit)
         } catch (error) {
           result = {
             ...value,
@@ -310,30 +314,30 @@ function isManagedTaskWorktree(cwd: string): boolean {
   return resolve(cwd).split(sep).includes('.nd-dsh-worktrees')
 }
 
-async function captureManagedBaseline(cwd: string): Promise<string> {
+async function captureManagedBaseline(cwd: string, runGit: WorktreeGitRunner): Promise<string> {
   const [head, status] = await Promise.all([
-    git(cwd, ['rev-parse', 'HEAD']),
-    git(cwd, ['status', '--porcelain=v1', '--untracked-files=all']),
+    runGit(cwd, ['rev-parse', 'HEAD']),
+    runGit(cwd, ['status', '--porcelain=v1', '--untracked-files=all']),
   ])
-  if (status.trim()) throw new Error('ND task worktree is dirty before machine verification')
-  const baseline = head.trim()
+  if (status.stdout.trim()) throw new Error('ND task worktree is dirty before machine verification')
+  const baseline = head.stdout.trim()
   if (!baseline) throw new Error('ND task worktree has no Git HEAD before machine verification')
   return baseline
 }
 
-async function restoreManagedBaseline(cwd: string, baseline: string): Promise<void> {
-  await git(cwd, ['reset', '--hard', baseline])
-  await git(cwd, ['clean', '-fd', '--'])
+async function restoreManagedBaseline(cwd: string, baseline: string, runGit: WorktreeGitRunner): Promise<void> {
+  await runGit(cwd, ['reset', '--hard', baseline])
+  await runGit(cwd, ['clean', '-fd', '--'])
   const [head, status] = await Promise.all([
-    git(cwd, ['rev-parse', 'HEAD']),
-    git(cwd, ['status', '--porcelain=v1', '--untracked-files=all']),
+    runGit(cwd, ['rev-parse', 'HEAD']),
+    runGit(cwd, ['status', '--porcelain=v1', '--untracked-files=all']),
   ])
-  if (head.trim() !== baseline || status.trim()) throw new Error('ND task worktree did not return to its verification checkpoint')
+  if (head.stdout.trim() !== baseline || status.stdout.trim()) throw new Error('ND task worktree did not return to its verification checkpoint')
 }
 
-async function git(cwd: string, args: string[]): Promise<string> {
+async function git(cwd: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
   const result = await execFileAsync('git', args, { cwd, encoding: 'utf8', maxBuffer: MAX_GIT_OUTPUT })
-  return result.stdout
+  return { stdout: result.stdout, stderr: result.stderr }
 }
 
 function verificationTimeoutMs(value = process.env.ND_DSH_VERIFY_TIMEOUT_MS): number {

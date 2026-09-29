@@ -149,6 +149,8 @@ export interface BrowserHistoryEntry {
   visitedAt: number
 }
 
+export type BrowserExtensionSource = 'unpacked' | 'bundled'
+
 export interface BrowserExtensionRecord {
   id: string
   name: string
@@ -160,6 +162,41 @@ export interface BrowserExtensionRecord {
   manifestVersion?: number | undefined
   error?: string | undefined
   installedAt: number
+  source?: BrowserExtensionSource | undefined
+  catalogId?: string | undefined
+  storeId?: string | undefined
+  publisher?: string | undefined
+  actionTitle?: string | undefined
+  actionPopup?: string | undefined
+  compatibilityNotes?: string[] | undefined
+}
+
+export interface BrowserExtensionInstallPreview {
+  path: string
+  name: string
+  version: string
+  permissions: string[]
+  manifestVersion?: number | undefined
+  status: BrowserExtensionRecord['status']
+  compatibilityNotes: string[]
+  actionTitle?: string | undefined
+  actionPopup?: string | undefined
+}
+
+export interface BrowserExtensionCatalogItem {
+  id: string
+  name: string
+  publisher: string
+  description: string
+  storeId?: string | undefined
+  storeUrl?: string | undefined
+  packagePolicy: 'bundled' | 'reference-only'
+  compatibility: 'experimental' | 'limited' | 'compatible'
+  bundleAvailable: boolean
+  installed: boolean
+  installedExtensionId?: string | undefined
+  installedSource?: BrowserExtensionSource | undefined
+  note?: string | undefined
 }
 
 export interface BrowserCredentialSummary {
@@ -198,6 +235,10 @@ export interface BrowserPlatformState {
   leases: BrowserTabLease[]
   downloads: BrowserDownloadRecord[]
   extensions: BrowserExtensionRecord[]
+  extensionCatalog: BrowserExtensionCatalogItem[]
+  extensionPopupId?: string | undefined
+  browserUseEnabled: boolean
+  developerMode: boolean
   credentials: BrowserCredentialSummary[]
   sitePermissions: BrowserSitePermission[]
   approvals: BrowserApprovalRequest[]
@@ -215,9 +256,17 @@ export interface BrowserPlatformDesktopApi {
   cancelDownload(downloadId: string): Promise<boolean>
   openDownload(downloadId: string): Promise<boolean>
   revealDownload(downloadId: string): Promise<boolean>
+  clearFinishedDownloads(): Promise<number>
   installExtension(): Promise<BrowserExtensionRecord | null>
   setExtensionEnabled(extensionId: string, enabled: boolean): Promise<BrowserExtensionRecord[]>
   removeExtension(extensionId: string): Promise<BrowserExtensionRecord[]>
+  reloadExtensions(): Promise<BrowserExtensionRecord[]>
+  setDeveloperMode(enabled: boolean): Promise<BrowserPlatformState>
+  setBrowserUseEnabled(enabled: boolean): Promise<BrowserPlatformState>
+  installCatalogExtension(catalogId: string): Promise<BrowserExtensionRecord | null>
+  openCatalogExtension(catalogId: string): Promise<BrowserTabDescriptor>
+  showExtensionPopup(extensionId: string): Promise<BrowserPlatformState>
+  closeExtensionPopup(): Promise<BrowserPlatformState>
   saveCredential(input: { origin: string; username: string; password: string; label?: string | undefined }): Promise<BrowserCredentialSummary>
   removeCredential(credentialId: string): Promise<boolean>
   autofillCredential(credentialId: string, targetId?: string, tabId?: string): Promise<{ ok: true; credentialId: string; username: string }>
@@ -238,9 +287,17 @@ export const BROWSER_PLATFORM_IPC = {
   cancelDownload: 'browser-platform:cancel-download',
   openDownload: 'browser-platform:open-download',
   revealDownload: 'browser-platform:reveal-download',
+  clearFinishedDownloads: 'browser-platform:clear-finished-downloads',
   installExtension: 'browser-platform:install-extension',
   extensionEnabled: 'browser-platform:extension-enabled',
   removeExtension: 'browser-platform:remove-extension',
+  reloadExtensions: 'browser-platform:reload-extensions',
+  developerMode: 'browser-platform:developer-mode',
+  browserUseEnabled: 'browser-platform:browser-use-enabled',
+  installCatalogExtension: 'browser-platform:install-catalog-extension',
+  openCatalogExtension: 'browser-platform:open-catalog-extension',
+  showExtensionPopup: 'browser-platform:show-extension-popup',
+  closeExtensionPopup: 'browser-platform:close-extension-popup',
   saveCredential: 'browser-platform:save-credential',
   removeCredential: 'browser-platform:remove-credential',
   autofillCredential: 'browser-platform:autofill-credential',
@@ -248,4 +305,17 @@ export const BROWSER_PLATFORM_IPC = {
   setSitePermission: 'browser-platform:set-site-permission',
   resolveApproval: 'browser-platform:resolve-approval',
   changedEvent: 'browser-platform:changed-event',
+} as const
+
+// Served only to the extension action popup ND is currently hosting. Carries
+// Electron tab ids, never URLs or titles; tab contents still come from
+// Electron's own chrome.tabs implementation.
+export interface BrowserExtensionPopupContext {
+  hostTabId: number
+  tabIds: number[]
+  windowId: number
+}
+
+export const BROWSER_EXTENSION_POPUP_IPC = {
+  context: 'browser-extension-popup:context',
 } as const

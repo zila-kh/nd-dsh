@@ -3,17 +3,19 @@ import { existsSync, promises as fs } from 'node:fs'
 import { basename, join } from 'node:path'
 import process from 'node:process'
 import { asNdContext, contextKey, type NdContext } from '../../shared/nd-context.js'
-import { ND_HOST_METHODS, type NdHostMethod } from '../../shared/extension-package.js'
+import { ND_HOST_METHODS, manifestPermissionIssues, validateNdExtensionManifest, type NdHostMethod } from '../../shared/extension-package.js'
 import {
   ND_EXTENSIONS_IPC,
   ND_HOME_IPC,
   type NdExtensionsStateView,
+  type NdAvailablePackageView,
   type NdInvocationRequest,
 } from '../../shared/nd-invocations.js'
 import type { OrganizationMutation, OrganizationSnapshot } from '../../shared/organization.js'
 import { BUILTIN_EXTENSION_PACKAGES, defaultActivationContexts } from '../../shared/builtin-extension-packages.js'
 import { captureDisplayUnderPointer, captureScreenRegion } from '../capture/app-capture.js'
 import { setDesktopWallpaper } from '../os/wallpaper.js'
+import { ProcessInventory } from '../os/process-inventory.js'
 import type { BrowserController } from '../browser/browser-controller.js'
 import type { WorkflowService } from '../workflows/workflow-service.js'
 import type { HomeStore } from '../home/home-store.js'
@@ -45,6 +47,13 @@ export interface NdIpcDependencies {
 
 const NOTE_TITLE_MAX = 80
 const MAX_OPEN_TARGETS = 1
+const QUIT_PROCESS_ID = 'nd.quit-process'
+
+function quitProcessPackagePath(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'nd-extensions', 'quit-process')
+    : join(app.getAppPath(), 'extensions', 'quit-process')
+}
 
 /**
  * The ND extension invocation surface plus the ND Home personal surface. Every
@@ -88,7 +97,10 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
     channels.push(channel)
   }
 
-  const stateView = async (): Promise<NdExtensionsStateView> => deps.broker.stateView()
+  const stateView = async (): Promise<NdExtensionsStateView> => {
+    const state = await deps.broker.stateView()
+    return { ...state, available: [await quitProcessCatalogView(state)] }
+  }
   const emitState = async (): Promise<void> => {
     if (deps.window.isDestroyed()) return
     deps.window.webContents.send(ND_EXTENSIONS_IPC.changedEvent, await stateView())
@@ -122,6 +134,15 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
 
   handle(ND_EXTENSIONS_IPC.installFromPath, async (_event, rawPath) => {
     await deps.packages.installFromDirectory(absolutePath(rawPath))
+    await emitState()
+    return stateView()
+  })
+
+  handle(ND_EXTENSIONS_IPC.installAvailable, async (_event, extensionId) => {
+    if (extensionId !== QUIT_PROCESS_ID) throw new Error('Unknown available ND extension')
+    const packagePath = quitProcessPackagePath()
+    if (!existsSync(join(packagePath, 'nd-extension.json'))) throw new Error('Quit Processes is missing from this ND build')
+    await deps.packages.installFromDirectory(packagePath, { expectId: QUIT_PROCESS_ID })
     await emitState()
     return stateView()
   })
@@ -296,6 +317,10 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
 export function registerNativeHostHandlers(deps: NdIpcDependencies): void {
   const { host } = deps
   const organization = deps.organization
+  const processes = new ProcessInventory(undefined, () => [
+    process.pid,
+    ...app.getAppMetrics().map((metric) => metric.pid),
+  ])
 
   host.register('note.create', async (input, context) => {
     const text = requiredText(input.text, 'Note text', 64_000)
@@ -489,6 +514,30 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): void {
     return { changed: true, path: target, platform: process.platform }
   })
 
+  host.register('process.list', async () => processes.list())
+
+  const quitProcess = async (input: Record<string, unknown>, force: boolean): Promise<{ quit: boolean }> => {
+    const id = requiredText(input.id, 'Process selection', 160)
+    const selected = await processes.resolve(id)
+    const result = await dialog.showMessageBox(deps.window, {
+      type: 'warning',
+      title: force ? 'Force quit process?' : 'Quit process?',
+      message: `${force ? 'Force quit' : 'Quit'} ${selected.name} (PID ${selected.pid})?`,
+      detail: force
+        ? 'The process will stop immediately and may lose unsaved work.'
+        : 'The process will be asked to stop. Unsaved work may be lost.',
+      buttons: ['Cancel', force ? 'Force quit' : 'Quit'],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    })
+    if (result.response !== 1) return { quit: false }
+    await processes.quit(id, force)
+    return { quit: true }
+  }
+  host.register('process.quit', async (input) => quitProcess(input, false))
+  host.register('process.forceQuit', async (input) => quitProcess(input, true))
+
   host.register('chat.ask', async (input, context) => {
     if (context.caller === 'agent') throw new Error('Starting a chat on ND’s behalf is a user action; ask the user to open ND Home')
     const text = requiredText(input.text, 'Chat prompt', 20_000)
@@ -505,6 +554,35 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): void {
     await deps.workflow.refresh(context.context.companyId, context.context.projectId)
     return workflowView(deps, context.context)
   })
+}
+
+async function quitProcessCatalogView(state: NdExtensionsStateView): Promise<NdAvailablePackageView> {
+  const path = join(quitProcessPackagePath(), 'nd-extension.json')
+  const fallback: NdAvailablePackageView = {
+    id: QUIT_PROCESS_ID,
+    name: 'Quit Processes',
+    description: 'Inspect running processes and quit a selected process from ND.',
+    version: '1.0.0',
+    permissions: ['process.read', 'process.quit'],
+    installed: state.packages.some((item) => item.id === QUIT_PROCESS_ID),
+    available: false,
+  }
+  try {
+    const parsed: unknown = JSON.parse(await fs.readFile(path, 'utf8'))
+    const validated = validateNdExtensionManifest(parsed)
+    if (!validated.ok || validated.manifest.id !== QUIT_PROCESS_ID || manifestPermissionIssues(validated.manifest).length > 0) return fallback
+    return {
+      id: validated.manifest.id,
+      name: validated.manifest.name,
+      description: validated.manifest.description,
+      version: validated.manifest.version,
+      permissions: validated.manifest.permissions,
+      installed: fallback.installed,
+      available: true,
+    }
+  } catch {
+    return fallback
+  }
 }
 
 async function workflowView(deps: NdIpcDependencies, context: { kind: string; companyId?: string; projectId?: string }): Promise<unknown[]> {

@@ -18,7 +18,6 @@ import {
   MAX_CLI_LENGTH,
   sanitizeRelativePath,
   splitInChunks,
-  type GitSpawnFunction,
 } from './git-cli.js'
 
 interface WorkspaceLike {
@@ -28,8 +27,7 @@ interface WorkspaceLike {
 export interface GitServiceOptions {
   gitPath?: string
   env?: Record<string, string>
-  spawnProcess?: GitSpawnFunction
-  core?: Pick<CoreClient, 'request'>
+  core: Pick<CoreClient, 'request'>
   onOutput?(output: string): void
 }
 
@@ -63,7 +61,7 @@ export class GitService {
   private snapshot: GitStatusSnapshot
   private refreshGeneration = 0
 
-  constructor(workspace: WorkspaceLike, options: GitServiceOptions = {}) {
+  constructor(workspace: WorkspaceLike, options: GitServiceOptions) {
     this.workspace = workspace
     this.cli = new GitCli(options)
     // OAuth output must never enter the renderer's Git output stream.
@@ -682,8 +680,8 @@ export class GitService {
 
   private async listRemotes(root: string): Promise<string[]> {
     try {
-      // `git config --list` emits flat key=value records, not the INI sections
-      // consumed by parseGitRemotes. Ask Git for names directly instead.
+      // `git config --list` emits flat key=value records rather than remote
+      // sections, so ask Git for the names directly.
       const result = await this.cli.exec(root, ['remote'])
       return [...new Set(result.stdout.split(/\r?\n/).map((name) => name.trim()).filter(Boolean))]
     } catch {

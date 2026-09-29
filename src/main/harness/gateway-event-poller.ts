@@ -6,6 +6,12 @@ const RUNNING_POLL_MS = 700
 const IDLE_POLL_MS = 2_500
 /** How long after the last observed running flag (or prompt) a session keeps being polled. */
 const RECENT_WINDOW_MS = 20_000
+/**
+ * After a turn is observed finishing, a few more fast polls catch events persisted
+ * just behind the running flag; the full recent window would re-read history for
+ * another ~20s after every turn.
+ */
+const FINISHED_GRACE_MS = 2_000
 
 interface PollerSessionListItem {
   sessionId?: unknown
@@ -130,6 +136,11 @@ export class GatewayEventPoller {
         } else if (previous !== running) {
           if (running || !this.awaitingStart.has(sessionId)) {
             this.emit({ kind: 'session-status', sessionId, running })
+          }
+          if (!running && !this.awaitingStart.has(sessionId)) {
+            const until = this.recentUntil.get(sessionId)
+            const graceUntil = this.now() + FINISHED_GRACE_MS
+            if (until !== undefined && until > graceUntil) this.recentUntil.set(sessionId, graceUntil)
           }
         }
         this.runningFlags.set(sessionId, running)

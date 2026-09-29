@@ -11,11 +11,19 @@ export interface GitProvenance {
 }
 
 const GIT_TIMEOUT_MS = 8_000
+/** A full clone of a real plugin repository routinely outlives the metadata timeout. */
+const GIT_CLONE_TIMEOUT_MS = 5 * 60_000
 const GIT_MAX_OUTPUT = 64 * 1024
 
-function git(dir: string, args: string[]): Promise<string> {
+function git(dir: string, args: string[], timeoutMs = GIT_TIMEOUT_MS): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile('git', args, { cwd: dir, timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_OUTPUT, windowsHide: true }, (error, stdout) => {
+    execFile('git', args, {
+      cwd: dir,
+      timeout: timeoutMs,
+      maxBuffer: GIT_MAX_OUTPUT,
+      windowsHide: true,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    }, (error, stdout) => {
       if (error) reject(error)
       else resolve(stdout.toString())
     })
@@ -64,7 +72,7 @@ export async function cloneWorkflowPluginSource(url: string, ref: string | undef
   await fs.mkdir(parent, { recursive: true })
   await fs.rm(destDir, { recursive: true, force: true })
   // Clone from the parent directory: `git clone` creates the destination itself.
-  await git(parent, ['clone', url, destDir])
+  await git(parent, ['clone', url, destDir], GIT_CLONE_TIMEOUT_MS)
   if (ref) await git(destDir, ['checkout', '--detach', ref])
   const provenance = await gitProvenance(destDir)
   return {

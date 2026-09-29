@@ -18,6 +18,8 @@ Both profiles share ND's extension/plugin/skill registries, workflow templates, 
 
 The primary browser path is the **ND built-in browser**: an ND-owned persistent Chromium session with real tabs, profile/session state, governed automation and a browser-extension layer. The **Browser Companion** remains a separate, optional target for a user's existing external Chrome/Chromium profile. ND Pencil remains the native Freeform design surface for the active project's real source.
 
+![ND DSH — Full Platform Flow](docs/assets/nd-dsh-full-platform-flow.png)
+
 ## Platform architecture
 
 ```mermaid
@@ -68,7 +70,7 @@ The detailed implementation map lives in [`docs/architecture.md`](docs/architect
 | **Skills** | Reusable expert task/context packs that agents can invoke when needed |
 | **Workflow templates** | Reusable task/process patterns with explicit context, approvals and automation rules |
 | **Agents / Subagents** | Autonomous helpers orchestrated under ND context, budget, permission and audit rules |
-| **Browser extensions** | Supported Chromium extension packages that belong to the ND built-in browser profile |
+| **Browser extensions** | Supported Chromium extension packages loaded into the ND built-in browser profile |
 | **Browser Companion** | Optional external-browser integration for an explicitly selected existing Chrome/Chromium profile |
 
 ## Product boundary
@@ -294,7 +296,7 @@ A **Public Beta** still requires the remaining P0 gates — restored CI with run
 | Source Control | 🚢 Shipped | Built-in Git panel (status groups, stage/commit, diffs, branches, fetch/pull/push) derived from microsoft/vscode extensions/git (MIT) — see [`docs/source-control.md`](docs/source-control.md) |
 | Rust core runtime | 🚢 Shipped | Single production runtime `nd-core` (Rust sidecar): runtime permits, process/PTY lifecycle, durable effect journal with restart replay, decision-kernel contract — organization truth stays ND/TypeScript-owned |
 | Unified browser platform | 🚢 Shipped | ND built-in multi-tab browser is the primary target; Browser Companion is an optional explicit external Chrome/Chromium target behind the same governed BrowserTarget/router contract |
-| In-app browser extensions | 🧪 Beta | Built-in extension management is present; first-class toolbar/action-popup compatibility is evidence-gated and must stay inside the ND browser rather than fall back to external Chrome |
+| In-app browser extension runtime | 🧪 Beta | Extensions load into the ND-owned browser session with in-app toolbar/action popups; broader compatibility is evidence-gated and never falls back to external Chrome |
 | ND Pencil | 🚢 Shipped | Native Freeform design surface (bundled `resources/nd-pencil`, sandboxed child view) editing the active project's real source — see [`docs/nd-pencil.md`](docs/nd-pencil.md) |
 | Policy gate | 🚢 Shipped | Main-process DENY/ALLOW/ASK enforcement for approval-bearing organization runs |
 | Packaging & installers | 🛠 Planned | Portable Windows build with bundled runtime (ND Core, Harness closure, ND Pencil, agent-browser) verified locally; signed/notarized installers, an update channel, and clean-machine offline install are still pending |
@@ -315,7 +317,7 @@ The full, ordered roadmap lives in [`docs/roadmap.md`](docs/roadmap.md), and the
 
 - Renderer: context isolation on, Node integration off, sandbox on.
 - Built-in browser: ND-owned persistent Chromium session composed of sandboxed Electron `WebContentsView` tabs; site permissions deny by default.
-- Browser extensions: supported packages belong to the ND built-in browser session. The architecture target keeps extension action UI inside the ND window and never silently falls back to external Chrome.
+- Browser extensions: supported packages load into the same ND browser session. Extension action popups stay inside the ND window; built-in extension execution never silently falls back to external Chrome.
 - Browser automation: attaches to the exact visible ND tab through loopback CDP; no hidden second browser. Browser Companion is an explicit optional target, not the built-in runtime.
 - ND Pencil: sandboxed, context-isolated child view; the managed engine binds to loopback only with a per-instance token/allowed-origin contract, denies popups/permissions, and blocks upstream authentication, collaboration, and built-in AI routes.
 - IPC: main-frame sender validation and narrow contracts.

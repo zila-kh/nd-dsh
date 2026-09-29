@@ -23,24 +23,32 @@ export interface HistoryEventEnvelope {
   data?: unknown
 }
 
+/** Returns the entry at `index` in a form the fold may mutate. */
+type OwnEntry = (index: number) => ThreadEntry
+
 export function foldHistory(events: HistoryEventEnvelope[]): ThreadEntry[] {
   const entries: ThreadEntry[] = []
+  const own: OwnEntry = (index) => entries[index]!
   for (const envelope of events) {
     if (!envelope) continue
-    foldEventInto(entries, envelope)
+    foldEventInto(entries, envelope, own)
   }
   return entries
 }
 
+/**
+ * Copy-on-write: only the entry an event changes is replaced, so React may replay
+ * an updater against the same previous state, and unchanged entries keep their
+ * identity for memoized rows.
+ */
 export function foldEvent(entries: ThreadEntry[], envelope: HistoryEventEnvelope): ThreadEntry[] {
-  // The fold updates entry fields; React may replay an updater with the same
-  // previous state, so none of those objects may be shared with that state.
-  const next = entries.map((entry) => ({ ...entry }))
-  foldEventInto(next, envelope)
+  const next = [...entries]
+  const own: OwnEntry = (index) => (next[index] = { ...next[index]! })
+  foldEventInto(next, envelope, own)
   return next
 }
 
-function foldEventInto(entries: ThreadEntry[], envelope: HistoryEventEnvelope): void {
+function foldEventInto(entries: ThreadEntry[], envelope: HistoryEventEnvelope, own: OwnEntry): void {
   const data = (envelope.data ?? {}) as Record<string, unknown>
   switch (envelope.type) {
     case 'user/message': {
@@ -70,7 +78,8 @@ function foldEventInto(entries: ThreadEntry[], envelope: HistoryEventEnvelope): 
       if (!text) return
       const last = entries.at(-1)
       if (last?.kind === 'assistant' && last.streaming) {
-        last.text = `${last.text}${text}`
+        const owned = own(entries.length - 1) as typeof last
+        owned.text = `${last.text}${text}`
       } else {
         entries.push({ kind: 'assistant', id: crypto.randomUUID(), text, streaming: true })
       }
@@ -81,8 +90,9 @@ function foldEventInto(entries: ThreadEntry[], envelope: HistoryEventEnvelope): 
       if (text === undefined) return
       const last = entries.at(-1)
       if (last?.kind === 'assistant' && last.streaming) {
-        last.text = text
-        last.streaming = false
+        const owned = own(entries.length - 1) as typeof last
+        owned.text = text
+        owned.streaming = false
       } else {
         entries.push({ kind: 'assistant', id: crypto.randomUUID(), text })
       }
@@ -93,7 +103,8 @@ function foldEventInto(entries: ThreadEntry[], envelope: HistoryEventEnvelope): 
       if (!text) return
       const last = entries.at(-1)
       if (last?.kind === 'reasoning' && last.text.length < 4000) {
-        last.text = `${last.text}\n${text}`
+        const owned = own(entries.length - 1) as typeof last
+        owned.text = `${last.text}\n${text}`
       } else {
         entries.push({ kind: 'reasoning', id: crypto.randomUUID(), text })
       }
@@ -118,8 +129,9 @@ function foldEventInto(entries: ThreadEntry[], envelope: HistoryEventEnvelope): 
       } else {
         const entry = entries[runningIndex]
         if (entry?.kind === 'tool') {
-          entry.status = typeof data.error === 'string' ? 'error' : 'done'
-          entry.result = summary
+          const owned = own(runningIndex) as typeof entry
+          owned.status = typeof data.error === 'string' ? 'error' : 'done'
+          owned.result = summary
         }
       }
       return
@@ -127,7 +139,7 @@ function foldEventInto(entries: ThreadEntry[], envelope: HistoryEventEnvelope): 
     case 'todo/write': {
       const todos = Array.isArray(data.todos) ? data.todos as unknown as TodoItem[] : []
       const last = entries.at(-1)
-      if (last?.kind === 'todo') last.items = todos
+      if (last?.kind === 'todo') (own(entries.length - 1) as typeof last).items = todos
       else entries.push({ kind: 'todo', id: crypto.randomUUID(), items: todos })
       return
     }

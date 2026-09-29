@@ -220,14 +220,6 @@ async function removeDisposableArtifacts(root: string): Promise<void> {
   await visit(root)
 }
 
-export async function taskEvidenceWorkspace(projectWorkspace: string | undefined, taskId: string): Promise<string | undefined> {
-  if (!projectWorkspace) return undefined
-  const repoRoot = await repositoryRoot(projectWorkspace).catch(() => undefined)
-  if (!repoRoot) return projectWorkspace
-  const candidate = describe(repoRoot, taskId).root
-  return await isAttachedWorktree(candidate) ? candidate : projectWorkspace
-}
-
 function describe(repoRoot: string, taskId: string): TaskWorktree {
   const repoKey = createHash('sha256').update(resolve(repoRoot)).digest('hex').slice(0, 12)
   const taskKey = safeTaskKey(taskId)

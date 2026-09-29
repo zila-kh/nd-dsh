@@ -191,6 +191,34 @@ let browserPlatform: BrowserPlatformState = {
   leases: [],
   downloads: [],
   extensions: [],
+  extensionCatalog: [
+    {
+      id: 'nd-browser-tools',
+      name: 'ND Browser Tools',
+      publisher: 'ND',
+      description: 'First-party browser tools that run entirely inside the ND built-in Chromium profile.',
+      packagePolicy: 'bundled',
+      compatibility: 'compatible',
+      bundleAvailable: true,
+      installed: false,
+      note: 'UI preview only.',
+    },
+    {
+      id: 'openai-chatgpt',
+      name: 'ChatGPT',
+      publisher: 'OpenAI',
+      description: 'Compatibility reference for the official standalone-Chrome extension, not the ND Method 2 runtime.',
+      storeId: 'hehggadaopoacecdllhhajmbjkdcmajg',
+      storeUrl: 'https://chromewebstore.google.com/detail/chatgpt/hehggadaopoacecdllhhajmbjkdcmajg?hl=en',
+      packagePolicy: 'reference-only',
+      compatibility: 'experimental',
+      bundleAvailable: false,
+      installed: false,
+      note: 'UI preview only.',
+    },
+  ],
+  browserUseEnabled: true,
+  developerMode: false,
   credentials: [],
   sitePermissions: [],
   approvals: [],
@@ -589,6 +617,7 @@ const desktopApi: DesktopApi = {
     state: async () => ({ packages: [], activations: [], grants: [], audit: [], pendingApprovals: [] }),
     installLocal: async () => null,
     installFromPath: async () => previewExtensionsState(),
+    installAvailable: async () => previewExtensionsState(),
     update: async () => previewExtensionsState(),
     rollback: async () => previewExtensionsState(),
     uninstall: async () => previewExtensionsState(),
@@ -712,6 +741,34 @@ const desktopApi: DesktopApi = {
     installExtension: async () => null,
     setExtensionEnabled: async () => browserPlatform.extensions,
     removeExtension: async () => browserPlatform.extensions,
+    reloadExtensions: async () => browserPlatform.extensions,
+    setDeveloperMode: async (enabled) => {
+      browserPlatform = { ...browserPlatform, developerMode: enabled }
+      browserPlatformEvents.emit(browserPlatform)
+      return browserPlatform
+    },
+    setBrowserUseEnabled: async (enabled) => {
+      browserPlatform = { ...browserPlatform, browserUseEnabled: enabled }
+      browserPlatformEvents.emit(browserPlatform)
+      return browserPlatform
+    },
+    installCatalogExtension: async () => null,
+    openCatalogExtension: async (catalogId) => {
+      const item = browserPlatform.extensionCatalog.find((candidate) => candidate.id === catalogId)
+      if (!item) throw new Error('Preview browser extension catalog item not found')
+      if (!item.storeUrl) throw new Error('This built-in extension does not have an external catalog listing')
+      return desktopApi.browserPlatform.createTab('builtin', item.storeUrl)
+    },
+    showExtensionPopup: async (extensionId) => {
+      browserPlatform = { ...browserPlatform, extensionPopupId: extensionId }
+      browserPlatformEvents.emit(browserPlatform)
+      return browserPlatform
+    },
+    closeExtensionPopup: async () => {
+      browserPlatform = { ...browserPlatform, extensionPopupId: undefined }
+      browserPlatformEvents.emit(browserPlatform)
+      return browserPlatform
+    },
     saveCredential: async (input) => {
       const record = { id: `preview-credential-${Date.now()}`, origin: new URL(input.origin).origin, username: input.username, ...(input.label ? { label: input.label } : {}), createdAt: Date.now(), updatedAt: Date.now() }
       browserPlatform = { ...browserPlatform, credentials: [record, ...browserPlatform.credentials] }
@@ -745,6 +802,7 @@ const desktopApi: DesktopApi = {
       return record
     },
     resolveApproval: async () => true,
+    clearFinishedDownloads: async () => 0,
     onChanged: browserPlatformEvents.on,
   },
   workspace: {

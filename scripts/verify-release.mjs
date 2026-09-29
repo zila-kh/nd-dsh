@@ -29,6 +29,8 @@ for (const marker of [
   'from: extensions/browser-companion',
   'to: browser-companion',
   'from: node_modules/agent-browser',
+  'from: resources/browser-extensions',
+  'to: browser-extensions',
   'from: resources/nd-pencil',
 ]) {
   if (!builderConfig.includes(marker)) throw new Error(`electron-builder.yml is missing: ${marker}`)
@@ -54,6 +56,9 @@ if (!configOnly) {
     `.release/nd-browser-host/${process.platform === 'win32' ? 'nd-browser-host.exe' : 'nd-browser-host'}`,
     'extensions/browser-companion/manifest.json',
     'extensions/browser-companion/service-worker.js',
+    'resources/browser-extensions/nd-browser-tools/manifest.json',
+    'resources/browser-extensions/nd-browser-tools/popup.html',
+    'resources/browser-extensions/nd-browser-tools/popup.js',
     'scripts/nd-browser-companion-runtime.mjs',
     'scripts/register-browser-native-host.mjs',
     '.release/harness/lib/bin.js',

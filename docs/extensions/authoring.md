@@ -87,6 +87,8 @@ and in the product.
 | `browser.openExternal` | `browser.openExternal` | Open an http(s) URL in the system browser |
 | `os.openTarget` | `os.launch` | Pick and open an app, file, or folder (user selection only; no shell strings) |
 | `os.wallpaper.chooseAndSet` | `os.wallpaper.write` | Pick an image in an ND-owned native dialog and set it as the host desktop wallpaper; Personal only |
+| `process.list` | `process.read` | List running processes in Personal with CPU and memory |
+| `process.quit` / `process.forceQuit` | `process.quit` | Quit a selected process from a fresh ND-issued list handle; ND confirms each action and protects its own processes; Personal only |
 | `chat.ask` | `chat.start` | Start an ND chat/agent turn from typed text |
 | `workflow.list` / `workflow.refresh` | `workflow.read` | Read (or refresh) the project's repository task board through the existing read-only mirror |
 
@@ -147,3 +149,9 @@ built-ins any time with:
 ```bash
 node scripts/validate-nd-extension.mjs --builtins
 ```
+
+`Quit Processes` is an optional ND-bundled package under
+`extensions/quit-process`. It appears in Settings → Extensions → Available and
+is installed only when selected, then activated for Personal separately. Its
+command uses `openViewId` to open the process view from either launcher, and its
+view uses `refreshIntervalMs` to refresh while open.

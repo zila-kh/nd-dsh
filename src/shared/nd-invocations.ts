@@ -57,6 +57,7 @@ export interface NdCommandView {
   contexts: NdContextKind[]
   startsAgent: boolean
   host: NdHostMethod
+  openViewId?: string
   permission: NdExtensionPermission
 }
 
@@ -71,6 +72,8 @@ export interface NdViewRow {
   title: string
   body?: string
   meta?: string
+  actionsDisabled?: boolean
+  sortValues?: Record<string, number>
 }
 
 export interface NdViewData {
@@ -81,6 +84,7 @@ export interface NdViewData {
   context: NdContext
   rows: NdViewRow[]
   actions: NdViewActionView[]
+  refreshIntervalMs?: number
   empty?: string
 }
 
@@ -160,10 +164,21 @@ export interface NdAuditEntryView {
 
 export interface NdExtensionsStateView {
   packages: NdInstalledPackageView[]
+  available?: NdAvailablePackageView[]
   activations: NdActivationView[]
   grants: NdGrantView[]
   audit: NdAuditEntryView[]
   pendingApprovals: NdPendingApprovalView[]
+}
+
+export interface NdAvailablePackageView {
+  id: string
+  name: string
+  description: string
+  version: string
+  permissions: NdExtensionPermission[]
+  installed: boolean
+  available: boolean
 }
 
 export interface NdHomeNoteView {
@@ -234,6 +249,7 @@ export interface NdExtensionsDesktopApi {
   /** Opens a native directory picker, validates, and installs the chosen package. */
   installLocal(): Promise<NdExtensionsStateView | null>
   installFromPath(path: string): Promise<NdExtensionsStateView>
+  installAvailable(extensionId: string): Promise<NdExtensionsStateView>
   update(extensionId: string, sourcePath?: string): Promise<NdExtensionsStateView>
   rollback(extensionId: string): Promise<NdExtensionsStateView>
   uninstall(extensionId: string): Promise<NdExtensionsStateView>
@@ -271,6 +287,7 @@ export const ND_EXTENSIONS_IPC = {
   state: 'nd-ext:state',
   installLocal: 'nd-ext:install-local',
   installFromPath: 'nd-ext:install-path',
+  installAvailable: 'nd-ext:install-available',
   update: 'nd-ext:update',
   rollback: 'nd-ext:rollback',
   uninstall: 'nd-ext:uninstall',

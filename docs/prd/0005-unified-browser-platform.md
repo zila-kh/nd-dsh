@@ -238,6 +238,15 @@ It must display:
 - enabled state;
 - startup/load errors.
 
+The in-app browser shell also owns extension chrome for the supported subset:
+
+- a visible Extensions button in the ND browser toolbar;
+- `action.default_popup` / legacy browser-action popup discovery;
+- popup rendering inside a sandboxed ND `WebContentsView` using the same
+  `persist:nd-dsh-browser` profile;
+- popup teardown on blur/navigation/tab switch/browser hide/extension unload;
+- no external Chrome process or Chrome-profile import for built-in extensions.
+
 Electron's documented compatibility limitation must remain visible in product
 and developer docs until evidence proves broader compatibility. If Electron
 cannot meet the required baseline, ND changes the built-in runtime rather than
