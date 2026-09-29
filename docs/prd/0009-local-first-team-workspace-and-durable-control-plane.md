@@ -536,6 +536,33 @@ Agents must not:
 - bypass policy because a human said something conversationally;
 - expose secrets into collaboration records without an explicit allowed path.
 
+## 19.1 Always-On local autonomy
+
+ND's local team workspace includes a local autonomy layer inspired by proven OpenClaw/Hermes patterns without introducing a second agent model.
+
+Required capabilities:
+
+- Always-On local mode that can keep the current trusted runtime alive when the visible ND window is closed;
+- optional packaged start-at-login where the OS integration is supported;
+- one-shot schedules;
+- recurring interval schedules;
+- 5-field cron schedules with explicit timezone;
+- agent routines that bind an existing `OrganizationAgent` to a recurring objective and optional skill hints;
+- cheap deterministic heartbeat checks for blocked tasks, failed runs, pending approvals and unresolved human actions;
+- event triggers from ND-owned organization activity into governed tasks or signals;
+- learned-skill candidates with evidence and explicit promotion/rejection.
+
+Hard rules:
+
+1. automation re-enters the same ND control plane;
+2. a schedule or trigger cannot bypass autonomy, policy, budget or runtime permits;
+3. a routine uses the existing `OrganizationAgent`; do not add a second Bot identity model;
+4. heartbeat should avoid a full model turn when deterministic state checks are sufficient;
+5. event triggers must be idempotent and must not replay history that predates the trigger;
+6. learned skills cannot silently grant permissions, rewrite policy or self-activate;
+7. external messaging channels remain extension territory and are deferred until the local stability gate;
+8. an Always-On desktop host is not represented as a crash-independent OS daemon; a later `nd-agentd` extraction is a separate reliability milestone.
+
 ## 20. Migration safety
 
 Migration from current organization snapshots:
@@ -620,11 +647,23 @@ M2 durable store
 M3 Local Web parity
   typed local API + authenticated realtime updates
 
-M4 reliability gate
-  restart + conflict + stale approval + policy + E2E/manual evidence
+M4 Always-On local runtime
+  background operation + optional start-at-login + liveness
+
+M5 automation v2
+  once + interval + cron/timezone + agent routines
+
+M6 heartbeat + events
+  deterministic attention + idempotent organization-event triggers
+
+M7 gated skill learning
+  candidate + evidence + explicit promotion/rejection
+
+M8 reliability gate
+  window-closed operation + restart + conflict + stale approval + policy + E2E/manual evidence
 ```
 
-Cloud/sync work does not start until M4 is accepted.
+Cloud/sync work does not start until M8 is accepted.
 
 ## 24. Future compatibility
 
