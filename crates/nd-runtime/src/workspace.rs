@@ -11,6 +11,7 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
 /// Default bound for a single file read. Matches the product's existing workspace
@@ -20,6 +21,9 @@ const DEFAULT_MAX_READ: usize = 1024 * 1024;
 /// payload could not be framed, and failing after the read would be a worse error
 /// than refusing the bound up front.
 const HARD_MAX_READ: usize = crate::protocol::MAX_FRAME_BYTES / 2;
+/// Writes stay comfortably below the protocol frame bound and are committed
+/// through a temporary sibling so a crash never leaves a partially written file.
+const HARD_MAX_WRITE: usize = crate::protocol::MAX_FRAME_BYTES / 2;
 /// Default directory-listing bound, matching the product's workspace browser.
 const DEFAULT_MAX_LIST_ENTRIES: usize = 500;
 const HARD_MAX_LIST_ENTRIES: usize = 4096;
@@ -44,6 +48,14 @@ pub struct ReadParams {
     pub root: String,
     pub path: String,
     pub max_bytes: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteParams {
+    pub root: String,
+    pub path: String,
+    pub data: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -82,6 +94,15 @@ pub struct ReadResult {
     pub truncated: bool,
     pub max_bytes: usize,
     pub byte_size: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteResult {
+    pub root: String,
+    pub path: String,
+    pub bytes_written: usize,
+    pub replaced: bool,
 }
 
 pub fn list(params: ListParams) -> Result<ListResult> {
@@ -265,6 +286,113 @@ pub fn read(params: ReadParams) -> Result<ReadResult> {
         max_bytes,
         byte_size,
     })
+}
+
+/// Atomic UTF-8 write inside an existing workspace directory.
+///
+/// The parent directory must already exist. This intentionally refuses recursive
+/// directory creation: a model cannot manufacture a path chain whose intermediate
+/// entries have not each been observed under the workspace boundary first.
+pub fn write(params: WriteParams) -> Result<WriteResult> {
+    if params.data.len() > HARD_MAX_WRITE {
+        bail!("workspace write exceeds the configured bound");
+    }
+    let root = canonical_root(&params.root)?;
+    let relative = validate_relative(&params.path)?;
+    if relative.as_os_str().is_empty() || relative == Path::new(".") {
+        bail!("workspace write path must name a file");
+    }
+    let file_name = relative
+        .file_name()
+        .context("workspace write path must name a file")?;
+    let parent_relative = relative.parent().unwrap_or_else(|| Path::new("."));
+    let parent = fs::canonicalize(root.join(parent_relative))
+        .context("workspace write parent is unavailable")?;
+    ensure_inside(&root, &parent)?;
+    if !fs::metadata(&parent)?.is_dir() {
+        bail!("workspace write parent is not a directory");
+    }
+
+    let requested_target = parent.join(file_name);
+    let (target, replaced, permissions) = match fs::symlink_metadata(&requested_target) {
+        Ok(_) => {
+            let canonical = fs::canonicalize(&requested_target)
+                .context("workspace write target is unavailable")?;
+            ensure_inside(&root, &canonical)?;
+            let target_metadata = fs::metadata(&canonical)?;
+            if !target_metadata.is_file() {
+                bail!("workspace write target is not a file");
+            }
+            // If the requested path is a safe in-workspace symlink, preserve the
+            // resolved file's permissions rather than the symlink's metadata.
+            (canonical, true, Some(target_metadata.permissions()))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            (requested_target, false, None)
+        }
+        Err(error) => return Err(error).context("inspect workspace write target"),
+    };
+
+    let temporary = parent.join(format!(".nd-write-{}.tmp", uuid::Uuid::new_v4()));
+    let result = (|| -> Result<()> {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .context("create workspace write staging file")?;
+        file.write_all(params.data.as_bytes())
+            .context("write workspace staging file")?;
+        file.sync_all().context("flush workspace staging file")?;
+        drop(file);
+        if let Some(permissions) = permissions {
+            fs::set_permissions(&temporary, permissions)
+                .context("preserve workspace file permissions")?;
+        }
+        atomic_replace(&temporary, &target)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result?;
+
+    Ok(WriteResult {
+        root: root.to_string_lossy().into_owned(),
+        path: relative_to_root(&root, &target),
+        bytes_written: params.data.len(),
+        replaced,
+    })
+}
+
+#[cfg(not(windows))]
+fn atomic_replace(source: &Path, target: &Path) -> Result<()> {
+    fs::rename(source, target).context("commit workspace write")
+}
+
+#[cfg(windows)]
+fn atomic_replace(source: &Path, target: &Path) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+    };
+
+    let source = source
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let target = target
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let flags = MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH;
+    // SAFETY: both UTF-16 buffers are NUL terminated and remain alive for the call.
+    let ok = unsafe { MoveFileExW(source.as_ptr(), target.as_ptr(), flags) };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error()).context("commit workspace write");
+    }
+    Ok(())
 }
 
 /// Resolve an existing workspace-relative path, rejecting escapes.
@@ -473,6 +601,98 @@ mod tests {
             assert!(result.is_err(), "{candidate} was accepted");
         }
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn atomic_write_replaces_and_creates_only_inside_existing_directories() {
+        let root = temp_root("workspace-write");
+        fs::create_dir_all(root.join("nested")).unwrap();
+        fs::write(root.join("nested/existing.txt"), "old").unwrap();
+
+        let replaced = write(WriteParams {
+            root: root_of(&root),
+            path: "nested/existing.txt".into(),
+            data: "new body".into(),
+        })
+        .unwrap();
+        assert!(replaced.replaced);
+        assert_eq!(replaced.bytes_written, 8);
+        assert_eq!(
+            fs::read_to_string(root.join("nested/existing.txt")).unwrap(),
+            "new body"
+        );
+
+        let created = write(WriteParams {
+            root: root_of(&root),
+            path: "nested/new.txt".into(),
+            data: "created".into(),
+        })
+        .unwrap();
+        assert!(!created.replaced);
+        assert_eq!(created.path, "nested/new.txt");
+        assert_eq!(
+            fs::read_to_string(root.join("nested/new.txt")).unwrap(),
+            "created"
+        );
+
+        let missing_parent = write(WriteParams {
+            root: root_of(&root),
+            path: "not-created/file.txt".into(),
+            data: "no".into(),
+        });
+        assert!(missing_parent.is_err());
+        assert!(!root.join("not-created").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn write_rejects_parent_absolute_and_symlink_escapes() {
+        let root = temp_root("workspace-write-root");
+        let outside = temp_root("workspace-write-outside");
+        fs::write(outside.join("secret.txt"), "outside").unwrap();
+
+        for candidate in ["../outside.txt", "/outside.txt", "C:/Windows/win.ini"] {
+            assert!(
+                write(WriteParams {
+                    root: root_of(&root),
+                    path: candidate.into(),
+                    data: "blocked".into(),
+                })
+                .is_err(),
+                "{candidate} was accepted"
+            );
+        }
+
+        if create_dir_symlink(&outside, &root.join("link")).is_ok() {
+            assert!(
+                write(WriteParams {
+                    root: root_of(&root),
+                    path: "link/secret.txt".into(),
+                    data: "blocked".into(),
+                })
+                .is_err()
+            );
+            assert_eq!(
+                fs::read_to_string(outside.join("secret.txt")).unwrap(),
+                "outside"
+            );
+        }
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(outside);
+    }
+
+    #[test]
+    fn write_rejects_payloads_over_the_protocol_safe_bound() {
+        let root = temp_root("workspace-write-bound");
+        let error = write(WriteParams {
+            root: root_of(&root),
+            path: "too-large.txt".into(),
+            data: "x".repeat(HARD_MAX_WRITE + 1),
+        })
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("configured bound"));
+        assert!(!root.join("too-large.txt").exists());
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

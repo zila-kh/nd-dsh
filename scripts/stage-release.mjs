@@ -11,12 +11,16 @@ const harnessSource = join(root, 'vendor', 'deepseek-harness')
 const stageRoot = join(root, '.release')
 const harnessOutput = join(stageRoot, 'harness')
 const coreOutput = join(stageRoot, 'nd-core')
+const agentOutput = join(stageRoot, 'nd-agent')
 const browserHostOutput = join(stageRoot, 'nd-browser-host')
 const coreBinaryName = process.platform === 'win32' ? 'nd-core.exe' : 'nd-core'
+const agentBinaryName = process.platform === 'win32' ? 'nd-agent.exe' : 'nd-agent'
 const browserHostBinaryName = process.platform === 'win32' ? 'nd-browser-host.exe' : 'nd-browser-host'
 const coreSourceBinary = join(root, 'target', 'release', coreBinaryName)
+const agentSourceBinary = join(root, 'target', 'release', agentBinaryName)
 const browserHostSourceBinary = join(root, 'target', 'release', browserHostBinaryName)
 const coreStagedBinary = join(coreOutput, coreBinaryName)
+const agentStagedBinary = join(agentOutput, agentBinaryName)
 const browserHostStagedBinary = join(browserHostOutput, browserHostBinaryName)
 const codexOutput = join(harnessOutput, 'node_modules', '@deepseek-ai', 'dsh-subagent-codex')
 const cordisGroupOutput = join(harnessOutput, 'node_modules', '@deepseek-ai', 'cordis-plugin-group')
@@ -32,17 +36,22 @@ await requireFile(join(harnessSource, 'package.json'), 'Harness source manifest'
 await requireFile(join(harnessSource, 'pnpm-lock.yaml'), 'Harness lockfile')
 
 console.log('\nBuilding the ND Core and Browser Companion native host release binaries...')
-await run(cargo, ['build', '--release', '-p', 'nd-core', '-p', 'nd-browser-host'], root, harnessEnv)
+await run(cargo, ['build', '--release', '-p', 'nd-core', '-p', 'nd-agent', '-p', 'nd-browser-host'], root, harnessEnv)
 await requireFile(coreSourceBinary, 'ND Core release binary')
+await requireFile(agentSourceBinary, 'ND Agent release binary')
 await requireFile(browserHostSourceBinary, 'ND Browser Companion native host')
 await fs.rm(coreOutput, { recursive: true, force: true })
+await fs.rm(agentOutput, { recursive: true, force: true })
 await fs.rm(browserHostOutput, { recursive: true, force: true })
 await fs.mkdir(coreOutput, { recursive: true })
+await fs.mkdir(agentOutput, { recursive: true })
 await fs.mkdir(browserHostOutput, { recursive: true })
 await fs.copyFile(coreSourceBinary, coreStagedBinary)
+await fs.copyFile(agentSourceBinary, agentStagedBinary)
 await fs.copyFile(browserHostSourceBinary, browserHostStagedBinary)
 if (process.platform !== 'win32') {
   await fs.chmod(coreStagedBinary, 0o755)
+  await fs.chmod(agentStagedBinary, 0o755)
   await fs.chmod(browserHostStagedBinary, 0o755)
 }
 
@@ -97,6 +106,7 @@ const required = [
   join(codexOutput, 'node_modules', '@openai', 'codex', 'package.json'),
   join(root, 'node_modules', 'agent-browser', 'bin', 'agent-browser.js'),
   coreStagedBinary,
+  agentStagedBinary,
   browserHostStagedBinary,
   join(root, 'extensions', 'browser-companion', 'manifest.json'),
   join(root, 'extensions', 'browser-companion', 'service-worker.js'),
@@ -153,6 +163,7 @@ const manifest = {
   arch: process.arch,
   nodeRuntime: { mode: 'electron-run-as-node', electronVersion: rootManifest.devDependencies?.electron },
   ndCore: { version: rootManifest.version, protocolVersion: 1, sha256: await sha256(coreStagedBinary) },
+  ndAgent: { version: rootManifest.version, protocolVersion: 1, sha256: await sha256(agentStagedBinary) },
   browserCompanion: {
     version: rootManifest.version,
     protocolVersion: 1,

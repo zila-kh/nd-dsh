@@ -15,7 +15,7 @@ import type {
   SessionSummary,
   WorkspaceSuggestion,
 } from '../../../shared/contracts'
-import { ANTIGRAVITY_ENGINE_ID, CHATGPT_WEB_ENGINE_ID, CODEX_CLI_ENGINE_ID, ND_HARNESS_ENGINE_ID, ZCODE_CLI_ENGINE_ID } from '../../../shared/coding-engines'
+import { ANTIGRAVITY_ENGINE_ID, CHATGPT_WEB_ENGINE_ID, CODEX_CLI_ENGINE_ID, ND_HARNESS_ENGINE_ID, ND_NATIVE_ENGINE_ID, ZCODE_CLI_ENGINE_ID } from '../../../shared/coding-engines'
 import { DisplayGroup, groupEntries, parseFileChanges, toolPreview, type ContextBlock } from '../../../shared/chat-grouping'
 import { filterSessionsInProjectScope, isSessionInProjectScope } from '../../../shared/session-project-scope'
 import { buildSessionTree, type SessionTreeNode } from '../../../shared/session-tree'
@@ -290,7 +290,7 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, workspaceSelec
       ? draftEngineId
       : ND_HARNESS_ENGINE_ID
   const onHarnessThread = activeEngineId === ND_HARNESS_ENGINE_ID
-  const supportsEngineModels = activeEngineId === ANTIGRAVITY_ENGINE_ID || activeEngineId === CODEX_CLI_ENGINE_ID || activeEngineId === ZCODE_CLI_ENGINE_ID
+  const supportsEngineModels = activeEngineId === ANTIGRAVITY_ENGINE_ID || activeEngineId === CODEX_CLI_ENGINE_ID || activeEngineId === ZCODE_CLI_ENGINE_ID || activeEngineId === ND_NATIVE_ENGINE_ID
   const engineModel = engineModelSelections[activeEngineId] ?? null
   const setEngineModel = (model: string | null): void => {
     setEngineModelSelections((current) => ({ ...current, [activeEngineId]: model }))
@@ -1220,6 +1220,7 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, workspaceSelec
   const setSessionPermission = async (mode: string): Promise<void> => {
     setPermissionMode(mode)
     setPermissionMenuOpen(false)
+    if (activeEngineId === ND_NATIVE_ENGINE_ID) return
     try {
       await window.ndDsh.harness.setPermissionMode(mode)
       if (onHarnessThread) {
@@ -1991,11 +1992,12 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, workspaceSelec
                   setPermissionMenuOpen(false); setModelMenuOpen(false); setEngineModelMenuOpen(false); setContextMenuOpen(false)
                   requestAnimationFrame(() => { textareaRef.current?.focus(); textareaRef.current?.setSelectionRange(next.caret, next.caret) })
                 }}><SparkIcon /> Skills</button>
-              {onHarnessThread || activeEngineId === ANTIGRAVITY_ENGINE_ID ? (
+              {onHarnessThread || activeEngineId === ANTIGRAVITY_ENGINE_ID || activeEngineId === ND_NATIVE_ENGINE_ID ? (
                 <div className="relative">
                   <button
                     className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-[#f59e0b]/30 bg-[#f59e0b]/10 px-1.5 py-[3px] text-[10px] font-medium text-[#f59e0b] transition-colors hover:bg-[#f59e0b]/20 [&_svg]:size-3"
                     onClick={() => { setPermissionMenuOpen(!permissionMenuOpen); setModelMenuOpen(false); setModelMenuPane('root'); closeMention() }}
+                    title={activeEngineId === ND_NATIVE_ENGINE_ID ? 'Permission mode for the next ND Agent turn' : undefined}
                   >
                     <ShieldIcon />
                     <span>{PERMISSION_MODES.find((mode) => mode.id === permissionMode)?.label ?? permissionMode}</span>

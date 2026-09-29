@@ -3,9 +3,10 @@ import { join } from 'node:path'
 import type { CodingEngineDescriptor } from '../../shared/contracts.js'
 import { buildCodingEngineCatalog, chatGptWebEngineDescriptor, ND_HARNESS_ENGINE_ID } from '../../shared/coding-engines.js'
 import { buildExtraCodingEngineCatalog } from '../../shared/extra-coding-engines.js'
-import { antigravityBinPath, claudeBinPath, codexBinPath, cursorBinPath, dshPatchPath, harnessCliBinPath, harnessRoot, piBinPath, presetSourceDir, zcodeBinPath } from '../app-paths.js'
+import { antigravityBinPath, claudeBinPath, codexBinPath, cursorBinPath, dshPatchPath, harnessCliBinPath, harnessRoot, ndAgentBinPath, piBinPath, presetSourceDir, zcodeBinPath } from '../app-paths.js'
 import type { CapabilityAssignmentStore } from '../capabilities/capability-assignment-store.js'
 import { gooseBinPath, hermesBinPath, jcodeBinPath, minimaxBinPath, opencodeBinPath } from './agent-cli/extra-cli-paths.js'
+import { nativePrivateSelectionEnabled } from './nd-native/native-selection-gate.js'
 
 /**
  * ND control-plane registry for executable coding engines plus durable
@@ -36,9 +37,13 @@ export class CodingEngineRegistry {
     const piCodingReady = piBinPath() !== undefined
     const cursorCliReady = cursorBinPath() !== undefined
     const claudeCodeCliReady = claudeBinPath() !== undefined
+    const nativeReady = nativePrivateSelectionEnabled() && existsSync(ndAgentBinPath())
     return [
       ...buildCodingEngineCatalog({
         harnessReady,
+        // Private opt-in only. Public/package defaults stay fail-closed until
+        // the milestone evidence is promoted into a release decision.
+        nativeReady,
         codexReady,
         codexCliReady,
         antigravityReady,

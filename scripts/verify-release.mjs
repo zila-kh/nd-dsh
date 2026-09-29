@@ -20,8 +20,12 @@ for (const marker of [
   'appId: com.nddsh.desktop',
   'from: .release/harness',
   'to: vendor/deepseek-harness',
+  'from: .release/harness/node_modules',
+  'to: vendor/deepseek-harness/node_modules',
   'from: .release/nd-core',
   'to: nd-core',
+  'from: .release/nd-agent',
+  'to: nd-agent',
   'from: .release/nd-browser-host',
   'to: nd-browser-host',
   'from: .release/THIRD_PARTY_NOTICES.nd-dsh.md',
@@ -53,6 +57,7 @@ if (!configOnly) {
   const requiredFiles = [
     '.release/release-manifest.json',
     `.release/nd-core/${process.platform === 'win32' ? 'nd-core.exe' : 'nd-core'}`,
+    `.release/nd-agent/${process.platform === 'win32' ? 'nd-agent.exe' : 'nd-agent'}`,
     `.release/nd-browser-host/${process.platform === 'win32' ? 'nd-browser-host.exe' : 'nd-browser-host'}`,
     'extensions/browser-companion/manifest.json',
     'extensions/browser-companion/service-worker.js',
@@ -76,6 +81,7 @@ if (!configOnly) {
     '.release/harness/node_modules/@deepseek-ai/dsh-mcp-client/lib/index.js',
     '.release/harness/node_modules/@deepseek-ai/dsh-subagent-codex/lib/index.js',
     '.release/harness/node_modules/@deepseek-ai/dsh-subagent-codex/node_modules/@openai/codex/package.json',
+    '.release/harness/node_modules/@deepseek-ai/dsh-app-boot/package.json',
     'node_modules/agent-browser/bin/agent-browser.js',
     `resources/nd-pencil/bin/${process.platform === 'win32' ? 'op-host-web-server.exe' : 'op-host-web-server'}`,
     'resources/nd-pencil/bin/web-bundle/op_host_web.js',
@@ -92,6 +98,9 @@ if (!configOnly) {
   if (manifest.nodeRuntime?.mode !== 'electron-run-as-node') throw new Error('Packaged Node runtime mode is not declared')
   if (manifest.ndCore?.protocolVersion !== 1 || typeof manifest.ndCore?.sha256 !== 'string' || manifest.ndCore.sha256.length !== 64) {
     throw new Error('Packaged ND Core provenance is missing or invalid')
+  }
+  if (manifest.ndAgent?.protocolVersion !== 1 || typeof manifest.ndAgent?.sha256 !== 'string' || manifest.ndAgent.sha256.length !== 64) {
+    throw new Error('Packaged ND Agent provenance is missing or invalid')
   }
   if (manifest.browserCompanion?.protocolVersion !== 1
     || typeof manifest.browserCompanion?.nativeHostSha256 !== 'string'

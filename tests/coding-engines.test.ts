@@ -7,6 +7,7 @@ import {
   CODEX_ENGINE_ID,
   CURSOR_CLI_ENGINE_ID,
   ND_HARNESS_ENGINE_ID,
+  ND_NATIVE_ENGINE_ID,
   PI_CODING_ENGINE_ID,
   ZCODE_CLI_ENGINE_ID,
   buildCodingEngineCatalog,
@@ -35,6 +36,7 @@ describe('coding engine catalog', () => {
     const engines = buildCodingEngineCatalog(availability())
     expect(engines.map((engine) => engine.id)).toEqual([
       ND_HARNESS_ENGINE_ID,
+      ND_NATIVE_ENGINE_ID,
       CODEX_ENGINE_ID,
       CODEX_CLI_ENGINE_ID,
       ANTIGRAVITY_ENGINE_ID,
