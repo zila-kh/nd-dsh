@@ -53,15 +53,28 @@ test('capture redesigned settings surfaces', async () => {
   await page.screenshot({ path: `${SHOT_DIR}/popover.png` })
   await page.keyboard.press('Escape')
 
-  // Settings → General → Browser.
+  // Open Settings for the sidebar + search captures.
   await page.getByRole('navigation', { name: 'ND-DSH navigation' }).getByTitle('Settings').click()
+  await expect(page.getByRole('tablist', { name: 'Settings sections' })).toBeVisible()
+
+  // Sidebar navigation + settings search (ChatGPT/Gemini-style).
+  await page.screenshot({ path: `${SHOT_DIR}/settings-sidebar.png` })
+  const searchBox = page.getByRole('textbox', { name: 'Search settings' })
+  await searchBox.fill('extension')
+  const searchResults = page.getByLabel('Settings search results')
+  await expect(searchResults.getByRole('button', { name: 'Browser extensions' })).toBeVisible()
+  await page.screenshot({ path: `${SHOT_DIR}/settings-search.png` })
+  await searchResults.getByRole('button', { name: 'Browser extensions' }).click()
+
+  // Settings → General → Browser (the search jump lands here; re-click is idempotent).
   const subTabs = page.getByRole('tablist', { name: 'General sub-tabs' })
   await subTabs.getByRole('tab', { name: 'Browser', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Built-in browser profile' })).toBeVisible()
   await page.screenshot({ path: `${SHOT_DIR}/browser-settings.png` })
 
-  // Extension manager drawer.
-  await page.getByRole('button', { name: 'Manage', exact: true }).click()
+  // Extension manager drawer (scoped: the app banner also has a Manage button).
+  const settingsRegion = page.getByRole('region', { name: 'Settings' })
+  await settingsRegion.getByRole('button', { name: 'Manage', exact: true }).click()
   await expect(page.getByText('Built-in catalog')).toBeVisible()
   await page.screenshot({ path: `${SHOT_DIR}/extensions-drawer.png` })
 
@@ -69,4 +82,9 @@ test('capture redesigned settings surfaces', async () => {
   await page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab', { name: 'Coding engines', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Coding engines' })).toBeVisible()
   await page.screenshot({ path: `${SHOT_DIR}/engines.png` })
+
+  // Extensions & plugins tab must scroll (regression: grid wrapper clipped it).
+  await page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab', { name: 'Extensions & plugins', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Plugins' })).toBeVisible()
+  await page.screenshot({ path: `${SHOT_DIR}/extensions-tab.png` })
 })

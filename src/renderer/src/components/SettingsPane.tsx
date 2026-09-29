@@ -1,26 +1,25 @@
-import { useEffect, useState, type FormEvent } from 'react'
-import type { AppInfo, BrowserState, HarnessStatus, SavedWorkspace, ThemeMode, ThemeState, WorkspaceRegistryView, WorkspaceState } from '../../../shared/contracts'
-import { MonitorIcon, MoonIcon, SunIcon } from './Icons'
+import { useState } from 'react'
+import type { BrowserState, HarnessStatus, ThemeMode, ThemeState, WorkspaceState } from '../../../shared/contracts'
+import {
+  BoxIcon,
+  BrainIcon,
+  PlugIcon,
+  PuzzleIcon,
+  SettingsIcon,
+  SparkIcon,
+  SunIcon,
+} from './Icons'
+import { AboutSettings } from './AboutSettings'
+import { AppearanceSettings } from './AppearanceSettings'
 import { BrowserSettings } from './BrowserSettings'
 import { CapabilitySettings } from './CapabilitySettings'
 import { EngineSettings } from './EngineSettings'
-import { QuickLauncherShortcutSettings } from './QuickLauncherShortcutSettings'
 import { ExtensionSettings } from './ExtensionSettings'
 import { ModelSettings } from './ModelSettings'
 import { PresetSettings } from './PresetSettings'
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog'
-import {
-  SettingsButton,
-  SettingsRow,
-  SettingsSection,
-  rowDesc,
-  rowPathText,
-  rowStack,
-  rowTitle,
-  rowValueText,
-  StatusChip,
-} from './settings-primitives'
-import { betaDiagnostics } from '../lib/beta-diagnostics'
+import { RuntimeSettings } from './RuntimeSettings'
+import { WorkspaceSettings } from './WorkspaceSettings'
+import { searchSettings, type SettingsSearchEntry } from '../lib/settings-search'
 import { cn } from '../lib/utils'
 import {
   generalSubTabFromLocation,
@@ -48,14 +47,14 @@ interface SettingsPaneProps {
   extensionsExtra?: React.ReactNode
 }
 
-const TABS: { id: SettingsTab; label: string }[] = [
-  { id: 'general', label: 'General' },
-  { id: 'appearance', label: 'Appearance' },
-  { id: 'models', label: 'Models' },
-  { id: 'capabilities', label: 'Capabilities' },
-  { id: 'extensions', label: 'Extensions & plugins' },
-  { id: 'engines', label: 'Coding engines' },
-  { id: 'presets', label: 'Agent presets' },
+const TABS: { id: SettingsTab; label: string; Icon: typeof SettingsIcon }[] = [
+  { id: 'general', label: 'General', Icon: SettingsIcon },
+  { id: 'appearance', label: 'Appearance', Icon: SunIcon },
+  { id: 'models', label: 'Models', Icon: BrainIcon },
+  { id: 'capabilities', label: 'Capabilities', Icon: BoxIcon },
+  { id: 'extensions', label: 'Extensions & plugins', Icon: PuzzleIcon },
+  { id: 'engines', label: 'Coding engines', Icon: PlugIcon },
+  { id: 'presets', label: 'Agent presets', Icon: SparkIcon },
 ]
 
 const GENERAL_SUB_TABS: { id: GeneralSubTab; label: string }[] = [
@@ -64,13 +63,6 @@ const GENERAL_SUB_TABS: { id: GeneralSubTab; label: string }[] = [
   { id: 'browser', label: 'Browser' },
   { id: 'about', label: 'About' },
 ]
-
-const THEME_OPTIONS: { mode: ThemeMode; label: string; Icon: typeof SunIcon }[] = [
-  { mode: 'system', label: 'System', Icon: MonitorIcon },
-  { mode: 'light', label: 'Light', Icon: SunIcon },
-  { mode: 'dark', label: 'Dark', Icon: MoonIcon },
-]
-
 
 export function SettingsPane({
   theme,
@@ -89,12 +81,8 @@ export function SettingsPane({
   onSelectCapabilitySubTab,
   extensionsExtra,
 }: SettingsPaneProps) {
-  const [appInfo, setAppInfo] = useState<AppInfo | null>(null)
-  const [pathDraft, setPathDraft] = useState('')
   const [internalSubTab, setInternalSubTab] = useState<GeneralSubTab>(generalSubTabFromLocation)
-  const [diagnosticsCopied, setDiagnosticsCopied] = useState(false)
-  const [savedWorkspaces, setSavedWorkspaces] = useState<WorkspaceRegistryView | null>(null)
-  const [workspaceToRemove, setWorkspaceToRemove] = useState<SavedWorkspace | null>(null)
+  const [search, setSearch] = useState('')
 
   const activeSubTab = propSubTab ?? internalSubTab
   const handleSelectSubTab = (selected: GeneralSubTab): void => {
@@ -105,99 +93,80 @@ export function SettingsPane({
     }
   }
 
-  useEffect(() => {
-    let mounted = true
-    void window.ndDsh.app.info().then((info) => { if (mounted) setAppInfo(info) }).catch(() => undefined)
-    return () => { mounted = false }
-  }, [])
-
-  useEffect(() => {
-    setPathDraft(workspace?.root ?? '')
-  }, [workspace?.root])
-
-  // The saved list is only shown on the Workspace sub-tab, so it is read on demand.
-  useEffect(() => {
-    if (activeSubTab !== 'workspace') return
-    let mounted = true
-    void window.ndDsh.workspace.registry()
-      .then((value) => { if (mounted) setSavedWorkspaces(value) })
-      .catch(() => undefined)
-    return () => { mounted = false }
-  }, [activeSubTab, workspace?.root])
-
-  const removeSavedWorkspace = async (id: string): Promise<void> => {
-    try {
-      const next = await window.ndDsh.workspace.removeSaved(id)
-      setSavedWorkspaces(next)
-      setWorkspaceToRemove(null)
-    } catch (cause) {
-      onError(errorMessage(cause))
-    }
+  const results = searchSettings(search)
+  const openSearchResult = (entry: SettingsSearchEntry): void => {
+    onSelectTab(entry.tab)
+    if (entry.subTab) handleSelectSubTab(entry.subTab)
+    if (entry.capabilitySubTab && onSelectCapabilitySubTab) onSelectCapabilitySubTab(entry.capabilitySubTab)
+    setSearch('')
   }
-
-  const changeFolder = async (): Promise<void> => {
-    try {
-      onWorkspaceChanged(await window.ndDsh.workspace.pick())
-    } catch (cause) {
-      onError(errorMessage(cause))
-    }
-  }
-
-  const openPath = async (event: FormEvent): Promise<void> => {
-    event.preventDefault()
-    const path = pathDraft.trim()
-    if (!path) return
-    try {
-      onWorkspaceChanged(await window.ndDsh.workspace.setRoot(path))
-    } catch (cause) {
-      onError(errorMessage(cause))
-    }
-  }
-
-  const copyDiagnostics = async (): Promise<void> => {
-    try {
-      await navigator.clipboard.writeText(betaDiagnostics(appInfo, workspace, harness, browser))
-      setDiagnosticsCopied(true)
-      window.setTimeout(() => setDiagnosticsCopied(false), 2_000)
-    } catch (cause) {
-      onError(`Could not copy diagnostics: ${errorMessage(cause)}`)
-    }
-  }
-
-  const dotClass = harness?.state === 'ready'
-    ? 'bg-primary'
-    : harness?.state === 'running' || harness?.state === 'starting'
-      ? 'animate-pulse-dot bg-info'
-      : harness?.state === 'error'
-        ? 'bg-destructive'
-        : 'bg-faint'
 
   return (
-    <section className="grid h-full w-full grid-rows-[auto_minmax(0,1fr)] min-h-0 min-w-0 bg-surface-0" aria-label="Settings">
-      <header className="flex items-center justify-between gap-4 border-b border-border-soft px-[26px] py-3.5">
-        <div>
-          <span className="mb-[5px] block text-[8px] font-bold tracking-[0.13em] text-faint">ND-DSH · AI COMPANY OS</span>
-          <h1 className="m-0 text-lg font-semibold tracking-tight text-strong">Settings</h1>
-        </div>
-        <nav role="tablist" aria-label="Settings sections" className="ml-auto flex shrink-0 gap-0.5 rounded-lg border border-border bg-secondary p-[3px]">
-          {TABS.map(({ id, label }) => (
-            <button
-              key={id}
-              role="tab"
-              aria-selected={tab === id}
-              className={cn(
-                'rounded-md px-3 py-1.5 text-[11px] font-semibold transition-colors',
-                tab === id ? 'bg-primary/10 text-primary' : 'text-faint hover:bg-accent hover:text-soft',
-              )}
-              onClick={() => onSelectTab(id)}
-            >
-              {label}
-            </button>
-          ))}
-        </nav>
+    <section
+      aria-label="Settings"
+      className="grid h-full w-full grid-cols-[248px_minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)] min-h-0 min-w-0 bg-surface-0"
+    >
+      <header className="col-span-2 border-b border-border-soft px-[26px] py-3.5">
+        <span className="mb-[5px] block text-[8px] font-bold tracking-[0.13em] text-faint">ND-DSH · AI COMPANY OS</span>
+        <h1 className="m-0 text-lg font-semibold tracking-tight text-strong">Settings</h1>
       </header>
 
-      <div className="grid min-h-0 grid-rows-[minmax(0,1fr)] overflow-hidden">
+      <aside className="flex min-h-0 flex-col gap-2 border-r border-border-soft px-2.5 py-3">
+        <input
+          aria-label="Search settings"
+          placeholder="Search settings"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') setSearch('')
+            if (event.key === 'Enter' && results[0]) openSearchResult(results[0])
+          }}
+          spellCheck={false}
+          className="h-[28px] w-full shrink-0 rounded-md border border-border bg-background px-2.5 text-[11px] text-soft outline-none focus:border-(--border-focus)"
+        />
+        {search.trim() ? (
+          <div aria-label="Settings search results" className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto">
+            {results.length ? results.map((entry) => (
+              <button
+                key={entry.id}
+                className="flex w-full flex-col items-start gap-[1px] rounded-md px-2.5 py-[7px] text-left transition-colors hover:bg-accent"
+                onClick={() => openSearchResult(entry)}
+              >
+                <span className="text-[11px] font-semibold text-strong">{entry.title}</span>
+                <span className="text-[9px] text-faint">{entry.section}</span>
+              </button>
+            )) : (
+              <p className="px-2.5 py-2 text-[10px] text-faint">No settings match “{search.trim()}”.</p>
+            )}
+          </div>
+        ) : (
+          <nav
+            role="tablist"
+            aria-label="Settings sections"
+            aria-orientation="vertical"
+            className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto"
+          >
+            {TABS.map(({ id, label, Icon }) => (
+              <button
+                key={id}
+                role="tab"
+                aria-selected={tab === id}
+                className={cn(
+                  'flex shrink-0 items-center gap-2 rounded-md px-2.5 py-[7px] text-left text-[11px] font-semibold transition-colors [&_svg]:size-[14px] [&_svg]:shrink-0',
+                  tab === id ? 'bg-primary/10 text-primary' : 'text-soft hover:bg-accent hover:text-strong',
+                )}
+                onClick={() => onSelectTab(id)}
+              >
+                <Icon />
+                {label}
+              </button>
+            ))}
+          </nav>
+        )}
+      </aside>
+
+      {/* Single-row grid: gives every tab surface a definite height so its own overflow-auto scrolls. */}
+      <div className="grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)] overflow-hidden">
         {tab === 'models' ? (
           <ModelSettings onError={onError} />
         ) : tab === 'capabilities' ? (
@@ -215,261 +184,51 @@ export function SettingsPane({
           <EngineSettings onError={onError} />
         ) : tab === 'presets' ? (
           <PresetSettings onError={onError} />
-        ) : (
+        ) : tab === 'appearance' ? (
           <div className="min-h-0 overflow-auto px-[26px] pb-[42px] pt-1.5">
-            {tab === 'general' ? (
-              <>
-                <div className="mt-3 flex items-center gap-1 border-b border-border-soft pb-2.5">
-                  <nav role="tablist" aria-label="General sub-tabs" className="flex shrink-0 gap-0.5 rounded-lg border border-border bg-secondary p-[3px]">
-                    {GENERAL_SUB_TABS.map(({ id, label }) => (
-                      <button
-                        key={id}
-                        role="tab"
-                        aria-selected={activeSubTab === id}
-                        className={cn(
-                          'rounded-md px-3 py-1 text-[11px] font-semibold transition-colors',
-                          activeSubTab === id
-                            ? 'bg-primary/10 text-primary'
-                            : 'text-faint hover:bg-accent hover:text-soft',
-                        )}
-                        onClick={() => handleSelectSubTab(id)}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </nav>
-                </div>
-
-                {activeSubTab === 'workspace' && (
-                  <>
-                    <SettingsSection title="Workspace" className="mt-3.5">
-                      <div className="space-y-1.5">
-                        <SettingsRow>
-                          <div className={rowStack}>
-                            <strong className={rowTitle}>Folder</strong>
-                            <span className={rowPathText} title={workspace?.root}>{workspace ? workspace.root : 'No workspace open'}</span>
-                          </div>
-                          <SettingsButton onClick={() => void changeFolder()}>Change folder</SettingsButton>
-                        </SettingsRow>
-                        <SettingsRow>
-                          <div className={rowStack}>
-                            <strong className={rowTitle}>Folder path</strong>
-                            <span className={rowDesc}>Open a project workspace by path.</span>
-                          </div>
-                          <form className="flex shrink-0 min-w-0 items-center gap-1.5" onSubmit={openPath}>
-                            <input
-                              aria-label="Workspace path"
-                              placeholder="/Users/you/your-project"
-                              value={pathDraft}
-                              onChange={(event) => setPathDraft(event.target.value)}
-                              spellCheck={false}
-                              className="h-[26px] w-[220px] min-w-0 rounded-md border border-border-strong bg-background px-[9px] font-mono text-[9px] text-soft outline-none focus:border-(--border-focus)"
-                            />
-                            <SettingsButton type="submit">Open</SettingsButton>
-                          </form>
-                        </SettingsRow>
-                      </div>
-                    </SettingsSection>
-
-                    {savedWorkspaces && savedWorkspaces.items.length > 0 ? (
-                      <SettingsSection title="Saved workspaces">
-                        <div className="space-y-1.5">
-                          {savedWorkspaces.items.map((item) => (
-                            <SettingsRow key={item.id}>
-                              <div className={rowStack}>
-                                <strong className={rowTitle}>
-                                  {item.name}
-                                  {item.id === savedWorkspaces.activeId ? <span className="ml-2 text-[9px] font-bold tracking-[0.08em] text-primary">CURRENT</span> : null}
-                                </strong>
-                                <span className={rowPathText} title={item.root}>{item.root}</span>
-                              </div>
-                              <SettingsButton
-                                aria-label={`Remove saved workspace ${item.name}`}
-                                className="hover:border-destructive/45 hover:text-destructive"
-                                onClick={() => setWorkspaceToRemove(item)}
-                              >
-                                Remove
-                              </SettingsButton>
-                            </SettingsRow>
-                          ))}
-                        </div>
-                      </SettingsSection>
-                    ) : null}
-                  </>
-                )}
-
-                {activeSubTab === 'runtime' && (
-                  <>
-                    <SettingsSection title="ND runtime" className="mt-3.5">
-                      <div className="space-y-1.5">
-                        <SettingsRow>
-                          <div className={rowStack}>
-                            <strong className={rowTitle}>Primary adapter</strong>
-                            <span className={rowDesc}>ND Harness currently owns durable sessions, tools, approvals, and organization run events. Additional coding engines are registered separately.</span>
-                          </div>
-                          <span className={cn('inline-block size-1.5 shrink-0 rounded-full', dotClass)} />
-                        </SettingsRow>
-                        <SettingsRow>
-                          <div className={rowStack}>
-                            <strong className={rowTitle}>Model route</strong>
-                            <span className={rowDesc}>{harness?.model ?? 'Not connected'}</span>
-                          </div>
-                          <span className={rowValueText}>{harness?.provider ?? '—'}</span>
-                        </SettingsRow>
-                        <SettingsRow>
-                          <div className={rowStack}>
-                            <strong className={rowTitle}>Provider credential</strong>
-                            <span className={rowDesc}>{harness?.apiKeyPresent ? 'Provider credentials configured' : harness?.apiKeyRequired ? 'Credential required for the active route' : 'No credential required for the active local route'}</span>
-                          </div>
-                          <StatusChip good={harness?.apiKeyPresent || !harness?.apiKeyRequired} warn={!harness?.apiKeyPresent && harness?.apiKeyRequired}>
-                            {harness?.apiKeyPresent ? 'Ready' : harness?.apiKeyRequired ? 'Check route' : 'No key needed'}
-                          </StatusChip>
-                        </SettingsRow>
-                        {harness?.sessionId ? (
-                          <SettingsRow>
-                            <div className={rowStack}>
-                              <strong className={rowTitle}>Active session</strong>
-                              <span className={rowPathText} title={harness.sessionId}>{harness.sessionId}</span>
-                            </div>
-                          </SettingsRow>
-                        ) : null}
-                        {harness?.error ? (
-                          <SettingsRow>
-                            <div className={rowStack}>
-                              <strong className={rowTitle}>Runtime error</strong>
-                              <span className={rowDesc}>{harness.error}</span>
-                            </div>
-                            <StatusChip warn>Attention</StatusChip>
-                          </SettingsRow>
-                        ) : null}
-                      </div>
-                    </SettingsSection>
-
-                    <QuickLauncherShortcutSettings onError={onError} />
-
-                    <SettingsSection title="Product architecture">
-                      <div className="space-y-1.5">
-                        <SettingsRow>
-                          <div className={rowStack}>
-                            <strong className={rowTitle}>Control plane</strong>
-                            <span className={rowDesc}>ND-DSH owns companies, projects, roles, agents, tasks, skills, memory, policies, provider routes, and engine registration.</span>
-                          </div>
-                          <StatusChip good>ND-DSH</StatusChip>
-                        </SettingsRow>
-                        <SettingsRow>
-                          <div className={rowStack}>
-                            <strong className={rowTitle}>Execution boundary</strong>
-                            <span className={rowDesc}>Coding engines are replaceable adapters. Vendor runtime interfaces are infrastructure, not product identity.</span>
-                          </div>
-                        </SettingsRow>
-                      </div>
-                    </SettingsSection>
-                  </>
-                )}
-
-                {activeSubTab === 'browser' && (
-                  <BrowserSettings
-                    browser={browser}
-                    onError={onError}
-                    onOpenBrowser={onOpenBrowser}
-                  />
-                )}
-
-                {activeSubTab === 'about' && (
-                  <SettingsSection title="About" className="mt-3.5">
-                    <div className="space-y-1.5">
-                      <SettingsRow>
-                        <div className={rowStack}>
-                          <strong className={rowTitle}>Version</strong>
-                          <span className={rowDesc}>{appInfo ? `${appInfo.name} ${appInfo.version}` : 'Loading…'}</span>
-                        </div>
-                        <span className={rowValueText}>{appInfo?.platform ?? '—'}</span>
-                      </SettingsRow>
-                      <SettingsRow>
-                        <div className={rowStack}>
-                          <strong className={rowTitle}>Project root</strong>
-                          <span className={rowPathText} title={appInfo?.projectRoot}>{appInfo?.projectRoot || '—'}</span>
-                        </div>
-                      </SettingsRow>
-                      <SettingsRow>
-                        <div className={rowStack}>
-                          <strong className={rowTitle}>Beta diagnostics</strong>
-                          <span className={rowDesc}>Copy runtime health for a bug report without credentials, session IDs, paths, project names, or browser URLs.</span>
-                        </div>
-                        <SettingsButton onClick={() => void copyDiagnostics()}>{diagnosticsCopied ? 'Copied' : 'Copy diagnostics'}</SettingsButton>
-                      </SettingsRow>
-                    </div>
-                  </SettingsSection>
-                )}
-              </>
-            ) : (
-              <SettingsSection title="Appearance" className="mt-3.5">
-                <SettingsRow>
-                  <div className={rowStack}>
-                    <strong className={rowTitle}>Theme</strong>
-                    <span className={rowDesc}>Follow the OS, or pin light or dark mode.</span>
-                  </div>
-                  <div role="radiogroup" aria-label="Theme" className="flex shrink-0 gap-[3px] rounded-[7px] border border-border bg-secondary p-[3px]">
-                    {THEME_OPTIONS.map(({ mode, label, Icon }) => (
-                      <button
-                        key={mode}
-                        role="radio"
-                        aria-checked={theme?.mode === mode}
-                        aria-label={label}
-                        title={label}
-                        className={cn(
-                          'grid size-[30px] h-6 place-items-center rounded-[5px] transition-colors [&_svg]:size-[13px]',
-                          theme?.mode === mode ? 'bg-primary/10 text-primary' : 'text-faint hover:bg-accent hover:text-foreground',
-                        )}
-                        onClick={() => onSelectTheme(mode)}
-                      >
-                        <Icon />
-                      </button>
-                    ))}
-                  </div>
-                </SettingsRow>
-              </SettingsSection>
-            )}
+            <AppearanceSettings theme={theme} onSelectTheme={onSelectTheme} />
+          </div>
+        ) : (
+          <div className="flex min-h-0 flex-col">
+            <div className="flex shrink-0 items-center border-b border-border-soft px-[26px] pb-2.5 pt-3">
+              <nav
+                role="tablist"
+                aria-label="General sub-tabs"
+                className="flex shrink-0 gap-0.5 rounded-lg border border-border bg-secondary p-[3px]"
+              >
+                {GENERAL_SUB_TABS.map(({ id, label }) => (
+                  <button
+                    key={id}
+                    role="tab"
+                    aria-selected={activeSubTab === id}
+                    className={cn(
+                      'rounded-md px-3 py-1 text-[11px] font-semibold transition-colors',
+                      activeSubTab === id
+                        ? 'bg-primary/10 text-primary'
+                        : 'text-faint hover:bg-accent hover:text-soft',
+                    )}
+                    onClick={() => handleSelectSubTab(id)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </nav>
+            </div>
+            <div className="min-h-0 flex-1 overflow-auto px-[26px] pb-[42px] pt-1.5">
+              {activeSubTab === 'runtime' && <RuntimeSettings harness={harness} onError={onError} />}
+              {activeSubTab === 'workspace' && (
+                <WorkspaceSettings workspace={workspace} onWorkspaceChanged={onWorkspaceChanged} onError={onError} />
+              )}
+              {activeSubTab === 'browser' && (
+                <BrowserSettings browser={browser} onError={onError} onOpenBrowser={onOpenBrowser} />
+              )}
+              {activeSubTab === 'about' && (
+                <AboutSettings workspace={workspace} harness={harness} browser={browser} onError={onError} />
+              )}
+            </div>
           </div>
         )}
       </div>
-
-      <Dialog open={workspaceToRemove !== null} onOpenChange={(open) => { if (!open) setWorkspaceToRemove(null) }}>
-        <DialogContent className="sm:max-w-[470px]">
-          <DialogHeader>
-            <DialogTitle>Remove saved workspace?</DialogTitle>
-            <DialogDescription>
-              {workspaceToRemove
-                ? `“${workspaceToRemove.name}” will no longer be offered as a saved workspace. The folder and everything in it are left untouched.`
-                : ''}
-            </DialogDescription>
-          </DialogHeader>
-          {workspaceToRemove ? (
-            <p className="m-0 font-mono text-[10px] text-muted-foreground">{workspaceToRemove.root}</p>
-          ) : null}
-          <DialogFooter>
-            <DialogClose asChild>
-              <button
-                type="button"
-                className="shrink-0 rounded-md border border-border bg-secondary px-2.5 py-1.5 text-[10px] text-soft transition-colors hover:bg-accent hover:text-foreground"
-              >
-                Cancel
-              </button>
-            </DialogClose>
-            <button
-              type="button"
-              className="shrink-0 rounded-md border border-destructive/45 bg-secondary px-2.5 py-1.5 text-[10px] text-destructive transition-colors hover:bg-destructive/10"
-              onClick={() => { if (workspaceToRemove) void removeSavedWorkspace(workspaceToRemove.id) }}
-            >
-              Remove
-            </button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </section>
   )
-}
-
-function errorMessage(cause: unknown): string {
-  return cause instanceof Error ? cause.message : String(cause)
 }
