@@ -43,6 +43,20 @@ ND already has:
 
 What is missing is the human-grade collaboration layer that lets a real team discuss work, record decisions and perform explicit approvals without leaving the ND project context.
 
+## 2.1 Competitive reference
+
+This PRD uses [ND Team Workspace Competitive Reference](../plan/team-workspace-competitive-reference.md) as an implementation benchmark.
+
+Primary references:
+
+- Asana — shared human/agent plan, context and governance;
+- Linear — agent-as-workspace-participant UX, delegation, comments and mentions;
+- GitHub Agent HQ — coding-agent mission control, identity and policy;
+- OpenAI Codex — parallel agent desktop workflows and worktree supervision;
+- Microsoft Copilot — convergence of General, Code and persistent teammates.
+
+The goal is not feature parity with their hosted platforms. PRD 0009 must match baseline collaboration expectations locally, then demonstrate ND-specific advantages: no required server, General + Coding over one project model, engine-neutral execution, isolated task/checkpoint lineage and explicit revision-bound approvals.
+
 ## 3. Scope boundary
 
 This PRD is **one-host local collaboration**.

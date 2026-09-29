@@ -41,6 +41,14 @@ The local product owns the core work model:
 
 Future cloud infrastructure may add cross-device synchronization, remote access, hosted backup, organization identity, hosted notifications, registries and managed services. It must not redefine the local collaboration model.
 
+## Competitive position
+
+PRD 0009 is tracked against a maintained external reference set: [ND Team Workspace Competitive Reference](./team-workspace-competitive-reference.md).
+
+The implementation rule is **reference, do not clone**. ND should match the essential human-agent collaboration quality already established by Asana, Linear, GitHub Agent HQ, Codex and Microsoft Copilot, while differentiating on local-first ownership, General + Coding, engine-neutral execution, isolated task/worktree transactions, explicit checkpoint-bound approvals and extensible local desktop capabilities.
+
+Cloud breadth is not the current competition target. The local milestone wins by proving a complete, safe workflow without a server.
+
 ## Immediate milestone: local team workspace
 
 PRD 0009 is the next product contract.
