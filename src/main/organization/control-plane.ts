@@ -61,6 +61,7 @@ const EMPTY: OrganizationControlSnapshot = {
  */
 export class OrganizationControlPlane {
   private loaded = false
+  private loadPromise: Promise<void> | undefined
   private value: OrganizationControlSnapshot = clone(EMPTY)
   private saveChain: Promise<void> = Promise.resolve()
   private pendingSave: Promise<void> | undefined
@@ -628,13 +629,43 @@ export class OrganizationControlPlane {
 
   private async load(): Promise<void> {
     if (this.loaded) return
+    if (this.loadPromise) return this.loadPromise
+    const pending = this.loadFromDisk()
+    this.loadPromise = pending
     try {
-      const parsed = JSON.parse(await fs.readFile(this.filePath, 'utf8')) as unknown
-      this.value = normalize(parsed)
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException | undefined)?.code !== 'ENOENT') throw error
+      await pending
+    } finally {
+      this.loadPromise = undefined
     }
-    this.loaded = true
+  }
+
+  private async loadFromDisk(): Promise<void> {
+    let primaryError: unknown
+    try {
+      this.value = await this.readSnapshot(this.filePath)
+      this.loaded = true
+      return
+    } catch (error) {
+      primaryError = error
+    }
+
+    try {
+      this.value = await this.readSnapshot(this.backupPath())
+      this.loaded = true
+      console.warn(`Recovered organization control state from backup after primary load failed: ${errorMessage(primaryError)}`)
+      await this.save()
+      return
+    } catch (backupError) {
+      if (isMissing(primaryError) && isMissing(backupError)) {
+        this.loaded = true
+        return
+      }
+      throw new Error(`Organization control state could not be loaded. Primary: ${errorMessage(primaryError)}. Backup: ${errorMessage(backupError)}.`)
+    }
+  }
+
+  private async readSnapshot(path: string): Promise<OrganizationControlSnapshot> {
+    return normalize(JSON.parse(await fs.readFile(path, 'utf8')) as unknown)
   }
 
   /** Durable once settled; saves requested during an in-flight write share the next one. */
@@ -645,13 +676,11 @@ export class OrganizationControlPlane {
       const snapshot = clone(this.value)
       const serialized = `${JSON.stringify(snapshot)}\n`
       await fs.mkdir(dirname(this.filePath), { recursive: true })
-      const temp = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`
+      await writeAtomic(this.filePath, serialized)
       try {
-        await fs.writeFile(temp, serialized, 'utf8')
-        await fs.rename(temp, this.filePath)
+        await writeAtomic(this.backupPath(), serialized)
       } catch (error) {
-        await fs.rm(temp, { force: true }).catch(() => undefined)
-        throw error
+        console.warn('Failed to persist organization control backup:', error)
       }
       this.onChanged?.(snapshot)
     })
@@ -659,6 +688,29 @@ export class OrganizationControlPlane {
     this.saveChain = write
     return write
   }
+
+  private backupPath(): string {
+    return `${this.filePath}.bak`
+  }
+}
+
+async function writeAtomic(path: string, content: string): Promise<void> {
+  const temp = `${path}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    await fs.writeFile(temp, content, { encoding: 'utf8', mode: 0o600 })
+    await fs.rename(temp, path)
+  } catch (error) {
+    await fs.rm(temp, { force: true }).catch(() => undefined)
+    throw error
+  }
+}
+
+function isMissing(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT'
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 function normalize(value: unknown): OrganizationControlSnapshot {

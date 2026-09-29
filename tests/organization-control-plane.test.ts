@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -57,6 +57,30 @@ async function fixture(computeLedger?: ComputeLedger) {
 }
 
 describe('organization control plane', () => {
+  it('recovers durable gates and signals from backup when the primary control file is corrupt', async () => {
+    const { root, control, value } = await fixture()
+    await control.mutate({
+      type: 'human-action.add',
+      companyId: 'company-1',
+      projectId: 'project-1',
+      kind: 'gate',
+      title: 'Durable gate',
+      question: 'Proceed?',
+    })
+    const primary = join(root, 'control.json')
+    expect(JSON.parse(await readFile(`${primary}.bak`, 'utf8')).humanActions).toHaveLength(1)
+    await writeFile(primary, '{corrupt', 'utf8')
+
+    const store = {
+      state: async () => structuredClone(value),
+      taskContext: async () => { throw new Error('not needed') },
+    }
+    const recovered = new OrganizationControlPlane(primary, store as never)
+    const state = await recovered.state()
+    expect(state.humanActions[0]?.title).toBe('Durable gate')
+    expect(JSON.parse(await readFile(primary, 'utf8')).humanActions[0]?.title).toBe('Durable gate')
+  })
+
   it('distinguishes a scoped human gate from ordinary runnable work', async () => {
     const { control } = await fixture()
     await control.mutate({

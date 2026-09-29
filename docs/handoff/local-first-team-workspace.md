@@ -127,6 +127,10 @@ Therefore:
 
 Do not market this branch as crash-independent daemon operation.
 
+## Durable local state
+
+The organization store, strategy/automation plane, and control plane now all use atomic primary writes plus recovery snapshots for their critical JSON state. The strategy/control authorities serialize first-load races and recover a valid backup if the primary file is unreadable.
+
 ## Safety invariants
 
 The implementation preserves:
