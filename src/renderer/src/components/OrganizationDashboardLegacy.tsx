@@ -25,6 +25,8 @@ interface Props {
 }
 
 type Section = 'overview' | 'work' | 'workforce' | 'knowledge'
+type BoardStatus = 'ready' | 'in_progress' | 'review' | 'blocked' | 'completed'
+const BOARD_STATUSES: BoardStatus[] = ['ready', 'in_progress', 'review', 'blocked', 'completed']
 
 const orgButton = cn(
   'h-7 shrink-0 rounded-md border border-border-strong bg-secondary px-[9px] text-sm text-soft transition-colors',
@@ -57,6 +59,7 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
   const [showCreateCompany, setShowCreateCompany] = useState(false)
   const [projectDraft, setProjectDraft] = useState({ name: '', objective: '', workspacePath: workspace?.root ?? '' })
   const [taskDraft, setTaskDraft] = useState({ title: '', description: '', priority: 'medium' as TaskPriority })
+  const [columnDraft, setColumnDraft] = useState<{ status: BoardStatus; title: string; description: string } | null>(null)
   const [memoryDraft, setMemoryDraft] = useState({ title: '', content: '' })
   const [engines, setEngines] = useState<CodingEngineDescriptor[]>([])
   const [engineAssignments, setEngineAssignments] = useState<Record<string, string>>({})
@@ -314,8 +317,10 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
     try { await fn() } catch (cause) { onError(errorMessage(cause)) } finally { setBusy(null) }
   }
 
-  async function mutate(value: Parameters<typeof window.ndDshOrganization.mutate>[0]): Promise<void> {
-    setState(await window.ndDshOrganization.mutate(value))
+  async function mutate(value: Parameters<typeof window.ndDshOrganization.mutate>[0]): Promise<OrganizationSnapshot> {
+    const next = await window.ndDshOrganization.mutate(value)
+    setState(next)
+    return next
   }
 
   async function createCompany(event: FormEvent): Promise<void> {
@@ -342,6 +347,22 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
     await action('task', async () => {
       await mutate({ type: 'task.create', companyId: company.id, projectId: project.id, title: taskDraft.title, description: taskDraft.description, priority: taskDraft.priority, acceptanceCriteria: ['Requested outcome is implemented and verified.'] })
       setTaskDraft({ title: '', description: '', priority: 'medium' })
+    })
+  }
+
+  /** Adds a task directly from a board column and lands it in that column. */
+  async function createTaskInColumn(event: FormEvent): Promise<void> {
+    event.preventDefault()
+    if (!company || !project || !columnDraft) return
+    const draft = columnDraft
+    await action('task', async () => {
+      const existingIds = new Set(state?.tasks.map((item) => item.id) ?? [])
+      const next = await mutate({ type: 'task.create', companyId: company.id, projectId: project.id, title: draft.title, description: draft.description, priority: 'medium', acceptanceCriteria: ['Requested outcome is implemented and verified.'] })
+      if (draft.status !== 'ready') {
+        const created = next.tasks.find((item) => !existingIds.has(item.id))
+        if (created) await mutate({ type: 'task.update', id: created.id, patch: { status: draft.status } })
+      }
+      setColumnDraft(null)
     })
   }
 
@@ -729,7 +750,13 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
                 ) : null}
                 <form className="grid grid-cols-1 gap-[7px] min-[900px]:grid-cols-2" onSubmit={(event) => void saveRuntimeSettings(event)}>
                   <input placeholder="Start command (e.g. npm run dev)" value={runtimeDraft.startCommand} onChange={(event) => setRuntimeDraft((value) => ({ ...value, startCommand: event.target.value }))} className={orgInput} />
-                  <input placeholder="Test command (informational)" value={runtimeDraft.testCommand} onChange={(event) => setRuntimeDraft((value) => ({ ...value, testCommand: event.target.value }))} className={orgInput} />
+                  <input
+                    placeholder="Test command — machine verification (e.g. npm test)"
+                    title="ND runs this command as the hard verification gate for every task checkpoint. Leave empty to skip machine verification."
+                    value={runtimeDraft.testCommand}
+                    onChange={(event) => setRuntimeDraft((value) => ({ ...value, testCommand: event.target.value }))}
+                    className={orgInput}
+                  />
                   <input placeholder="Target URL — overrides port (e.g. http://localhost:3000)" value={runtimeDraft.targetUrl} onChange={(event) => setRuntimeDraft((value) => ({ ...value, targetUrl: event.target.value }))} className={orgInput} />
                   <input placeholder={`Target port (default ${DEFAULT_PROJECT_PORT})`} inputMode="numeric" value={runtimeDraft.targetPort} onChange={(event) => setRuntimeDraft((value) => ({ ...value, targetPort: event.target.value }))} className={orgInput} />
                   <input placeholder="Health-check path (/)" value={runtimeDraft.healthCheckPath} onChange={(event) => setRuntimeDraft((value) => ({ ...value, healthCheckPath: event.target.value }))} className={orgInput} />
@@ -793,27 +820,53 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
           </form>
         ) : null}
         <div className="grid grid-cols-[repeat(6,minmax(160px,1fr))] gap-2 overflow-x-auto max-[1100px]:grid-cols-[repeat(6,220px)]">
-          {(['backlog', 'ready', 'in_progress', 'review', 'blocked', 'completed'] as const).map((status) => {
+          {(['backlog', ...BOARD_STATUSES] as const).map((status) => {
             const repoCards = status === 'backlog' ? [] : repoBoard[status] ?? []
+            const draftStatus = status === 'backlog' ? null : status
             return (
               <section key={status} className="min-h-[300px] rounded-[7px] border border-border-soft bg-surface-0 p-2">
                 <header className="mb-[7px] flex items-center justify-between text-xs font-bold uppercase text-muted-foreground">
                   <span>{status.replace('_', ' ')}</span>
                   <span className="flex items-center gap-1">
                     <b>{tasks.filter((item) => item.status === status).length}{repoCards.length ? <span className="font-normal normal-case text-faint">+{repoCards.length} repo</span> : null}</b>
-                    {onAskAgent && status !== 'backlog' ? (
+                    {draftStatus ? (
                       <button
                         type="button"
-                        aria-label={`Ask the agent to add or advance a ${status.replace('_', ' ')} task`}
-                        title={`Ask the agent to add or advance a ${status.replace('_', ' ')} task`}
+                        aria-label={`Add a ${status.replace('_', ' ')} task`}
+                        title={`Add a ${status.replace('_', ' ')} task`}
                         className="grid size-[18px] place-items-center rounded-[5px] border border-transparent text-faint transition-colors hover:border-border-strong hover:bg-secondary hover:text-foreground"
-                        onClick={() => onAskAgent(buildColumnPrompt(status))}
+                        onClick={() => setColumnDraft((current) => current?.status === status ? null : { status: draftStatus, title: '', description: '' })}
                       >
                         +
                       </button>
                     ) : null}
                   </span>
                 </header>
+                {columnDraft?.status === status ? (
+                  <form className="mb-[7px] flex flex-col gap-[5px]" onSubmit={(event) => void createTaskInColumn(event)}>
+                    <input
+                      autoFocus
+                      required
+                      placeholder="Task title"
+                      aria-label="New task title"
+                      value={columnDraft.title}
+                      onChange={(event) => setColumnDraft((current) => current?.status === status ? { ...current, title: event.target.value } : current)}
+                      className={orgInput}
+                    />
+                    <input
+                      required
+                      placeholder="Required outcome"
+                      aria-label="New task required outcome"
+                      value={columnDraft.description}
+                      onChange={(event) => setColumnDraft((current) => current?.status === status ? { ...current, description: event.target.value } : current)}
+                      className={orgInput}
+                    />
+                    <div className="flex items-center gap-[5px]">
+                      <button className={orgPrimaryButton} disabled={busy !== null}>{busy === 'task' ? 'Adding…' : 'Add'}</button>
+                      <button type="button" className={orgButton} onClick={() => setColumnDraft(null)}>Cancel</button>
+                    </div>
+                  </form>
+                ) : null}
                 {tasks.filter((item) => item.status === status).map((item) => (
                   <TaskCard
                     key={item.id}
@@ -1294,26 +1347,6 @@ function RepositoryCard({ card, task, onOpenDetail, onOpenChat }: {
 function buildRepoTaskPrompt(task: RepositoryWorkflowTask): string {
   const prdNote = task.prdRefs.length > 0 ? ' and its linked PRD' : ''
   return `@${task.sourcePath} work on this repository task from the ND workflow mirror. Read the task file${prdNote} in the workspace first and follow its conventions — checked criteria are not completion, and human acceptance must be recorded by a person.`
-}
-
-/**
- * Per-column composer shortcut: the prompt names the target lifecycle and
- * points the agent at the workflow task directory; the user appends specifics.
- */
-function buildColumnPrompt(status: 'ready' | 'in_progress' | 'review' | 'blocked' | 'completed'): string {
-  const dir = '@.agents/docs/tasks/'
-  switch (status) {
-    case 'ready':
-      return `${dir} add a new repository task in "todo" (ready) state to this project's workflow — outcome: [describe the outcome], acceptance criteria: [list them]`
-    case 'in_progress':
-      return `${dir} move one ready "todo" task into "wip" (in progress) and start on it; ask me which if it is ambiguous`
-    case 'review':
-      return `${dir} submit a "wip" task for review per this workflow's conventions — summarize what was done and what verification evidence exists`
-    case 'blocked':
-      return `${dir} move a task into "blocked" state — blocker: [describe the blocker]`
-    case 'completed':
-      return `${dir} complete and archive a "wip" task into done/ per the workflow conventions — only after fresh verification evidence and my explicit human acceptance`
-  }
 }
 
 const repoDetailLabel = 'text-[10px] font-bold uppercase tracking-[0.1em] text-faint'

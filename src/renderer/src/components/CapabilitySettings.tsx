@@ -1,7 +1,8 @@
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
 import type { CapabilityDescriptor, CapabilityKind, CapabilityProviderStatus, CapabilitySetupCheck } from '../../../shared/capabilities'
 import { cn } from '../lib/utils'
 import { capabilitySubTabFromLocation, type CapabilitySubTab } from '../lib/settings-route'
+import { EngineInstallHelp } from './engine-install-help'
 import {
   SettingsButton,
   SettingsRow,
@@ -40,6 +41,7 @@ export function CapabilitySettings({ onError, subTab: propSubTab, onSelectSubTab
   const [statuses, setStatuses] = useState<Record<string, CapabilityProviderStatus>>({})
   const [busy, setBusy] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [retrying, setRetrying] = useState(false)
   const [setupProvider, setSetupProvider] = useState<string | null>(null)
   const [setupChecks, setSetupChecks] = useState<Record<string, CapabilitySetupCheck>>({})
   const [setupValues, setSetupValues] = useState<Record<string, Record<string, string>>>({})
@@ -54,21 +56,30 @@ export function CapabilitySettings({ onError, subTab: propSubTab, onSelectSubTab
     }
   }
 
-  useEffect(() => {
-    let mounted = true
-    const refresh = (): void => {
-      void window.ndDsh.capabilities.providers()
-        .then((value) => { if (mounted) setProviders(value) })
+  // Providers and statuses re-probe on every call, so this also serves the per-row Re-check.
+  const refresh = useCallback(async (): Promise<void> => {
+    setRetrying(true)
+    try {
+      await window.ndDsh.capabilities.providers()
+        .then(setProviders)
         .catch((cause) => onError(errorMessage(cause)))
-      void window.ndDsh.capabilities.statuses()
-        .then((value) => { if (mounted) setStatuses(value) })
+      await window.ndDsh.capabilities.statuses()
+        .then(setStatuses)
         .catch((cause) => onError(errorMessage(cause)))
-        .finally(() => { if (mounted) setLoading(false) })
+    } finally {
+      setRetrying(false)
+      setLoading(false)
     }
-    refresh()
-    const offStatus = window.ndDsh.capabilities.onStatusChanged((value) => { if (mounted) setStatuses(value) })
-    return () => { mounted = false; offStatus() }
   }, [onError])
+
+  useEffect(() => {
+    void refresh()
+  }, [refresh])
+
+  useEffect(() => {
+    const offStatus = window.ndDsh.capabilities.onStatusChanged((value) => setStatuses(value))
+    return () => offStatus()
+  }, [])
 
   const verify = async (providerId: string): Promise<void> => {
     if (busy) return
@@ -189,6 +200,8 @@ export function CapabilitySettings({ onError, subTab: propSubTab, onSelectSubTab
                         ? 'disabled'
                         : 'unverified'
               const setupCheck = setupChecks[provider.id]
+              // Engine CLIs become available once installed; other unavailable kinds need build-time adapters.
+              const showInstallHelp = !provider.available && (provider.kind === 'engine' || provider.installHelp !== undefined)
               return (
                 <Fragment key={provider.id}>
                 <SettingsRow>
@@ -196,6 +209,14 @@ export function CapabilitySettings({ onError, subTab: propSubTab, onSelectSubTab
                     <strong className={rowTitle}>{provider.name}</strong>
                     <span className={rowDesc}>{provider.description}</span>
                     {!provider.available && provider.unavailableReason ? <span className={rowPathText}>{provider.unavailableReason}</span> : null}
+                    {showInstallHelp ? (
+                      <EngineInstallHelp
+                        help={provider.installHelp}
+                        retrying={retrying}
+                        onRetry={() => void refresh()}
+                        onError={onError}
+                      />
+                    ) : null}
                     {status?.lastError && (!provider.setup || setupInstalled) ? <span className={rowPathText}>{status.lastError}</span> : null}
                     {status?.setupError ? <span className={rowPathText}>{status.setupError}</span> : null}
                     {status?.setupMessage ? <span className={rowPathText}>{status.setupMessage}{status.setupProgress !== undefined ? ` (${status.setupProgress}%)` : ''}</span> : null}

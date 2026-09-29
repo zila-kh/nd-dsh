@@ -76,7 +76,13 @@ describe('ExtensionPackageStore lifecycle', () => {
   it('rejects package symlinks because they can escape the package root', async () => {
     await writePackage(sourceRoot, SAMPLE)
     await writeFile(join(sourceRoot, 'inside.txt'), 'ok', 'utf8')
-    await symlink(join(sourceRoot, 'inside.txt'), join(sourceRoot, 'link.txt'))
+    // Windows file symlinks need Developer Mode or admin rights; directory junctions do not.
+    if (process.platform === 'win32') {
+      await mkdir(join(sourceRoot, 'inside'))
+      await symlink(join(sourceRoot, 'inside'), join(sourceRoot, 'link'), 'junction')
+    } else {
+      await symlink(join(sourceRoot, 'inside.txt'), join(sourceRoot, 'link.txt'))
+    }
     const store = new ExtensionPackageStore(root)
     await expect(store.installFromDirectory(sourceRoot)).rejects.toThrow(/symbolic link/)
   })

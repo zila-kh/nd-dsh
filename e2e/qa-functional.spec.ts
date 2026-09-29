@@ -58,6 +58,8 @@ test('QA: full work loop — company, project, PM plan, worker, reviewer, comple
   await dialog.getByPlaceholder('Company name').fill('QA Test Corp')
   await dialog.getByPlaceholder('Company mission').fill('Test the full ND-DSH work loop end-to-end.')
   await dialog.getByRole('button', { name: 'Create AI company' }).click()
+  // The dashboard opens on Work; the activity feed that confirms creation lives in Overview.
+  await page.getByRole('button', { name: 'Overview' }).click()
   await expect(page.getByText('Created QA Test Corp with a default AI workforce')).toBeVisible({ timeout: 10_000 })
 
   // 3. Create project

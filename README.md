@@ -1,17 +1,77 @@
 # ND-DSH
 
-> **Company team first. Built for devs, by real devs. Works with any CLI engine — Codex, DeepSeek Harness, and many more.**
+> **Local-first AI work desktop. General work + software delivery + extensions + agents, with replaceable model and coding-engine runtimes.**
 
-ND-DSH is a desktop **AI Company Operating System for software delivery**. Instead of treating an AI model as a single chat box, ND owns companies, projects, roles, teams, agents, tasks, workflows, skills, memory, policies, model-provider routes, and coding-engine capabilities.
+ND-DSH is a desktop **AI workspace and company operating platform** for everyday work, software development, automation, extensions, agents, and governed browser automation. Instead of treating an AI model as a single chat box, ND owns contexts, companies, projects, roles, teams, agents, tasks, workflows, skills, memory, policies, model-provider routes, browser state, and coding-engine capabilities.
 
 > **⚠️ Status: Developer Preview / Private Beta.**
 > The core loop runs on real desktop/runtime state, but there is no signed public installer or broad stability promise yet. Use it with supervised beta workflows and expect breaking changes. See [What we ship and what's planned](#what-we-ship-and-whats-planned) and the [Roadmap](#roadmap).
 
-The current product is coding-first: an AI PM plans work, assigned workers can execute independent tasks in parallel in ND-owned task workspaces, ND checkpoints and machine-verifies the result, an independent reviewer verifies the exact checkpoint, failed reviews can return to bounded rework, durable memory is recorded, dependencies unlock, and the next safe task can continue according to company autonomy and policy.
+ND started coding-first. The desktop now exposes two human-facing workspace profiles over the same governed runtime:
 
-Two more first-class surfaces ship with the desktop: a **unified browser platform** — the ND built-in multi-tab browser (tabs, history, downloads, credential mediation, extensions, trusted leases/policy) plus an explicit **Browser Companion** target into your existing Chrome/Chromium profile, both behind one governed BrowserTarget contract — and **ND Pencil**, ND's native Freeform design surface for design work against the active project's real source.
+- **General** — non-coding work: Home, chat/agents, files and folders, projects, browser, knowledge, design, launcher, daily workflows and ND Extensions.
+- **Coding** — General plus the coding workbench, Git, terminal, QA/test surfaces, source tooling, task workspaces, code agents and coding-engine controls.
+
+Switching General ↔ Coding is a presentation change. It must not pause, cancel, restart, or silently re-scope already-running company/task/agent execution.
+
+Both profiles share ND's extension/plugin/skill registries, workflow templates, memory/context, Kanban/tasks, company/project boundaries, permissions, credential handling, BYOK/provider routing, and agent runtime.
+
+The primary browser path is the **ND built-in browser**: an ND-owned persistent Chromium session with real tabs, profile/session state, governed automation and a browser-extension layer. The **Browser Companion** remains a separate, optional target for a user's existing external Chrome/Chromium profile. ND Pencil remains the native Freeform design surface for the active project's real source.
 
 ![ND DSH — Full Platform Flow](docs/assets/nd-dsh-full-platform-flow.png)
+
+## Platform architecture
+
+```mermaid
+flowchart TB
+    U[Users / Teams] --> D[ND Desktop / ND DSH]
+
+    D --> G[General Workspace]
+    D --> C[Coding Workspace]
+
+    G --> GE[ND Extensions / Home / Daily Workflows]
+    C --> DEV[Developer Tools / Git / Terminal / QA]
+
+    GE --> CORE[Shared ND Core Platform]
+    DEV --> CORE
+
+    CORE --> EXT[Extensions / Plugins / Skills]
+    CORE --> WF[Workflow Templates / Kanban / Tasks]
+    CORE --> AG[Agents / Subagents / Orchestration]
+    CORE --> CTX[Memory / Context / Knowledge]
+    CORE --> SEC[Permissions / Credentials / Security]
+    CORE --> MOD[BYOK Models / Provider Routing]
+    CORE --> BR[Built-in Browser]
+
+    BR --> BEXT[Browser Extensions / In-app Popups]
+    BR -. optional explicit target .-> BC[Browser Companion]
+
+    EXT --> EXEC[Execution / Integration Layer]
+    WF --> EXEC
+    AG --> EXEC
+    SEC --> EXEC
+    MOD --> EXEC
+    BR --> EXEC
+
+    EXEC --> OS[OS Actions / Local Filesystem]
+    EXEC --> TERM[Terminal / Coding Engines]
+    EXEC --> API[External APIs / Cloud / Sync]
+    EXEC --> WEB[Team / Admin Web Portal]
+```
+
+The detailed implementation map lives in [`docs/architecture.md`](docs/architecture.md). The core distinction is that **ND Extensions**, **plugins**, **skills**, and **browser extensions are different capability classes** even though they can participate in the same workflows.
+
+| Concept | ND meaning |
+| --- | --- |
+| **General Workspace** | Non-coding productivity, daily operations, files/folders, browser, knowledge, chat and extensions |
+| **Coding Workspace** | General capabilities plus code, terminal, Git, QA, debug/build/release and coding-engine workflows |
+| **ND Extensions** | Manifest-governed host/app capabilities, commands, typed views and workflows mediated by ND permissions |
+| **Plugins** | Third-party integrations/adapters connected through ND capability and permission boundaries |
+| **Skills** | Reusable expert task/context packs that agents can invoke when needed |
+| **Workflow templates** | Reusable task/process patterns with explicit context, approvals and automation rules |
+| **Agents / Subagents** | Autonomous helpers orchestrated under ND context, budget, permission and audit rules |
+| **Browser extensions** | Supported Chromium extension packages loaded into the ND built-in browser profile |
+| **Browser Companion** | Optional external-browser integration for an explicitly selected existing Chrome/Chromium profile |
 
 ## Product boundary
 
@@ -20,8 +80,15 @@ ND-DSH is the product and control plane. Runtime vendors are replaceable impleme
 ```text
 ND-DSH desktop UI
         |
+        +--> General workspace
+        +--> Coding workspace
+        |
         v
-ND company / project / role / agent / task control plane
+ND context / company / project / role / agent / task control plane
+        |
+        +--> ND Extensions / plugins / skills / workflows
+        |
+        +--> ND built-in browser + optional Browser Companion
         |
         +--> ND provider routes
         |      +--> DeepSeek compatibility route
@@ -207,17 +274,27 @@ Review the resulting runtime/config compatibility against the ND overlay and ada
 
 ## Project status
 
-**ND-DSH is a Developer Preview / Private Beta.** Supervised source-build and staged-runtime workflows are available, but a signed public installer, installed-app coverage, and a broad compatibility guarantee are still pending; expect breaking changes.
+**ND-DSH is a Developer Preview / Private Beta.** The current private artifact is a local Windows portable build, `ND-DSH-0.1.1-private-beta-x64.exe`. It is not a signed public installer, and there is no update channel.
 
-What exists today is a real running slice: the app runs on actual desktop/runtime state with no production fallback to mock companies, fake sessions, fake workspaces, or a localhost demo page, and the renderer fails closed if its trusted desktop bridges are missing. As of 2026-09-24 every locally-runnable gate is green on the current tree: repository verification, typecheck, 841 unit tests, Rust `core:test`, the full Playwright sweep, a real-user production E2E journey across companies/parallel modes/restart, a portable Windows build with packaged runtime smoke and a forced-core-crash cleanup proof, and benchmark contract/budget checks against the committed baseline. Release validation that needs a Windows CI runner is explicitly tracked as [blocked-0004](docs/tasks/blocked-0004-windows-release-validation.md).
+Read these three documents, in this order:
 
-A **Public Beta** still requires the remaining P0 gates — restored CI with runner-attested release evidence, signed installers with an update channel, a clean-machine offline runtime proof, installed-app E2E against the packaged artifact, and the real-Chrome companion smoke. The ordered checklist lives in [`docs/plan/beta-release-readiness.md`](docs/plan/beta-release-readiness.md); normalized action metadata for policy enforcement beyond Harness approval frames remains the pre-GA gate.
+| Question | Document |
+| --- | --- |
+| What does this private build actually ship? | [`docs/architecture.md`](docs/architecture.md) |
+| What is the full product, including gaps? | [`docs/prd-full.md`](docs/prd-full.md) |
+| What passed, what failed, and what is still missing? | [`docs/plan/release-0.0.1-checklist.md`](docs/plan/release-0.0.1-checklist.md) |
+
+The app runs on real desktop state and fails closed when its trusted bridges are missing. On 2026-09-29, unit tests passed (1013), the Playwright suite had no failing spec, and a portable build plus packaged smoke passed for `0.1.0`. The same day's live-model journey did not finish its first chat turn, so that loop is not claimed green on this tree. Runner-attested Windows CI remains [blocked-0004](docs/tasks/blocked-0004-windows-release-validation.md).
+
+A **Public Beta** still requires restored CI, signed installers with an update channel, a clean-machine install, installed-app E2E, and the real-Chrome companion smoke. The ordered plan is [`docs/plan/beta-release-readiness.md`](docs/plan/beta-release-readiness.md). The area-by-area gate definitions stay in [`docs/plan/beta-release-gate.md`](docs/plan/beta-release-gate.md); treat the checklist above as the newer pass/fail record.
 
 ## What we ship and what's planned
 
 | Area | Status | Detail |
 | --- | --- | --- |
-| Desktop shell | 🚢 Shipped | Secure Electron/React app with one canonical visible browser pane; renderer fails closed without trusted bridges |
+| Desktop shell | 🚢 Shipped | Secure Electron/React desktop; renderer fails closed without trusted bridges |
+| General / Coding workspace profiles | 🧪 Beta | Two human-facing profiles over the same ND identity, context, agent and execution state; switching profiles is presentation-only |
+| ND Extensions / Home / command registry | 🧪 Beta | Manifest-governed Personal/Company/Project contributions, launcher commands, typed views and narrow native host capabilities; human validation remains |
 | Model routing | 🚢 Shipped | Provider-neutral routes: DeepSeek, OpenAI-compatible, Responses-compatible, Anthropic-compatible |
 | Provider credentials | 🚢 Shipped | OS-backed encrypted storage when available; write-only from the UI (replace/clear, never read back) |
 | Organization state | 🚢 Shipped | Multiple companies/projects with scoped teams, roles, AI employees, goals, milestones, tasks, memory, policies, run receipts and coordination events |
@@ -226,10 +303,11 @@ A **Public Beta** still requires the remaining P0 gates — restored CI with run
 | Coding engines | 🚢 Shipped | ND Harness; direct Codex, ZCode, Antigravity, Pi, Cursor, Claude Code; installed OpenCode/Goose/JCode/Hermes adapters; delegated Codex fallback |
 | Source Control | 🚢 Shipped | Built-in Git panel (status groups, stage/commit, diffs, branches, fetch/pull/push) derived from microsoft/vscode extensions/git (MIT) — see [`docs/source-control.md`](docs/source-control.md) |
 | Rust core runtime | 🚢 Shipped | Single production runtime `nd-core` (Rust sidecar): runtime permits, process/PTY lifecycle, durable effect journal with restart replay, decision-kernel contract — organization truth stays ND/TypeScript-owned |
-| Unified browser platform | 🚢 Shipped | Built-in multi-tab browser (tabs, history, downloads, credential mediation, extension manager, trusted leases/policy) + Browser Companion into the user's real Chrome profile, one BrowserTarget/router contract across both |
+| Unified browser platform | 🚢 Shipped | ND built-in multi-tab browser is the primary target; Browser Companion is an optional explicit external Chrome/Chromium target behind the same governed BrowserTarget/router contract |
+| In-app browser extension runtime | 🧪 Beta | Extensions load into the ND-owned browser session with in-app toolbar/action popups; broader compatibility is evidence-gated and never falls back to external Chrome |
 | ND Pencil | 🚢 Shipped | Native Freeform design surface (bundled `resources/nd-pencil`, sandboxed child view) editing the active project's real source — see [`docs/nd-pencil.md`](docs/nd-pencil.md) |
 | Policy gate | 🚢 Shipped | Main-process DENY/ALLOW/ASK enforcement for approval-bearing organization runs |
-| Packaging & installers | 🛠 Planned | Portable Windows build with bundled runtime (ND Core, Harness closure, ND Pencil, agent-browser) verified locally; signed/notarized installers, an update channel, and clean-machine offline install are still pending |
+| Packaging & installers | 🧪 Beta | Private Windows portable `0.1.1` with bundled ND Core, Harness, ND Pencil, and agent-browser. Signed installers, an update channel, and a clean-machine install are still pending |
 | Codex onboarding | 🛠 Planned | Native authentication and health checks in first-run onboarding |
 | More execution providers | 🛠 Planned | Additional local/offline and remote/cloud workers behind the same ND task/workspace/evidence contract |
 | Broader company templates | 🛠 Planned | Non-coding business roles once the software-company loop is reliable |
@@ -238,15 +316,17 @@ A **Public Beta** still requires the remaining P0 gates — restored CI with run
 
 The full, ordered roadmap lives in [`docs/roadmap.md`](docs/roadmap.md), and the complete feature inventory / product requirements for contributors live in [`docs/prd-full.md`](docs/prd-full.md). Summary:
 
-1. **Shipped foundation** — the coding-first vertical slice above, on real state.
-2. **Public Beta P0** — runtime distribution, installers, installed-app E2E, onboarding.
-3. **After the beta** — more engine adapters, broader action metadata for policy, business-company templates.
+1. **Shipped foundation** — real company/project/task execution, coding engines, Rust core, built-in browser baseline, source control and design surface.
+2. **Current beta expansion** — General/Coding workspace profiles, ND Extensions/Home, shared command registry, governed native capabilities and first-class in-app browser extensions.
+3. **Public Beta P0** — runtime distribution, signed installers, installed-app E2E, onboarding and runner-attested release evidence.
+4. **After the beta** — more engine adapters, broader action metadata for policy, cloud/sync options and broader company templates.
 
 ## Security boundaries
 
 - Renderer: context isolation on, Node integration off, sandbox on.
-- Browser pane: isolated Electron `WebContentsView`; permissions denied by default.
-- Browser automation: attaches to the exact visible pane through loopback CDP; no hidden second browser.
+- Built-in browser: ND-owned persistent Chromium session composed of sandboxed Electron `WebContentsView` tabs; site permissions deny by default.
+- Browser extensions: supported packages load into the same ND browser session. Extension action popups stay inside the ND window; built-in extension execution never silently falls back to external Chrome.
+- Browser automation: attaches to the exact visible ND tab through loopback CDP; no hidden second browser. Browser Companion is an explicit optional target, not the built-in runtime.
 - ND Pencil: sandboxed, context-isolated child view; the managed engine binds to loopback only with a per-instance token/allowed-origin contract, denies popups/permissions, and blocks upstream authentication, collaboration, and built-in AI routes.
 - IPC: main-frame sender validation and narrow contracts.
 - Workspace: path containment and symlink protections.
@@ -264,7 +344,9 @@ src/main/                 Electron main process and ND services
 src/main/organization/    AI company durable state, orchestration, policy gate
 src/main/engines/         coding-engine catalog and employee assignments
 src/main/harness/         primary Harness adapter
-src/main/browser/         visible browser + agent-browser integration
+src/main/browser/         ND built-in Chromium tabs/profile/extension runtime + agent-browser integration
+src/main/browser-platform/ unified BrowserTarget routing, policy, credentials and extension management
+src/main/extensions/      ND extension packages, lifecycle and trusted invocation broker
 src/preload/              trusted renderer bridge
 src/renderer/             ND product UI
 src/shared/               cross-process contracts
@@ -282,4 +364,4 @@ Released under the **MIT License** — see [`LICENSE`](LICENSE). DeepSeek Harnes
 
 ---
 
-> **ND-DSH** — Company team first. Built for devs, by real devs. Any CLI engine: Codex, DeepSeek Harness, and many more. · *Developer Preview / Private Beta.* · [Roadmap](docs/roadmap.md) · MIT License
+> **ND-DSH** — General + Coding workspaces on one governed local-first AI platform. Replaceable models and coding engines. · *Developer Preview / Private Beta.* · [Architecture](docs/architecture.md) · [Full PRD](docs/prd-full.md) · [Release checklist](docs/plan/release-0.0.1-checklist.md) · [Roadmap](docs/roadmap.md) · MIT License

@@ -1,11 +1,12 @@
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { CodingEngineRegistry } from '../src/main/engines/coding-engine-registry.js'
 import { CapabilityAssignmentStore } from '../src/main/capabilities/capability-assignment-store.js'
 import { CapabilityRegistry, type CapabilityBuiltinProbes, type CapabilitySetupAdapters } from '../src/main/capabilities/capability-registry.js'
 import { CapabilityStatusStore } from '../src/main/capabilities/capability-status-store.js'
+import { createEngineCliSetupAdapters, REVIEWED_ENGINE_PACKAGES } from '../src/main/capabilities/engine-cli-setup.js'
 import type { CodingEngineDescriptor } from '../src/shared/contracts.js'
 import {
   DEFAULT_CAPABILITY_PROVIDER,
@@ -19,7 +20,11 @@ import {
   ND_WORKSPACE_CONTEXT_ID,
   OPENVIKING_MEMORY_ID,
 } from '../src/shared/capabilities.js'
-import { buildCodingEngineCatalog } from '../src/shared/coding-engines.js'
+import { buildCodingEngineCatalog, ANTIGRAVITY_ENGINE_ID, PI_CODING_ENGINE_ID, ZCODE_CLI_ENGINE_ID } from '../src/shared/coding-engines.js'
+
+vi.mock('electron', () => ({
+  app: { getPath: () => join(tmpdir(), 'nd-dsh-capability-registry-userdata') },
+}))
 
 /** Extra available engine so role and team fallbacks can use distinct usable providers. */
 const TEST_ENGINE: CodingEngineDescriptor = {
@@ -53,13 +58,14 @@ async function registryFixture(
   builtinProbes: CapabilityBuiltinProbes = {},
   extraEngines: CodingEngineDescriptor[] = [],
   setupAdapters: CapabilitySetupAdapters = {},
+  piCodingReady = false,
 ): Promise<RegistryFixture> {
   const dir = await mkdtemp(join(tmpdir(), 'nd-dsh-capability-registry-'))
   const assignments = new CapabilityAssignmentStore(join(dir, 'capability-assignments.json'))
   const statusPath = join(dir, 'capability-statuses.json')
   const statuses = new CapabilityStatusStore(statusPath)
   const catalog = [
-    ...buildCodingEngineCatalog({ harnessReady: true, codexReady: false, codexCliReady: true, antigravityReady: false, zcodeCliReady: false, piCodingReady: false, cursorCliReady: false, claudeCodeCliReady: false }),
+    ...buildCodingEngineCatalog({ harnessReady: true, codexReady: false, codexCliReady: true, antigravityReady: false, zcodeCliReady: false, piCodingReady, cursorCliReady: false, claudeCodeCliReady: false }),
     ...extraEngines,
   ]
   const engines: Pick<CodingEngineRegistry, 'list' | 'assign'> = {
@@ -147,6 +153,43 @@ describe('CapabilityRegistry', () => {
     }
     expect(byId.get(ND_CODEX_DELEGATED_CAPABILITY_ID)?.available).toBe(false)
     expect(byId.get(ND_CODEX_CLI_CAPABILITY_ID)?.available).toBe(true)
+  })
+
+  it('threads third-party install guidance through engine capabilities only', async () => {
+    const { registry } = await registryFixture()
+    const byId = new Map(registry.list().map((item) => [item.id, item]))
+
+    expect(byId.get(ANTIGRAVITY_ENGINE_ID)?.installHelp?.url).toBe('https://antigravity.google')
+    expect(byId.get(PI_CODING_ENGINE_ID)?.installHelp?.command).toBe('npm install -g @mariozechner/pi-coding-agent')
+    // ZCode ships no official source in ND, and the ND-owned engines are never
+    // installed by the end user.
+    expect(byId.get(ZCODE_CLI_ENGINE_ID)?.installHelp).toBeUndefined()
+    expect(byId.get(ND_CODEX_DELEGATED_CAPABILITY_ID)?.installHelp).toBeUndefined()
+    expect(byId.get(ND_HARNESS_CAPABILITY_ID)?.installHelp).toBeUndefined()
+    for (const slot of [OPENVIKING_MEMORY_ID, ND_MEMORY_MCP_ID, ND_SESSION_RECALL_ID, GRAPHIFY_CONTEXT_ID]) {
+      expect(byId.get(slot)?.installHelp).toBeUndefined()
+    }
+  })
+
+  it('derives an approved-package setup for an undetected engine CLI and drops it once detected', async () => {
+    const binRoot = await mkdtemp(join(tmpdir(), 'nd-dsh-engine-cli-bin-'))
+    const adapters = createEngineCliSetupAdapters({ binRoot })
+    const pin = REVIEWED_ENGINE_PACKAGES.find((item) => item.capabilityId === PI_CODING_ENGINE_ID)!
+
+    // The registry validates ND's own pins (exact version, https source,
+    // sha256 integrity) before exposing them as Download & Setup.
+    const undetected = (await registryFixture({}, [], adapters)).registry
+    const undetectedPi = undetected.list().find((item) => item.id === PI_CODING_ENGINE_ID)
+    expect(undetectedPi).toMatchObject({
+      available: true,
+      setup: { mode: 'approved-package', sourceUrl: pin.tarball, version: pin.version, integrity: pin.integrity },
+    })
+    expect(undetectedPi?.unavailableReason).toBeUndefined()
+
+    const detected = (await registryFixture({}, [], adapters, true)).registry
+    const detectedPi = detected.list().find((item) => item.id === PI_CODING_ENGINE_ID)
+    expect(detectedPi?.available).toBe(true)
+    expect(detectedPi?.setup).toBeUndefined()
   })
 
   it('does not expose stale enabled or verification state for an unavailable adapter', async () => {

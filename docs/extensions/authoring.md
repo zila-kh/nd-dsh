@@ -17,8 +17,9 @@ and the broker remains the execution boundary.
 
 ## 1. Manifest
 
-Start from [`examples/nd-extension-journal`](../examples/nd-extension-journal)
-and the JSON Schema at [`schema/nd-extension.schema.json`](../schema/nd-extension.schema.json).
+Start from [`examples/extension-counter/nd-extension.example.json`](../../examples/extension-counter/nd-extension.example.json)
+and the JSON Schema at [`schema/nd-extension.schema.json`](../../schema/nd-extension.schema.json).
+The older `examples/nd-extension-journal` folder is not in this tree.
 
 ```json
 {
@@ -142,8 +143,8 @@ broker with the same authorization checks.
 
 `Daily Essentials`, `Wallpaper Manager`, and `Project Workflow` ship with ND and
 use exactly these contracts. Wallpaper Manager is the first native-host proving
-package: it is Personal-only, permission-scoped, and uses the same manifest path
-as the user-authored example in `examples/nd-extension-wallpaper`. Validate the
+package: it is Personal-only and permission-scoped. The separate
+`examples/nd-extension-wallpaper` sample is not in this tree. Validate the
 built-ins any time with:
 
 ```bash

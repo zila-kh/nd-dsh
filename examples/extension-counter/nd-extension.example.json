@@ -1,0 +1,19 @@
+{
+  "id": "example-counter-mcp",
+  "name": "Example Counter MCP",
+  "description": "Zero-dependency MCP stdio example routed by ND across Harness and shell-capable coding engines.",
+  "surface": "mcp",
+  "version": "1.0.0",
+  "enabled": false,
+  "instructions": "Use the routed counter_get, counter_add, and counter_reset tools. Reset, add 3, add 4, and verify the final value is 7.",
+  "runtime": {
+    "kind": "mcp-stdio",
+    "command": "node",
+    "args": [
+      "examples/extension-counter/mcp-server.mjs"
+    ],
+    "env": {}
+  },
+  "engineRoutes": [],
+  "providerRoutes": []
+}

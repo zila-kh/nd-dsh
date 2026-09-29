@@ -23,6 +23,13 @@ const rendererErrors: string[] = []
 
 test.beforeAll(async () => {
   launched = await launchApp()
+  // The OS clamps the window to the host display, which would make the pane
+  // measurements below depend on the machine running the suite. Pin the app's
+  // own default desktop size so the shipped layout is what gets asserted.
+  await launched.app.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0]?.setSize(1640, 980)
+  })
+  await expect.poll(() => launched.page.evaluate(() => window.innerWidth)).toBe(1640)
   launched.page.on('pageerror', (error) => rendererErrors.push(`pageerror: ${error.message}`))
   launched.page.on('console', (message) => {
     if (message.type() === 'error') rendererErrors.push(`console: ${message.text()}`)

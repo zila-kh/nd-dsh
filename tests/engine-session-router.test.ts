@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { EngineSessionRouter, isRestorableBrowserUrl } from '../src/main/engines/engine-session-router.js'
 import type { WorkspaceState } from '../src/shared/contracts.js'
 import { ND_WORKSPACE_CONTEXT_MARKER } from '../src/shared/workspace-context.js'
+import { ND_NATIVE_ENGINE_ID } from '../src/shared/coding-engines.js'
+import { ND_NATIVE_PRIVATE_SELECTION_ENV } from '../src/main/engines/nd-native/native-selection-gate.js'
 
 const workspaceState: WorkspaceState = {
   root: 'C:/projects/parent/examples',
@@ -80,6 +82,54 @@ describe('engine route admission', () => {
     await expect(router.createSession('missing-engine')).rejects.toThrow(/Unknown coding engine/)
     expect(harness.run).not.toHaveBeenCalled()
     expect(harness.gatewayRpc).not.toHaveBeenCalled()
+  })
+})
+
+describe('ND Agent session ownership', () => {
+  it('requires both the private flag and a ready native runtime for new sessions', async () => {
+    const previous = process.env[ND_NATIVE_PRIVATE_SELECTION_ENV]
+    const { harness, workspace, direct } = fixture()
+    let ready = false
+    const native = {
+      ...direct,
+      ready: () => ready,
+      start: vi.fn(async () => {}),
+      ownsSession: () => false,
+      listSessions: () => [],
+    }
+    const router = new EngineSessionRouter(harness as never, direct as never, workspace as never,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, native as never)
+    try {
+      delete process.env[ND_NATIVE_PRIVATE_SELECTION_ENV]
+      await expect(router.createSession(ND_NATIVE_ENGINE_ID)).rejects.toThrow(/private/i)
+
+      process.env[ND_NATIVE_PRIVATE_SELECTION_ENV] = '1'
+      await expect(router.createSession(ND_NATIVE_ENGINE_ID)).rejects.toThrow(/runtime is unavailable/i)
+
+      ready = true
+      await expect(router.createSession(ND_NATIVE_ENGINE_ID)).resolves.toMatchObject({ engineId: ND_NATIVE_ENGINE_ID })
+    } finally {
+      if (previous === undefined) delete process.env[ND_NATIVE_PRIVATE_SELECTION_ENV]
+      else process.env[ND_NATIVE_PRIVATE_SELECTION_ENV] = previous
+    }
+  })
+
+  it('resumes an existing native session with its original engine despite a different requested engine', async () => {
+    const { harness, workspace, direct } = fixture()
+    const native = {
+      ...direct,
+      start: vi.fn(async () => {}),
+      run: vi.fn(async () => ({ sessionId: 'nd-native-legacy' })),
+      ownsSession: (id: string) => id === 'nd-native-legacy',
+      listSessions: () => [{ sessionId: 'nd-native-legacy', engineId: 'nd-native', cwd: workspaceState.root, title: 'Old native chat', createdAt: 1, updatedAt: 2, running: false }],
+      transcript: async (sessionId: string) => ({ sessionId, engineId: 'nd-native', events: [] }),
+    }
+    const router = new EngineSessionRouter(harness as never, direct as never, workspace as never,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, native as never)
+    await router.run('continue', { sessionId: 'nd-native-legacy', engineId: 'nd-harness' })
+    expect(native.run).toHaveBeenCalledWith(expect.stringContaining('continue'), { sessionId: 'nd-native-legacy', cwd: workspaceState.root })
+    expect(harness.run).not.toHaveBeenCalled()
+    await expect(router.transcript('nd-native-legacy')).resolves.toMatchObject({ engineId: 'nd-native' })
   })
 })
 

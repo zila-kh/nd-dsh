@@ -458,5 +458,6 @@ function engineCapability(engine: CodingEngineDescriptor): CapabilityDescriptor 
     available: engine.available,
     description: engine.description,
     ...(engine.unavailableReason !== undefined ? { unavailableReason: engine.unavailableReason } : {}),
+    ...(engine.installHelp !== undefined ? { installHelp: engine.installHelp } : {}),
   }
 }

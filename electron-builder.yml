@@ -20,6 +20,8 @@ extraResources:
     to: THIRD_PARTY_NOTICES.nd-dsh.md
   - from: .release/nd-core
     to: nd-core
+  - from: .release/nd-agent
+    to: nd-agent
   - from: .release/nd-browser-host
     to: nd-browser-host
   - from: extensions/browser-companion
@@ -28,6 +30,10 @@ extraResources:
     to: nd-extensions/quit-process
   - from: .release/harness
     to: vendor/deepseek-harness
+  - from: .release/harness/node_modules
+    to: vendor/deepseek-harness/node_modules
+    filter:
+      - "**/*"
   - from: configs/dsh
     to: configs/dsh
   - from: scripts

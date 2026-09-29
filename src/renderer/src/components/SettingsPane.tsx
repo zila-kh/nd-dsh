@@ -43,6 +43,8 @@ interface SettingsPaneProps {
   onSelectSubTab?: (subTab: GeneralSubTab) => void
   capabilitySubTab?: CapabilitySubTab
   onSelectCapabilitySubTab?: (subTab: CapabilitySubTab) => void
+  /** Opens an existing chat session in the Agent workbench. */
+  onOpenSession?(sessionId: string): void
   /** ND extension packages management, rendered above the agent-capability catalog. */
   extensionsExtra?: React.ReactNode
 }
@@ -79,6 +81,7 @@ export function SettingsPane({
   onSelectSubTab,
   capabilitySubTab,
   onSelectCapabilitySubTab,
+  onOpenSession,
   extensionsExtra,
 }: SettingsPaneProps) {
   const [internalSubTab, setInternalSubTab] = useState<GeneralSubTab>(generalSubTabFromLocation)
@@ -183,7 +186,7 @@ export function SettingsPane({
         ) : tab === 'engines' ? (
           <EngineSettings onError={onError} />
         ) : tab === 'presets' ? (
-          <PresetSettings onError={onError} />
+          <PresetSettings onError={onError} {...(onOpenSession ? { onOpenSession } : {})} />
         ) : tab === 'appearance' ? (
           <div className="min-h-0 overflow-auto px-[26px] pb-[42px] pt-1.5">
             <AppearanceSettings theme={theme} onSelectTheme={onSelectTheme} />

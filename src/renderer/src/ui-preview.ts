@@ -982,7 +982,7 @@ function gatewayPreview(method: string) {
   if (method === 'session.create') return Promise.resolve({ ok: true, value: { sessionId: `preview-${Date.now()}` } })
   if (method === 'session.models') return Promise.resolve({ ok: true, value: { current: { provider: 'openai-prod', model: 'gpt-5.6', reasoningEffort: 'high' }, routable: true, groups: [{ id: 'openai-prod', name: 'OpenAI', models: [{ id: 'gpt-5.6', name: 'GPT-5.6', reasoning: { efforts: [{ id: 'medium', name: 'Medium' }, { id: 'high', name: 'High' }], defaultEffort: 'high' } }] }], failures: [] } })
   if (method === 'skill.list') return Promise.resolve({ ok: true, value: { skills: [{ name: 'live-browser', description: 'Inspect and verify the visible application.' }, { name: 'product-review', description: 'Review product changes against acceptance criteria.' }] } })
-  if (method === 'agentPreset.list') return Promise.resolve({ ok: true, value: { presets: [{ id: 'nd-dsh', name: 'ND-DSH', description: 'Full product delivery agent', trust: 'project', isDefault: true }, { id: 'code', name: 'Code', description: 'Plan, tool, check coding mode', trust: 'system' }, { id: 'cordis', name: 'Creator', description: 'Create and refine agent presets', trust: 'system' }] } })
+  if (method === 'agentPresets.list') return Promise.resolve({ ok: true, value: { presets: [{ id: 'nd-dsh', name: 'ND-DSH', description: 'Full product delivery agent', trust: 'project', isDefault: true }, { id: 'code', name: 'Code', description: 'Plan, tool, check coding mode', trust: 'system' }, { id: 'cordis', name: 'Creator', description: 'Create and refine agent presets', trust: 'system' }] } })
   return Promise.resolve({ ok: true, value: {} })
 }
 

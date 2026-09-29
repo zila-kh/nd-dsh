@@ -1,4 +1,5 @@
-import { CODEX_CLI_ENGINE_ID, CODEX_ENGINE_ID, ND_HARNESS_ENGINE_ID } from './coding-engines.js'
+import { CLAUDE_CODE_CLI_ENGINE_ID, CODEX_CLI_ENGINE_ID, CODEX_ENGINE_ID, ND_HARNESS_ENGINE_ID, PI_CODING_ENGINE_ID } from './coding-engines.js'
+import type { CodingEngineInstallHelp } from './contracts.js'
 
 /**
  * Pluggable capability layers. Every kind ships an ND built-in today and may
@@ -29,6 +30,11 @@ export interface CapabilityDescriptor {
    * arbitrary download URL supplied at runtime.
    */
   setup?: CapabilitySetupDescriptor
+  /**
+   * End-user install guidance for third-party CLIs. Unlike `setup`, this is
+   * advisory only: ND never installs the external product.
+   */
+  installHelp?: CodingEngineInstallHelp
 }
 
 export interface CapabilitySetupField {
@@ -120,6 +126,8 @@ export interface CapabilityProviderStatus {
 export const ND_HARNESS_CAPABILITY_ID = ND_HARNESS_ENGINE_ID
 export const ND_CODEX_DELEGATED_CAPABILITY_ID = CODEX_ENGINE_ID
 export const ND_CODEX_CLI_CAPABILITY_ID = CODEX_CLI_ENGINE_ID
+export const ND_PI_CODING_CAPABILITY_ID = PI_CODING_ENGINE_ID
+export const ND_CLAUDE_CODE_CAPABILITY_ID = CLAUDE_CODE_CLI_ENGINE_ID
 export const ND_ORG_MEMORY_ID = 'nd-org-memory'
 export const ND_WORKSPACE_CONTEXT_ID = 'nd-workspace-context'
 export const OPENVIKING_MEMORY_ID = 'openviking-memory'

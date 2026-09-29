@@ -1,6 +1,8 @@
 # Beta Hardening v2
 
-Status: implementation branch ready for CI/QA
+> Superseded. This branch plan is not the current release status. Use [release-0.0.1-checklist.md](release-0.0.1-checklist.md).
+
+Status: historical — branch `feat/beta-hardening-v2`
 Branch: `feat/beta-hardening-v2`
 Baseline: `main` at `8864e4698830981e36291a92fb976c657eacc61d`
 

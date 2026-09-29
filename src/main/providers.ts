@@ -3,7 +3,7 @@ import { app, safeStorage } from 'electron'
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { ModelProvider, ProviderModel, ProviderPingResult } from '../shared/contracts.js'
-import { buildProviderRuntime, DIRECT_DEEPSEEK_ROUTE, isDynamicSessionHeader, isOpenCodeEndpoint, type ProviderRuntimeConfig } from './provider-runtime.js'
+import { buildProviderRuntime, DIRECT_DEEPSEEK_ROUTE, isDynamicSessionHeader, isOpenCodeEndpoint, protocolFromApiFormat, type ProviderRuntimeConfig } from './provider-runtime.js'
 import { pingProvider, probeProviderCompletion } from './provider-ping.js'
 import { sanitizeProviderModel } from '../shared/provider-models.js'
 
@@ -23,6 +23,16 @@ interface ProviderSecretsFile {
 interface ProviderReadResult {
   providers: ModelProvider[]
   hadPlaintextSecrets: boolean
+}
+
+/** Credential-bearing turn configuration; pass only over the supervised agent pipe. */
+export interface NativeAgentModelRoute {
+  provider: string
+  model: string
+  baseUrl: string
+  apiKey: string
+  format: 'openai-completions' | 'openai-responses' | 'anthropic-messages' | 'deepseek'
+  headers: Record<string, string>
 }
 
 function defaultProvider(): ModelProvider {
@@ -266,6 +276,31 @@ export class ProviderStore {
   /** Trusted main-process summary used by runtime status computation. */
   enabled(): ModelProvider | undefined {
     return cloneProviders(this.providers).find((provider) => provider.enabled)
+  }
+
+  nativeAgentRoute(providerId?: string, modelId?: string): NativeAgentModelRoute {
+    const selected = providerId?.trim()
+    const provider = this.providers.find((item) => item.enabled && (item.id === selected || (selected === DIRECT_DEEPSEEK_ROUTE && item.id === 'deepseek')))
+      ?? (!selected ? this.providers.find((item) => item.enabled) : undefined)
+    if (!provider) throw new Error(selected ? `ND provider ${selected} is not enabled` : 'Enable a model provider in ND Settings before running ND Agent')
+    const model = modelId?.trim() || provider.models.find((item) => item.id.trim())?.id.trim()
+    if (!model) throw new Error(`ND provider ${provider.name} has no model configured`)
+    if (!provider.models.some((item) => item.id === model)) throw new Error(`Model ${model} is not configured for ND provider ${provider.name}`)
+    const format = provider.id === 'deepseek' ? 'deepseek' : protocolFromApiFormat(provider.apiFormat)
+    if (!format) throw new Error(`ND provider ${provider.name} needs an explicit API format for the native agent`)
+    const headers: Record<string, string> = {}
+    for (const [key, value] of Object.entries(provider.headers ?? {})) {
+      if (isDynamicSessionHeader(value)) continue
+      headers[key] = value
+    }
+    return {
+      provider: provider.id,
+      model,
+      baseUrl: provider.baseUrl,
+      apiKey: provider.apiKey,
+      format,
+      headers,
+    }
   }
 
   private readProviders(): ProviderReadResult {

@@ -72,7 +72,13 @@ export class AgentBrowserClient {
     this.binary = this.resolveBinary(projectRoot)
     this.entryPath = resolve(
       process.env.ND_DSH_AGENT_BROWSER_ENTRY
-        ?? join(projectRoot, 'node_modules', 'agent-browser', 'bin', 'agent-browser.js'),
+        ?? join(
+          app.isPackaged ? process.resourcesPath : projectRoot,
+          'node_modules',
+          'agent-browser',
+          'bin',
+          'agent-browser.js',
+        ),
     )
     this.electronNodeMode = app.isPackaged && !process.env.ND_DSH_AGENT_BROWSER_BIN?.trim()
   }

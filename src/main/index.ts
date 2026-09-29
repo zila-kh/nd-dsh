@@ -1,5 +1,5 @@
 import 'dotenv/config'
-import { app, BrowserWindow, crashReporter, dialog, globalShortcut, Menu, type MenuItemConstructorOptions } from 'electron'
+import { app, BrowserWindow, crashReporter, dialog, globalShortcut, Menu, screen, type MenuItemConstructorOptions } from 'electron'
 import { createServer } from 'node:net'
 import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
@@ -23,6 +23,7 @@ import { DEFAULT_BROWSER_URL } from './browser/browser-url.js'
 import { CapabilityAssignmentStore } from './capabilities/capability-assignment-store.js'
 import { CapabilityRegistry } from './capabilities/capability-registry.js'
 import { CapabilityStatusStore } from './capabilities/capability-status-store.js'
+import { createEngineCliSetupAdapters } from './capabilities/engine-cli-setup.js'
 import { createHarnessSourceSetupAdapters } from './capabilities/harness-runtime-setup.js'
 import { ExternalElementStage, RecentPickStore } from './capture/external-inspect.js'
 import { CoreClient } from './core/core-client.js'
@@ -42,6 +43,8 @@ import { CodexCliEngine } from './engines/codex/codex-cli-engine.js'
 import { CursorCliEngine } from './engines/cursor/cursor-cli-engine.js'
 import { CodingEngineRegistry } from './engines/coding-engine-registry.js'
 import { EngineSessionRouter } from './engines/engine-session-router.js'
+import { NdNativeEngine } from './engines/nd-native/nd-native-engine.js'
+import { NdNativeToolBroker } from './engines/nd-native/nd-native-tool-broker.js'
 import { PiCodingEngine } from './engines/pi/pi-coding-engine.js'
 import { ZcodeCliEngine } from './engines/zcode/zcode-cli-engine.js'
 import { GitService } from './git/git-service.js'
@@ -196,11 +199,15 @@ async function createWindow(cdpPort: number): Promise<void> {
   const usageLedger = new UsageLedger(join(userData, 'usage-ledger.jsonl'))
   const isMac = process.platform === 'darwin'
 
+  // On displays narrower than the intended 1640×980 the window would hang off
+  // the screen and hide the right-hand surfaces. Clamp the default and the
+  // minimum to the primary work area so the whole shell stays reachable.
+  const { workArea } = screen.getPrimaryDisplay()
   const window = new BrowserWindow({
-    width: 1640,
-    height: 980,
-    minWidth: 1180,
-    minHeight: 720,
+    width: Math.min(1640, workArea.width),
+    height: Math.min(980, workArea.height),
+    minWidth: Math.min(1180, workArea.width),
+    minHeight: Math.min(720, workArea.height),
     show: false,
     backgroundColor: theme.windowBackgroundColor(),
     autoHideMenuBar: true,
@@ -229,7 +236,9 @@ async function createWindow(cdpPort: number): Promise<void> {
   activeTerminalManager = terminalManager
 
   const workspaces = new WorkspaceRegistry(join(userData, 'workspaces.json'))
-  await workspaces.ensureActive(workspace.state().root)
+  // Only a folder the user already saved becomes the active entry. The boot root
+  // itself is never pinned, so ND never presents an implicit default project.
+  await workspaces.activateSaved(workspace.state().root)
 
   // The window's own origin is reserved: neither the project runtime nor a
   // browser-pane navigation may load ND's renderer into ND's browser view.
@@ -323,12 +332,32 @@ async function createWindow(cdpPort: number): Promise<void> {
   activeCursorEngine = cursorEngine
   const claudeEngine = new ClaudeCodeCliEngine({ log: (line) => console.log(line), spawnProcess: engineSpawn })
   activeClaudeEngine = claudeEngine
+  let nativeAgent: NdNativeEngine
+  let taskWorktrees: TaskWorktreeManager | undefined
+  const nativeBroker = new NdNativeToolBroker({
+    core,
+    browser: browserPlatform,
+    workspace,
+    ownsWorktree: (cwd) => taskWorktrees?.ownsRoot(cwd) === true,
+    engine: () => nativeAgent,
+  })
+  await nativeBroker.reconcile().then((count) => {
+    if (count > 0) console.warn(`Marked ${count} interrupted ND Agent tool effect(s) uncertain; none will be replayed.`)
+  }).catch((error) => {
+    console.warn('ND Agent effect reconciliation is unavailable:', error instanceof Error ? error.message : String(error))
+  })
+  nativeAgent = new NdNativeEngine({
+    providers,
+    dataDir: join(userData, 'nd-agent-sessions'),
+    tool: (request) => nativeBroker.call(request),
+    spawnProcess: unscopedCoreSpawn,
+  })
   const engineRouter = new EngineSessionRouter(harness, codexEngine, workspace, antigravityEngine, {
     browser,
     git,
     storePath: join(userData, 'chatgpt-web-sessions.json'),
     log: (line) => console.warn(line),
-  }, zcodeEngine, piEngine, cursorEngine, claudeEngine, engineSpawn, directEngineJournal)
+  }, zcodeEngine, piEngine, cursorEngine, claudeEngine, engineSpawn, directEngineJournal, nativeAgent)
   activeEngineRouter = engineRouter
   engineRouter.setBrowserAccessProvider(browserPlatform)
   const projectWorkspace = new ProjectWorkspaceCoordinator(
@@ -353,7 +382,10 @@ async function createWindow(cdpPort: number): Promise<void> {
     list: () => workerAssignableCodingEngines(engines.list()),
     assign: (agentId, engineId) => engines.assign(agentId, engineId),
   }
-  const capabilitySetupAdapters = createHarnessSourceSetupAdapters()
+  // Approved-package setup for engine CLIs published on npm (Pi, Claude Code)
+  // joins the harness source-runtime adapters; each engine id only gains a
+  // setup block while its binary probe fails.
+  const capabilitySetupAdapters = { ...createHarnessSourceSetupAdapters(), ...createEngineCliSetupAdapters() }
   const capabilities = new CapabilityRegistry(capabilityAssignments, workerEngines, capabilityStatuses, {
     [ND_ORG_MEMORY_ID]: async () => { await organizationStore.state() },
     [ND_WORKSPACE_CONTEXT_ID]: async () => {
@@ -380,7 +412,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   const ndPencil = new NdPencilController(window, workspace, projectRoot(), ndPencilPreload)
   await ndPencil.initialize()
   const coreWorktreeGit = createCoreWorktreeGit(core)
-  const taskWorktrees = new TaskWorktreeManager(coreWorktreeGit)
+  taskWorktrees = new TaskWorktreeManager(coreWorktreeGit)
   // Task worktrees are ND's own isolated checkouts for this project, so the
   // engine router admits them by the exact roots ND created — never by a path
   // shape a caller could construct.
@@ -388,11 +420,14 @@ async function createWindow(cdpPort: number): Promise<void> {
   harness.setSessionCwdGuard((cwd) => taskWorktrees.ownsRoot(cwd))
   const decisionSupport = createDecisionSupportFromEnv(process.env, fetch, core)
   const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter, projectRuntime, capabilities, executionCoordinator, taskWorktrees, core, { spawnProcess: unscopedCoreSpawn, stopProcess: stopCoreManagedChildProcess, runGit: coreWorktreeGit }, browserPlatform, decisionSupport)
-  const approvalGate = new OrganizationApprovalGate(organizationStore, harness, core)
+  const approvalGate = new OrganizationApprovalGate(organizationStore, engineRouter, core)
   const qa = new QaService({ spawnProcess: unscopedCoreSpawn, stopProcess: stopCoreManagedChildProcess })
   activeQa = qa
   qa.setProjectRoot(workspace.state().root)
-  const disposeIpc = registerIpc({ window, preloadPath: preload, launcherPopup, browser, dshSurface, engines, engineRouter, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, qa, sessionArchive, usageLedger, capabilities, organizationStore })
+  const disposeIpc = registerIpc({ window, preloadPath: preload, launcherPopup, browser, dshSurface, engines, engineRouter, nativeToolBroker: nativeBroker, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, qa, sessionArchive, usageLedger, capabilities, organizationStore })
+  if (nativeAgent.ready()) void nativeAgent.start().catch((error) => {
+    console.warn('ND Agent private runtime could not initialize:', error instanceof Error ? error.message : String(error))
+  })
   const disposeBrowserCompanionIpc = registerBrowserCompanionIpc(window, browserCompanion)
   const disposeBrowserPlatformIpc = registerBrowserPlatformIpc(window, browserPlatform)
   browserPlatform.setListener((state) => {

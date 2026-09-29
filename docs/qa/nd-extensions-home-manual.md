@@ -1,5 +1,7 @@
 # ND Extensions & ND Home — validation gate
 
+> `examples/nd-extension-journal` is not in this tree. Use [`examples/extension-counter`](../../examples/extension-counter) for a local package sample. Current release status: [release-0.0.1-checklist.md](../plan/release-0.0.1-checklist.md).
+
 Status: implementation complete locally 2026-09-27 (PRD 0006, tasks 0035–0043);
 automated layers recorded below; manual layer pending the operator run.
 Branch: `feat/quick-launcher-capture`

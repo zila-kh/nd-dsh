@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ND Extension Counter Demo</title>
+    <style>
+      :root { font-family: ui-sans-serif, system-ui, sans-serif; color-scheme: light dark; }
+      body { min-height: 100vh; margin: 0; display: grid; place-items: center; background: Canvas; color: CanvasText; }
+      main { width: min(420px, calc(100vw - 32px)); padding: 28px; border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); border-radius: 16px; }
+      h1 { margin: 0 0 8px; font-size: 22px; }
+      p { opacity: .72; line-height: 1.5; }
+      output { display: block; margin: 24px 0; font-size: 64px; font-weight: 700; text-align: center; }
+      .controls { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+      button { min-height: 40px; border-radius: 9px; border: 1px solid color-mix(in srgb, CanvasText 22%, transparent); background: color-mix(in srgb, CanvasText 6%, Canvas); color: inherit; cursor: pointer; }
+      button:focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
+      code { font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Universal Extension Router Demo</h1>
+      <p>One tiny app used to exercise Memory, Subagents, Plugins, MCP, Skills, Commands, and Hooks across ND coding engines.</p>
+      <output id="count" aria-live="polite">0</output>
+      <div class="controls" aria-label="Counter controls">
+        <button id="decrement" type="button">−1</button>
+        <button id="reset" type="button">Reset</button>
+        <button id="increment" type="button">+1</button>
+      </div>
+      <p><code>window.ndCounter.get() / add(n) / reset()</code></p>
+    </main>
+    <script type="module" src="./counter.js"></script>
+  </body>
+</html>

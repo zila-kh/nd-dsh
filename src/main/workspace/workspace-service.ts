@@ -17,7 +17,7 @@ interface SuggestIndexCache {
   entries: WorkspaceSuggestion[]
 }
 
-type WorkspaceContext = Omit<WorkspaceState, 'root' | 'name'>
+type WorkspaceContext = Omit<WorkspaceState, 'root' | 'name' | 'selectedByUser'>
 
 export interface WorkspaceServiceOptions {
   /**
@@ -30,6 +30,12 @@ export interface WorkspaceServiceOptions {
 
 export class WorkspaceService {
   private root: string
+  /**
+   * Whether this root was chosen by the user in this app run. The boot fallback
+   * root is a runtime cwd, not a project: surfaces hide it until the user opens
+   * a folder or selects an organization project for it.
+   */
+  private selectedByUser = false
   private suggestIndex: SuggestIndexCache | null = null
   private context: WorkspaceContext = { binding: 'standalone' }
   private onStateChanged?: ((state: WorkspaceState) => void) | undefined
@@ -46,7 +52,14 @@ export class WorkspaceService {
   }
 
   state(): WorkspaceState {
-    return { root: this.root, name: basename(this.root) || this.root, ...this.context }
+    return {
+      root: this.root,
+      name: basename(this.root) || this.root,
+      ...this.context,
+      // Any organization project binding is an explicit selection; a bare
+      // standalone root only counts once the user opened that folder.
+      selectedByUser: this.selectedByUser || this.context.binding !== 'standalone',
+    }
   }
 
   setStateListener(listener: ((state: WorkspaceState) => void) | undefined): void {
@@ -79,6 +92,7 @@ export class WorkspaceService {
     const selected = result.filePaths[0]
     if (!result.canceled && selected) {
       this.root = resolve(selected)
+      this.selectedByUser = true
       this.emitState()
     }
     return this.state()
@@ -89,6 +103,7 @@ export class WorkspaceService {
     const stats = await fs.stat(candidate)
     if (!stats.isDirectory()) throw new Error('The selected path is not a directory')
     this.root = candidate
+    this.selectedByUser = true
     this.emitState()
     return this.state()
   }

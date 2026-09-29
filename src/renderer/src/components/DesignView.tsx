@@ -26,16 +26,23 @@ import { LucidePenTool, LucideLayout, LucideCode, LucideLayers, LucideSave, Luci
 interface DesignViewProps {
   active: boolean
   workspace: WorkspaceState | null
+  /**
+   * Whether the active root was selected by the user. The boot fallback root is
+   * a runtime cwd, never a project, so design surfaces never label it as one.
+   */
+  workspaceSelected: boolean
   browser: BrowserState | null
   harness: HarnessStatus | null
   onWorkspaceChanged(workspace: WorkspaceState): void
   onAskAgent(prompt: string): void
   onError(message: string): void
+  /** Transient user feedback (toasts) for actions without a dedicated surface. */
+  onNotify?(message: string): void
 }
 
 type DesignSurface = 'live' | 'freeform' | 'templates' | 'library' | 'canvas'
 
-export function DesignView({ active, workspace, browser, harness, onWorkspaceChanged, onAskAgent, onError }: DesignViewProps) {
+export function DesignView({ active, workspace, workspaceSelected, browser, harness, onWorkspaceChanged, onAskAgent, onError, onNotify }: DesignViewProps) {
   const [project, setProject] = useState<DesignProjectState | null>(null)
   const [freeform, setFreeform] = useState<DesignFreeformState | null>(null)
   const [surface, setSurface] = useState<DesignSurface>('live')
@@ -226,7 +233,7 @@ export function DesignView({ active, workspace, browser, harness, onWorkspaceCha
                 ND
               </span>
               <span className="text-xs font-bold text-strong truncate max-w-[160px]">
-                {workspace?.projectName ?? workspace?.name ?? 'Design Mode'}
+                {workspaceSelected ? (workspace?.projectName ?? workspace?.name ?? 'Design Mode') : 'No project'}
               </span>
             </div>
 
@@ -301,10 +308,10 @@ export function DesignView({ active, workspace, browser, harness, onWorkspaceCha
                   <div className="flex flex-col gap-1 border-b border-border-soft p-3">
                     <small className="text-[10px] font-bold tracking-widest text-primary uppercase">Workspace</small>
                     <strong className="truncate text-sm font-semibold text-strong">
-                      {workspace?.projectName ?? workspace?.name ?? 'No project'}
+                      {workspaceSelected ? (workspace?.projectName ?? workspace?.name ?? 'No project') : 'No project'}
                     </strong>
                     <span className="truncate text-xs text-faint">
-                      {project ? projectLabel(project) : workspace?.companyName ?? 'Standalone workspace'}
+                      {project ? projectLabel(project) : workspaceSelected ? (workspace?.companyName ?? 'Standalone workspace') : 'Open a folder or select a project'}
                     </span>
                   </div>
 
@@ -433,7 +440,16 @@ export function DesignView({ active, workspace, browser, harness, onWorkspaceCha
               ) : (
                 <>
                   {surface === 'live' && (
-                    <BrowserPane active={active && surface === 'live'} state={browser} onSnapshot={() => undefined} onError={onError} />
+                    <BrowserPane
+                      active={active && surface === 'live'}
+                      state={browser}
+                      onSnapshot={(result) => {
+                        navigator.clipboard.writeText(result)
+                          .then(() => onNotify?.('Live-app snapshot copied to the clipboard.'))
+                          .catch(() => onNotify?.('Live-app snapshot captured, but copying to the clipboard failed.'))
+                      }}
+                      onError={onError}
+                    />
                   )}
                   {surface === 'freeform' && (
                     <FreeformSurface
