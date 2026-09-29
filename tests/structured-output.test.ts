@@ -64,4 +64,36 @@ describe('splitAssistantSegments', () => {
     expect(segments[1]).toEqual({ kind: 'text', text: 'mid' })
     expect(segments[2]?.kind).toBe('review')
   })
+
+  it('splits a Reasoning preamble before a plan block into its own segment', () => {
+    const plan = {
+      goal: { title: 'Ship beta', description: 'Accept the beta.' },
+      milestones: [{ title: 'M1', description: 'First', tasks: [{ title: 'T1', description: 'Do it' }] }],
+    }
+    const segments = splitAssistantSegments(`**Reasoning.** I verified the gaps before planning.\n\n<nd-dsh-plan>${JSON.stringify(plan)}</nd-dsh-plan>`)
+    expect(segments).toEqual([
+      { kind: 'reasoning', text: 'I verified the gaps before planning.' },
+      { kind: 'plan', plan },
+    ])
+  })
+
+  it('splits a standalone Reasoning paragraph from the answer that follows', () => {
+    const segments = splitAssistantSegments('**Reasoning.** Checked the config first.\n\nHere is the answer.')
+    expect(segments).toEqual([
+      { kind: 'reasoning', text: 'Checked the config first.' },
+      { kind: 'text', text: 'Here is the answer.' },
+    ])
+  })
+
+  it('treats a heading-style label as reasoning', () => {
+    const segments = splitAssistantSegments('## Reasoning\nChecked the logs.')
+    expect(segments).toEqual([
+      { kind: 'reasoning', text: 'Checked the logs.' },
+    ])
+  })
+
+  it('keeps ordinary prose that merely starts with the word Reasoning', () => {
+    const text = 'Reasoning about tradeoffs leads to the following choice.'
+    expect(splitAssistantSegments(text)).toEqual([{ kind: 'text', text }])
+  })
 })

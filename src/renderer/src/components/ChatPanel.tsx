@@ -1764,7 +1764,7 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, workspaceSelec
                 {group.kind === 'tool-group' ? (
                   <ToolGroupView group={group} {...(onOpenFile ? { onOpenFile: feedHandlers.openFile } : {})} />
                 ) : group.kind === 'reasoning-group' ? (
-                  <ReasoningCard text={group.text} />
+                  <ReasoningCard text={group.text} streaming={busy && index === feed.groups.length - 1} className="ml-[30px]" />
                 ) : group.kind === 'context-group' ? (
                   <ContextCard blocks={group.blocks} />
                 ) : (
@@ -2506,6 +2506,11 @@ function ThreadEntryView({ entry, isLastAssistant, retryPrompt, onAnswerApproval
           </span>
           <div className="min-w-0 flex-1 pb-1">
             {segments.map((segment, index) => {
+              if (segment.kind === 'reasoning') {
+                // The card sits above the answer, so it is live only while the
+                // reasoning segment is still the tail of the streamed message.
+                return <ReasoningCard key={index} text={segment.text} streaming={Boolean(entry.streaming) && index === segments.length - 1} />
+              }
               if (segment.kind === 'review') return <ReviewVerdictCard key={index} review={segment.review} />
               if (segment.kind === 'plan') return <PlanSubmittedCard key={index} plan={segment.plan} />
               return <MarkdownLite key={index} text={segment.text} {...(onOpenFile ? { onOpenFile } : {})} {...(onOpenLink ? { onOpenLink } : {})} />
@@ -2736,26 +2741,35 @@ function ContextCard({ blocks }: { blocks: ContextBlock[] }) {
   )
 }
 
-function ReasoningCard({ text }: { text: string }) {
-  const [open, setOpen] = useState(false)
+/**
+ * Reasoning renders like ChatGPT's thinking block: it opens while the model
+ * is still deliberating, collapses to a one-line preview once the answer
+ * starts, and stops auto-toggling as soon as the user takes over.
+ */
+function ReasoningCard({ text, streaming = false, className }: { text: string; streaming?: boolean; className?: string }) {
+  const [open, setOpen] = useState(streaming)
+  const userToggled = useRef(false)
+  useEffect(() => {
+    if (!userToggled.current) setOpen(streaming)
+  }, [streaming])
   const lines = text.split('\n').filter((line) => line.trim())
-  const firstLine = lines[0] ?? ''
+  const preview = (streaming ? lines.at(-1) : lines[0]) ?? ''
   return (
-    <div className="mb-2 ml-[30px]">
+    <div className={cn('mb-2', className)}>
       <button
-        className="flex items-center gap-1.5 rounded-md py-[3px] pl-[5px] pr-2 text-[11px] text-faint transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[11px]"
-        onClick={() => setOpen((v) => !v)}
+        className="flex max-w-full items-center gap-1.5 rounded-md py-[3px] pl-[5px] pr-2 text-left text-[11px] text-faint transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[11px]"
+        aria-expanded={open}
+        onClick={() => { userToggled.current = true; setOpen((value) => !value) }}
       >
-        <BrainIcon className="text-primary/50" />
-        <span className="max-w-[320px] truncate font-medium">{firstLine}</span>
-        <span className="text-[9px] text-fainter">{lines.length > 1 ? `+${lines.length - 1}` : ''}</span>
-        <ChevronDownIcon className={cn('ml-0.5 transition-transform [&]:size-[10px]', open && 'rotate-180')} />
+        <BrainIcon className="shrink-0 text-primary/50" />
+        <span className="shrink-0 font-medium">{streaming ? 'Thinking' : 'Reasoning'}</span>
+        {streaming ? <span className="inline-block animate-pulse-dot">…</span> : null}
+        <span className="min-w-0 max-w-[320px] truncate text-[9.5px] text-fainter">{preview}</span>
+        <ChevronDownIcon className={cn('ml-0.5 shrink-0 transition-transform [&]:size-[10px]', open && 'rotate-180')} />
       </button>
       {open ? (
-        <div className="mt-1 flex flex-col gap-1 border-l-2 border-primary/20 pl-2.5">
-          {lines.map((line, index) => (
-            <div key={index} className="[overflow-wrap:anywhere] font-mono text-[9.5px]/[1.7] text-faint">{line}</div>
-          ))}
+        <div className="mt-1 max-h-[280px] overflow-y-auto rounded-lg border border-border-soft bg-surface-1 px-2.5 py-2">
+          <MarkdownLite text={text.trim() || 'Thinking…'} className="[&_div]:text-soft" />
         </div>
       ) : null}
     </div>
