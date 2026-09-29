@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { BrowserState, HarnessStatus, ThemeMode, ThemeState, WorkspaceState } from '../../../shared/contracts'
 import {
+  BlocksIcon,
   BoxIcon,
   BrainIcon,
   PlugIcon,
@@ -54,7 +55,8 @@ const TABS: { id: SettingsTab; label: string; Icon: typeof SettingsIcon }[] = [
   { id: 'appearance', label: 'Appearance', Icon: SunIcon },
   { id: 'models', label: 'Models', Icon: BrainIcon },
   { id: 'capabilities', label: 'Capabilities', Icon: BoxIcon },
-  { id: 'extensions', label: 'Extensions & plugins', Icon: PuzzleIcon },
+  { id: 'extensions', label: 'Extensions', Icon: PuzzleIcon },
+  { id: 'plugins', label: 'Plugins', Icon: BlocksIcon },
   { id: 'engines', label: 'Coding engines', Icon: PlugIcon },
   { id: 'presets', label: 'Agent presets', Icon: SparkIcon },
 ]
@@ -179,10 +181,13 @@ export function SettingsPane({
             {...(onSelectCapabilitySubTab !== undefined ? { onSelectSubTab: onSelectCapabilitySubTab } : {})}
           />
         ) : tab === 'extensions' ? (
-          <div className="min-h-0 overflow-auto px-[26px] pb-[42px] pt-1.5">
-            {extensionsExtra ? <div className="mb-6 mt-3">{extensionsExtra}</div> : null}
-            <ExtensionSettings onError={onError} />
+          <div className="min-h-0 overflow-auto px-[26px] pb-[42px] pt-4">
+            {extensionsExtra ?? (
+              <p className="mt-6 text-[11px] text-faint">ND extension packages appear here once the extension runtime is available in this environment.</p>
+            )}
           </div>
+        ) : tab === 'plugins' ? (
+          <ExtensionSettings onError={onError} />
         ) : tab === 'engines' ? (
           <EngineSettings onError={onError} />
         ) : tab === 'presets' ? (

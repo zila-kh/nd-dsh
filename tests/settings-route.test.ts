@@ -33,8 +33,9 @@ describe('settings route', () => {
 
   it('accepts plural aliases and a regular query string', () => {
     expect(settingsTabFromLocation({ hash: '#/settings?tab=models', search: '' })).toBe('models')
-    expect(settingsTabFromLocation({ hash: '#/settings?tab=plugins', search: '' })).toBe('extensions')
-    expect(settingsTabFromLocation({ hash: '#/settings?tab=plugin', search: '' })).toBe('extensions')
+    expect(settingsTabFromLocation({ hash: '#/settings?tab=extensions', search: '' })).toBe('extensions')
+    expect(settingsTabFromLocation({ hash: '#/settings?tab=plugins', search: '' })).toBe('plugins')
+    expect(settingsTabFromLocation({ hash: '#/settings?tab=plugin', search: '' })).toBe('plugins')
     expect(settingsTabFromLocation({ hash: '#/settings', search: '?tab=engine' })).toBe('engines')
   })
 

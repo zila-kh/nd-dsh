@@ -1,4 +1,4 @@
-export type SettingsTab = 'general' | 'appearance' | 'models' | 'capabilities' | 'extensions' | 'engines' | 'presets'
+export type SettingsTab = 'general' | 'appearance' | 'models' | 'capabilities' | 'extensions' | 'plugins' | 'engines' | 'presets'
 export type GeneralSubTab = 'runtime' | 'workspace' | 'browser' | 'about'
 export type CapabilitySubTab = 'engine' | 'memory' | 'context' | 'lifecycle'
 
@@ -13,6 +13,7 @@ const TAB_QUERY: Record<SettingsTab, string> = {
   models: 'model',
   capabilities: 'capabilities',
   extensions: 'extensions',
+  plugins: 'plugins',
   engines: 'engines',
   presets: 'presets',
 }
@@ -24,8 +25,8 @@ const QUERY_TAB = new Map<string, SettingsTab>([
   ['models', 'models'],
   ['capability', 'capabilities'],
   ['capabilities', 'capabilities'],
-  ['plugin', 'extensions'],
-  ['plugins', 'extensions'],
+  ['plugin', 'plugins'],
+  ['plugins', 'plugins'],
   ['extension', 'extensions'],
   ['extensions', 'extensions'],
   ['engine', 'engines'],

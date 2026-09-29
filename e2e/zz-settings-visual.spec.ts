@@ -83,8 +83,13 @@ test('capture redesigned settings surfaces', async () => {
   await expect(page.getByRole('heading', { name: 'Coding engines' })).toBeVisible()
   await page.screenshot({ path: `${SHOT_DIR}/engines.png` })
 
-  // Extensions & plugins tab must scroll (regression: grid wrapper clipped it).
-  await page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab', { name: 'Extensions & plugins', exact: true }).click()
-  await expect(page.getByRole('heading', { name: 'Plugins' })).toBeVisible()
+  // Extensions tab (ND extension packages) must scroll (regression: grid wrapper clipped it).
+  await page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab', { name: 'Extensions', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'ND extension packages' })).toBeVisible()
   await page.screenshot({ path: `${SHOT_DIR}/extensions-tab.png` })
+
+  // Plugins tab (agent plugins manager).
+  await page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab', { name: 'Plugins', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Plugins' })).toBeVisible()
+  await page.screenshot({ path: `${SHOT_DIR}/plugins-tab.png` })
 })
