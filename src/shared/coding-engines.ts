@@ -1,6 +1,7 @@
 import type { CodingEngineDescriptor, CodingEngineInstallHelp } from './contracts.js'
 
 export const ND_HARNESS_ENGINE_ID = 'nd-harness'
+export const ND_NATIVE_ENGINE_ID = 'nd-native'
 export const CHATGPT_WEB_ENGINE_ID = 'chatgpt-web'
 export const CODEX_ENGINE_ID = 'codex'
 export const CODEX_CLI_ENGINE_ID = 'codex-cli'
@@ -12,6 +13,7 @@ export const CLAUDE_CODE_CLI_ENGINE_ID = 'claude-code-cli'
 
 export interface CodingEngineAvailability {
   harnessReady: boolean
+  nativeReady?: boolean
   codexReady: boolean
   codexCliReady: boolean
   antigravityReady: boolean
@@ -113,6 +115,20 @@ export function buildCodingEngineCatalog(availability: CodingEngineAvailability)
         persistentSessions: true,
       },
       workerInstructions: '\nExecution engine: ND Harness. Work directly in the project workspace using the available ND tools.\n',
+    },
+    {
+      id: ND_NATIVE_ENGINE_ID,
+      name: 'ND Agent (Rust)',
+      integration: 'primary',
+      available: availability.nativeReady === true,
+      description: 'ND-owned Rust agent runtime using ND model routes, workspace tools, browser and extension brokerage, approvals, and durable sessions.',
+        ...(availability.nativeReady ? {} : { unavailableReason: 'ND Agent is in private workflow verification.' }),
+      capabilities: {
+          workspace: true, filesystem: true, shell: false, browser: true, skills: true,
+          mcp: false, modelProviderRouting: true, humanApprovals: true,
+        streaming: true, persistentSessions: true,
+      },
+      workerInstructions: '\nExecution engine: ND Agent. Use ND workspace tools and the visible ND browser.\n',
     },
     {
       id: CODEX_ENGINE_ID,

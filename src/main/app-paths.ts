@@ -38,6 +38,15 @@ export function bundledResourceRoot(): string {
   return app.isPackaged ? process.resourcesPath : projectRoot()
 }
 
+/** ND-owned Rust agent. The override is for source development only. */
+export function ndAgentBinPath(): string {
+  if (process.env.ND_AGENT_BINARY?.trim()) return resolve(process.env.ND_AGENT_BINARY)
+  const name = process.platform === 'win32' ? 'nd-agent.exe' : 'nd-agent'
+  return app.isPackaged
+    ? join(process.resourcesPath, 'nd-agent', name)
+    : join(projectRoot(), 'target', 'debug', name)
+}
+
 /** User-managed published DSH package installation owned by ND. */
 export function managedHarnessRoot(): string {
   return resolve(process.env.ND_DSH_MANAGED_RUNTIME_ROOT ?? join(app.getPath('userData'), 'runtimes/dsh'))

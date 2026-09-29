@@ -1,6 +1,6 @@
 import type { DshEventFrame } from '../../shared/contracts.js'
 import type { CoreClient } from '../core/core-client.js'
-import type { HarnessService } from '../harness/harness-service.js'
+import type { EngineSessionRouter } from '../engines/engine-session-router.js'
 import { classifyRuntimeApproval } from './approval-policy.js'
 import type { OrganizationStore } from './store.js'
 
@@ -14,7 +14,7 @@ import type { OrganizationStore } from './store.js'
 export class OrganizationApprovalGate {
   constructor(
     private readonly store: Pick<OrganizationStore, 'runBySession' | 'policy'>,
-    private readonly harness: Pick<HarnessService, 'respond'>,
+    private readonly engines: Pick<EngineSessionRouter, 'respond'>,
     private readonly core?: Pick<CoreClient, 'request'>,
   ) {}
 
@@ -41,7 +41,7 @@ export class OrganizationApprovalGate {
     // untracked automatic external effect. Fall back to the human gate.
     if (effect === 'allow' && !journaled) return true
 
-    await this.harness.respond(frame.rpcId, {
+    await this.engines.respond(frame.rpcId, {
       sessionId: frame.sessionId,
       approvalId: frame.approvalId ?? frame.rpcId,
       outcome: effect === 'allow' ? 'allowed-once' : 'rejected',

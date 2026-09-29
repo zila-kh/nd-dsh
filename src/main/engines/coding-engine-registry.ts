@@ -39,6 +39,9 @@ export class CodingEngineRegistry {
     return [
       ...buildCodingEngineCatalog({
         harnessReady,
+        // Keep the runtime private until the ND workflow parity gate passes.
+        // Existing native sessions still route by their stable engine id.
+        nativeReady: false,
         codexReady,
         codexCliReady,
         antigravityReady,

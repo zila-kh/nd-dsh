@@ -43,6 +43,8 @@ import { CodexCliEngine } from './engines/codex/codex-cli-engine.js'
 import { CursorCliEngine } from './engines/cursor/cursor-cli-engine.js'
 import { CodingEngineRegistry } from './engines/coding-engine-registry.js'
 import { EngineSessionRouter } from './engines/engine-session-router.js'
+import { NdNativeEngine } from './engines/nd-native/nd-native-engine.js'
+import { NdNativeToolBroker } from './engines/nd-native/nd-native-tool-broker.js'
 import { PiCodingEngine } from './engines/pi/pi-coding-engine.js'
 import { ZcodeCliEngine } from './engines/zcode/zcode-cli-engine.js'
 import { GitService } from './git/git-service.js'
@@ -330,12 +332,32 @@ async function createWindow(cdpPort: number): Promise<void> {
   activeCursorEngine = cursorEngine
   const claudeEngine = new ClaudeCodeCliEngine({ log: (line) => console.log(line), spawnProcess: engineSpawn })
   activeClaudeEngine = claudeEngine
+  let nativeAgent: NdNativeEngine
+  let taskWorktrees: TaskWorktreeManager | undefined
+  const nativeBroker = new NdNativeToolBroker({
+    core,
+    browser: browserPlatform,
+    workspace,
+    ownsWorktree: (cwd) => taskWorktrees?.ownsRoot(cwd) === true,
+    engine: () => nativeAgent,
+  })
+  await nativeBroker.reconcile().then((count) => {
+    if (count > 0) console.warn(`Marked ${count} interrupted ND Agent tool effect(s) uncertain; none will be replayed.`)
+  }).catch((error) => {
+    console.warn('ND Agent effect reconciliation is unavailable:', error instanceof Error ? error.message : String(error))
+  })
+  nativeAgent = new NdNativeEngine({
+    providers,
+    dataDir: join(userData, 'nd-agent-sessions'),
+    tool: (request) => nativeBroker.call(request),
+    spawnProcess: unscopedCoreSpawn,
+  })
   const engineRouter = new EngineSessionRouter(harness, codexEngine, workspace, antigravityEngine, {
     browser,
     git,
     storePath: join(userData, 'chatgpt-web-sessions.json'),
     log: (line) => console.warn(line),
-  }, zcodeEngine, piEngine, cursorEngine, claudeEngine, engineSpawn, directEngineJournal)
+  }, zcodeEngine, piEngine, cursorEngine, claudeEngine, engineSpawn, directEngineJournal, nativeAgent)
   activeEngineRouter = engineRouter
   engineRouter.setBrowserAccessProvider(browserPlatform)
   const projectWorkspace = new ProjectWorkspaceCoordinator(
@@ -390,7 +412,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   const ndPencil = new NdPencilController(window, workspace, projectRoot(), ndPencilPreload)
   await ndPencil.initialize()
   const coreWorktreeGit = createCoreWorktreeGit(core)
-  const taskWorktrees = new TaskWorktreeManager(coreWorktreeGit)
+  taskWorktrees = new TaskWorktreeManager(coreWorktreeGit)
   // Task worktrees are ND's own isolated checkouts for this project, so the
   // engine router admits them by the exact roots ND created — never by a path
   // shape a caller could construct.
@@ -398,11 +420,14 @@ async function createWindow(cdpPort: number): Promise<void> {
   harness.setSessionCwdGuard((cwd) => taskWorktrees.ownsRoot(cwd))
   const decisionSupport = createDecisionSupportFromEnv(process.env, fetch, core)
   const organization = new OrganizationOrchestrator(organizationStore, harness, workspace, engines, engineRouter, projectRuntime, capabilities, executionCoordinator, taskWorktrees, core, { spawnProcess: unscopedCoreSpawn, stopProcess: stopCoreManagedChildProcess, runGit: coreWorktreeGit }, browserPlatform, decisionSupport)
-  const approvalGate = new OrganizationApprovalGate(organizationStore, harness, core)
+  const approvalGate = new OrganizationApprovalGate(organizationStore, engineRouter, core)
   const qa = new QaService({ spawnProcess: unscopedCoreSpawn, stopProcess: stopCoreManagedChildProcess })
   activeQa = qa
   qa.setProjectRoot(workspace.state().root)
   const disposeIpc = registerIpc({ window, preloadPath: preload, launcherPopup, browser, dshSurface, engines, engineRouter, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, qa, sessionArchive, usageLedger, capabilities, organizationStore })
+  if (nativeAgent.ready()) void nativeAgent.start().catch((error) => {
+    console.warn('ND Agent private runtime could not initialize:', error instanceof Error ? error.message : String(error))
+  })
   const disposeBrowserCompanionIpc = registerBrowserCompanionIpc(window, browserCompanion)
   const disposeBrowserPlatformIpc = registerBrowserPlatformIpc(window, browserPlatform)
   browserPlatform.setListener((state) => {

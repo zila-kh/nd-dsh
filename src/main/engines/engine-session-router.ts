@@ -18,6 +18,7 @@ import {
   CODEX_CLI_ENGINE_ID,
   CURSOR_CLI_ENGINE_ID,
   ND_HARNESS_ENGINE_ID,
+  ND_NATIVE_ENGINE_ID,
   PI_CODING_ENGINE_ID,
   ZCODE_CLI_ENGINE_ID,
 } from '../../shared/coding-engines.js'
@@ -47,6 +48,7 @@ import { createExtraCliEngines } from './agent-cli/extra-cli-engines.js'
 import { TRANSCRIPT_EVENT_TYPES } from './agent-cli/agent-cli-support.js'
 import type { PiCodingEngine } from './pi/pi-coding-engine.js'
 import type { ZcodeCliEngine } from './zcode/zcode-cli-engine.js'
+import type { NdNativeEngine } from './nd-native/nd-native-engine.js'
 
 const STRUCTURED_TRANSCRIPT_ENGINE_IDS = new Set([
   OPENCODE_CLI_ENGINE_ID,
@@ -68,11 +70,11 @@ export interface ChatGptWebRuntime {
  * never branch on engine ids.
  */
 export interface DirectWorkspaceEngine {
-  run(prompt: string, options?: { sessionId?: string; cwd?: string; model?: string; permissionMode?: string }): Promise<{ sessionId: string }>
+  run(prompt: string, options?: { sessionId?: string; cwd?: string; provider?: string; model?: string; permissionMode?: string }): Promise<{ sessionId: string }>
   createSession(input?: { cwd?: string; model?: string }): Promise<{ sessionId: string }>
   stop(sessionId?: string): Promise<void>
   listSessions(): EngineSessionSummary[]
-  transcript(sessionId: string): EngineSessionTranscript
+  transcript(sessionId: string): EngineSessionTranscript | Promise<EngineSessionTranscript>
   ownsSession(sessionId: string): boolean
   handlesApproval(rpcId: string): boolean
   respond(rpcId: string, value: unknown): Promise<void>
@@ -131,6 +133,7 @@ export class EngineSessionRouter {
     claude?: ClaudeCodeCliEngine,
     directSpawnProcess: typeof spawn = spawn,
     private readonly sessionJournal?: SessionJournalStore,
+    nativeAgent?: NdNativeEngine,
   ) {
     this.directEngines.set(CODEX_CLI_ENGINE_ID, codex)
     if (antigravity) this.directEngines.set(ANTIGRAVITY_ENGINE_ID, antigravity)
@@ -138,6 +141,10 @@ export class EngineSessionRouter {
     if (pi) this.directEngines.set(PI_CODING_ENGINE_ID, pi)
     if (cursor) this.directEngines.set(CURSOR_CLI_ENGINE_ID, cursor)
     if (claude) this.directEngines.set(CLAUDE_CODE_CLI_ENGINE_ID, claude)
+    if (nativeAgent) {
+      this.directEngines.set(ND_NATIVE_ENGINE_ID, nativeAgent)
+      this.routerOwnedDirectEngines.add(nativeAgent)
+    }
     for (const [engineId, engine] of createExtraCliEngines((line) => console.warn(line), directSpawnProcess)) {
       this.directEngines.set(engineId, engine)
       this.routerOwnedDirectEngines.add(engine)
@@ -188,7 +195,10 @@ export class EngineSessionRouter {
       ? this.engineForSession(options.sessionId)
       : options?.engineId ?? ND_HARNESS_ENGINE_ID
     if (!options?.sessionId) this.assertKnownEngine(requested)
-    const providerId = requested === ND_HARNESS_ENGINE_ID
+    if (requested === ND_NATIVE_ENGINE_ID) {
+      await (this.directEngines.get(requested) as NdNativeEngine | undefined)?.start()
+    }
+    const providerId = requested === ND_HARNESS_ENGINE_ID || requested === ND_NATIVE_ENGINE_ID
       ? options?.provider ?? this.harness.status().provider
       : undefined
     const directTarget = this.directEngines.get(requested)
@@ -224,7 +234,7 @@ export class EngineSessionRouter {
     let routedPrompt = this.extensions
       ? await this.extensions.decoratePrompt(skill?.prompt ?? prompt, requested, providerId)
       : skill?.prompt ?? prompt
-    if (options?.sessionId && this.browserAccess) {
+    if (options?.sessionId && this.browserAccess && requested !== ND_NATIVE_ENGINE_ID) {
       const token = this.browserAccess.issueSessionAccess(options.sessionId)
       routedPrompt += `\n\n<nd-browser-access>\nOpaque browser access token for this ND session: ${token}\nPass it unchanged as accessToken on every nd_browser_call. Do not expose it in user-facing output.\n</nd-browser-access>`
     }
@@ -268,6 +278,7 @@ export class EngineSessionRouter {
       return direct.run(appendWorkspaceContext(optimizedPrompt, workspace, sessionCwd ?? workspace.root), {
         ...(options?.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
         ...(options?.model !== undefined ? { model: options.model } : {}),
+        ...(options?.provider !== undefined ? { provider: options.provider } : {}),
         ...(options?.permissionMode !== undefined ? { permissionMode: options.permissionMode } : {}),
         // A session keeps the root it was created with. Re-rooting every turn
         // at the active workspace would run an isolated task worktree's worker
@@ -412,7 +423,7 @@ export class EngineSessionRouter {
   async transcript(sessionId: string): Promise<EngineSessionTranscript> {
     for (const direct of this.directEngines.values()) {
       if (!direct.ownsSession(sessionId)) continue
-      const fallback = direct.transcript(sessionId)
+      const fallback = await direct.transcript(sessionId)
       const events = await this.nativeTranscript(sessionId, fallback.events)
       return { ...fallback, events }
     }
@@ -487,6 +498,9 @@ export class EngineSessionRouter {
   }
 
   private assertKnownEngine(engineId: string): void {
+    if (engineId === ND_NATIVE_ENGINE_ID) {
+      throw new Error('ND Agent is still in private workflow verification')
+    }
     if (
       engineId === ND_HARNESS_ENGINE_ID
       || engineId === CODEX_ENGINE_ID

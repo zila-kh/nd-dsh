@@ -83,6 +83,26 @@ describe('engine route admission', () => {
   })
 })
 
+describe('ND Agent session ownership', () => {
+  it('resumes an existing native session with its original engine despite a different requested engine', async () => {
+    const { harness, workspace, direct } = fixture()
+    const native = {
+      ...direct,
+      start: vi.fn(async () => {}),
+      run: vi.fn(async () => ({ sessionId: 'nd-native-legacy' })),
+      ownsSession: (id: string) => id === 'nd-native-legacy',
+      listSessions: () => [{ sessionId: 'nd-native-legacy', engineId: 'nd-native', cwd: workspaceState.root, title: 'Old native chat', createdAt: 1, updatedAt: 2, running: false }],
+      transcript: async (sessionId: string) => ({ sessionId, engineId: 'nd-native', events: [] }),
+    }
+    const router = new EngineSessionRouter(harness as never, direct as never, workspace as never,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, native as never)
+    await router.run('continue', { sessionId: 'nd-native-legacy', engineId: 'nd-harness' })
+    expect(native.run).toHaveBeenCalledWith(expect.stringContaining('continue'), { sessionId: 'nd-native-legacy', cwd: workspaceState.root })
+    expect(harness.run).not.toHaveBeenCalled()
+    await expect(router.transcript('nd-native-legacy')).resolves.toMatchObject({ engineId: 'nd-native' })
+  })
+})
+
 describe('direct engine workspace context', () => {
   it.each(['antigravity', 'codex-cli', 'zcode-cli', 'pi-coding', 'cursor-cli', 'claude-code-cli'])('routes the catalog and selected model for %s', async (engineId) => {
     const { router, run } = fixture()
