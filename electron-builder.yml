@@ -30,6 +30,10 @@ extraResources:
     to: nd-extensions/quit-process
   - from: .release/harness
     to: vendor/deepseek-harness
+  - from: .release/harness/node_modules
+    to: vendor/deepseek-harness/node_modules
+    filter:
+      - "**/*"
   - from: configs/dsh
     to: configs/dsh
   - from: scripts

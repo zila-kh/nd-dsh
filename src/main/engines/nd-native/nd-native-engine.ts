@@ -81,7 +81,7 @@ export class NdNativeEngine {
     return { sessionId: result.sessionId }
   }
 
-  async run(prompt: string, options: { sessionId?: string; cwd?: string; provider?: string; model?: string } = {}): Promise<{ sessionId: string }> {
+  async run(prompt: string, options: { sessionId?: string; cwd?: string; provider?: string; model?: string; permissionMode?: string } = {}): Promise<{ sessionId: string }> {
     const sessionId = options.sessionId ?? (await this.createSession(options.cwd ? { cwd: options.cwd } : {})).sessionId
     const slash = options.model?.indexOf('/') ?? -1
     const selectedProvider = slash > 0 && !options.provider ? options.model!.slice(0, slash) : options.provider
@@ -89,7 +89,7 @@ export class NdNativeEngine {
     const route = this.options.providers.nativeAgentRoute(selectedProvider, selectedModel)
     const tokenSaver = tokenSaverRuntime()?.settings()
     const compactContext = tokenSaver ? tokenSaver.ndEnabled && tokenSaver.mode !== 'off' : true
-    await this.rpc('turn.start', { sessionId, prompt, cwd: options.cwd, route, compactContext })
+    await this.rpc('turn.start', { sessionId, prompt, cwd: options.cwd, route, compactContext, permissionMode: options.permissionMode ?? 'workspace-write' })
     return { sessionId }
   }
 

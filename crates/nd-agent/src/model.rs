@@ -305,7 +305,8 @@ async fn complete_async(
                         }
                     };
                     let Some(chunk) = next else { break };
-                    let chunk = chunk.map_err(|_| anyhow::anyhow!("model transport stream failed"))?;
+                    let chunk =
+                        chunk.map_err(|_| anyhow::anyhow!("model transport stream failed"))?;
                     pending.extend_from_slice(&chunk);
                     while let Some(index) = pending.iter().position(|byte| *byte == b'\n') {
                         let mut line = pending.drain(..=index).collect::<Vec<_>>();
@@ -361,7 +362,10 @@ async fn complete_async(
             }
         }
     }
-    bail!("{}", last_error.unwrap_or_else(|| "model request failed".to_owned()))
+    bail!(
+        "{}",
+        last_error.unwrap_or_else(|| "model request failed".to_owned())
+    )
 }
 
 fn consume_sse_line(
@@ -715,9 +719,7 @@ mod tests {
             &route,
             &[Message::text("user", "say hello")],
             Arc::new(AtomicBool::new(false)),
-            |chunk| {
-                chunks.push(chunk.to_owned())
-            },
+            |chunk| chunks.push(chunk.to_owned()),
         )
         .unwrap();
         let request = server.join().unwrap();

@@ -27,7 +27,9 @@ use nd_runtime::terminal::{
     TerminalCloseParams, TerminalCreateParams, TerminalHistoryAppendParams, TerminalManager,
     TerminalResizeParams, TerminalRestartParams, TerminalStateParams, TerminalWriteParams,
 };
-use nd_runtime::workspace::{self, IndexParams, ListParams, ReadParams, WriteParams};
+use nd_runtime::workspace::{
+    self, IndexParams, ListParams, ReadParams, WriteParams as WorkspaceWriteParams,
+};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -499,7 +501,7 @@ fn dispatch(
             to_value(workspace::read(params)?)
         }
         "workspace.write" => {
-            let params = from_params::<WriteParams>(params)?;
+            let params = from_params::<WorkspaceWriteParams>(params)?;
             state.metrics.observe_workspace(&params.root);
             to_value(workspace::write(params)?)
         }

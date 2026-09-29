@@ -617,7 +617,10 @@ mod tests {
         .unwrap();
         assert!(replaced.replaced);
         assert_eq!(replaced.bytes_written, 8);
-        assert_eq!(fs::read_to_string(root.join("nested/existing.txt")).unwrap(), "new body");
+        assert_eq!(
+            fs::read_to_string(root.join("nested/existing.txt")).unwrap(),
+            "new body"
+        );
 
         let created = write(WriteParams {
             root: root_of(&root),
@@ -627,7 +630,10 @@ mod tests {
         .unwrap();
         assert!(!created.replaced);
         assert_eq!(created.path, "nested/new.txt");
-        assert_eq!(fs::read_to_string(root.join("nested/new.txt")).unwrap(), "created");
+        assert_eq!(
+            fs::read_to_string(root.join("nested/new.txt")).unwrap(),
+            "created"
+        );
 
         let missing_parent = write(WriteParams {
             root: root_of(&root),
@@ -646,20 +652,30 @@ mod tests {
         fs::write(outside.join("secret.txt"), "outside").unwrap();
 
         for candidate in ["../outside.txt", "/outside.txt", "C:/Windows/win.ini"] {
-            assert!(write(WriteParams {
-                root: root_of(&root),
-                path: candidate.into(),
-                data: "blocked".into(),
-            }).is_err(), "{candidate} was accepted");
+            assert!(
+                write(WriteParams {
+                    root: root_of(&root),
+                    path: candidate.into(),
+                    data: "blocked".into(),
+                })
+                .is_err(),
+                "{candidate} was accepted"
+            );
         }
 
         if create_dir_symlink(&outside, &root.join("link")).is_ok() {
-            assert!(write(WriteParams {
-                root: root_of(&root),
-                path: "link/secret.txt".into(),
-                data: "blocked".into(),
-            }).is_err());
-            assert_eq!(fs::read_to_string(outside.join("secret.txt")).unwrap(), "outside");
+            assert!(
+                write(WriteParams {
+                    root: root_of(&root),
+                    path: "link/secret.txt".into(),
+                    data: "blocked".into(),
+                })
+                .is_err()
+            );
+            assert_eq!(
+                fs::read_to_string(outside.join("secret.txt")).unwrap(),
+                "outside"
+            );
         }
         let _ = fs::remove_dir_all(root);
         let _ = fs::remove_dir_all(outside);
@@ -672,7 +688,8 @@ mod tests {
             root: root_of(&root),
             path: "too-large.txt".into(),
             data: "x".repeat(HARD_MAX_WRITE + 1),
-        }).unwrap_err();
+        })
+        .unwrap_err();
         assert!(format!("{error:#}").contains("configured bound"));
         assert!(!root.join("too-large.txt").exists());
         let _ = fs::remove_dir_all(root);

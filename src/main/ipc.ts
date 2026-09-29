@@ -995,6 +995,7 @@ function asRunOptions(value: unknown): HarnessRunOptions {
   if (provider !== undefined && (typeof provider !== 'string' || !provider.trim() || provider.length > 256)) throw new Error('provider must be a short non-empty string')
   const model = record.model
   if (model !== undefined && (typeof model !== 'string' || !model.trim() || model.length > 256)) throw new Error('model must be a short non-empty string')
+  const permissionMode = record.permissionMode === undefined ? undefined : asPermissionMode(record.permissionMode)
   const workspaceCwd = record.workspaceCwd
   if (workspaceCwd !== undefined && (typeof workspaceCwd !== 'string' || !workspaceCwd.trim() || workspaceCwd.length > 4_096)) {
     throw new Error('workspaceCwd must be a short non-empty path')
@@ -1006,6 +1007,7 @@ function asRunOptions(value: unknown): HarnessRunOptions {
     ...(typeof engineId === 'string' ? { engineId: engineId.trim() } : {}),
     ...(typeof provider === 'string' ? { provider: provider.trim() } : {}),
     ...(typeof model === 'string' ? { model: model.trim() } : {}),
+    ...(permissionMode !== undefined ? { permissionMode } : {}),
     ...(typeof workspaceCwd === 'string' ? { workspaceCwd: workspaceCwd.trim() } : {}),
   }
 }

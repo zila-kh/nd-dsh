@@ -95,12 +95,17 @@ impl Session {
         if !enabled || message_chars(&self.messages) <= MAX_CONTEXT_CHARS {
             return false;
         }
-        let system = self.messages.first()
+        let system = self
+            .messages
+            .first()
             .filter(|message| message.role == "system")
             .cloned();
         let first_conversation = if system.is_some() { 1 } else { 0 };
         let budget = MAX_CONTEXT_CHARS.saturating_sub(
-            system.as_ref().map(|message| message.content.chars().count()).unwrap_or(0)
+            system
+                .as_ref()
+                .map(|message| message.content.chars().count())
+                .unwrap_or(0)
                 + COMPACT_SUMMARY_CHARS,
         );
 
@@ -131,7 +136,11 @@ impl Session {
             if available < 64 {
                 break;
             }
-            let excerpt = message.content.chars().take(available.min(1_000)).collect::<String>();
+            let excerpt = message
+                .content
+                .chars()
+                .take(available.min(1_000))
+                .collect::<String>();
             if !excerpt.trim().is_empty() {
                 summary.push_str(&format!("{}: {}\n", message.role, excerpt));
             }
@@ -157,10 +166,17 @@ impl Session {
 }
 
 fn message_chars(messages: &[Message]) -> usize {
-    messages.iter().map(|message| {
-        message.content.chars().count()
-            + message.tool_calls.iter().map(|call| call.arguments.to_string().chars().count() + call.name.len()).sum::<usize>()
-    }).sum()
+    messages
+        .iter()
+        .map(|message| {
+            message.content.chars().count()
+                + message
+                    .tool_calls
+                    .iter()
+                    .map(|call| call.arguments.to_string().chars().count() + call.name.len())
+                    .sum::<usize>()
+        })
+        .sum()
 }
 
 pub fn now_ms() -> u64 {
@@ -308,22 +324,36 @@ mod tests {
         let mut session = Session::new("C:/project".to_owned());
         session.messages.push(Message::text("system", "policy"));
         for index in 0..40 {
-            session.messages.push(Message::text("user", format!("question-{index} {}", "x".repeat(3_000))));
-            session.messages.push(Message::text("assistant", format!("answer-{index} {}", "y".repeat(3_000))));
+            session.messages.push(Message::text(
+                "user",
+                format!("question-{index} {}", "x".repeat(3_000)),
+            ));
+            session.messages.push(Message::text(
+                "assistant",
+                format!("answer-{index} {}", "y".repeat(3_000)),
+            ));
         }
         assert!(session.compact_messages(true));
         assert_eq!(session.messages[0].content, "policy");
         assert_eq!(session.messages[1].role, "system");
-        assert!(session.messages[1].content.contains("Token Saver compacted"));
+        assert!(
+            session.messages[1]
+                .content
+                .contains("Token Saver compacted")
+        );
         assert_eq!(session.messages[2].role, "user");
-        assert!(message_chars(&session.messages) <= MAX_CONTEXT_CHARS + COMPACT_SUMMARY_CHARS + 4_000);
+        assert!(
+            message_chars(&session.messages) <= MAX_CONTEXT_CHARS + COMPACT_SUMMARY_CHARS + 4_000
+        );
     }
 
     #[test]
     fn compaction_is_disabled_when_token_saver_is_off() {
         let mut session = Session::new("C:/project".to_owned());
         session.messages.push(Message::text("system", "policy"));
-        session.messages.push(Message::text("user", "x".repeat(MAX_CONTEXT_CHARS + 1)));
+        session
+            .messages
+            .push(Message::text("user", "x".repeat(MAX_CONTEXT_CHARS + 1)));
         let before = session.messages.clone();
         assert!(!session.compact_messages(false));
         assert_eq!(session.messages.len(), before.len());

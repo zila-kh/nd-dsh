@@ -43,6 +43,35 @@ impl<W: Write + Send> WireWriter for JsonLineWriter<W> {
 
 type Reply = mpsc::Sender<Value>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PermissionMode {
+    ReadOnly,
+    WorkspaceWrite,
+    FullAccess,
+}
+
+impl PermissionMode {
+    fn parse(value: Option<&str>) -> Result<Self> {
+        match value.unwrap_or("workspace-write") {
+            "read-only" => Ok(Self::ReadOnly),
+            "workspace-write" => Ok(Self::WorkspaceWrite),
+            "danger-full-access" => Ok(Self::FullAccess),
+            _ => bail!("invalid ND Agent permission mode"),
+        }
+    }
+
+    fn requires_approval(self, name: &str, arguments: &Value) -> Result<bool> {
+        if !is_effectful(name, arguments) {
+            return Ok(false);
+        }
+        match self {
+            Self::ReadOnly => bail!("ND Agent permission mode is read only"),
+            Self::WorkspaceWrite => Ok(!matches!(name, "nd_workspace_write")),
+            Self::FullAccess => Ok(false),
+        }
+    }
+}
+
 pub struct AgentServer {
     store: Arc<SessionStore>,
     writer: Arc<dyn WireWriter>,
@@ -191,6 +220,7 @@ impl AgentServer {
         let route: ModelRoute = serde_json::from_value(params["route"].clone())
             .context("missing or invalid ND model route")?;
         let compact_context = params["compactContext"].as_bool().unwrap_or(true);
+        let permission_mode = PermissionMode::parse(params["permissionMode"].as_str())?;
         let session = self.store.get(&session_id)?;
         let flag = Arc::new(AtomicBool::new(false));
         {
@@ -237,7 +267,8 @@ impl AgentServer {
         let server = Arc::clone(self);
         let worker_session_id = session_id.clone();
         std::thread::spawn(move || {
-            let outcome = server.run_turn(&session, &route, &flag, compact_context);
+            let outcome =
+                server.run_turn(&session, &route, &flag, compact_context, permission_mode);
             if let Err(error) = outcome {
                 if let Ok(mut session) = session.lock() {
                     let _ = server.record(
@@ -272,6 +303,7 @@ impl AgentServer {
         route: &ModelRoute,
         flag: &Arc<AtomicBool>,
         compact_context: bool,
+        permission_mode: PermissionMode,
     ) -> Result<()> {
         for _ in 0..MAX_TOOL_ROUNDS {
             if flag.load(Ordering::SeqCst) {
@@ -338,7 +370,7 @@ impl AgentServer {
                 if flag.load(Ordering::SeqCst) {
                     bail!("ND agent turn canceled");
                 }
-                self.execute_tool(session, call, flag)?;
+                self.execute_tool(session, call, flag, permission_mode)?;
             }
         }
         bail!("ND agent reached the tool-round limit")
@@ -349,6 +381,7 @@ impl AgentServer {
         session: &Arc<Mutex<Session>>,
         call: ToolCall,
         flag: &AtomicBool,
+        permission_mode: PermissionMode,
     ) -> Result<()> {
         if !tool_names().contains(&call.name.as_str()) {
             bail!("model requested unknown ND tool");
@@ -364,8 +397,19 @@ impl AgentServer {
             self.store.save(&session)?;
             (session.id.clone(), session.cwd.clone())
         };
-        if is_effectful(&call.name) {
-            self.wait_for_approval(&session_id, &call, flag)?;
+        let approval_required = match permission_mode.requires_approval(&call.name, &call.arguments)
+        {
+            Ok(required) => required,
+            Err(error) => {
+                self.record_tool_result(session, &call, format!("Tool denied: {error}"))?;
+                return Err(error);
+            }
+        };
+        if approval_required {
+            if let Err(error) = self.wait_for_approval(&session_id, &call, flag) {
+                self.record_tool_result(session, &call, format!("Tool denied: {error}"))?;
+                return Err(error);
+            }
         }
         let result = self.host_request(
             "host.tool",
@@ -386,6 +430,15 @@ impl AgentServer {
                 .collect::<String>()
                 + "\n[ND output truncated]";
         }
+        self.record_tool_result(session, &call, output)
+    }
+
+    fn record_tool_result(
+        &self,
+        session: &Arc<Mutex<Session>>,
+        call: &ToolCall,
+        output: String,
+    ) -> Result<()> {
         let mut session = session.lock().unwrap();
         session.messages.push(Message {
             role: "tool".to_owned(),
@@ -495,11 +548,15 @@ fn wait_reply(
     }
 }
 
-fn is_effectful(name: &str) -> bool {
-    matches!(
-        name,
-        "nd_workspace_write" | "nd_shell" | "nd_git" | "nd_browser_call" | "nd_extension_call"
-    )
+fn is_effectful(name: &str, arguments: &Value) -> bool {
+    match name {
+        "nd_workspace_write" | "nd_shell" | "nd_browser_call" | "nd_extension_call" => true,
+        "nd_git" => !matches!(
+            arguments["operation"].as_str(),
+            Some("status" | "log" | "diff")
+        ),
+        _ => false,
+    }
 }
 
 fn required_string(value: &Value, key: &str) -> Result<String> {
@@ -516,6 +573,72 @@ fn required_string(value: &Value, key: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn permission_modes_classify_workspace_and_git_actions() {
+        let read = PermissionMode::ReadOnly;
+        let write = PermissionMode::WorkspaceWrite;
+        let full = PermissionMode::FullAccess;
+        let empty = json!({});
+        let status = json!({ "operation": "status" });
+        let add = json!({ "operation": "add" });
+
+        assert_eq!(PermissionMode::parse(None).unwrap(), write);
+        assert!(PermissionMode::parse(Some("invalid")).is_err());
+        assert!(!read.requires_approval("nd_workspace_read", &empty).unwrap());
+        assert!(!read.requires_approval("nd_git", &status).unwrap());
+        assert!(
+            read.requires_approval("nd_workspace_write", &empty)
+                .is_err()
+        );
+        assert!(read.requires_approval("nd_git", &add).is_err());
+        assert!(
+            !write
+                .requires_approval("nd_workspace_write", &empty)
+                .unwrap()
+        );
+        assert!(write.requires_approval("nd_git", &add).unwrap());
+        assert!(write.requires_approval("nd_browser_call", &empty).unwrap());
+        assert!(!full.requires_approval("nd_browser_call", &empty).unwrap());
+    }
+
+    #[test]
+    fn read_only_denies_a_write_without_contacting_the_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = Arc::new(CaptureWriter(Mutex::new(Vec::new())));
+        let server = AgentServer::new(SessionStore::open(dir.path()).unwrap(), writer.clone());
+        let session = server.store.create("C:/project".to_owned()).unwrap();
+        let call = ToolCall {
+            id: "write-1".to_owned(),
+            name: "nd_workspace_write".to_owned(),
+            arguments: json!({ "path": "blocked.txt", "data": "test" }),
+        };
+        let error = server
+            .execute_tool(
+                &session,
+                call,
+                &AtomicBool::new(false),
+                PermissionMode::ReadOnly,
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("read only"));
+        assert!(
+            !writer
+                .0
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|frame| frame["method"] == "host.tool")
+        );
+
+        let stored = server.store.get(&session.lock().unwrap().id).unwrap();
+        let stored = stored.lock().unwrap();
+        assert_eq!(
+            stored.messages.last().unwrap().tool_call_id.as_deref(),
+            Some("write-1")
+        );
+        assert_eq!(stored.events.last().unwrap()["type"], "tool/result");
+    }
 
     struct CaptureWriter(Mutex<Vec<Value>>);
 
