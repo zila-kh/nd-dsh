@@ -20,7 +20,10 @@ import type { ExecutionCoordinator, RuntimePermit } from './execution-coordinato
 import type { OrganizationOrchestrator } from './orchestrator.js'
 import { materializeOrganizationSignal } from './signal-materializer.js'
 import { runDueSchedules } from './schedule-runner.js'
+import { runDueHeartbeats } from './heartbeat-runner.js'
+import { runEventTriggers } from './event-trigger-runner.js'
 import { OrganizationStrategyPlane } from './strategy-plane.js'
+import type { LocalRuntimeService } from '../local-runtime/local-runtime-service.js'
 import type { OrganizationStore } from './store.js'
 
 const MUTATIONS = new Set([
@@ -32,7 +35,9 @@ const CONTROL_MUTATIONS = new Set([
   'human-action.add', 'human-action.resolve', 'signal.add', 'signal.triage', 'budget.set', 'feedback.add',
 ])
 const STRATEGY_MUTATIONS = new Set([
-  'anchor.add', 'anchor.update', 'knowledge.add', 'knowledge.update', 'schedule.add', 'schedule.update', 'action.record',
+  'anchor.add', 'anchor.update', 'knowledge.add', 'knowledge.update', 'schedule.add', 'schedule.update',
+  'heartbeat.add', 'heartbeat.update', 'trigger.add', 'trigger.update',
+  'skill-candidate.add', 'skill-candidate.update', 'skill-candidate.promote', 'action.record',
 ])
 const CONTROL_ACTIONS = new Set<OrganizationControlAction>(['internal.plan', 'task.execute', 'task.review', 'workflow.continue'])
 
@@ -44,6 +49,7 @@ export function registerOrganizationIpc(
   projectRuntime?: ProjectRuntimeService,
   executionCoordinator?: ExecutionCoordinator,
   extraTrustedWindow?: () => BrowserWindow | null,
+  localRuntime?: LocalRuntimeService,
 ): () => void {
   const channels: string[] = []
   const computeLedger = new ComputeLedger(join(app.getPath('userData'), 'compute-usage.jsonl'))
@@ -89,8 +95,15 @@ export function registerOrganizationIpc(
   const scheduleTimer = setInterval(() => {
     if (scheduleBusy) return
     scheduleBusy = true
-    void runDueSchedules({ strategy, control, store, orchestrator })
-      .catch((error) => console.warn('Organization scheduled work failed:', error instanceof Error ? error.message : String(error)))
+    void (async () => {
+      await runDueSchedules({ strategy, control, store, orchestrator })
+      localRuntime?.noteSchedulerTick()
+      await runDueHeartbeats({ strategy, control, store })
+      localRuntime?.noteHeartbeatTick()
+      await runEventTriggers({ strategy, control, store })
+      localRuntime?.noteEventTick()
+    })()
+      .catch((error) => console.warn('Organization automation tick failed:', error instanceof Error ? error.message : String(error)))
       .finally(() => { scheduleBusy = false })
   }, 15_000)
   scheduleTimer.unref()

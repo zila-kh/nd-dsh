@@ -52,11 +52,14 @@ export async function runDueSchedules(deps: ScheduleRunnerDeps): Promise<void> {
       const open = state.tasks.find((task) => task.sourceScheduleId === schedule.id && task.status !== 'completed')
       let created: string | undefined
       if (!open) {
-        const title = `${schedule.title} · ${new Date(now()).toISOString().slice(0, 10)}`
+        const title = `${schedule.title} · ${new Date(now()).toISOString().slice(0, 16)}`
+        const cadence = describeCadence(schedule)
+        const routine = schedule.mode === 'routine' ? `\nAgent routine: ${schedule.prompt ?? schedule.title}${schedule.skillIds?.length ? `\nPreferred skills: ${schedule.skillIds.join(', ')}` : ''}` : ''
         await deps.store.mutate({
           type: 'task.create', companyId: company.id, projectId: project.id, title,
-          description: `Recurring work from the company schedule "${schedule.title}" (every ${formatInterval(schedule.intervalMinutes)}).`,
+          description: `Automated work from "${schedule.title}" (${cadence}).${routine}`,
           sourceScheduleId: schedule.id,
+          ...(schedule.agentId ? { assignedAgentId: schedule.agentId } : {}),
         })
         created = title
       }
@@ -77,6 +80,13 @@ export async function runDueSchedules(deps: ScheduleRunnerDeps): Promise<void> {
       await audit('deny', 'Scheduled company work failed closed.', detail)
     }
   }
+}
+
+function describeCadence(schedule: OrganizationCompanySchedule): string {
+  const mode = schedule.mode ?? 'interval'
+  if (mode === 'once') return `one time at ${new Date(schedule.runAt ?? schedule.nextRunAt).toISOString()}`
+  if (mode === 'cron') return `cron ${schedule.cron ?? ''} in ${schedule.timezone ?? 'UTC'}`
+  return `every ${formatInterval(schedule.intervalMinutes ?? 60)}`
 }
 
 function formatInterval(minutes: number): string {
