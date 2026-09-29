@@ -1142,7 +1142,7 @@ function normalizeSnapshot(value: unknown): DurableOrganizationSnapshot {
 async function writeAtomic(path: string, content: string): Promise<void> {
   const temp = `${path}.${process.pid}.${randomUUID()}.tmp`
   try {
-    await fs.writeFile(temp, content, 'utf8')
+    await fs.writeFile(temp, content, { encoding: 'utf8', mode: 0o600 })
     await fs.rename(temp, path)
   } catch (error) {
     await fs.rm(temp, { force: true }).catch(() => undefined)
