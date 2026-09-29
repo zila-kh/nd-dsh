@@ -19,10 +19,10 @@ export interface EventTriggerRunnerDeps {
   control: {
     state(): Promise<OrganizationControlSnapshot>
     mutate(mutation: OrganizationControlMutation): Promise<OrganizationControlSnapshot>
-    shouldRun(projectId: string | undefined, action: 'workflow.continue'): Promise<OrganizationTurnDecision>
+    shouldRun(projectId: string | undefined, action: 'task.execute', taskId?: string): Promise<OrganizationTurnDecision>
   }
   orchestrator: {
-    runNext(projectId?: string, explicit?: boolean): Promise<OrganizationRunReceipt | null>
+    runTask(taskId: string, explicit?: boolean): Promise<OrganizationRunReceipt>
   }
 }
 
@@ -55,9 +55,10 @@ export async function runEventTriggers(deps: EventTriggerRunnerDeps): Promise<vo
         throw new Error('Trigger agent is no longer available')
       }
 
-      const existing = state.tasks.find((item) => item.sourceTriggerId === trigger.id && item.sourceActivityId === activity.id)
-      const title = existing?.title ?? `${trigger.title} · ${new Date(activity.createdAt).toISOString().slice(0, 16)}`
-      if (!existing) {
+      let triggeredTask = state.tasks.find((item) => item.sourceTriggerId === trigger.id && item.sourceActivityId === activity.id)
+      const reused = Boolean(triggeredTask)
+      const title = triggeredTask?.title ?? `${trigger.title} · ${new Date(activity.createdAt).toISOString().slice(0, 16)}`
+      if (!triggeredTask) {
         state = await deps.store.mutate({
           type: 'task.create',
           companyId: trigger.companyId,
@@ -68,16 +69,18 @@ export async function runEventTriggers(deps: EventTriggerRunnerDeps): Promise<vo
           sourceActivityId: activity.id,
           ...(trigger.agentId ? { assignedAgentId: trigger.agentId } : {}),
         })
+        triggeredTask = state.tasks.find((item) => item.sourceTriggerId === trigger.id && item.sourceActivityId === activity.id)
       }
 
-      const parts = [existing ? `Reused crash-safe trigger task "${title}".` : `Created task "${title}".`]
+      if (!triggeredTask) throw new Error('Event-triggered task was not materialized')
+      const parts = [reused ? `Reused crash-safe trigger task "${title}".` : `Created task "${title}".`]
       if (company.autonomyLevel >= 3) {
-        const decision = await deps.control.shouldRun(trigger.projectId, 'workflow.continue')
+        const decision = await deps.control.shouldRun(trigger.projectId, 'task.execute', triggeredTask.id)
         if (decision.route === 'ready') {
-          const receipt = await deps.orchestrator.runNext(trigger.projectId, false)
-          parts.push(receipt ? `Dispatched ${receipt.kind} run ${receipt.runId}.` : 'No runnable work was available yet.')
+          const receipt = await deps.orchestrator.runTask(triggeredTask.id, false)
+          parts.push(`Dispatched ${receipt.kind} run ${receipt.runId} for the triggered task.`)
         } else {
-          parts.push(`Autonomous dispatch held by control plane: ${decision.reason}`)
+          parts.push(`Triggered task is waiting on the board: ${decision.reason}`)
         }
       } else {
         parts.push('Task is waiting for a human because company autonomy is below level 3.')

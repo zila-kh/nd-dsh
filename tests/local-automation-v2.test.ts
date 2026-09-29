@@ -121,14 +121,28 @@ describe('local automation v2', () => {
       strategy,
       store: {
         state: async () => structuredClone(value),
-        mutate: async (mutation) => { mutations.push(mutation); return structuredClone(value) },
+        mutate: async (mutation) => {
+          mutations.push(mutation)
+          if (mutation.type === 'task.create') {
+            value.tasks.push({
+              id: 'trigger-task', companyId: mutation.companyId, projectId: mutation.projectId,
+              title: mutation.title, description: mutation.description, acceptanceCriteria: [], priority: mutation.priority ?? 'medium',
+              status: 'ready', dependsOn: mutation.dependsOn ?? [],
+              ...(mutation.assignedAgentId ? { assignedAgentId: mutation.assignedAgentId } : {}),
+              ...(mutation.sourceTriggerId ? { sourceTriggerId: mutation.sourceTriggerId } : {}),
+              ...(mutation.sourceActivityId ? { sourceActivityId: mutation.sourceActivityId } : {}),
+              createdAt: Date.now(), updatedAt: Date.now(),
+            })
+          }
+          return structuredClone(value)
+        },
       },
       control: {
         state: async () => control(),
         mutate: async () => control(),
         shouldRun: async () => ({ route: 'ready', reason: 'allowed' } as never),
       },
-      orchestrator: { runNext: async () => ({ runId: 'run-1', sessionId: 'session-1', projectId: 'p1', kind: 'task-execution' }) },
+      orchestrator: { runTask: async (taskId) => ({ runId: 'run-1', sessionId: 'session-1', projectId: 'p1', taskId, kind: 'task-execution' }) },
     })
     const created = mutations.filter((item) => item.type === 'task.create')
     expect(created).toHaveLength(1)
@@ -145,7 +159,7 @@ describe('local automation v2', () => {
         mutate: async () => control(),
         shouldRun: async () => ({ route: 'ready', reason: 'allowed' } as never),
       },
-      orchestrator: { runNext: async () => null },
+      orchestrator: { runTask: async (taskId) => ({ runId: 'run-2', sessionId: 'session-2', projectId: 'p1', taskId, kind: 'task-execution' }) },
     })
     expect(mutations.filter((item) => item.type === 'task.create')).toHaveLength(1)
   })
