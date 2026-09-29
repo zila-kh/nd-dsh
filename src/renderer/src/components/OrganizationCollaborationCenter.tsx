@@ -44,15 +44,15 @@ export function OrganizationCollaborationCenter({ companyId, projectId, onAskAge
       .then((next) => {
         if (!mounted) return
         setState(next)
-        const first = next.members.find((item) => item.companyId === companyId && item.status === 'active')
+        const first = (next.members ?? []).find((item) => item.companyId === companyId && item.status === 'active')
         if (first) setActiveMemberId((current) => current || first.id)
       })
       .catch((cause) => onError(errorMessage(cause)))
     const off = window.ndDshOrganization.onChanged((next) => {
       if (!mounted) return
       setState(next)
-      const activeStillExists = next.members.some((item) => item.id === activeMemberId && item.status === 'active')
-      if (!activeStillExists) setActiveMemberId(next.members.find((item) => item.companyId === companyId && item.status === 'active')?.id ?? '')
+      const activeStillExists = (next.members ?? []).some((item) => item.id === activeMemberId && item.status === 'active')
+      if (!activeStillExists) setActiveMemberId((next.members ?? []).find((item) => item.companyId === companyId && item.status === 'active')?.id ?? '')
     })
     return () => { mounted = false; off() }
   }, [activeMemberId, companyId, onError])

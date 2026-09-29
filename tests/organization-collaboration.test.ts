@@ -141,7 +141,7 @@ describe('local team collaboration', () => {
       targetKind: 'integration',
       targetId: task.id,
     })
-    const request = state.approvalRequests[0]!
+    const request = (state.approvalRequests ?? [])[0]!
     state = await store.mutate({
       type: 'approval.resolve',
       id: request.id,

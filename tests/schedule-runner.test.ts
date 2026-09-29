@@ -30,7 +30,8 @@ function harness(options: { autonomy: number; gate?: 'ready' | 'held'; openTask?
           tasks.push({
             id: 'generated-task', companyId: mutation.companyId, projectId: mutation.projectId,
             title: mutation.title, description: mutation.description, acceptanceCriteria: [], priority: mutation.priority ?? 'medium',
-            status: 'ready', dependsOn: mutation.dependsOn ?? [], sourceScheduleId: mutation.sourceScheduleId,
+            status: 'ready', dependsOn: mutation.dependsOn ?? [],
+            ...(mutation.sourceScheduleId ? { sourceScheduleId: mutation.sourceScheduleId } : {}),
             ...(mutation.assignedAgentId ? { assignedAgentId: mutation.assignedAgentId } : {}),
             ...(mutation.requestedSkillIds ? { requestedSkillIds: mutation.requestedSkillIds } : {}),
             createdAt: 1, updatedAt: 1,
