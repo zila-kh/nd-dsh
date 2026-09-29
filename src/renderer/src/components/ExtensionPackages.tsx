@@ -64,7 +64,7 @@ export function ExtensionPackagesCard({ state, organization, contexts, requested
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
-            <Package className="size-4 text-primary" /> Extension packages
+            <Package className="size-4 text-primary" /> ND extension packages
           </h3>
           <p className="text-xs text-faint">
             Installed once for your ND profile. Activation, settings, and grants are per context; installation alone grants nothing.
@@ -89,7 +89,7 @@ export function ExtensionPackagesCard({ state, organization, contexts, requested
 
       {(state.available?.length ?? 0) > 0 ? (
         <div className="space-y-2 rounded-md border border-border-soft p-3">
-          <h4 className="text-xs font-semibold text-foreground">Available extensions</h4>
+          <h4 className="text-xs font-semibold text-foreground">Available to install</h4>
           {state.available?.map((item) => {
             const installed = state.packages.find((pack) => pack.id === item.id)
             const updateAvailable = installed && installed.version !== item.version
@@ -98,7 +98,7 @@ export function ExtensionPackagesCard({ state, organization, contexts, requested
                 <div className="min-w-0 flex-1">
                   <div className="text-xs font-medium text-foreground">{item.name} · v{item.version}</div>
                   <p className="text-[11px] text-faint">{item.description}</p>
-                  <p className="text-[10px] text-faint">Permissions: {item.permissions.join(', ') || 'none'}</p>
+                  <p className="text-[10px] text-faint">Can: {describePermissions(item.permissions) || 'no special access'}</p>
                 </div>
                 <Button size="sm" variant="outline" disabled={busy || !item.available || Boolean(installed && !updateAvailable)} onClick={() => void run(() => window.ndDsh.ndExtensions.installAvailable(item.id))}>
                   {updateAvailable ? 'Update' : installed ? 'Installed' : item.available ? 'Install' : 'Unavailable'}
@@ -238,11 +238,13 @@ function PackageRow({
             {item.hasExecutable ? <Badge variant="outline">executable</Badge> : null}
           </div>
           <p className="mt-0.5 text-[11px] text-faint">{item.description}</p>
-          <p className="mt-0.5 text-[10px] text-faint">
-            {item.source.kind} · {item.source.location}
-            {item.source.revision ? ` @ ${item.source.revision.slice(0, 10)}` : ''} · commands {item.contributions.commands} · views {item.contributions.views} · workflows {item.contributions.workflows}
+          <p
+            className="mt-0.5 text-[10px] text-faint"
+            title={`${item.source.location}${item.source.revision ? ` @ ${item.source.revision.slice(0, 10)}` : ''}`}
+          >
+            {describeSource(item.source.kind)} · {item.contributions.commands} commands · {item.contributions.views} views · {item.contributions.workflows} workflows
           </p>
-          <p className="mt-0.5 text-[10px] text-faint">Permissions: {item.permissions.join(', ') || 'none'}</p>
+          <p className="mt-0.5 text-[10px] text-faint">Can: {describePermissions(item.permissions) || 'no special access'}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button size="sm" variant="outline" className="h-7" disabled={busy} onClick={() => void run(() => window.ndDsh.ndExtensions.update(item.id))}>
@@ -261,23 +263,27 @@ function PackageRow({
         </div>
       </div>
 
-      <div className="mt-2 flex flex-wrap items-center gap-2">
-        <span className="text-[11px] text-faint">Activation:</span>
-        {supported.map((option) => {
-          const active = isActive(item.id, option.context)
-          return (
-            <button
-              key={option.id}
-              type="button"
-              disabled={busy}
-              className={`rounded-full border px-2 py-0.5 text-[11px] transition-colors ${active ? 'border-primary/60 bg-primary/15 text-foreground' : 'border-border-soft text-faint hover:text-foreground'}`}
-              onClick={() => void run(() => window.ndDsh.ndExtensions.setActivation(item.id, option.context, !active))}
-            >
-              {option.label}{active ? ' ✓' : ''}
-            </button>
-          )
-        })}
-      </div>
+      {supported.length > 0 ? (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <span className="text-[11px] text-faint">Activation:</span>
+          {supported.map((option) => {
+            const active = isActive(item.id, option.context)
+            return (
+              <button
+                key={option.id}
+                type="button"
+                disabled={busy}
+                className={`rounded-full border px-2 py-0.5 text-[11px] transition-colors ${active ? 'border-primary/60 bg-primary/15 text-foreground' : 'border-border-soft text-faint hover:text-foreground'}`}
+                onClick={() => void run(() => window.ndDsh.ndExtensions.setActivation(item.id, option.context, !active))}
+              >
+                {option.label}{active ? ' ✓' : ''}
+              </button>
+            )
+          })}
+        </div>
+      ) : (
+        <p className="mt-2 text-[11px] text-faint">Activates in a company or project context — none is open yet, so there is nothing to switch on here.</p>
+      )}
 
       {item.settings.length > 0 ? (
         <div className="mt-2 space-y-1.5">
@@ -494,4 +500,29 @@ function ExtensionViewDialog({
       </DialogContent>
     </Dialog>
   )
+}
+
+/** Plain-language permission summaries; unknown slugs stay honest instead of guessing. */
+const PERMISSION_LABELS: Record<string, string> = {
+  'notes.read': 'Read your notes',
+  'notes.write': 'Create and edit notes',
+  'capture.screen': 'Take screen captures',
+  'capture.area': 'Capture parts of the screen',
+  'capture.read': 'Read saved captures',
+  'clipboard.read': 'Read copied text',
+  'browser.navigate': 'Navigate the built-in browser',
+  'browser.openExternal': 'Open links in your system browser',
+  'os.launch': 'Open apps and files on this device',
+  'process.read': 'See running processes',
+  'process.quit': 'Quit running processes',
+  'workflow.read': 'Read the project task board',
+  'chat.start': 'Start chats as you',
+}
+
+function describePermissions(permissions: string[]): string {
+  return Array.from(new Set(permissions.map((permission) => PERMISSION_LABELS[permission] ?? permission))).join(', ')
+}
+
+function describeSource(kind: string): string {
+  return kind === 'builtin' ? 'Bundled with ND' : kind === 'local' ? 'Installed from a folder' : kind
 }

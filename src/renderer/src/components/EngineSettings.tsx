@@ -16,14 +16,24 @@ import {
 import { GatewaySettings } from './GatewaySettings'
 import { TokenSaverSettings } from './TokenSaverSettings'
 import { TokenToolOptimizationSettings } from './TokenToolOptimizationSettings'
+import { enginesSubTabFromLocation, type EnginesSubTab } from '../lib/settings-route'
+import { cn } from '../lib/utils'
 
 const PREFERRED_CHAT_ENGINE_STORAGE_KEY = 'nd-dsh-preferred-chat-engine'
 
+const ENGINES_SUB_TABS: { id: EnginesSubTab; label: string }[] = [
+  { id: 'engines', label: 'Engines' },
+  { id: 'gateway', label: 'Gateway' },
+  { id: 'tokens', label: 'Token efficiency' },
+]
+
 interface EngineSettingsProps {
   onError(message: string): void
+  subTab?: EnginesSubTab
+  onSelectSubTab?: (subTab: EnginesSubTab) => void
 }
 
-export function EngineSettings({ onError }: EngineSettingsProps) {
+export function EngineSettings({ onError, subTab: propSubTab, onSelectSubTab }: EngineSettingsProps) {
   const [engines, setEngines] = useState<CodingEngineDescriptor[]>([])
   const [loading, setLoading] = useState(true)
   const [retrying, setRetrying] = useState(false)
@@ -83,9 +93,40 @@ export function EngineSettings({ onError }: EngineSettingsProps) {
     void refresh()
   }, [refresh])
 
+  const [internalSubTab, setInternalSubTab] = useState<EnginesSubTab>(enginesSubTabFromLocation)
+  const activeSubTab = propSubTab ?? internalSubTab
+  const handleSelectSubTab = (selected: EnginesSubTab): void => {
+    if (onSelectSubTab) {
+      onSelectSubTab(selected)
+    } else {
+      setInternalSubTab(selected)
+    }
+  }
+
   return (
-    <div className="min-h-0 overflow-auto px-[26px] pb-[42px] pt-1.5">
-      <SettingsSection title="Coding engines">
+    <div className="flex min-h-0 flex-col">
+      <div className="flex shrink-0 items-center border-b border-border-soft px-[26px] pb-2.5 pt-3">
+        <nav role="tablist" aria-label="Coding engines sub-tabs" className="flex shrink-0 gap-0.5 rounded-lg border border-border bg-secondary p-[3px]">
+          {ENGINES_SUB_TABS.map(({ id, label }) => (
+            <button
+              key={id}
+              role="tab"
+              aria-selected={activeSubTab === id}
+              className={cn(
+                'rounded-md px-3 py-1 text-[11px] font-semibold transition-colors',
+                activeSubTab === id ? 'bg-primary/10 text-primary' : 'text-faint hover:bg-accent hover:text-soft',
+              )}
+              onClick={() => handleSelectSubTab(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto px-[26px] pb-[42px] pt-1.5">
+        {activeSubTab === 'engines' && (
+          <>
+      <SettingsSection title="Coding engines" className="mt-3.5">
         <div className="space-y-1.5">
           <SettingsRow>
             <div className={rowStack}>
@@ -177,10 +218,16 @@ export function EngineSettings({ onError }: EngineSettingsProps) {
           </SettingsRow>
         </div>
       </SettingsSection>
-
-      <TokenToolOptimizationSettings onError={onError} />
-      <TokenSaverSettings onError={onError} />
-      <GatewaySettings onError={onError} />
+            </>
+        )}
+        {activeSubTab === 'gateway' && <GatewaySettings onError={onError} />}
+        {activeSubTab === 'tokens' && (
+          <>
+            <TokenToolOptimizationSettings onError={onError} />
+            <TokenSaverSettings onError={onError} />
+          </>
+        )}
+      </div>
     </div>
   )
 }
