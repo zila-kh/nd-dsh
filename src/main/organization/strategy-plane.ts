@@ -197,7 +197,7 @@ export class OrganizationStrategyPlane {
     for (const trigger of this.value.triggers.filter((item) => item.status === 'active')) {
       if (trigger.maxRuns !== undefined && trigger.runCount >= trigger.maxRuns) continue
       for (const activity of organization.activity) {
-        if (activity.companyId !== trigger.companyId || activity.projectId !== trigger.projectId || activity.type !== trigger.eventType) continue
+        if (activity.companyId !== trigger.companyId || activity.projectId !== trigger.projectId || activity.type !== trigger.eventType || activity.createdAt < trigger.createdAt) continue
         if (seen.has(`${trigger.id}:${activity.id}`)) continue
         output.push({ trigger: clone(trigger), activity: clone(activity) })
         if (output.length >= 50) return output
@@ -483,7 +483,7 @@ function normalize(value: unknown): OrganizationStrategySnapshot {
     version: 1,
     anchors: Array.isArray(input.anchors) ? input.anchors : [],
     knowledge: Array.isArray(input.knowledge) ? input.knowledge : [],
-    schedules: Array.isArray(input.schedules) ? input.schedules.map((item) => ({ mode: item.mode ?? 'interval', ...item })) : [],
+    schedules: Array.isArray(input.schedules) ? input.schedules.map((item) => ({ ...item, mode: item.mode ?? 'interval' })) : [],
     heartbeats: Array.isArray(input.heartbeats) ? input.heartbeats : [],
     triggers: Array.isArray(input.triggers) ? input.triggers : [],
     triggerReceipts: Array.isArray(input.triggerReceipts) ? input.triggerReceipts : [],

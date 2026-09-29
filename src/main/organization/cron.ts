@@ -7,9 +7,10 @@ export function nextCronAt(expression: string, timezone: string | undefined, fro
   const [minute, hour, dom, month, dow] = fields.map((field, index) => parseField(field!, limits[index]!))
   const zone = timezone?.trim() || 'UTC'
   validateTimezone(zone)
+  const formatter = zonedFormatter(zone)
   let candidate = Math.floor(fromMs / MINUTE_MS) * MINUTE_MS + MINUTE_MS
   for (let i = 0; i < MAX_SCAN_MINUTES; i++, candidate += MINUTE_MS) {
-    const parts = zonedParts(candidate, zone)
+    const parts = zonedParts(candidate, formatter)
     const dayOfMonthMatch = dom.values.has(parts.day)
     const dayOfWeekMatch = dow.values.has(parts.weekday)
     const dayMatch = dom.wildcard || dow.wildcard
@@ -71,8 +72,8 @@ function validateTimezone(timezone: string): void {
   }
 }
 
-function zonedParts(timestamp: number, timezone: string): { minute: number; hour: number; day: number; month: number; weekday: number } {
-  const formatter = new Intl.DateTimeFormat('en-US', {
+function zonedFormatter(timezone: string): Intl.DateTimeFormat {
+  return new Intl.DateTimeFormat('en-US', {
     timeZone: timezone,
     minute: '2-digit',
     hour: '2-digit',
@@ -81,6 +82,9 @@ function zonedParts(timestamp: number, timezone: string): { minute: number; hour
     month: '2-digit',
     weekday: 'short',
   })
+}
+
+function zonedParts(timestamp: number, formatter: Intl.DateTimeFormat): { minute: number; hour: number; day: number; month: number; weekday: number } {
   const parts = Object.fromEntries(formatter.formatToParts(timestamp).map((item) => [item.type, item.value]))
   return {
     minute: Number(parts.minute),

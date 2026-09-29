@@ -25,7 +25,7 @@ describe('local team collaboration', () => {
   it('seeds a local human member and persists project/task discussion across restart', async () => {
     const { path, store, company, project, owner } = await fixture()
     let state = await store.mutate({ type: 'member.create', companyId: company.id, displayName: 'Dara', title: 'Product Lead' })
-    const dara = state.members.find((item) => item.displayName === 'Dara')!
+    const dara = (state.members ?? []).find((item) => item.displayName === 'Dara')!
     state = await store.mutate({ type: 'task.create', companyId: company.id, projectId: project.id, title: 'Payments', description: 'Implement payment flow' })
     const task = state.tasks[0]!
 
@@ -48,10 +48,10 @@ describe('local team collaboration', () => {
 
     const reloaded = new OrganizationStore(path)
     state = await reloaded.state()
-    expect(state.members.map((item) => item.displayName)).toEqual(expect.arrayContaining(['Owner', 'Dara']))
-    expect(state.messages).toHaveLength(2)
-    expect(state.messages.find((item) => item.taskId === task.id)?.body).toContain('payment callback')
-    expect(state.messages[0]?.mentionActorIds).toContain(dara.id)
+    expect((state.members ?? []).map((item) => item.displayName)).toEqual(expect.arrayContaining(['Owner', 'Dara']))
+    expect(state.messages ?? []).toHaveLength(2)
+    expect((state.messages ?? []).find((item) => item.taskId === task.id)?.body).toContain('payment callback')
+    expect((state.messages ?? [])[0]?.mentionActorIds).toContain(dara.id)
     expect(JSON.parse(await readFile(path, 'utf8')).messages).toHaveLength(2)
   })
 
@@ -66,7 +66,7 @@ describe('local team collaboration', () => {
       summary: 'Use SQLite for local collaboration.',
       rationale: 'The local milestone must not require a server.',
     })
-    const first = state.decisions[0]!
+    const first = (state.decisions ?? [])[0]!
     state = await store.mutate({
       type: 'decision.supersede',
       id: first.id,
@@ -75,8 +75,8 @@ describe('local team collaboration', () => {
       summary: 'Keep SQLite behind a repository abstraction.',
       rationale: 'This preserves a future sync/storage migration path.',
     })
-    expect(state.decisions.find((item) => item.id === first.id)?.status).toBe('superseded')
-    expect(state.decisions.find((item) => item.supersedesDecisionId === first.id)?.status).toBe('active')
+    expect((state.decisions ?? []).find((item) => item.id === first.id)?.status).toBe('superseded')
+    expect((state.decisions ?? []).find((item) => item.supersedesDecisionId === first.id)?.status).toBe('active')
   })
 
   it('never treats friendly chat as approval and binds explicit approval to the exact checkpoint', async () => {
@@ -100,7 +100,7 @@ describe('local team collaboration', () => {
       authorMemberId: owner.id,
       body: 'looks good 👍',
     })
-    expect((await store.state()).approvalRequests).toHaveLength(0)
+    expect((await store.state()).approvalRequests ?? []).toHaveLength(0)
 
     state = await store.mutate({
       type: 'approval.request',
@@ -111,13 +111,13 @@ describe('local team collaboration', () => {
       targetKind: 'task-review',
       targetId: task.id,
     })
-    const request = state.approvalRequests[0]!
+    const request = (state.approvalRequests ?? [])[0]!
     expect(request.targetRevision).toBe('checkpoint-a')
 
     await store.updateRunProvenance(run.id, { checkpointCommit: 'checkpoint-b' })
     await expect(store.mutate({ type: 'approval.resolve', id: request.id, actorMemberId: owner.id, verdict: 'approve' }))
       .rejects.toThrow(/stale/i)
-    expect((await store.state()).approvalRequests[0]?.status).toBe('pending')
+    expect(((await store.state()).approvalRequests ?? [])[0]?.status).toBe('pending')
   })
 
   it('records explicit human verdicts independently from agent review state', async () => {
@@ -149,8 +149,8 @@ describe('local team collaboration', () => {
       verdict: 'request_changes',
       comment: 'Tighten the empty state before integration.',
     })
-    expect(state.approvalRequests[0]?.status).toBe('changes_requested')
-    expect(state.approvalVerdicts[0]).toMatchObject({ verdict: 'request_changes', actor: { kind: 'human', id: owner.id } })
+    expect((state.approvalRequests ?? [])[0]?.status).toBe('changes_requested')
+    expect((state.approvalVerdicts ?? [])[0]).toMatchObject({ verdict: 'request_changes', actor: { kind: 'human', id: owner.id } })
     expect(state.tasks[0]?.status).toBe('ready')
   })
 })

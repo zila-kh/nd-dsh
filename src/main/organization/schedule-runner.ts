@@ -52,7 +52,7 @@ export async function runDueSchedules(deps: ScheduleRunnerDeps): Promise<void> {
       const open = state.tasks.find((task) => task.sourceScheduleId === schedule.id && task.status !== 'completed')
       let created: string | undefined
       if (!open) {
-        const title = `${schedule.title} · ${new Date(now()).toISOString().slice(0, 16)}`
+        const title = `${schedule.title} · ${new Date(now()).toISOString().slice(0, 10)}`
         const cadence = describeCadence(schedule)
         const routine = schedule.mode === 'routine' ? `\nAgent routine: ${schedule.prompt ?? schedule.title}${schedule.skillIds?.length ? `\nPreferred skills: ${schedule.skillIds.join(', ')}` : ''}` : ''
         await deps.store.mutate({
