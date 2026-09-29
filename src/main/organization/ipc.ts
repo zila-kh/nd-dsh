@@ -100,7 +100,7 @@ export function registerOrganizationIpc(
       localRuntime?.noteSchedulerTick()
       await runDueHeartbeats({ strategy, control, store })
       localRuntime?.noteHeartbeatTick()
-      await runEventTriggers({ strategy, control, store })
+      await runEventTriggers({ strategy, control, store, orchestrator })
       localRuntime?.noteEventTick()
     })()
       .catch((error) => console.warn('Organization automation tick failed:', error instanceof Error ? error.message : String(error)))

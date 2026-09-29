@@ -60,6 +60,7 @@ export async function runDueSchedules(deps: ScheduleRunnerDeps): Promise<void> {
           description: `Automated work from "${schedule.title}" (${cadence}).${routine}`,
           sourceScheduleId: schedule.id,
           ...(schedule.agentId ? { assignedAgentId: schedule.agentId } : {}),
+          ...(schedule.skillIds?.length ? { requestedSkillIds: schedule.skillIds } : {}),
         })
         created = title
       }

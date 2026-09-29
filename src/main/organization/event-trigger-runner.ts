@@ -1,5 +1,5 @@
-import type { OrganizationControlMutation, OrganizationControlSnapshot } from '../../shared/organization-control.js'
-import type { OrganizationMutation, OrganizationSnapshot } from '../../shared/organization.js'
+import type { OrganizationControlMutation, OrganizationControlSnapshot, OrganizationTurnDecision } from '../../shared/organization-control.js'
+import type { OrganizationMutation, OrganizationRunReceipt, OrganizationSnapshot } from '../../shared/organization.js'
 import type { OrganizationAutomationTrigger } from '../../shared/organization-strategy.js'
 
 interface TriggerFiring {
@@ -19,6 +19,10 @@ export interface EventTriggerRunnerDeps {
   control: {
     state(): Promise<OrganizationControlSnapshot>
     mutate(mutation: OrganizationControlMutation): Promise<OrganizationControlSnapshot>
+    shouldRun(projectId: string | undefined, action: 'workflow.continue'): Promise<OrganizationTurnDecision>
+  }
+  orchestrator: {
+    runNext(projectId?: string, explicit?: boolean): Promise<OrganizationRunReceipt | null>
   }
 }
 
@@ -44,20 +48,41 @@ export async function runEventTriggers(deps: EventTriggerRunnerDeps): Promise<vo
         continue
       }
 
-      const state = await deps.store.state()
+      let state = await deps.store.state()
+      const company = state.companies.find((item) => item.id === trigger.companyId)
+      if (!company) throw new Error('Trigger company no longer exists')
       if (trigger.agentId && !state.agents.some((item) => item.id === trigger.agentId && item.companyId === trigger.companyId)) {
         throw new Error('Trigger agent is no longer available')
       }
-      const title = `${trigger.title} · ${new Date(activity.createdAt).toISOString().slice(0, 16)}`
-      await deps.store.mutate({
-        type: 'task.create',
-        companyId: trigger.companyId,
-        projectId: trigger.projectId,
-        title,
-        description: `${trigger.prompt}\n\nTriggered by ${activity.type}: ${activity.message}`,
-        ...(trigger.agentId ? { assignedAgentId: trigger.agentId } : {}),
-      })
-      await deps.strategy.recordTriggerFire(trigger.id, activity.id, 'success', `Created task "${title}".`)
+
+      const existing = state.tasks.find((item) => item.sourceTriggerId === trigger.id && item.sourceActivityId === activity.id)
+      const title = existing?.title ?? `${trigger.title} · ${new Date(activity.createdAt).toISOString().slice(0, 16)}`
+      if (!existing) {
+        state = await deps.store.mutate({
+          type: 'task.create',
+          companyId: trigger.companyId,
+          projectId: trigger.projectId,
+          title,
+          description: `${trigger.prompt}\n\nTriggered by ${activity.type}: ${activity.message}`,
+          sourceTriggerId: trigger.id,
+          sourceActivityId: activity.id,
+          ...(trigger.agentId ? { assignedAgentId: trigger.agentId } : {}),
+        })
+      }
+
+      const parts = [existing ? `Reused crash-safe trigger task "${title}".` : `Created task "${title}".`]
+      if (company.autonomyLevel >= 3) {
+        const decision = await deps.control.shouldRun(trigger.projectId, 'workflow.continue')
+        if (decision.route === 'ready') {
+          const receipt = await deps.orchestrator.runNext(trigger.projectId, false)
+          parts.push(receipt ? `Dispatched ${receipt.kind} run ${receipt.runId}.` : 'No runnable work was available yet.')
+        } else {
+          parts.push(`Autonomous dispatch held by control plane: ${decision.reason}`)
+        }
+      } else {
+        parts.push('Task is waiting for a human because company autonomy is below level 3.')
+      }
+      await deps.strategy.recordTriggerFire(trigger.id, activity.id, 'success', parts.join(' '))
     } catch (error) {
       await deps.strategy.recordTriggerFire(trigger.id, activity.id, 'failed', error instanceof Error ? error.message : String(error))
     }

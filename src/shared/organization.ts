@@ -203,6 +203,11 @@ export interface OrganizationTask {
   integratedHead?: string
   /** Set when a recurring company schedule created this task. */
   sourceScheduleId?: string
+  /** Event-trigger provenance prevents duplicate task creation after a crash/retry. */
+  sourceTriggerId?: string
+  sourceActivityId?: string
+  /** Skills requested by an automation/routine in addition to role/team/agent skills. */
+  requestedSkillIds?: string[]
   /** Why ND blocked the task, shown to the human until the task moves again. */
   blockedReason?: string
   createdAt: number
@@ -361,12 +366,12 @@ export interface OrganizationSnapshot {
   activity: OrganizationActivity[]
   runs: OrganizationRun[]
   /** Local human identities for attribution. These are not remote authentication principals. */
-  members?: OrganizationMember[]
+  members: OrganizationMember[]
   /** Durable human-grade project/task/review collaboration. */
-  messages?: OrganizationMessage[]
-  decisions?: OrganizationDecision[]
-  approvalRequests?: OrganizationApprovalRequest[]
-  approvalVerdicts?: OrganizationApprovalVerdict[]
+  messages: OrganizationMessage[]
+  decisions: OrganizationDecision[]
+  approvalRequests: OrganizationApprovalRequest[]
+  approvalVerdicts: OrganizationApprovalVerdict[]
   /** Structured machine-oriented team/task handoffs. Missing in older v1 snapshots and normalized to []. */
   coordination: OrganizationTeamEvent[]
 }
@@ -422,8 +427,8 @@ export type OrganizationMutation =
   | { type: 'skill.create'; scope: Exclude<OrganizationScope, 'builtin'>; name: string; description: string; instructions: string; companyId?: string; projectId?: string; teamId?: string; roleId?: string; agentId?: string }
   | { type: 'workflow.create'; companyId: string; projectId?: string; name: string; steps: WorkflowStep[] }
   | { type: 'goal.create'; companyId: string; projectId: string; title: string; description: string }
-  | { type: 'task.create'; companyId: string; projectId: string; goalId?: string; milestoneId?: string; title: string; description: string; acceptanceCriteria?: string[]; priority?: TaskPriority; dependsOn?: string[]; assignedAgentId?: string; workScopes?: string[]; evidenceKind?: TaskEvidenceKind; artifactPaths?: string[]; sourceScheduleId?: string }
-  | { type: 'task.update'; id: string; patch: Partial<Pick<OrganizationTask, 'title' | 'description' | 'acceptanceCriteria' | 'priority' | 'status' | 'dependsOn' | 'assignedAgentId' | 'workScopes' | 'evidenceKind' | 'artifactPaths'>> }
+  | { type: 'task.create'; companyId: string; projectId: string; goalId?: string; milestoneId?: string; title: string; description: string; acceptanceCriteria?: string[]; priority?: TaskPriority; dependsOn?: string[]; assignedAgentId?: string; workScopes?: string[]; evidenceKind?: TaskEvidenceKind; artifactPaths?: string[]; sourceScheduleId?: string; sourceTriggerId?: string; sourceActivityId?: string; requestedSkillIds?: string[] }
+  | { type: 'task.update'; id: string; patch: Partial<Pick<OrganizationTask, 'title' | 'description' | 'acceptanceCriteria' | 'priority' | 'status' | 'dependsOn' | 'assignedAgentId' | 'workScopes' | 'evidenceKind' | 'artifactPaths' | 'requestedSkillIds'>> }
   | { type: 'collaboration.message.add'; companyId: string; projectId: string; authorMemberId: string; body: string; taskId?: string; replyToId?: string; mentionActorIds?: string[]; kind?: OrganizationMessageKind }
   | { type: 'decision.create'; companyId: string; projectId: string; authorMemberId: string; title: string; summary: string; rationale: string; taskId?: string }
   | { type: 'decision.supersede'; id: string; authorMemberId: string; title: string; summary: string; rationale: string }

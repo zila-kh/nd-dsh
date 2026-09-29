@@ -146,7 +146,7 @@ export class OrganizationStore {
     const agent = task.assignedAgentId ? this.value.agents.find((item) => item.id === task.assignedAgentId) : undefined
     const role = agent ? this.value.roles.find((item) => item.id === agent.roleId) : undefined
     const teamSkills = this.value.teams.find((item) => item.id === agent?.teamId)?.skillIds ?? []
-    const ids = new Set([...(agent?.skillIds ?? []), ...(role?.skillIds ?? []), ...teamSkills])
+    const ids = new Set([...(agent?.skillIds ?? []), ...(role?.skillIds ?? []), ...teamSkills, ...(task.requestedSkillIds ?? [])])
     const skills = this.value.skills.filter((skill) => skill.scope === 'builtin' || ids.has(skill.id) || skill.companyId === company.id || skill.projectId === project.id)
     const memory = this.value.memory.filter((entry) => entry.companyId === company.id && (!entry.projectId || entry.projectId === project.id)).slice(-30)
     const policies = this.value.policies.filter((item) => item.companyId === company.id)
@@ -714,10 +714,20 @@ export class OrganizationStore {
     if (project.companyId !== input.companyId) throw new Error('Project does not belong to company')
     if (input.assignedAgentId && !this.value.agents.some((item) => item.id === input.assignedAgentId && item.companyId === input.companyId)) throw new Error('Assigned agent crosses company boundary')
     for (const dependency of input.dependsOn ?? []) if (!this.value.tasks.some((item) => item.id === dependency && item.projectId === input.projectId)) throw new Error('Task dependency crosses project boundary')
+    for (const skillId of input.requestedSkillIds ?? []) {
+      const skill = this.value.skills.find((item) => item.id === skillId)
+      if (!skill) throw new Error(`Requested skill not found: ${skillId}`)
+      if (skill.scope !== 'builtin' && skill.companyId !== input.companyId) throw new Error('Requested skill crosses company boundary')
+      if (skill.projectId && skill.projectId !== input.projectId) throw new Error('Requested skill crosses project boundary')
+    }
+    const duplicateTrigger = input.sourceTriggerId && input.sourceActivityId
+      ? this.value.tasks.find((item) => item.sourceTriggerId === input.sourceTriggerId && item.sourceActivityId === input.sourceActivityId)
+      : undefined
+    if (duplicateTrigger) return
     const agent = input.assignedAgentId ? this.value.agents.find((item) => item.id === input.assignedAgentId) : this.pickAgent(input.companyId)
     if (agent?.teamId && !project.teamIds.includes(agent.teamId)) project.teamIds.push(agent.teamId)
     const now = Date.now()
-    this.value.tasks.push({ id: randomUUID(), companyId: input.companyId, projectId: input.projectId, title: clean(input.title), description: clean(input.description), acceptanceCriteria: input.acceptanceCriteria?.map(clean).filter(Boolean) ?? ['Requested outcome is implemented and verified.'], priority: input.priority ?? 'medium', status: 'backlog', dependsOn: input.dependsOn ?? [], ...(input.goalId ? { goalId: input.goalId } : {}), ...(input.milestoneId ? { milestoneId: input.milestoneId } : {}), ...(agent ? { assignedAgentId: agent.id } : {}), ...taskExecutionHints(input), ...(input.sourceScheduleId ? { sourceScheduleId: clean(input.sourceScheduleId) } : {}), createdAt: now, updatedAt: now })
+    this.value.tasks.push({ id: randomUUID(), companyId: input.companyId, projectId: input.projectId, title: clean(input.title), description: clean(input.description), acceptanceCriteria: input.acceptanceCriteria?.map(clean).filter(Boolean) ?? ['Requested outcome is implemented and verified.'], priority: input.priority ?? 'medium', status: 'backlog', dependsOn: input.dependsOn ?? [], ...(input.goalId ? { goalId: input.goalId } : {}), ...(input.milestoneId ? { milestoneId: input.milestoneId } : {}), ...(agent ? { assignedAgentId: agent.id } : {}), ...taskExecutionHints(input), ...(input.sourceScheduleId ? { sourceScheduleId: clean(input.sourceScheduleId) } : {}), ...(input.sourceTriggerId ? { sourceTriggerId: clean(input.sourceTriggerId) } : {}), ...(input.sourceActivityId ? { sourceActivityId: clean(input.sourceActivityId) } : {}), ...(input.requestedSkillIds?.length ? { requestedSkillIds: [...new Set(input.requestedSkillIds)] } : {}), createdAt: now, updatedAt: now })
     this.refreshProject(input.projectId)
   }
   private updateTask(id: string, patch: Extract<OrganizationMutation, { type: 'task.update' }>['patch']): void {
@@ -730,6 +740,15 @@ export class OrganizationStore {
     const nextPatch = { ...patch }
     if (patch.workScopes !== undefined) nextPatch.workScopes = normalizeWorkScopes(patch.workScopes)
     if (patch.artifactPaths !== undefined) nextPatch.artifactPaths = normalizeArtifactPaths(patch.artifactPaths)
+    if (patch.requestedSkillIds !== undefined) {
+      for (const skillId of patch.requestedSkillIds) {
+        const skill = this.value.skills.find((item) => item.id === skillId)
+        if (!skill) throw new Error(`Requested skill not found: ${skillId}`)
+        if (skill.scope !== 'builtin' && skill.companyId !== task.companyId) throw new Error('Requested skill crosses company boundary')
+        if (skill.projectId && skill.projectId !== task.projectId) throw new Error('Requested skill crosses project boundary')
+      }
+      nextPatch.requestedSkillIds = [...new Set(patch.requestedSkillIds)]
+    }
     const effectiveEvidence = patch.evidenceKind ?? task.evidenceKind ?? ((nextPatch.artifactPaths ?? task.artifactPaths)?.length ? 'artifact' : 'code')
     const effectiveArtifacts = nextPatch.artifactPaths ?? task.artifactPaths ?? []
     if (effectiveEvidence === 'artifact' && effectiveArtifacts.length === 0) throw new Error('Artifact tasks require at least one artifact path')

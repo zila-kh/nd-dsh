@@ -24,7 +24,7 @@ function organization(now = Date.now()): OrganizationSnapshot {
     roles: [],
     teams: [],
     agents: [{ id: 'a1', companyId: 'c1', name: 'Builder', roleId: 'r1', status: 'idle', skillIds: [] }],
-    skills: [],
+    skills: [{ id: 'builtin:implementation', scope: 'builtin', name: 'Implementation', description: 'Build safely', instructions: 'Implement and verify.' }],
     workflows: [],
     goals: [],
     milestones: [],
@@ -33,6 +33,11 @@ function organization(now = Date.now()): OrganizationSnapshot {
     policies: [],
     activity: [],
     runs: [],
+    members: [],
+    messages: [],
+    decisions: [],
+    approvalRequests: [],
+    approvalVerdicts: [],
     coordination: [],
   }
 }
@@ -76,7 +81,7 @@ describe('local automation v2', () => {
       mode: 'routine', intervalMinutes: 30, agentId: 'a1', prompt: 'Inspect the project and continue safe ready work.',
       skillIds: ['builtin:implementation'],
     })
-    expect(state.schedules[0]).toMatchObject({ mode: 'routine', agentId: 'a1', intervalMinutes: 30 })
+    expect(state.schedules[0]).toMatchObject({ mode: 'routine', agentId: 'a1', intervalMinutes: 30, skillIds: ['builtin:implementation'] })
   })
 
   it('heartbeat surfaces attention without calling a model', async () => {
@@ -118,9 +123,16 @@ describe('local automation v2', () => {
         state: async () => structuredClone(value),
         mutate: async (mutation) => { mutations.push(mutation); return structuredClone(value) },
       },
-      control: { state: async () => control(), mutate: async () => control() },
+      control: {
+        state: async () => control(),
+        mutate: async () => control(),
+        shouldRun: async () => ({ route: 'ready', reason: 'allowed' } as never),
+      },
+      orchestrator: { runNext: async () => ({ runId: 'run-1', sessionId: 'session-1', projectId: 'p1', kind: 'task-execution' }) },
     })
-    expect(mutations.filter((item) => item.type === 'task.create')).toHaveLength(1)
+    const created = mutations.filter((item) => item.type === 'task.create')
+    expect(created).toHaveLength(1)
+    expect(created[0]).toMatchObject({ sourceTriggerId: trigger.id, sourceActivityId: 'new', assignedAgentId: 'a1' })
     expect((await strategy.state()).triggerReceipts).toHaveLength(1)
     await runEventTriggers({
       strategy,
@@ -128,7 +140,12 @@ describe('local automation v2', () => {
         state: async () => structuredClone(value),
         mutate: async (mutation) => { mutations.push(mutation); return structuredClone(value) },
       },
-      control: { state: async () => control(), mutate: async () => control() },
+      control: {
+        state: async () => control(),
+        mutate: async () => control(),
+        shouldRun: async () => ({ route: 'ready', reason: 'allowed' } as never),
+      },
+      orchestrator: { runNext: async () => null },
     })
     expect(mutations.filter((item) => item.type === 'task.create')).toHaveLength(1)
   })

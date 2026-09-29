@@ -296,6 +296,12 @@ export class OrganizationStrategyPlane {
       : input.intervalMinutes === undefined ? undefined : positiveInteger(input.intervalMinutes, 'intervalMinutes')
     if (mode === 'routine' && !input.agentId) throw new Error('Agent routine requires agentId')
     if (mode === 'routine' && !input.prompt?.trim()) throw new Error('Agent routine requires a prompt')
+    for (const skillId of input.skillIds ?? []) {
+      const skill = organization.skills.find((item) => item.id === skillId)
+      if (!skill) throw new Error(`Routine skill not found: ${skillId}`)
+      if (skill.scope !== 'builtin' && skill.companyId !== input.companyId) throw new Error('Routine skill crosses company boundary')
+      if (skill.projectId && skill.projectId !== input.projectId) throw new Error('Routine skill crosses project boundary')
+    }
     if (mode === 'cron') validateCron(clean(input.cron ?? ''), input.timezone)
     const runAt = mode === 'once' ? positiveInteger(input.runAt ?? input.nextRunAt ?? now + 60_000, 'runAt') : undefined
     const row: OrganizationCompanySchedule = {
