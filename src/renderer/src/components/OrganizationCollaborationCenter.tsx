@@ -47,8 +47,8 @@ export function OrganizationCollaborationCenter({ companyId, projectId, onAskAge
       window.ndDshControl.management(projectId),
     ])
       .then(([next, managementState]) => {
-        setManagement(managementState)
         if (!mounted) return
+        setManagement(managementState)
         setState(next)
         const first = (next.members ?? []).find((item) => item.companyId === companyId && item.status === 'active')
         if (first) setActiveMemberId((current) => current || first.id)
