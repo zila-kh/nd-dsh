@@ -170,6 +170,41 @@ describe('local team collaboration', () => {
     })).rejects.toThrow(/already integrated/i)
   })
 
+  it('rejects forged task approval targets and invented checkpoints', async () => {
+    const { store, company, project, owner } = await fixture()
+    let state = await store.mutate({ type: 'task.create', companyId: company.id, projectId: project.id, title: 'Uncheckpointed', description: 'No run yet' })
+    const task = state.tasks[0]!
+
+    await expect(store.mutate({
+      type: 'approval.request',
+      companyId: company.id,
+      projectId: project.id,
+      taskId: task.id,
+      requesterMemberId: owner.id,
+      targetKind: 'task-review',
+      targetId: task.id,
+      targetRevision: 'invented',
+    })).rejects.toThrow(/real task checkpoint/i)
+
+    const run = await store.beginRun('task-execution', company.id, project.id, 'session-binding', task.id, undefined, {
+      parallelTask: true,
+      engineId: 'nd-native',
+      workspaceKind: 'git-worktree',
+      workspaceRoot: '/tmp/task-binding',
+      baselineCommit: 'base',
+    })
+    await store.updateRunProvenance(run.id, { checkpointCommit: 'real-checkpoint' })
+    await expect(store.mutate({
+      type: 'approval.request',
+      companyId: company.id,
+      projectId: project.id,
+      taskId: task.id,
+      requesterMemberId: owner.id,
+      targetKind: 'integration',
+      targetId: 'different-task',
+    })).rejects.toThrow(/targetId must match taskId/i)
+  })
+
   it('records explicit human verdicts independently from agent review state', async () => {
     const { store, company, project, owner } = await fixture()
     let state = await store.mutate({ type: 'task.create', companyId: company.id, projectId: project.id, title: 'UI', description: 'Polish team view' })

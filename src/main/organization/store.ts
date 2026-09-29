@@ -909,19 +909,19 @@ export class OrganizationStore {
     const requester = this.member(input.requesterMemberId, input.companyId)
     const task = input.taskId ? this.task(input.taskId) : undefined
     if (task && task.projectId !== input.projectId) throw new Error('Approval task crosses project boundary')
-    if ((input.targetKind === 'task-review' || input.targetKind === 'integration') && !task) throw new Error('Task approval requires a task')
+    const checkpointBound = input.targetKind === 'task-review' || input.targetKind === 'integration'
+    if (checkpointBound && !task) throw new Error('Task approval requires a task')
+    if (checkpointBound && task && input.targetId.trim() !== task.id) throw new Error('Task approval targetId must match taskId')
     if (input.targetKind === 'integration' && task?.integrationState === 'integrated') {
       throw new Error('Task is already integrated; an integration approval cannot undo merged work. Create a follow-up task or decision instead.')
     }
     const latestRevision = task ? this.latestCheckpoint(task.id) : undefined
     const requestedRevision = input.targetRevision?.trim()
-    if (task && requestedRevision && latestRevision && requestedRevision !== latestRevision) {
+    if (checkpointBound && !latestRevision) throw new Error('Checkpoint-bound approval requires a real task checkpoint')
+    if (checkpointBound && requestedRevision && requestedRevision !== latestRevision) {
       throw new Error(`Approval target is stale: requested checkpoint ${requestedRevision}, current checkpoint is ${latestRevision}`)
     }
-    const revision = requestedRevision || latestRevision
-    if ((input.targetKind === 'task-review' || input.targetKind === 'integration') && !revision) {
-      throw new Error('Checkpoint-bound approval requires a task checkpoint')
-    }
+    const revision = checkpointBound ? latestRevision : requestedRevision
     if (this.value.approvalRequests.some((item) => item.status === 'pending' && item.targetKind === input.targetKind && item.targetId === input.targetId && item.targetRevision === revision)) {
       throw new Error('An equivalent approval request is already pending')
     }
