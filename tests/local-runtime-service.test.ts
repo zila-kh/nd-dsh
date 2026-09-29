@@ -78,7 +78,7 @@ describe('LocalRuntimeService', () => {
     const service = new LocalRuntimeService(path, appPort, 'linux')
     await service.initialize()
     const state = await service.update({ alwaysOn: true, startAtLogin: true })
-    expect(state.settings.startAtLogin).toBe(true)
+    expect(state.settings.startAtLogin).toBe(false)
     expect(state.startAtLoginSupported).toBe(false)
     expect(state.startAtLoginApplied).toBe(false)
   })

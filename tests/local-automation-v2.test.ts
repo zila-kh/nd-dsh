@@ -164,6 +164,29 @@ describe('local automation v2', () => {
     expect(mutations.filter((item) => item.type === 'task.create')).toHaveLength(1)
   })
 
+  it('retries failed event deliveries after backoff and consumes them after success', async () => {
+    const value = organization()
+    const { strategy } = await strategyFixture(value)
+    let state = await strategy.mutate({
+      type: 'trigger.add', companyId: 'c1', projectId: 'p1', title: 'Retry blocker',
+      eventType: 'task.blocked', action: 'task', prompt: 'Investigate',
+    })
+    const trigger = state.triggers[0]!
+    value.activity.unshift({
+      id: 'retry-event', companyId: 'c1', projectId: 'p1', type: 'task.blocked',
+      message: 'Transient engine issue', createdAt: trigger.createdAt + 1,
+    })
+    expect(await strategy.pendingTriggerFirings(trigger.createdAt + 1)).toHaveLength(1)
+    await strategy.recordTriggerFire(trigger.id, 'retry-event', 'failed', 'provider unavailable')
+    expect(await strategy.pendingTriggerFirings(Date.now())).toHaveLength(0)
+    expect(await strategy.pendingTriggerFirings(Date.now() + 60_001)).toHaveLength(1)
+    await strategy.recordTriggerFire(trigger.id, 'retry-event', 'success', 'task dispatched')
+    expect(await strategy.pendingTriggerFirings(Date.now() + 120_000)).toHaveLength(0)
+    state = await strategy.state()
+    expect(state.triggers[0]?.runCount).toBe(1)
+    expect(state.triggerReceipts.find((item) => item.activityId === 'retry-event')?.outcome).toBe('success')
+  })
+
   it('learned skills stay candidates until explicitly promoted', async () => {
     const { strategy, mutations } = await strategyFixture()
     let state = await strategy.mutate({

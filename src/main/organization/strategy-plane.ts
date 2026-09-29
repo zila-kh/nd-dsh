@@ -21,6 +21,8 @@ import {
 import { nextCronAt, validateCron } from './cron.js'
 import type { OrganizationStore } from './store.js'
 
+const TRIGGER_RETRY_MS = 60_000
+
 const EMPTY: OrganizationStrategySnapshot = {
   version: 1,
   anchors: [],
@@ -189,16 +191,22 @@ export class OrganizationStrategyPlane {
     await this.save()
   }
 
-  async pendingTriggerFirings(): Promise<Array<{ trigger: OrganizationAutomationTrigger; activity: OrganizationSnapshot['activity'][number] }>> {
+  async pendingTriggerFirings(now = Date.now()): Promise<Array<{ trigger: OrganizationAutomationTrigger; activity: OrganizationSnapshot['activity'][number] }>> {
     await this.load()
     const organization = await this.store.state()
-    const seen = new Set(this.value.triggerReceipts.map((item) => `${item.triggerId}:${item.activityId}`))
+    const latestReceipts = new Map<string, OrganizationTriggerReceipt>()
+    for (const receipt of this.value.triggerReceipts) {
+      const key = `${receipt.triggerId}:${receipt.activityId}`
+      if (!latestReceipts.has(key)) latestReceipts.set(key, receipt)
+    }
     const output: Array<{ trigger: OrganizationAutomationTrigger; activity: OrganizationSnapshot['activity'][number] }> = []
     for (const trigger of this.value.triggers.filter((item) => item.status === 'active')) {
       if (trigger.maxRuns !== undefined && trigger.runCount >= trigger.maxRuns) continue
       for (const activity of organization.activity) {
         if (activity.companyId !== trigger.companyId || activity.projectId !== trigger.projectId || activity.type !== trigger.eventType || activity.createdAt < trigger.createdAt) continue
-        if (seen.has(`${trigger.id}:${activity.id}`)) continue
+        const receipt = latestReceipts.get(`${trigger.id}:${activity.id}`)
+        if (receipt?.outcome === 'success' || receipt?.outcome === 'skipped') continue
+        if (receipt?.outcome === 'failed' && receipt.createdAt + TRIGGER_RETRY_MS > now) continue
         output.push({ trigger: clone(trigger), activity: clone(activity) })
         if (output.length >= 50) return output
       }
@@ -208,16 +216,24 @@ export class OrganizationStrategyPlane {
 
   async recordTriggerFire(triggerId: string, activityId: string, outcome: CompanyScheduleOutcome, detail: string): Promise<void> {
     await this.load()
-    if (this.value.triggerReceipts.some((item) => item.triggerId === triggerId && item.activityId === activityId)) return
     const trigger = must(this.value.triggers.find((item) => item.id === triggerId), 'Automation trigger')
-    const receipt: OrganizationTriggerReceipt = {
-      id: randomUUID(), triggerId, activityId, outcome, detail: clean(detail), createdAt: Date.now(),
+    const now = Date.now()
+    const existing = this.value.triggerReceipts.find((item) => item.triggerId === triggerId && item.activityId === activityId)
+    const previousOutcome = existing?.outcome
+    if (previousOutcome === 'success' || previousOutcome === 'skipped') return
+    if (existing) {
+      existing.outcome = outcome
+      existing.detail = clean(detail)
+      existing.createdAt = now
+    } else {
+      this.value.triggerReceipts.unshift({
+        id: randomUUID(), triggerId, activityId, outcome, detail: clean(detail), createdAt: now,
+      })
+      this.value.triggerReceipts = this.value.triggerReceipts.slice(0, 2_000)
     }
-    this.value.triggerReceipts.unshift(receipt)
-    this.value.triggerReceipts = this.value.triggerReceipts.slice(0, 2_000)
-    if (outcome === 'success') trigger.runCount += 1
+    if (outcome === 'success' && previousOutcome !== 'success') trigger.runCount += 1
     if (trigger.maxRuns !== undefined && trigger.runCount >= trigger.maxRuns) trigger.status = 'completed'
-    trigger.updatedAt = Date.now()
+    trigger.updatedAt = now
     await this.save()
   }
 

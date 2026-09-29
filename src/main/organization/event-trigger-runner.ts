@@ -75,12 +75,16 @@ export async function runEventTriggers(deps: EventTriggerRunnerDeps): Promise<vo
       if (!triggeredTask) throw new Error('Event-triggered task was not materialized')
       const parts = [reused ? `Reused crash-safe trigger task "${title}".` : `Created task "${title}".`]
       if (company.autonomyLevel >= 3) {
-        const decision = await deps.control.shouldRun(trigger.projectId, 'task.execute', triggeredTask.id)
-        if (decision.route === 'ready') {
-          const receipt = await deps.orchestrator.runTask(triggeredTask.id, false)
-          parts.push(`Dispatched ${receipt.kind} run ${receipt.runId} for the triggered task.`)
+        if (triggeredTask.status !== 'ready') {
+          parts.push(`Triggered task is ${triggeredTask.status}; ND will not auto-restart non-ready work.`)
         } else {
-          parts.push(`Triggered task is waiting on the board: ${decision.reason}`)
+          const decision = await deps.control.shouldRun(trigger.projectId, 'task.execute', triggeredTask.id)
+          if (decision.route === 'ready') {
+            const receipt = await deps.orchestrator.runTask(triggeredTask.id, false)
+            parts.push(`Dispatched ${receipt.kind} run ${receipt.runId} for the triggered task.`)
+          } else {
+            parts.push(`Triggered task is waiting on the board: ${decision.reason}`)
+          }
         }
       } else {
         parts.push('Task is waiting for a human because company autonomy is below level 3.')

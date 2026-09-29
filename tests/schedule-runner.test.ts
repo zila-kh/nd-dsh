@@ -72,6 +72,19 @@ describe('runDueSchedules', () => {
     expect(events.at(-1)).toMatch(/still open/)
   })
 
+  it('does not auto-restart blocked or in-flight scheduled work', async () => {
+    for (const status of ['blocked', 'in_progress', 'review'] as const) {
+      const { deps, events, created } = harness({
+        autonomy: 3,
+        openTask: { sourceScheduleId: 'sched-1', title: 'Existing scheduled work', status },
+      })
+      await runDueSchedules(deps)
+      expect(created).toHaveLength(0)
+      expect(events.some((item) => item.startsWith('runTask:'))).toBe(false)
+      expect(events.at(-1)).toContain(`is ${status}; ND will not auto-restart`)
+    }
+  })
+
   it('hands the run back for a soon retry when a gate holds it', async () => {
     const { deps, created, events } = harness({ autonomy: 3, gate: 'held' })
     await runDueSchedules(deps)

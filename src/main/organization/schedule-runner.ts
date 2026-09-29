@@ -70,12 +70,16 @@ export async function runDueSchedules(deps: ScheduleRunnerDeps): Promise<void> {
       if (!scheduledTask) throw new Error('Scheduled task was not materialized')
       const parts = [created ? `Created task "${created}".` : `Task "${scheduledTask.title}" from the previous run is still open.`]
       if (company.autonomyLevel >= 3) {
-        const executionDecision = await deps.control.shouldRun(schedule.projectId, 'task.execute', scheduledTask.id)
-        if (executionDecision.route === 'ready') {
-          const receipt = await deps.orchestrator.runTask(scheduledTask.id, false)
-          parts.push(`Dispatched ${receipt.kind} run ${receipt.runId} for the scheduled task.`)
+        if (scheduledTask.status !== 'ready') {
+          parts.push(`Scheduled task is ${scheduledTask.status}; ND will not auto-restart non-ready work.`)
         } else {
-          parts.push(`Scheduled task is waiting on the board: ${executionDecision.reason}`)
+          const executionDecision = await deps.control.shouldRun(schedule.projectId, 'task.execute', scheduledTask.id)
+          if (executionDecision.route === 'ready') {
+            const receipt = await deps.orchestrator.runTask(scheduledTask.id, false)
+            parts.push(`Dispatched ${receipt.kind} run ${receipt.runId} for the scheduled task.`)
+          } else {
+            parts.push(`Scheduled task is waiting on the board: ${executionDecision.reason}`)
+          }
         }
       } else {
         parts.push('It is waiting on the board for a human to start it; raise the company to autonomy 3 to let schedules start work.')

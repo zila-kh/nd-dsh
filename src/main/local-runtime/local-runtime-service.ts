@@ -95,7 +95,8 @@ export class LocalRuntimeService {
       ...(patch.alwaysOn !== undefined ? { alwaysOn: Boolean(patch.alwaysOn) } : {}),
       ...(patch.startAtLogin !== undefined ? { startAtLogin: Boolean(patch.startAtLogin) } : {}),
     }
-    if (!this.settingsValue.alwaysOn && this.settingsValue.startAtLogin) {
+    const loginItemPlatformSupported = this.platform === 'win32' || this.platform === 'darwin'
+    if ((!this.settingsValue.alwaysOn || !loginItemPlatformSupported) && this.settingsValue.startAtLogin) {
       this.settingsValue.startAtLogin = false
     }
     await this.save()
