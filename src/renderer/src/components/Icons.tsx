@@ -98,3 +98,6 @@ export const HomeIcon = (props: IconProps) => <IconBase {...props}><path d="m3 1
 export const DownloadIcon = (props: IconProps) => (
   <IconBase {...props}><path d="M12 3v11" /><path d="m7.5 10 4.5 4.5L16.5 10" /><path d="M4 17v2.25A1.75 1.75 0 0 0 5.75 21h12.5A1.75 1.75 0 0 0 20 19.25V17" /></IconBase>
 )
+export const BlocksIcon = (props: IconProps) => (
+  <IconBase {...props}><rect x="3" y="3" width="7.5" height="7.5" rx="1.2" /><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.2" /><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.2" /><path d="M17.25 13.75v7M13.5 17.5h7.5" /></IconBase>
+)

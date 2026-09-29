@@ -21,7 +21,7 @@ test.afterAll(async () => {
 test('plugin catalog settings expose search, installed, built-in, and all seven surfaces', async () => {
   const { page } = launched
   await page.getByRole('navigation', { name: 'ND-DSH navigation' }).getByTitle('Settings').click()
-  await page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab', { name: 'Extensions & plugins', exact: true }).click()
+  await page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab', { name: 'Plugins', exact: true }).click()
 
   await expect(page.getByRole('heading', { name: 'Plugins', exact: true })).toBeVisible()
   await expect(page.getByLabel('Search plugins')).toBeVisible()
@@ -29,8 +29,10 @@ test('plugin catalog settings expose search, installed, built-in, and all seven 
   await expect(page.getByRole('heading', { name: 'Built-in', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Add Plugin', exact: true })).toBeVisible()
 
+  // Scope to the surface nav: the settings sidebar also has a Plugins tab button.
+  const surfaceNav = page.getByRole('navigation', { name: 'Plugin capability types' })
   for (const surface of ['Plugins', 'MCP Servers', 'Skills', 'Commands', 'Hooks', 'Subagents', 'Memory']) {
-    await expect(page.getByRole('button', { name: surface, exact: true })).toBeVisible()
+    await expect(surfaceNav.getByRole('button', { name: surface, exact: true })).toBeVisible()
   }
 
   await page.getByLabel('Search plugins').fill('counter')
@@ -43,7 +45,8 @@ test('plugin catalog settings expose search, installed, built-in, and all seven 
 
 test('all seven agent capability surfaces ship a routable Counter demo', async () => {
   const { page } = launched
-  await expect(page).toHaveURL(/#\/settings\?tab=extensions$/)
+  await expect(page).toHaveURL(/#\/settings\?tab=plugins$/)
+  const surfaceNav = page.getByRole('navigation', { name: 'Plugin capability types' })
 
   const surfaces = [
     ['Memory', 'Counter Memory Demo'],
@@ -56,7 +59,7 @@ test('all seven agent capability surfaces ship a routable Counter demo', async (
   ] as const
 
   for (const [surface, demoName] of surfaces) {
-    await page.getByRole('button', { name: surface, exact: true }).click()
+    await surfaceNav.getByRole('button', { name: surface, exact: true }).click()
     await page.getByRole('button', { name: new RegExp(demoName) }).click()
     await expect(page.getByText('Counter route smoke test', { exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'Run demo', exact: true }).click()
@@ -72,7 +75,8 @@ test('all seven agent capability surfaces ship a routable Counter demo', async (
 
 test('custom extension settings persist through the trusted desktop bridge', async () => {
   const { page } = launched
-  await page.getByRole('button', { name: 'Plugins', exact: true }).click()
+  const surfaceNav = page.getByRole('navigation', { name: 'Plugin capability types' })
+  await surfaceNav.getByRole('button', { name: 'Plugins', exact: true }).click()
   await page.getByRole('button', { name: 'Add Plugin', exact: true }).click()
   await expect(page.getByText('Custom', { exact: true }).last()).toBeVisible()
 
@@ -90,8 +94,8 @@ test('custom extension settings persist through the trusted desktop bridge', asy
   // Navigate away and back so ExtensionSettings remounts and reloads the
   // catalog through the trusted main-process bridge instead of React state.
   await page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab', { name: 'General', exact: true }).click()
-  await page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab', { name: 'Extensions & plugins', exact: true }).click()
-  await page.getByRole('button', { name: 'Plugins', exact: true }).click()
+  await page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab', { name: 'Plugins', exact: true }).click()
+  await surfaceNav.getByRole('button', { name: 'Plugins', exact: true }).click()
   await expect(page.getByRole('button', { name: /E2E Routed Plugin/ })).toBeVisible()
   expect(rendererErrors).toEqual([])
 })
