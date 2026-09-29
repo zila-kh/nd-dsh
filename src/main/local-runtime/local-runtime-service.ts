@@ -10,6 +10,12 @@ const DEFAULT_SETTINGS: LocalRuntimeSettings = {
   startAtLogin: false,
 }
 
+export interface LocalRuntimeAppPort {
+  isPackaged: boolean
+  getLoginItemSettings(options?: { args?: string[] }): { openAtLogin: boolean }
+  setLoginItemSettings(settings: { openAtLogin: boolean; args?: string[] }): void
+}
+
 export class LocalRuntimeService {
   private loaded = false
   private settingsValue: LocalRuntimeSettings = { ...DEFAULT_SETTINGS }
@@ -20,7 +26,11 @@ export class LocalRuntimeService {
   private lastEventTickAt: number | undefined
   private onChanged: ((state: LocalRuntimeState) => void) | undefined
 
-  constructor(private readonly filePath: string) {}
+  constructor(
+    private readonly filePath: string,
+    private readonly appPort: LocalRuntimeAppPort = app as unknown as LocalRuntimeAppPort,
+    private readonly platform: NodeJS.Platform = process.platform,
+  ) {}
 
   async initialize(): Promise<LocalRuntimeState> {
     await this.load()
@@ -63,9 +73,9 @@ export class LocalRuntimeService {
 
   async state(): Promise<LocalRuntimeState> {
     await this.load()
-    const supported = process.platform === 'win32' || process.platform === 'darwin'
-    const applied = supported && app.isPackaged
-      ? app.getLoginItemSettings({ args: ['--background'] }).openAtLogin
+    const supported = this.platform === 'win32' || this.platform === 'darwin'
+    const applied = supported && this.appPort.isPackaged
+      ? this.appPort.getLoginItemSettings({ args: ['--background'] }).openAtLogin
       : false
     return {
       settings: { ...this.settingsValue },
@@ -129,10 +139,10 @@ export class LocalRuntimeService {
   }
 
   private applyLoginItem(): void {
-    const supported = process.platform === 'win32' || process.platform === 'darwin'
-    if (!supported || !app.isPackaged) return
+    const supported = this.platform === 'win32' || this.platform === 'darwin'
+    if (!supported || !this.appPort.isPackaged) return
     try {
-      app.setLoginItemSettings({
+      this.appPort.setLoginItemSettings({
         openAtLogin: this.settingsValue.alwaysOn && this.settingsValue.startAtLogin,
         args: ['--background'],
       })
