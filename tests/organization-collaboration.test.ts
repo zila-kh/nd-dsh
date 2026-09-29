@@ -18,7 +18,7 @@ async function fixture() {
   let state = await store.mutate({ type: 'company.create', name: 'Taxi Co', mission: 'Ship with a real local team' })
   const company = state.companies[0]!
   state = await store.mutate({ type: 'project.create', companyId: company.id, name: 'Taxi App', objective: 'Ship MVP', workspacePath: dir })
-  return { path, store, company, project: state.projects[0]!, owner: state.members[0]! }
+  return { path, store, company, project: state.projects[0]!, owner: (state.members ?? [])[0]! }
 }
 
 describe('local team collaboration', () => {
