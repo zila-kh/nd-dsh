@@ -219,9 +219,16 @@ Run locally from the repo:
 ```bash
 corepack pnpm install
 corepack pnpm typecheck
-corepack pnpm vitest run tests/organization-collaboration.test.ts tests/local-automation-v2.test.ts tests/local-runtime-service.test.ts tests/schedule-runner.test.ts
+corepack pnpm vitest run \
+  tests/organization-collaboration.test.ts \
+  tests/organization-strategy-plane.test.ts \
+  tests/organization-control-plane.test.ts \
+  tests/local-automation-v2.test.ts \
+  tests/local-runtime-service.test.ts \
+  tests/schedule-runner.test.ts
 corepack pnpm test
 corepack pnpm build
+corepack pnpm beta:unit
 ```
 
 If dependencies are already installed, skip `pnpm install`.
@@ -238,8 +245,10 @@ If dependencies are already installed, skip `pnpm install`.
 4. Request explicit integration approval.
 5. Confirm:
    - typing “looks good” does not approve;
-   - changing checkpoint makes an old approval fail stale;
-   - Request Changes returns work to ready;
+   - changing checkpoint automatically cancels the old approval;
+   - a forged/stale checkpoint cannot be requested;
+   - an already-integrated task cannot receive or resolve an integration approval;
+   - Request Changes returns pre-integration work to ready;
    - Reject blocks it.
 6. Strategy:
    - create interval schedule;
@@ -249,26 +258,32 @@ If dependencies are already installed, skip `pnpm install`.
    - create heartbeat;
    - create event trigger.
 7. Set company autonomy >= 3 and verify an automation executes its own generated task.
-8. Enable Always-On:
+   - verify blocked/in-progress/review scheduled tasks are not auto-restarted;
+   - simulate one transient trigger failure and confirm it retries after the backoff without creating a duplicate task.
+8. Remove a test project that owns a schedule, heartbeat, trigger, signal/gate and evidence; restart ND and confirm no orphaned background/control records return.
+9. Enable Always-On:
    - close ND window;
    - verify process remains alive;
    - wait for scheduler/heartbeat tick;
    - reopen through global launcher / app launch;
    - confirm liveness timestamps advanced.
-9. In packaged Windows/macOS build:
+10. In an unpackaged dev build, confirm Start at login is shown unsupported while Always-On itself still works.
+11. In a packaged Windows build:
    - enable Start at login;
    - sign out/reboot/login;
-   - verify ND launches hidden;
+   - verify ND launches hidden via the background login argument;
    - verify due automation is processed.
-10. Disable Always-On and confirm normal close exits cleanly.
+12. On packaged macOS, validate the same flow on the signed/notarized app; ND detects the login launch through Electron's login-item state instead of Windows-only arguments.
+13. Disable Always-On and confirm normal close exits cleanly.
 
 ## Acceptance gate
 
 Do not merge as “fully verified” until:
 
 - typecheck passes;
-- targeted tests pass;
+- targeted collaboration + strategy + control + automation/runtime tests pass;
 - full test suite passes;
+- `beta:unit` passes;
 - packaged build passes;
 - manual collaboration smoke passes;
 - manual Always-On background smoke passes;
