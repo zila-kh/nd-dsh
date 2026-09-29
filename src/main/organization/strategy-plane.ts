@@ -67,7 +67,7 @@ export class OrganizationStrategyPlane {
       case 'knowledge.add': this.addKnowledge(organization, mutation); break
       case 'knowledge.update': this.updateKnowledge(mutation.id, mutation.patch); break
       case 'schedule.add': this.addSchedule(organization, mutation); break
-      case 'schedule.update': this.updateSchedule(mutation.id, mutation.patch); break
+      case 'schedule.update': this.updateSchedule(organization, mutation.id, mutation.patch); break
       case 'heartbeat.add': this.addHeartbeat(organization, mutation); break
       case 'heartbeat.update': this.updateHeartbeat(mutation.id, mutation.patch); break
       case 'trigger.add': this.addTrigger(organization, mutation); break
@@ -326,19 +326,54 @@ export class OrganizationStrategyPlane {
     this.value.schedules.unshift(row)
   }
 
-  private updateSchedule(id: string, patch: Extract<OrganizationStrategyMutation, { type: 'schedule.update' }>['patch']): void {
+  private updateSchedule(
+    organization: OrganizationSnapshot,
+    id: string,
+    patch: Extract<OrganizationStrategyMutation, { type: 'schedule.update' }>['patch'],
+  ): void {
     const row = must(this.value.schedules.find((item) => item.id === id), 'Company schedule')
     if (patch.title !== undefined) row.title = clean(patch.title)
     if (patch.intervalMinutes !== undefined) row.intervalMinutes = positiveInteger(patch.intervalMinutes, 'intervalMinutes')
-    if (patch.cron !== undefined) { validateCron(clean(patch.cron), patch.timezone ?? row.timezone); row.cron = clean(patch.cron) }
-    if (patch.timezone !== undefined) row.timezone = clean(patch.timezone)
-    if (patch.runAt !== undefined) row.runAt = positiveInteger(patch.runAt, 'runAt')
+
+    if (patch.agentId !== undefined) {
+      if (!organization.agents.some((item) => item.id === patch.agentId && item.companyId === row.companyId)) {
+        throw new Error('Scheduled agent not found in company')
+      }
+      row.agentId = patch.agentId
+    }
+    if (patch.skillIds !== undefined) {
+      for (const skillId of patch.skillIds) {
+        const skill = organization.skills.find((item) => item.id === skillId)
+        if (!skill) throw new Error(`Routine skill not found: ${skillId}`)
+        if (skill.scope !== 'builtin' && skill.companyId !== row.companyId) throw new Error('Routine skill crosses company boundary')
+        if (skill.projectId && skill.projectId !== row.projectId) throw new Error('Routine skill crosses project boundary')
+      }
+      row.skillIds = cleanList(patch.skillIds)
+    }
+
+    const nextTimezone = patch.timezone !== undefined ? clean(patch.timezone) : row.timezone
+    const nextCron = patch.cron !== undefined ? clean(patch.cron) : row.cron
+    if (row.mode === 'cron' && (patch.cron !== undefined || patch.timezone !== undefined)) {
+      validateCron(nextCron ?? '', nextTimezone)
+      row.cron = nextCron
+      row.timezone = nextTimezone ?? 'UTC'
+      if (patch.nextRunAt === undefined) row.nextRunAt = nextCronAt(row.cron, row.timezone, Date.now())
+    } else {
+      if (patch.cron !== undefined) {
+        validateCron(clean(patch.cron), nextTimezone)
+        row.cron = clean(patch.cron)
+      }
+      if (patch.timezone !== undefined) row.timezone = nextTimezone
+    }
+
+    if (patch.runAt !== undefined) {
+      row.runAt = positiveInteger(patch.runAt, 'runAt')
+      if (row.mode === 'once' && patch.nextRunAt === undefined) row.nextRunAt = row.runAt
+    }
     if (patch.status !== undefined) row.status = patch.status
     if (patch.nextRunAt !== undefined) row.nextRunAt = positiveInteger(patch.nextRunAt, 'nextRunAt')
     if (patch.maxRuns !== undefined) row.maxRuns = positiveInteger(patch.maxRuns, 'maxRuns')
-    if (patch.agentId !== undefined) row.agentId = patch.agentId
     if (patch.prompt !== undefined) row.prompt = clean(patch.prompt)
-    if (patch.skillIds !== undefined) row.skillIds = cleanList(patch.skillIds)
     row.updatedAt = Date.now()
   }
 

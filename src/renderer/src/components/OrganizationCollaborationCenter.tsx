@@ -5,6 +5,7 @@ import type {
   OrganizationSnapshot,
   OrganizationTask,
 } from '../../../shared/organization'
+import type { OrganizationManagementProjection } from '../../../shared/organization-control'
 import { cn } from '../lib/utils'
 import { Card as UiCard } from './ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
@@ -31,6 +32,7 @@ const input = cn(
 
 export function OrganizationCollaborationCenter({ companyId, projectId, onAskAgent, onError }: Props) {
   const [state, setState] = useState<OrganizationSnapshot | null>(null)
+  const [management, setManagement] = useState<OrganizationManagementProjection | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [activeMemberId, setActiveMemberId] = useState('')
   const [memberDraft, setMemberDraft] = useState({ displayName: '', title: '' })
@@ -40,8 +42,12 @@ export function OrganizationCollaborationCenter({ companyId, projectId, onAskAge
 
   useEffect(() => {
     let mounted = true
-    void window.ndDshOrganization.state()
-      .then((next) => {
+    void Promise.all([
+      window.ndDshOrganization.state(),
+      window.ndDshControl.management(projectId),
+    ])
+      .then(([next, managementState]) => {
+        setManagement(managementState)
         if (!mounted) return
         setState(next)
         const first = (next.members ?? []).find((item) => item.companyId === companyId && item.status === 'active')
@@ -54,8 +60,13 @@ export function OrganizationCollaborationCenter({ companyId, projectId, onAskAge
       const activeStillExists = (next.members ?? []).some((item) => item.id === activeMemberId && item.status === 'active')
       if (!activeStillExists) setActiveMemberId((next.members ?? []).find((item) => item.companyId === companyId && item.status === 'active')?.id ?? '')
     })
-    return () => { mounted = false; off() }
-  }, [activeMemberId, companyId, onError])
+    const offControl = window.ndDshControl.onChanged(() => {
+      void window.ndDshControl.management(projectId)
+        .then((next) => { if (mounted) setManagement(next) })
+        .catch((cause) => onError(errorMessage(cause)))
+    })
+    return () => { mounted = false; off(); offControl() }
+  }, [activeMemberId, companyId, onError, projectId])
 
   const project = state?.projects.find((item) => item.id === projectId && item.companyId === companyId)
   const members = useMemo(() => (state?.members ?? []).filter((item) => item.companyId === companyId), [state, companyId])
@@ -66,7 +77,12 @@ export function OrganizationCollaborationCenter({ companyId, projectId, onAskAge
   const approvals = useMemo(() => (state?.approvalRequests ?? []).filter((item) => item.projectId === projectId).slice().sort((a, b) => b.createdAt - a.createdAt), [state, projectId])
   const activeMember = members.find((item) => item.id === activeMemberId && item.status === 'active')
   const mentioned = messages.filter((item) => activeMemberId && item.mentionActorIds.includes(activeMemberId))
-  const needsYou = approvals.filter((item) => item.status === 'pending').length + mentioned.length
+  const pendingApprovals = approvals.filter((item) => item.status === 'pending').length
+  const managementNeedsYou = management?.needsYou.length ?? 0
+  const blockedTasks = tasks.filter((item) => item.status === 'blocked').length
+  const reviewTasks = tasks.filter((item) => item.status === 'review').length
+  const newSignals = management?.metrics.newSignals ?? 0
+  const needsYou = pendingApprovals + mentioned.length + managementNeedsYou + reviewTasks
 
   async function act(key: string, fn: () => Promise<unknown>): Promise<void> {
     if (busy) return
@@ -81,7 +97,7 @@ export function OrganizationCollaborationCenter({ companyId, projectId, onAskAge
         type: 'member.create', companyId, displayName: memberDraft.displayName,
         ...(memberDraft.title.trim() ? { title: memberDraft.title } : {}),
       })
-      const created = next.members.find((item) => item.companyId === companyId && item.displayName === memberDraft.displayName.trim())
+      const created = (next.members ?? []).find((item) => item.companyId === companyId && item.displayName === memberDraft.displayName.trim())
       if (created) setActiveMemberId(created.id)
       setMemberDraft({ displayName: '', title: '' })
     })
@@ -219,10 +235,14 @@ export function OrganizationCollaborationCenter({ companyId, projectId, onAskAge
       <div className="grid content-start gap-2.5">
         <CollabCard title="Needs You" badge={String(needsYou)}>
           <div className="grid grid-cols-2 gap-2">
-            <Metric label="Pending approvals" value={approvals.filter((item) => item.status === 'pending').length} />
+            <Metric label="Pending approvals" value={pendingApprovals} />
             <Metric label="Mentions" value={mentioned.length} />
+            <Metric label="Control actions" value={managementNeedsYou} />
+            <Metric label="Review tasks" value={reviewTasks} />
+            <Metric label="Blocked tasks" value={blockedTasks} />
+            <Metric label="New signals" value={newSignals} />
           </div>
-          <p className="m-0 mt-2 text-[11px] text-faint">This first local projection is profile-scoped. It will later join Control Center gates, blockers and scheduled-agent questions.</p>
+          <p className="m-0 mt-2 text-[11px] text-faint">One local attention surface now combines collaboration, control-plane gates/actions, blocked work, reviews and automation/heartbeat signals.</p>
         </CollabCard>
 
         <CollabCard title="Explicit Approval">
