@@ -370,16 +370,19 @@ export class OrganizationStrategyPlane {
     const nextTimezone = patch.timezone !== undefined ? clean(patch.timezone) : row.timezone
     const nextCron = patch.cron !== undefined ? clean(patch.cron) : row.cron
     if (row.mode === 'cron' && (patch.cron !== undefined || patch.timezone !== undefined)) {
-      validateCron(nextCron ?? '', nextTimezone)
-      row.cron = nextCron
-      row.timezone = nextTimezone ?? 'UTC'
-      if (patch.nextRunAt === undefined) row.nextRunAt = nextCronAt(row.cron, row.timezone, Date.now())
+      const cron = nextCron ?? ''
+      const timezone = nextTimezone ?? 'UTC'
+      validateCron(cron, timezone)
+      row.cron = cron
+      row.timezone = timezone
+      if (patch.nextRunAt === undefined) row.nextRunAt = nextCronAt(cron, timezone, Date.now())
     } else {
       if (patch.cron !== undefined) {
-        validateCron(clean(patch.cron), nextTimezone)
-        row.cron = clean(patch.cron)
+        const cron = clean(patch.cron)
+        validateCron(cron, nextTimezone)
+        row.cron = cron
       }
-      if (patch.timezone !== undefined) row.timezone = nextTimezone
+      if (patch.timezone !== undefined) row.timezone = clean(patch.timezone)
     }
 
     if (patch.runAt !== undefined) {
