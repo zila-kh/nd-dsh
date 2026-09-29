@@ -1,25 +1,25 @@
 ---
-id: "0008"
+id: "0010"
 title: "ND Cloud Sync and Customer Portal"
-status: draft
+status: deferred
 created: 2026-09-27
 ---
 
-# PRD 0008 — ND Cloud Sync and Customer Portal
+# PRD 0010 — ND Cloud Sync and Customer Portal
 
 ## 1. Product outcome
 
-Add optional paid hosted infrastructure around the complete free local ND product.
+After PRD 0009 is accepted, add optional hosted infrastructure around the complete free local ND product.
 
-ND Cloud provides sync, remote access, collaboration and hosted services. It must not become required for normal local work.
+ND Cloud provides cross-device sync, remote access and hosted services for the local collaboration model defined by PRD 0009. It must not become required for normal local work.
 
-## 2. Customer value
+## 1.1 Dependency gate\n\nImplementation is deferred until PRD 0009 local collaboration passes its durability/reliability gate. Cloud must transport the local model rather than inventing a second task/comment/approval system.\n\n## 2. Customer value
 
 Potential paid capabilities:
 
 - cross-device/company sync;
 - remote Web access to connected ND hosts;
-- multi-user/team collaboration;
+- cross-device synchronization of the local team workspace;\n- remote team access to the same comments/decisions/approvals model;
 - hosted backup/history;
 - devices/host management;
 - team membership and roles;

@@ -1,19 +1,19 @@
 ---
-id: "0009"
+id: "0011"
 title: "ND Admin, Entitlements and Extension Registry"
-status: draft
+status: deferred
 created: 2026-09-27
 ---
 
-# PRD 0009 — ND Admin, Entitlements and Extension Registry
+# PRD 0011 — ND Admin, Entitlements and Extension Registry
 
 ## 1. Product outcome
 
-Create a separate internal ND administration surface and cloud control services without mixing staff authority into the customer portal.
+After hosted ND Cloud exists, create a separate internal ND administration surface and cloud control services without mixing staff authority into the customer portal.
 
 This PRD also defines the future managed extension registry and entitlement boundary.
 
-## 2. Application separation
+## 1.1 Dependency gate\n\nImplementation is deferred behind PRD 0009 (local team workspace) and PRD 0010 (hosted sync/customer portal). Local collaboration functionality is not an entitlement and cannot be remotely revoked.\n\n## 2. Application separation
 
 Recommended cloud applications:
 
@@ -79,7 +79,7 @@ The entitlement service should unlock hosted capabilities such as:
 
 - cloud sync;
 - remote control;
-- team collaboration;
+- hosted multi-device team sync and remote collaboration;
 - hosted backups;
 - private extension registry;
 - enterprise managed policy;
