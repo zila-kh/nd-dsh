@@ -23,6 +23,7 @@ export function nativeExtensionProjectContext(
   organization: OrganizationSnapshot,
   sessionId: string,
   cwd: string,
+  worktree: boolean,
 ): NdProjectContext {
   const sessionRuns = organization.runs
     .filter((run) =>
@@ -31,15 +32,20 @@ export function nativeExtensionProjectContext(
     .sort((left, right) => right.startedAt - left.startedAt)
 
   if (sessionRuns.length > 0) {
-    const run = sessionRuns.find((candidate) =>
-      candidate.workspaceRoot === undefined || sameRoot(candidate.workspaceRoot, cwd))
-    if (!run) throw new Error('ND Agent extension context does not match the session worktree')
+    // A session id belongs to its newest ND run. Never fall back to an older
+    // run merely because its recorded root happens to match.
+    const run = sessionRuns[0]!
+    if (run.workspaceRoot !== undefined && !sameRoot(run.workspaceRoot, cwd)) {
+      throw new Error('ND Agent extension context does not match the session worktree')
+    }
     const project = organization.projects.find((item) => item.id === run.projectId)
     if (!project || project.companyId !== run.companyId) {
       throw new Error('ND Agent organization run no longer has a valid project context')
     }
     return { kind: 'project', companyId: run.companyId, projectId: run.projectId }
   }
+
+  if (worktree) throw new Error('ND Agent task worktree has no organization run context')
 
   const projectId = organization.activeProjectId
   const project = organization.projects.find((item) => item.id === projectId)

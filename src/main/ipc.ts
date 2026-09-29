@@ -231,9 +231,9 @@ export function registerIpc(deps: IpcDependencies): () => void {
     host: nativeHost,
     organization: deps.organizationStore,
   })
-  deps.nativeToolBroker?.setExtensionInvoker(async ({ sessionId, cwd, extensionId, contributionId, input }) => {
+  deps.nativeToolBroker?.setExtensionInvoker(async ({ sessionId, cwd, worktree, extensionId, contributionId, input }) => {
     const organization = await deps.organizationStore.state()
-    const context = nativeExtensionProjectContext(organization, sessionId, cwd)
+    const context = nativeExtensionProjectContext(organization, sessionId, cwd, worktree)
     const credential = invocationBroker.mintRunCredential({
       sessionId,
       engineId: 'nd-native',

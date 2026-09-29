@@ -10,6 +10,7 @@ import type { NativeToolRequest, NdNativeEngine } from './nd-native-engine.js'
 export type NativeExtensionInvoker = (request: {
   sessionId: string
   cwd: string
+  worktree: boolean
   extensionId: string
   contributionId: string
   input: Record<string, unknown>
@@ -130,6 +131,7 @@ export class NdNativeToolBroker {
           result = await this.extensionInvoker({
             sessionId: request.sessionId,
             cwd: session.cwd,
+            worktree: this.options.ownsWorktree(session.cwd),
             extensionId,
             contributionId,
             input,

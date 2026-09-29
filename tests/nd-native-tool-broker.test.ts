@@ -111,6 +111,7 @@ describe('ND Agent trusted tool broker', () => {
     expect(invoke).toHaveBeenCalledWith({
       sessionId: 'nd-native-one',
       cwd: project,
+      worktree: false,
       extensionId: 'example.tools',
       contributionId: 'project.read',
       input: { query: 'todo' },

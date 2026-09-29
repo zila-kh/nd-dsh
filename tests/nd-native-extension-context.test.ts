@@ -45,7 +45,7 @@ describe('ND Agent extension project context', () => {
         startedAt: 10,
       } as never],
     })
-    expect(nativeExtensionProjectContext(state, 'nd-native-one', 'C:/worktrees/project-a/task-1')).toEqual({
+    expect(nativeExtensionProjectContext(state, 'nd-native-one', 'C:/worktrees/project-a/task-1', true)).toEqual({
       kind: 'project',
       companyId: 'company-a',
       projectId: 'project-a',
@@ -66,12 +66,17 @@ describe('ND Agent extension project context', () => {
         startedAt: 10,
       } as never],
     })
-    expect(() => nativeExtensionProjectContext(state, 'nd-native-one', 'C:/worktrees/project-a/task-2'))
+    expect(() => nativeExtensionProjectContext(state, 'nd-native-one', 'C:/worktrees/project-a/task-2', true))
       .toThrow(/does not match the session worktree/)
   })
 
+  it('does not bind an orphaned task worktree to the ambient active project', () => {
+    expect(() => nativeExtensionProjectContext(snapshot(), 'nd-native-orphan', 'C:/worktrees/old/task-1', true))
+      .toThrow(/has no organization run context/)
+  })
+
   it('uses the active project only for an interactive session with no organization run', () => {
-    expect(nativeExtensionProjectContext(snapshot(), 'nd-native-chat', 'C:/projects/b')).toEqual({
+    expect(nativeExtensionProjectContext(snapshot(), 'nd-native-chat', 'C:/projects/b', false)).toEqual({
       kind: 'project',
       companyId: 'company-b',
       projectId: 'project-b',
