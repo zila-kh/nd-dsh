@@ -60,6 +60,12 @@ export function registerOrganizationIpc(
     (projectWorkspace, taskId) => orchestrator.captureTaskEvidence(projectWorkspace, taskId),
   )
   const strategy = new OrganizationStrategyPlane(join(app.getPath('userData'), 'organization-strategy.json'), store)
+  void store.state()
+    .then((organization) => Promise.all([
+      strategy.pruneToOrganization(organization),
+      control.pruneToOrganization(organization),
+    ]))
+    .catch((error) => console.warn('Organization scoped-state startup reconciliation failed:', error instanceof Error ? error.message : String(error)))
   control.setOnChanged((state) => {
     if (!window.isDestroyed()) window.webContents.send(ORGANIZATION_CONTROL_IPC.changed, state)
   })
