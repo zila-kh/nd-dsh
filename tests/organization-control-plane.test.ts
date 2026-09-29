@@ -257,7 +257,7 @@ describe('organization control plane', () => {
   })
 
   it('prunes durable control records that belong to removed projects', async () => {
-    const { control, organization } = await fixture()
+    const { control, value } = await fixture()
     await control.mutate({
       type: 'human-action.add',
       companyId: 'company-1',
@@ -274,9 +274,9 @@ describe('organization control plane', () => {
       title: 'Signal',
       summary: 'Project signal',
     })
-    organization.projects = []
-    organization.tasks = []
-    await control.pruneToOrganization(organization)
+    value.projects = []
+    value.tasks = []
+    await control.pruneToOrganization(value)
     const state = await control.state()
     expect(state.humanActions).toHaveLength(0)
     expect(state.signals).toHaveLength(0)
