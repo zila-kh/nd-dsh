@@ -107,6 +107,41 @@ describe('local automation v2', () => {
     expect(controlState.signals[0]?.summary).toContain('blocked task')
   })
 
+  it('does not repeatedly resurface failed runs from before the previous heartbeat', async () => {
+    const value = organization()
+    value.runs.push({
+      id: 'old-failure', companyId: 'c1', projectId: 'p1', kind: 'pm-plan',
+      status: 'failed', sessionId: 'old-session', error: 'old provider failure',
+      startedAt: 10, completedAt: 20,
+    })
+    let controlState = control()
+    const candidate = {
+      id: 'hb-1', companyId: 'c1', projectId: 'p1', title: 'Project heartbeat',
+      intervalMinutes: 30, status: 'active' as const, nextRunAt: 100,
+      lastRunAt: 50, createdAt: 1, updatedAt: 50,
+    }
+    await runDueHeartbeats({
+      strategy: {
+        dueHeartbeats: async () => [candidate],
+        beginHeartbeat: async () => ({ ...candidate, lastRunAt: 100, nextRunAt: 1000 }),
+        finishHeartbeat: async () => undefined,
+      },
+      store: { state: async () => structuredClone(value) },
+      control: {
+        state: async () => structuredClone(controlState),
+        mutate: async (mutation) => {
+          if (mutation.type === 'signal.add') controlState.signals.unshift({
+            id: 'unexpected', companyId: mutation.companyId, projectId: mutation.projectId,
+            source: mutation.source, title: mutation.title, summary: mutation.summary,
+            status: 'new', confidence: mutation.confidence, createdAt: 100, updatedAt: 100,
+          })
+          return structuredClone(controlState)
+        },
+      },
+    })
+    expect(controlState.signals).toHaveLength(0)
+  })
+
   it('event triggers only consume events created after the trigger and are idempotent', async () => {
     const value = organization(100)
     value.activity.push({ id: 'old', companyId: 'c1', projectId: 'p1', type: 'task.blocked', message: 'Old blocker', createdAt: 99 })
