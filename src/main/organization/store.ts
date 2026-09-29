@@ -28,7 +28,8 @@ import { BUILTIN_SKILLS, defaultPolicies, defaultWorkflow } from './defaults.js'
 const EMPTY: OrganizationSnapshot = {
   version: 1,
   companies: [], projects: [], roles: [], teams: [], agents: [], skills: BUILTIN_SKILLS,
-  workflows: [], goals: [], milestones: [], tasks: [], memory: [], policies: [], activity: [], runs: [], coordination: [],
+  workflows: [], goals: [], milestones: [], tasks: [], memory: [], policies: [], activity: [], runs: [],
+  members: [], messages: [], decisions: [], approvalRequests: [], approvalVerdicts: [], coordination: [],
 }
 
 const SNAPSHOT_ARRAY_KEYS = [
@@ -67,6 +68,8 @@ export class OrganizationStore {
       case 'project.activate': this.activateProject(mutation.id); break
       case 'project.remove': this.removeProject(mutation.id); break
       case 'team.create': this.createTeam(mutation); break
+      case 'member.create': this.createMember(mutation); break
+      case 'member.update': this.updateMember(mutation.id, mutation.patch); break
       case 'role.create': this.createRole(mutation); break
       case 'role.update': this.updateRole(mutation.id, mutation.patch); break
       case 'agent.create': this.createAgent(mutation); break
@@ -76,6 +79,11 @@ export class OrganizationStore {
       case 'goal.create': this.createGoal(mutation); break
       case 'task.create': this.createTask(mutation); break
       case 'task.update': this.updateTask(mutation.id, mutation.patch); break
+      case 'collaboration.message.add': this.addCollaborationMessage(mutation); break
+      case 'decision.create': this.createDecision(mutation); break
+      case 'decision.supersede': this.supersedeDecision(mutation); break
+      case 'approval.request': this.createApprovalRequest(mutation); break
+      case 'approval.resolve': this.resolveApproval(mutation); break
       case 'memory.add': this.addMemory({ ...mutation, source: 'human' }); break
       case 'policy.set': this.setPolicy(mutation); break
     }
@@ -568,6 +576,7 @@ export class OrganizationStore {
     this.seedAgent(id, 'Builder', engineerRole.id, engineeringTeam.id)
     this.seedAgent(id, 'Reviewer', reviewerRole.id, qualityTeam.id)
     this.seedAgent(id, 'Researcher', researcherRole.id, qualityTeam.id)
+    this.value.members.push({ id: randomUUID(), companyId: id, displayName: 'Owner', title: 'Workspace Owner', status: 'active', createdAt: now, updatedAt: now })
     this.value.workflows.push(defaultWorkflow(id)); this.value.policies.push(...defaultPolicies(id))
     this.activity(id, undefined, 'company.created', `Created ${company.name} with a default AI workforce and safety policy.`)
   }
@@ -595,6 +604,12 @@ export class OrganizationStore {
     this.value.tasks = this.value.tasks.filter((item) => item.companyId !== id)
     this.value.runs = this.value.runs.filter((item) => item.companyId !== id)
     this.value.coordination = this.value.coordination.filter((item) => item.companyId !== id)
+    this.value.members = this.value.members.filter((item) => item.companyId !== id)
+    this.value.messages = this.value.messages.filter((item) => item.companyId !== id)
+    this.value.decisions = this.value.decisions.filter((item) => item.companyId !== id)
+    const approvalIds = new Set(this.value.approvalRequests.filter((item) => item.companyId === id).map((item) => item.id))
+    this.value.approvalRequests = this.value.approvalRequests.filter((item) => item.companyId !== id)
+    this.value.approvalVerdicts = this.value.approvalVerdicts.filter((item) => !approvalIds.has(item.requestId))
     this.value.memory = this.value.memory.filter((item) => item.companyId !== id)
     this.value.skills = this.value.skills.filter((item) => item.companyId !== id)
     this.value.workflows = this.value.workflows.filter((item) => item.companyId !== id)
@@ -660,6 +675,11 @@ export class OrganizationStore {
     this.value.tasks = this.value.tasks.filter((item) => item.projectId !== id)
     this.value.runs = this.value.runs.filter((item) => item.projectId !== id)
     this.value.coordination = this.value.coordination.filter((item) => item.projectId !== id)
+    this.value.messages = this.value.messages.filter((item) => item.projectId !== id)
+    this.value.decisions = this.value.decisions.filter((item) => item.projectId !== id)
+    const approvalIds = new Set(this.value.approvalRequests.filter((item) => item.projectId === id).map((item) => item.id))
+    this.value.approvalRequests = this.value.approvalRequests.filter((item) => item.projectId !== id)
+    this.value.approvalVerdicts = this.value.approvalVerdicts.filter((item) => !approvalIds.has(item.requestId))
     this.value.memory = this.value.memory.filter((item) => item.projectId !== id)
     this.value.skills = this.value.skills.filter((item) => item.projectId !== id)
     this.value.workflows = this.value.workflows.filter((item) => item.projectId !== id)
@@ -748,6 +768,180 @@ export class OrganizationStore {
       else goal.status = 'active'
     }
   }
+  private createMember(input: Extract<OrganizationMutation, { type: 'member.create' }>): void {
+    this.company(input.companyId)
+    const now = Date.now()
+    this.value.members.push({
+      id: randomUUID(),
+      companyId: input.companyId,
+      displayName: clean(input.displayName),
+      ...(input.title?.trim() ? { title: input.title.trim().slice(0, 120) } : {}),
+      status: 'active',
+      createdAt: now,
+      updatedAt: now,
+    })
+    this.activity(input.companyId, undefined, 'member.created', `Added local member “${input.displayName.trim()}”.`)
+  }
+
+  private updateMember(id: string, patch: Extract<OrganizationMutation, { type: 'member.update' }>['patch']): void {
+    const member = must(this.value.members.find((item) => item.id === id), 'Organization member')
+    if (patch.displayName !== undefined) member.displayName = clean(patch.displayName)
+    if (patch.title !== undefined) {
+      if (patch.title.trim()) member.title = patch.title.trim().slice(0, 120)
+      else delete member.title
+    }
+    if (patch.status !== undefined) member.status = patch.status
+    member.updatedAt = Date.now()
+    this.activity(member.companyId, undefined, 'member.updated', `Updated local member “${member.displayName}”.`)
+  }
+
+  private addCollaborationMessage(input: Extract<OrganizationMutation, { type: 'collaboration.message.add' }>): void {
+    const project = this.project(input.projectId)
+    if (project.companyId !== input.companyId) throw new Error('Collaboration message crosses company boundary')
+    const member = this.member(input.authorMemberId, input.companyId)
+    const task = input.taskId ? this.task(input.taskId) : undefined
+    if (task && task.projectId !== input.projectId) throw new Error('Collaboration task crosses project boundary')
+    if (input.replyToId) {
+      const parent = must(this.value.messages.find((item) => item.id === input.replyToId), 'Parent collaboration message')
+      if (parent.projectId !== input.projectId || parent.taskId !== input.taskId) throw new Error('Reply crosses collaboration thread boundary')
+    }
+    const mentionActorIds = [...new Set((input.mentionActorIds ?? []).map((item) => item.trim()).filter(Boolean))]
+    for (const actorId of mentionActorIds) this.assertActorInCompany(actorId, input.companyId)
+    const now = Date.now()
+    const body = clean(input.body).slice(0, 20_000)
+    this.value.messages.push({
+      id: randomUUID(),
+      companyId: input.companyId,
+      projectId: input.projectId,
+      kind: input.kind ?? (input.taskId ? 'task' : 'project'),
+      ...(input.taskId ? { taskId: input.taskId } : {}),
+      ...(input.replyToId ? { replyToId: input.replyToId } : {}),
+      author: { kind: 'human', id: member.id },
+      body,
+      mentionActorIds,
+      createdAt: now,
+      updatedAt: now,
+    })
+    this.activity(input.companyId, input.projectId, 'collaboration.message', `${member.displayName} posted ${input.taskId ? 'a task comment' : 'a project message'}.`)
+  }
+
+  private createDecision(input: Extract<OrganizationMutation, { type: 'decision.create' }>): void {
+    const project = this.project(input.projectId)
+    if (project.companyId !== input.companyId) throw new Error('Decision crosses company boundary')
+    const member = this.member(input.authorMemberId, input.companyId)
+    if (input.taskId && this.task(input.taskId).projectId !== input.projectId) throw new Error('Decision task crosses project boundary')
+    const now = Date.now()
+    this.value.decisions.push({
+      id: randomUUID(),
+      companyId: input.companyId,
+      projectId: input.projectId,
+      ...(input.taskId ? { taskId: input.taskId } : {}),
+      title: clean(input.title).slice(0, 240),
+      summary: clean(input.summary).slice(0, 4_000),
+      rationale: clean(input.rationale).slice(0, 12_000),
+      status: 'active',
+      createdBy: { kind: 'human', id: member.id },
+      createdAt: now,
+      updatedAt: now,
+    })
+    this.activity(input.companyId, input.projectId, 'decision.created', `${member.displayName} recorded decision “${input.title.trim()}”.`)
+  }
+
+  private supersedeDecision(input: Extract<OrganizationMutation, { type: 'decision.supersede' }>): void {
+    const previous = must(this.value.decisions.find((item) => item.id === input.id), 'Decision')
+    if (previous.status !== 'active') throw new Error('Only an active decision can be superseded')
+    const member = this.member(input.authorMemberId, previous.companyId)
+    const now = Date.now()
+    previous.status = 'superseded'
+    previous.updatedAt = now
+    this.value.decisions.push({
+      id: randomUUID(),
+      companyId: previous.companyId,
+      projectId: previous.projectId,
+      ...(previous.taskId ? { taskId: previous.taskId } : {}),
+      title: clean(input.title).slice(0, 240),
+      summary: clean(input.summary).slice(0, 4_000),
+      rationale: clean(input.rationale).slice(0, 12_000),
+      status: 'active',
+      createdBy: { kind: 'human', id: member.id },
+      supersedesDecisionId: previous.id,
+      createdAt: now,
+      updatedAt: now,
+    })
+    this.activity(previous.companyId, previous.projectId, 'decision.superseded', `${member.displayName} superseded decision “${previous.title}”.`)
+  }
+
+  private createApprovalRequest(input: Extract<OrganizationMutation, { type: 'approval.request' }>): void {
+    const project = this.project(input.projectId)
+    if (project.companyId !== input.companyId) throw new Error('Approval request crosses company boundary')
+    const requester = this.member(input.requesterMemberId, input.companyId)
+    const task = input.taskId ? this.task(input.taskId) : undefined
+    if (task && task.projectId !== input.projectId) throw new Error('Approval task crosses project boundary')
+    if ((input.targetKind === 'task-review' || input.targetKind === 'integration') && !task) throw new Error('Task approval requires a task')
+    const revision = input.targetRevision?.trim() || (task ? this.latestCheckpoint(task.id) : undefined)
+    if ((input.targetKind === 'task-review' || input.targetKind === 'integration') && !revision) {
+      throw new Error('Checkpoint-bound approval requires a task checkpoint')
+    }
+    if (this.value.approvalRequests.some((item) => item.status === 'pending' && item.targetKind === input.targetKind && item.targetId === input.targetId && item.targetRevision === revision)) {
+      throw new Error('An equivalent approval request is already pending')
+    }
+    const request = {
+      id: randomUUID(),
+      companyId: input.companyId,
+      projectId: input.projectId,
+      ...(task ? { taskId: task.id } : {}),
+      targetKind: input.targetKind,
+      targetId: clean(input.targetId).slice(0, 512),
+      ...(revision ? { targetRevision: revision.slice(0, 256) } : {}),
+      requestedBy: { kind: 'human' as const, id: requester.id },
+      requiredApproverKind: 'human' as const,
+      status: 'pending' as const,
+      createdAt: Date.now(),
+    }
+    this.value.approvalRequests.push(request)
+    this.activity(input.companyId, input.projectId, 'approval.requested', `${requester.displayName} requested explicit ${input.targetKind} approval.`)
+  }
+
+  private resolveApproval(input: Extract<OrganizationMutation, { type: 'approval.resolve' }>): void {
+    const request = must(this.value.approvalRequests.find((item) => item.id === input.id), 'Approval request')
+    if (request.status !== 'pending') throw new Error('Approval request is no longer pending')
+    const member = this.member(input.actorMemberId, request.companyId)
+    if (request.taskId && request.targetRevision) {
+      const current = this.latestCheckpoint(request.taskId)
+      if (current !== request.targetRevision) {
+        throw new Error(`Approval target is stale: expected checkpoint ${request.targetRevision}, current checkpoint is ${current ?? 'unavailable'}`)
+      }
+    }
+    const status = input.verdict === 'approve' ? 'approved' : input.verdict === 'request_changes' ? 'changes_requested' : 'rejected'
+    request.status = status
+    request.resolvedAt = Date.now()
+    this.value.approvalVerdicts.push({
+      id: randomUUID(),
+      requestId: request.id,
+      actor: { kind: 'human', id: member.id },
+      verdict: input.verdict,
+      ...(input.comment?.trim() ? { comment: input.comment.trim().slice(0, 8_000) } : {}),
+      createdAt: request.resolvedAt,
+    })
+    this.activity(request.companyId, request.projectId, `approval.${status}`, `${member.displayName} ${status.replace('_', ' ')} ${request.targetKind} approval.`)
+  }
+
+  private member(id: string, companyId: string) {
+    const member = must(this.value.members.find((item) => item.id === id), 'Organization member')
+    if (member.companyId !== companyId || member.status !== 'active') throw new Error('Organization member is not active in this company')
+    return member
+  }
+
+  private assertActorInCompany(id: string, companyId: string): void {
+    if (this.value.members.some((item) => item.id === id && item.companyId === companyId && item.status === 'active')) return
+    if (this.value.agents.some((item) => item.id === id && item.companyId === companyId)) return
+    throw new Error('Mention actor crosses company boundary')
+  }
+
+  private latestCheckpoint(taskId: string): string | undefined {
+    return this.value.runs.find((item) => item.taskId === taskId && item.checkpointCommit)?.checkpointCommit
+  }
+
   private seedRole(companyId: string, name: string, responsibility: string, systemPrompt: string, skillIds: string[]): OrganizationRole { const role = { id: randomUUID(), companyId, name, responsibility, systemPrompt, skillIds }; this.value.roles.push(role); return role }
   private seedTeam(companyId: string, name: string, purpose: string, roleIds: string[], skillIds: string[]): Team { const team = { id: randomUUID(), companyId, name, purpose, roleIds, skillIds }; this.value.teams.push(team); return team }
   private seedAgent(companyId: string, name: string, roleId: string, teamId: string): OrganizationAgent { const agent: OrganizationAgent = { id: randomUUID(), companyId, name, roleId, teamId, status: 'idle', skillIds: [] }; this.value.agents.push(agent); return agent }
@@ -844,8 +1038,10 @@ function normalizeSnapshot(value: unknown): OrganizationSnapshot {
   for (const key of SNAPSHOT_ARRAY_KEYS) {
     if (!Array.isArray(record[key])) throw new Error(`Organization snapshot field ${key} must be an array`)
   }
-  if (record.coordination !== undefined && !Array.isArray(record.coordination)) {
-    throw new Error('Organization snapshot field coordination must be an array when present')
+  for (const key of ['members', 'messages', 'decisions', 'approvalRequests', 'approvalVerdicts', 'coordination'] as const) {
+    if (record[key] !== undefined && !Array.isArray(record[key])) {
+      throw new Error(`Organization snapshot field ${key} must be an array when present`)
+    }
   }
   const parsed = record as unknown as OrganizationSnapshot
   return { ...clone(EMPTY), ...parsed, skills: mergeBuiltins(parsed.skills) }

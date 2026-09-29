@@ -25,8 +25,8 @@ import type { OrganizationStore } from './store.js'
 
 const MUTATIONS = new Set([
   'company.create', 'company.update', 'company.activate', 'company.remove', 'project.create', 'project.update', 'project.activate', 'project.remove',
-  'team.create', 'role.create', 'role.update', 'agent.create', 'agent.update', 'skill.create', 'workflow.create', 'goal.create', 'task.create',
-  'task.update', 'memory.add', 'policy.set',
+  'team.create', 'member.create', 'member.update', 'role.create', 'role.update', 'agent.create', 'agent.update', 'skill.create', 'workflow.create', 'goal.create', 'task.create',
+  'task.update', 'collaboration.message.add', 'decision.create', 'decision.supersede', 'approval.request', 'approval.resolve', 'memory.add', 'policy.set',
 ])
 const CONTROL_MUTATIONS = new Set([
   'human-action.add', 'human-action.resolve', 'signal.add', 'signal.triage', 'budget.set', 'feedback.add',
