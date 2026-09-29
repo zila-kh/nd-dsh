@@ -113,6 +113,24 @@ describe('organization strategy plane', () => {
     expect(JSON.parse(await readFile(primary, 'utf8')).schedules[0]?.title).toBe('Durable routine')
   })
 
+  it('uses the backup instead of silently erasing structurally malformed automation state', async () => {
+    const { root, strategy } = await fixture()
+    await strategy.mutate({
+      type: 'heartbeat.add',
+      companyId: 'company-1',
+      projectId: 'project-1',
+      title: 'Durable heartbeat',
+      intervalMinutes: 15,
+    })
+    const primary = join(root, 'strategy.json')
+    await writeFile(primary, JSON.stringify({ version: 1, heartbeats: 'damaged' }), 'utf8')
+
+    const value = organization()
+    const recovered = new OrganizationStrategyPlane(primary, { state: async () => structuredClone(value) } as never)
+    const state = await recovered.state()
+    expect(state.heartbeats[0]?.title).toBe('Durable heartbeat')
+  })
+
   it('projects release readiness from task state and exact review evidence', async () => {
     const { strategy, value } = await fixture()
     let projection = await strategy.projection('project-1', control())

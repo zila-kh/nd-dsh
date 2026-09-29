@@ -42,6 +42,7 @@ const EMPTY: OrganizationStrategySnapshot = {
  */
 export class OrganizationStrategyPlane {
   private loaded = false
+  private loadPromise: Promise<void> | undefined
   private value: OrganizationStrategySnapshot = clone(EMPTY)
   private saveChain: Promise<void> = Promise.resolve()
   private onChanged: ((state: OrganizationStrategySnapshot) => void) | undefined
@@ -512,6 +513,17 @@ export class OrganizationStrategyPlane {
 
   private async load(): Promise<void> {
     if (this.loaded) return
+    if (this.loadPromise) return this.loadPromise
+    const pending = this.loadFromDisk()
+    this.loadPromise = pending
+    try {
+      await pending
+    } finally {
+      this.loadPromise = undefined
+    }
+  }
+
+  private async loadFromDisk(): Promise<void> {
     let primaryError: unknown
     try {
       this.value = await this.readSnapshot(this.filePath)
@@ -583,7 +595,14 @@ function errorMessage(error: unknown): string {
 }
 
 function normalize(value: unknown): OrganizationStrategySnapshot {
-  if (!value || typeof value !== 'object') return clone(EMPTY)
+  if (!value || typeof value !== 'object') throw new Error('Organization strategy snapshot must be a JSON object')
+  const record = value as Record<string, unknown>
+  if (record.version !== 1) throw new Error(`Unsupported organization strategy snapshot version: ${String(record.version)}`)
+  for (const key of ['anchors', 'knowledge', 'schedules', 'heartbeats', 'triggers', 'triggerReceipts', 'skillCandidates', 'audit'] as const) {
+    if (record[key] !== undefined && !Array.isArray(record[key])) {
+      throw new Error(`Organization strategy snapshot field ${key} must be an array when present`)
+    }
+  }
   const input = value as Partial<OrganizationStrategySnapshot>
   return {
     version: 1,
