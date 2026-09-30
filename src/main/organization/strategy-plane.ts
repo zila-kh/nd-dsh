@@ -249,7 +249,9 @@ export class OrganizationStrategyPlane {
       })
       this.value.triggerReceipts = this.value.triggerReceipts.slice(0, 2_000)
     }
-    if (outcome === 'success' && previousOutcome !== 'success') trigger.runCount += 1
+    // The early return above already ruled out a previously recorded success,
+    // so counting here cannot double-count a retried success receipt.
+    if (outcome === 'success') trigger.runCount += 1
     if (trigger.maxRuns !== undefined && trigger.runCount >= trigger.maxRuns) trigger.status = 'completed'
     trigger.updatedAt = now
     await this.save()

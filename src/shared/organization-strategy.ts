@@ -205,7 +205,7 @@ export type OrganizationStrategyMutation =
   | { type: 'anchor.update'; id: string; patch: Partial<Pick<OrganizationStrategicAnchor, 'title' | 'outcome' | 'successCriteria' | 'priority' | 'status'>> }
   | { type: 'knowledge.add'; companyId: string; projectId?: string; kind: CompanyKnowledgeKind; title: string; content: string; tags?: string[]; confidence?: CompanyKnowledgeConfidence; source?: OrganizationCompanyKnowledge['source']; sourceRef?: string; supersedesId?: string }
   | { type: 'knowledge.update'; id: string; patch: Partial<Pick<OrganizationCompanyKnowledge, 'title' | 'content' | 'tags' | 'confidence' | 'status'>> }
-  | { type: 'schedule.add'; companyId: string; projectId: string; title: string; mode?: CompanyScheduleMode; intervalMinutes?: number; cron?: string; timezone?: string; runAt?: number; maxRuns?: number; agentId?: string; prompt?: string; skillIds?: string[] }
+  | { type: 'schedule.add'; companyId: string; projectId: string; title: string; mode?: CompanyScheduleMode; intervalMinutes?: number; cron?: string; timezone?: string; runAt?: number; nextRunAt?: number; maxRuns?: number; agentId?: string; prompt?: string; skillIds?: string[] }
   | { type: 'schedule.update'; id: string; patch: Partial<Pick<OrganizationCompanySchedule, 'title' | 'intervalMinutes' | 'cron' | 'timezone' | 'runAt' | 'status' | 'nextRunAt' | 'maxRuns' | 'agentId' | 'prompt' | 'skillIds'>> }
   | { type: 'heartbeat.add'; companyId: string; projectId: string; title: string; intervalMinutes: number }
   | { type: 'heartbeat.update'; id: string; patch: Partial<Pick<OrganizationHeartbeat, 'title' | 'intervalMinutes' | 'status' | 'nextRunAt'>> }

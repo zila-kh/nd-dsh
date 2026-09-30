@@ -4,6 +4,23 @@ Status: **implementation complete for local MVP; local machine verification requ
 Branch: `feat/local-first-team-workspace`
 PR: #64
 
+## Local verification log (2026-09-30, Windows 11 x64, Node 24.19 / pnpm 11.7 / Rust 1.98)
+
+Programmatic gates, executed on this branch with the fixes listed below:
+
+- `corepack pnpm install` — up to date.
+- `corepack pnpm typecheck` — **passes** (after fixes; previously 15 errors: unchecked cron tuple access, `readSnapshot` widening `DurableOrganizationSnapshot`, a statically dead `previousOutcome !== 'success'` comparison, `nextRunAt` missing from the `schedule.add` mutation type, and `exactOptionalPropertyTypes` violations in `tests/local-automation-v2.test.ts`).
+- Targeted vitest suite (collaboration / strategy / control / automation v2 / runtime service / schedule runner) — **45/45 pass**.
+- `corepack pnpm test` — **1066 pass, 9 skipped (live-engine), 0 fail**.
+- `corepack pnpm build` — **passes**.
+- `corepack pnpm beta:unit` — **passes end-to-end** (verify + typecheck + full test + `core:test` + `browser:host:test`). Required fixing one pre-existing clippy `collapsible_if` in `crates/nd-agent/src/lib.rs` under Rust 1.98 plus `cargo fmt`.
+- `corepack pnpm dist:win:dir` — **packages successfully** (`dist/win-unpacked/ND-DSH.exe`, signtool-signed).
+- `corepack pnpm release:smoke:packaged` — **fails, but not from this branch**: a freshly staged harness now resolves upstream `node-addon-require-builtin@0.1.6`, whose native Electron fingerprint allowlist (43.0.0, 44.0.0, 45.0.0-alpha.6) rejects this app's Electron 43.4.0 (`Node 24.18.1, V8 15.0.245.28-electron.0`), so the harness cannot boot inside Electron at all. The branch touches no `vendor/`, `package.json`, or lockfile files; rebuilding `main` today fails identically. The older Sep 29 portable artifact on this machine predates the vendored dependency drift and still boots. Upstream has no newer loader release (0.1.6 is latest). Remedy belongs to a harness sync or an Electron pin decision on main, not this branch.
+
+Fixes applied on the working tree (uncommitted): `src/main/organization/cron.ts`, `src/main/organization/store.ts`, `src/main/organization/strategy-plane.ts`, `src/shared/organization-strategy.ts`, `tests/local-automation-v2.test.ts`, `crates/nd-agent/src/lib.rs`.
+
+Still outstanding from the acceptance gate: manual collaboration smoke, manual Always-On background smoke, start-at-login smoke on the release OS, and the overnight automation observation.
+
 ## Goal
 
 Make ND a stronger local-first Human + AI Team Workspace before cloud work, while adapting the best local-agent patterns from OpenClaw/Hermes without turning ND into a wrapper around either project.

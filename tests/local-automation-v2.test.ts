@@ -98,7 +98,7 @@ describe('local automation v2', () => {
       control: {
         state: async () => structuredClone(controlState),
         mutate: async (mutation) => {
-          if (mutation.type === 'signal.add') controlState.signals.unshift({ id: 's1', companyId: mutation.companyId, projectId: mutation.projectId, source: mutation.source, title: mutation.title, summary: mutation.summary, status: 'new', confidence: mutation.confidence, createdAt: Date.now(), updatedAt: Date.now() })
+          if (mutation.type === 'signal.add') controlState.signals.unshift({ id: 's1', companyId: mutation.companyId, ...(mutation.projectId ? { projectId: mutation.projectId } : {}), source: mutation.source, title: mutation.title, summary: mutation.summary, status: 'new', ...(mutation.confidence === undefined ? {} : { confidence: mutation.confidence }), createdAt: Date.now(), updatedAt: Date.now() })
           return structuredClone(controlState)
         },
       },
@@ -131,9 +131,9 @@ describe('local automation v2', () => {
         state: async () => structuredClone(controlState),
         mutate: async (mutation) => {
           if (mutation.type === 'signal.add') controlState.signals.unshift({
-            id: 'unexpected', companyId: mutation.companyId, projectId: mutation.projectId,
+            id: 'unexpected', companyId: mutation.companyId, ...(mutation.projectId ? { projectId: mutation.projectId } : {}),
             source: mutation.source, title: mutation.title, summary: mutation.summary,
-            status: 'new', confidence: mutation.confidence, createdAt: 100, updatedAt: 100,
+            status: 'new', ...(mutation.confidence === undefined ? {} : { confidence: mutation.confidence }), createdAt: 100, updatedAt: 100,
           })
           return structuredClone(controlState)
         },

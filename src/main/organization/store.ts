@@ -539,7 +539,7 @@ export class OrganizationStore {
     }
   }
 
-  private async readSnapshot(path: string): Promise<OrganizationSnapshot> {
+  private async readSnapshot(path: string): Promise<DurableOrganizationSnapshot> {
     const parsed = JSON.parse(await fs.readFile(path, 'utf8')) as unknown
     return normalizeSnapshot(parsed)
   }

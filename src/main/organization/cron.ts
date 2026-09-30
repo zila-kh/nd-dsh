@@ -1,10 +1,12 @@
 const MINUTE_MS = 60_000
 const MAX_SCAN_MINUTES = 366 * 24 * 60
 
+type CronField = { values: Set<number>; wildcard: boolean }
+
 export function nextCronAt(expression: string, timezone: string | undefined, fromMs: number): number {
   const fields = expression.trim().split(/\s+/)
   if (fields.length !== 5) throw new Error('Cron must contain 5 fields: minute hour day-of-month month day-of-week')
-  const [minute, hour, dom, month, dow] = fields.map((field, index) => parseField(field!, limits[index]!))
+  const [minute, hour, dom, month, dow] = fields.map((field, index) => parseField(field!, limits[index]!)) as [CronField, CronField, CronField, CronField, CronField]
   const zone = timezone?.trim() || 'UTC'
   validateTimezone(zone)
   const formatter = zonedFormatter(zone)
@@ -38,7 +40,7 @@ const limits = [
   { min: 0, max: 6 },
 ] as const
 
-function parseField(input: string, range: { min: number; max: number }): { values: Set<number>; wildcard: boolean } {
+function parseField(input: string, range: { min: number; max: number }): CronField {
   const values = new Set<number>()
   const wildcard = input === '*'
   for (const part of input.split(',')) {
