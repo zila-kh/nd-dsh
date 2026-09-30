@@ -261,10 +261,8 @@
     </main>
   </div>
 
-  <!-- Vanilla JavaScript Application (classic scripts: runs from file:// with no server) -->
-  <script src="data.js"></script>
-  <script src="canvas-engine.js"></script>
-  <script src="audio-synth.js"></script>
-  <script src="app.js"></script>
+  <!-- Vite entry: ES module source for dev/build. The built dist/index.html is
+       rewritten to a single classic script so it also runs from file:// (see vite.config.js). -->
+  <script type="module" src="./main.js"></script>
 </body>
 </html>
