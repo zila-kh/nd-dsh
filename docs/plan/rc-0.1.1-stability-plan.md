@@ -15,14 +15,19 @@ counts in the denominator.
 
 ## F1 — Fix the Playwright worker-teardown exit-1 (A8) — release-test fix
 
-Status: **in progress.** Symptom: 60 passed / 0 failed / 3 skipped, but the
-suite exits 1 with a worker-teardown timeout after the last test
-(`zz-settings-visual.spec.ts`). Primary suspect: a raw CDP WebSocket in
-`e2e/zz-adblock-probe.spec.ts` (`workerExceptions`) whose async close
-handshake is not awaited, plus any process-tree helpers in `fixtures.ts` that
-leave child handles open. Reproduce with just the two trailing specs, fix,
-then a full `pnpm e2e` must exit 0. Unblocks: `beta:automated` fully green +
-journey gate 20.
+Status: **tests green, suite exit flaky.** Three stale selectors fixed
+(Settings split into Extensions/Plugins tabs by `dbf9fcd`; Strategy card
+renamed to "Automation & Agent Routines" by `146f906`) — three consecutive
+full runs report **60 passed / 0 failed / 3 skipped**. The remaining
+worker-teardown timeout is intermittent (~1 in 2 full runs): an abandoned
+Playwright Electron dispose leaves the ref'd driver pipe + CDP sockets open.
+`closeApp` bounds the dispose at 60 s with one bounded retry and sweeps dead
+transport handles (f76169b); product-side shutdown is proven clean on every
+close (graceful quit, `exited=true`, zero survivor processes, enforced by the
+fixture). Classified as a Playwright transport leak, not a product defect.
+Residual options before GO: characterize the stall with
+`ND_E2E_TEARDOWN_DIAG=1` full runs, or gate A8 on "tests green" + a recorded
+classification. Unblocks: `beta:automated` fully green + journey gate 20.
 
 ## F2 — Build the packaged artifact from the frozen tag
 
