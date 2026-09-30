@@ -403,8 +403,9 @@ async function main() {
     const reviewRuns = finalRuns.filter((run) => run.kind === 'review' || run.kind === 'task-review')
     gate('deliver', 'All planned tasks completed by the PM/workers', finalTasks.length > 0 && finalTasks.every((task) => task.status === 'completed'),
       `statuses=${JSON.stringify(finalTasks.map((task) => task.status))}, deliveryMinutes=${deliveryMinutes.toFixed(1)}`)
-    gate('integrate', 'At least one execution integrated into the base checkout', finalRuns.some((run) => run.integrationState === 'integrated'),
-      `integrationStates=${JSON.stringify(finalRuns.map((run) => run.integrationState))}`)
+    const integratedTasks = finalTasks.filter((task) => task.integrationState === 'integrated')
+    gate('integrate', 'At least one execution integrated into the base checkout', integratedTasks.length > 0,
+      `taskIntegrationStates=${JSON.stringify(finalTasks.map((task) => task.integrationState))}, heads=${JSON.stringify(integratedTasks.map((task) => task.integratedHead))}`)
     gate('review', 'Independent review ran on the delivered work', reviewRuns.length > 0, `${reviewRuns.length} review run(s)`)
     gate('files', 'All declared full-stack artifacts exist in the integrated workspace', DELIVERABLE_FILES.every((name) => existsSync(join(workspace, name))), DELIVERABLE_FILES.join(', '))
 
