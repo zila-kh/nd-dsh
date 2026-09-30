@@ -1,15 +1,41 @@
-import { mkdtemp } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { OrganizationOrchestrator } from '../src/main/organization/orchestrator.js'
 import { OrganizationStore } from '../src/main/organization/store.js'
+import { TaskWorktreeManager } from '../src/main/organization/task-worktree.js'
 
 class FakeHarness {
   private counter = 0
   private canceled = new Set<string>()
   prompts: Array<{ prompt: string; sessionId?: string }> = []
+  renames: Array<{ sessionId: string; title: string }> = []
+  titles = new Map<string, string>()
+  renameError?: Error
+  onStop?: () => Promise<void>
   async createSession(): Promise<string> { this.counter += 1; return `session-${this.counter}` }
+  async renameSession(sessionId: string, title: string): Promise<void> {
+    if (this.renameError) throw this.renameError
+    this.renames.push({ sessionId, title })
+    this.titles.set(sessionId, title)
+  }
+  async gatewayRpc(method: string): Promise<{ ok: true; value: unknown }> {
+    if (method === 'session.cancel') {
+      await this.onStop?.()
+      return { ok: true, value: { sessionId: '' } }
+    }
+    if (method === 'session.list') {
+      return {
+        ok: true,
+        value: {
+          items: [...this.titles].map(([sessionId, title]) => ({ sessionId, projections: { values: { title } } })),
+        },
+      }
+    }
+    if (method !== 'session.create') throw new Error(`Unexpected gateway method: ${method}`)
+    return { ok: true, value: { sessionId: await this.createSession() } }
+  }
   async run(prompt: string, options?: { sessionId?: string }): Promise<{ sessionId: string }> { this.prompts.push({ prompt, ...(options?.sessionId ? { sessionId: options.sessionId } : {}) }); return { sessionId: options?.sessionId ?? 'session' } }
   async close(): Promise<void> {}
   status(): { provider: string; model: string } { return { provider: 'test-provider', model: 'test-model' } }
@@ -33,7 +59,7 @@ async function fixture(autonomyLevel: 0 | 1 | 2 | 3 | 4 = 3) {
   const harness = new FakeHarness()
   const workspace = new FakeWorkspace()
   const orchestrator = new OrganizationOrchestrator(store, harness as never, workspace as never)
-  return { store, company, project, harness, orchestrator }
+  return { store, company, project, harness, workspace, orchestrator }
 }
 
 function assistant(sessionId: string, text: string) {
@@ -57,6 +83,119 @@ async function finishReview(orchestrator: OrganizationOrchestrator, sessionId: s
 }
 
 describe('OrganizationOrchestrator', () => {
+  it('holds future work through automatic execution and run-next but finishes review after focus changes', async () => {
+    const { store, project, harness, orchestrator } = await fixture(3)
+    await store.applyPlan(project.id, { goal: { title: 'MVP', description: 'Ship a slice' }, milestones: [
+      { title: 'Now', description: 'First slice', tasks: [{ title: 'Deliver now', description: 'Build' }] },
+      { title: 'Later', description: 'Next slice', tasks: [{ title: 'Future critical', description: 'Build later', priority: 'critical' }] },
+    ] })
+    let state = await store.state()
+    const now = state.tasks.find((task) => task.title === 'Deliver now')!
+    const future = state.tasks.find((task) => task.title === 'Future critical')!
+    await expect(orchestrator.runTask(future.id, false)).rejects.toThrow(/outside.*milestone/i)
+    expect(harness.prompts).toHaveLength(0)
+    const execution = await orchestrator.runNext(project.id, false)
+    expect(execution?.taskId).toBe(now.id)
+    await store.mutate({ type: 'project.update', id: project.id, patch: { deliveryMilestoneId: state.milestones[1]!.id } })
+    await finishWorker(orchestrator, execution!.sessionId, 'First slice delivered')
+    state = await store.state()
+    const review = state.runs.find((run) => run.kind === 'task-review' && run.status === 'running')!
+    expect(review.taskId).toBe(now.id)
+    await finishReview(orchestrator, review.sessionId, 'pass', 'Verified first slice')
+    state = await store.state()
+    expect(state.tasks.find((task) => task.id === now.id)?.status).toBe('completed')
+    expect(state.runs.find((run) => run.status === 'running')?.taskId).toBe(future.id)
+  })
+
+  it('shares cancellation cleanup when the stop event races the cancel RPC response', async () => {
+    const { store, company, project, harness, workspace } = await fixture(2)
+    let notifyRollback!: () => void
+    let releaseRollback!: () => void
+    const rollbackStarted = new Promise<void>(resolve => { notifyRollback = resolve })
+    const rollbackGate = new Promise<void>(resolve => { releaseRollback = resolve })
+    const worktrees = new TaskWorktreeManager()
+    const worktree = { root: '/workspace/task', repoRoot: '/workspace', branch: 'task-test', taskId: 'test' }
+    vi.spyOn(worktrees, 'ensure').mockResolvedValue(worktree)
+    vi.spyOn(worktrees, 'baseline').mockResolvedValue('baseline-commit')
+    const rollback = vi.spyOn(worktrees, 'rollback').mockImplementation(async () => {
+      notifyRollback()
+      await rollbackGate
+    })
+    const orchestrator = new OrganizationOrchestrator(store, harness as never, workspace as never, undefined, undefined, undefined, undefined, undefined, worktrees)
+    const state = await store.mutate({ type: 'task.create', companyId: company.id, projectId: project.id, title: 'Cancelable isolated task', description: 'Build it.' })
+    const execution = await orchestrator.runTask(state.tasks[0]!.id)
+    let stopEvent!: Promise<void>
+    harness.onStop = async () => {
+      stopEvent = orchestrator.handleHarnessEvent(stopped(execution.sessionId))
+      await rollbackStarted
+    }
+    const canceled = orchestrator.cancelRun(execution.runId)
+    await rollbackStarted
+    // Let the RPC response and a second terminal event arrive while rollback is busy.
+    const lateError = orchestrator.handleHarnessEvent({ kind: 'agent-error', sessionId: execution.sessionId, message: 'Turn aborted' })
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(rollback).toHaveBeenCalledTimes(1)
+    releaseRollback()
+    await Promise.all([canceled, stopEvent, lateError])
+    const after = await store.state()
+    expect(rollback).toHaveBeenCalledTimes(1)
+    expect(after.runs.find(run => run.id === execution.runId)?.status).toBe('failed')
+    expect(after.tasks[0]?.status).toBe('blocked')
+    expect(after.activity.filter(item => item.type === 'task.blocked' && item.message.includes('Cancelable isolated task'))).toHaveLength(1)
+    expect(after.runs.some(run => run.kind === 'task-review')).toBe(false)
+  })
+
+  it('gives workers and reviewers the exact artifact contract used by the delivery gate', async () => {
+    const { store, company, project, harness, orchestrator } = await fixture(2)
+    const root = await mkdtemp(join(tmpdir(), 'nd-artifact-contract-'))
+    await writeFile(join(root, 'README.md'), '# Non-Git research workspace\n')
+    await store.mutate({ type: 'project.update', id: project.id, patch: { workspacePath: root, testCommand: 'node --test' } })
+    let state = await store.mutate({
+      type: 'task.create', companyId: company.id, projectId: project.id,
+      title: 'Research accessibility', description: 'Document the findings.',
+      evidenceKind: 'artifact', artifactPaths: ['docs/research/ux-a11y-i18n.md'],
+      acceptanceCriteria: ['Document actionable accessibility findings'],
+    })
+    const task = state.tasks[0]!
+    const execution = await orchestrator.runTask(task.id)
+    expect(harness.prompts.at(-1)?.prompt).toContain('docs/research/ux-a11y-i18n.md')
+    expect(harness.prompts.at(-1)?.prompt).toContain('exact paths')
+    expect(harness.prompts.at(-1)?.prompt).toContain('artifact verification rather than the project test command')
+
+    // Prose plus an artifact at a different path must still fail closed.
+    await mkdir(join(root, 'docs'), { recursive: true })
+    await writeFile(join(root, 'docs/ux-a11y-i18n.md'), '# Findings\nUse labelled controls.\n')
+    await finishWorker(orchestrator, execution.sessionId, 'Research complete.')
+    state = await store.state()
+    expect(state.tasks[0]?.status).toBe('blocked')
+    expect(state.runs.find(run => run.id === execution.runId)?.error).toContain('docs')
+    expect(state.runs.some(run => run.kind === 'task-review')).toBe(false)
+
+    await mkdir(join(root, 'docs/research'), { recursive: true })
+    await writeFile(join(root, 'docs/research/ux-a11y-i18n.md'), '# Findings\nUse labelled controls.\n')
+    const retry = await orchestrator.runTask(task.id)
+    await finishWorker(orchestrator, retry.sessionId, 'Required artifact produced.')
+    state = await store.state()
+    expect(state.tasks[0]?.status).toBe('review')
+    await orchestrator.reviewTask(task.id)
+    expect(harness.prompts.at(-1)?.prompt).toContain('docs/research/ux-a11y-i18n.md')
+    expect(harness.prompts.at(-1)?.prompt).toContain('Inspect the content against the acceptance criteria')
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('tells code workers the configured machine command and exposes skipped verification', async () => {
+    const { store, company, project, harness, orchestrator } = await fixture(2)
+    let state = await store.mutate({ type: 'task.create', companyId: company.id, projectId: project.id, title: 'Code task', description: 'Build the feature.' })
+    const task = state.tasks[0]!
+    const first = await orchestrator.runTask(task.id)
+    expect(harness.prompts.at(-1)?.prompt).toContain('machine verification as skipped')
+    await finishWorker(orchestrator, first.sessionId)
+    await store.mutate({ type: 'project.update', id: project.id, patch: { testCommand: 'node --test' } })
+    state = await store.mutate({ type: 'task.create', companyId: company.id, projectId: project.id, title: 'Verified code task', description: 'Build another feature.' })
+    await orchestrator.runTask(state.tasks.find(item => item.title === 'Verified code task')!.id)
+    expect(harness.prompts.at(-1)?.prompt).toContain('Project machine-verification command: node --test')
+  })
+
   it('runs PM → worker → independent review automatically at autonomy level 3', async () => {
     const { store, project, harness, orchestrator } = await fixture()
     const planRun = await orchestrator.planProject(project.id)
@@ -79,6 +218,53 @@ describe('OrganizationOrchestrator', () => {
     expect(state.memory.some((item) => item.title === 'Review pass')).toBe(true)
     expect(state.memory.some((item) => item.title === 'Review: Implement feature')).toBe(true)
     expect(harness.prompts).toHaveLength(3)
+    // Sessions carry the real work title, not the runtime's "You are…" first-prompt fallback.
+    expect(harness.renames).toEqual([
+      { sessionId: 'session-1', title: 'Plan · App' },
+      { sessionId: 'session-2', title: 'Implement feature' },
+      { sessionId: 'session-3', title: 'Review · Implement feature' },
+    ])
+  })
+
+  it('keeps the run alive when a session rename fails', async () => {
+    const { store, project, harness, orchestrator } = await fixture()
+    harness.renameError = new Error('rename unavailable')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const planRun = await orchestrator.planProject(project.id)
+      expect(planRun.sessionId).toBe('session-1')
+      await orchestrator.handleHarnessEvent(assistant(planRun.sessionId, plan([{ title: 'Implement feature', description: 'Build and test it' }])))
+      await orchestrator.handleHarnessEvent(stopped(planRun.sessionId))
+      const state = await store.state()
+      expect(state.tasks[0]?.status).toBe('in_progress')
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('session rename failed'), 'rename unavailable')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('backfills only sessions that still carry the first-prompt fallback title', async () => {
+    const { store, company, project, harness, orchestrator } = await fixture()
+    const created = await store.mutate({ type: 'task.create', companyId: company.id, projectId: project.id, title: 'Fix the login flow', description: 'Restore the session', acceptanceCriteria: ['Tests pass'] })
+    const task = created.tasks[0]!
+    const planRun = await store.beginRun('pm-plan', company.id, project.id, 'session-plan')
+    await store.completeRun(planRun.id, 'planned')
+    const reviewRun = await store.beginRun('task-review', company.id, project.id, 'session-review', task.id)
+    await store.completeRun(reviewRun.id, 'reviewed')
+    const executionRun = await store.beginRun('task-execution', company.id, project.id, 'session-renamed', task.id)
+    await store.completeRun(executionRun.id, 'done')
+    harness.titles.set('session-plan', 'You are the AI Product Manager for Autonomo')
+    harness.titles.set('session-review', 'You are an independent reviewer for Autonom')
+    // A real or user-pinned title must never be overwritten by the backfill.
+    harness.titles.set('session-renamed', 'My own title')
+
+    await orchestrator.backfillSessionTitles()
+
+    expect(harness.renames).toHaveLength(2)
+    expect(harness.renames).toEqual(expect.arrayContaining([
+      { sessionId: 'session-plan', title: 'Plan · App' },
+      { sessionId: 'session-review', title: 'Review · Fix the login flow' },
+    ]))
   })
 
   it('assembles a structured PM plan from streamed assistant chunks', async () => {

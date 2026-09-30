@@ -89,6 +89,7 @@ export class OrganizationOrchestrator {
   private attemptedProviderRoutes = new Map<string, Set<string>>()
   private pendingFallbackRoutes = new Map<string, ProviderRoute>()
   private canceledSessions = new Set<string>()
+  private cancellationFinalizations = new Map<string, Promise<void>>()
   private lastProgressAt = new Map<string, number>()
   private parallelFillProjects = new Set<string>()
   private stallReconcileBusy = false
@@ -170,6 +171,7 @@ export class OrganizationOrchestrator {
     const pmRole = pmAgent ? context.roles.find((r) => r.id === pmAgent.roleId) : context.roles.find((r) => r.name.toLowerCase().includes('product manager'))
     const modelOpts = this.resolveAgentModel(pmAgent, pmRole)
     const sessionId = await this.harness.createSession()
+    await this.nameSession(sessionId, `Plan · ${context.project.name}`)
     const run = await this.store.beginRun('pm-plan', context.company.id, projectId, sessionId)
     this.lastProgressAt.set(sessionId, run.startedAt)
     try {
@@ -189,6 +191,9 @@ export class OrganizationOrchestrator {
 
   async runTask(taskId: string, explicit = true): Promise<OrganizationRunReceipt> {
     const context = await this.store.taskContext(taskId)
+    if (!explicit && context.project.deliveryMilestoneId && context.task.milestoneId !== context.project.deliveryMilestoneId) {
+      throw new Error('Task is outside the selected delivery milestone')
+    }
     this.assertPolicy(await this.store.policy(context.company.id, 'task.execute'), explicit, 'task execution')
     if (!explicit && context.company.autonomyLevel < 3) throw new Error('Autonomy level 3+ is required for automatic execution')
     if (context.task.status !== 'ready' && context.task.status !== 'blocked') throw new Error(`Task is ${context.task.status}; only ready or blocked tasks can run`)
@@ -266,8 +271,8 @@ export class OrganizationOrchestrator {
     let target: { engineId: string; sessionId: string }
     try {
       target = this.engineRuns
-        ? await this.engineRuns.createSession(engine.id, taskWorktree?.root)
-        : { engineId: ND_HARNESS_ENGINE_ID, sessionId: await this.createHarnessSession(taskWorktree?.root) }
+        ? await this.engineRuns.createSession(engine.id, taskWorktree?.root, context.task.title)
+        : { engineId: ND_HARNESS_ENGINE_ID, sessionId: await this.createHarnessSession(taskWorktree?.root, context.task.title) }
       await this.journalEffect({
         kind: 'engine.session',
         state: 'complete',
@@ -493,7 +498,7 @@ export class OrganizationOrchestrator {
     await this.assertTaskRunSlot(context.task.id, context.project.id, Boolean(taskWorktree))
     if (!taskWorktree) await this.prepareWorkspace(context.project.workspacePath)
     const reviewHead = taskWorktree ? await this.taskWorktrees.checkpoint(taskWorktree, context.task.title) : undefined
-    const sessionId = await this.createHarnessSession(taskWorktree?.root)
+    const sessionId = await this.createHarnessSession(taskWorktree?.root, `Review · ${context.task.title}`)
     const run = await this.store.beginRun(
       'task-review',
       context.company.id,
@@ -713,6 +718,11 @@ export class OrganizationOrchestrator {
     if (!sessionId) return
     this.lastProgressAt.set(sessionId, Date.now())
     const run = await this.store.runBySession(sessionId)
+    const cancellation = this.cancellationFinalizations.get(sessionId)
+    if (cancellation) {
+      await cancellation
+      return
+    }
 
     if (frame.kind === 'session-event' && frame.event && run) {
       const data = frame.event.data as Record<string, unknown> | undefined
@@ -1070,6 +1080,22 @@ export class OrganizationOrchestrator {
   }
 
   private async handleCanceledRun(run: OrganizationRun, sessionId: string): Promise<void> {
+    const existing = this.cancellationFinalizations.get(sessionId)
+    if (existing) return existing
+    // The cancel RPC response and engine stop/error events arrive independently.
+    // Share one finalization so they cannot race Git rollback or release twice.
+    const finalization = this.finalizeCanceledRun(run, sessionId)
+    this.cancellationFinalizations.set(sessionId, finalization)
+    try {
+      await finalization
+    } finally {
+      this.cancellationFinalizations.delete(sessionId)
+    }
+  }
+
+  private async finalizeCanceledRun(run: OrganizationRun, sessionId: string): Promise<void> {
+    // A delayed caller may still hold the snapshot from before cleanup finished.
+    if (!(await this.store.runBySession(sessionId))) return
     const message = 'Canceled by user before the run completed.'
     taskMetricsRecorder()?.noteCanceled(sessionId)
     if (run.kind === 'task-execution') await this.rollbackExecutionAttempt(sessionId)
@@ -1219,8 +1245,10 @@ export class OrganizationOrchestrator {
   }
 
   private consumeCanceledSession(sessionId: string): boolean {
-    if (this.canceledSessions.delete(sessionId)) return true
-    return this.harness.consumeCanceledSession(sessionId)
+    if (this.canceledSessions.has(sessionId)) return true
+    if (!this.harness.consumeCanceledSession(sessionId)) return false
+    this.canceledSessions.add(sessionId)
+    return true
   }
 
   private async continueProject(projectId: string): Promise<void> {
@@ -1398,13 +1426,68 @@ export class OrganizationOrchestrator {
     await this.workspace.setRoot(workspacePath)
   }
 
-  private async createHarnessSession(cwd?: string): Promise<string> {
-    if (!cwd) return this.harness.createSession()
-    const result = await this.harness.gatewayRpc('session.create', { cwd })
-    if (!result.ok) throw new Error(result.error?.message ?? 'Harness session.create failed')
-    const sessionId = (result.value as { sessionId?: unknown } | undefined)?.sessionId
-    if (typeof sessionId !== 'string' || !sessionId) throw new Error('Harness session.create returned no session id')
+  private async createHarnessSession(cwd?: string, title?: string): Promise<string> {
+    const sessionId = await (async (): Promise<string> => {
+      if (!cwd) return this.harness.createSession()
+      const result = await this.harness.gatewayRpc('session.create', { cwd })
+      if (!result.ok) throw new Error(result.error?.message ?? 'Harness session.create failed')
+      const sessionId = (result.value as { sessionId?: unknown } | undefined)?.sessionId
+      if (typeof sessionId !== 'string' || !sessionId) throw new Error('Harness session.create returned no session id')
+      return sessionId
+    })()
+    if (title?.trim()) await this.nameSession(sessionId, title)
     return sessionId
+  }
+
+  /**
+   * Name a session after the work it performs. The runtime otherwise labels
+   * sessions with a first-prompt fallback ("You are Builder acting as…"),
+   * which hides the real task from the chat sidebar. Best-effort: a rename
+   * failure must never fail the run the session belongs to.
+   */
+  private async nameSession(sessionId: string, title: string): Promise<void> {
+    try {
+      await this.harness.renameSession(sessionId, title)
+    } catch (cause) {
+      console.warn(`organization: session rename failed for ${sessionId}:`, cause instanceof Error ? cause.message : String(cause))
+    }
+  }
+
+  /**
+   * Rename harness-backed organization sessions that still carry the runtime's
+   * "You are…" first-prompt fallback — sessions created before ND began naming
+   * them at creation time. Only fallback titles are touched, so a user rename
+   * or a real title is never overwritten. Safe to re-run: renames no-op once
+   * the title is real.
+   */
+  async backfillSessionTitles(): Promise<void> {
+    try {
+      const result = await this.harness.gatewayRpc('session.list')
+      if (!result.ok) return
+      const items = (result.value as { items?: Array<{ sessionId?: unknown; projections?: { values?: Record<string, unknown> } }> } | undefined)?.items ?? []
+      const listedTitle = new Map(items.flatMap((item) => {
+        const sessionId = item.sessionId
+        const title = item.projections?.values?.title
+        return typeof sessionId === 'string' && typeof title === 'string' ? [[sessionId, title] as const] : []
+      }))
+      const state = await this.store.state()
+      const projectNameById = new Map(state.projects.map((project) => [project.id, project.name]))
+      const taskTitleById = new Map(state.tasks.map((task) => [task.id, task.title]))
+      for (const run of state.runs) {
+        const current = listedTitle.get(run.sessionId)
+        if (current === undefined || !current.trimStart().startsWith('You are')) continue
+        const taskTitle = run.taskId ? taskTitleById.get(run.taskId) : undefined
+        const title = run.kind === 'pm-plan'
+          ? `Plan · ${projectNameById.get(run.projectId) ?? 'project'}`
+          : run.kind === 'task-review'
+            ? (taskTitle ? `Review · ${taskTitle}` : undefined)
+            : taskTitle
+        if (!title?.trim()) continue
+        await this.nameSession(run.sessionId, title)
+      }
+    } catch (cause) {
+      console.warn('organization: session title backfill failed:', cause instanceof Error ? cause.message : String(cause))
+    }
   }
 
   private async warmProjectTarget(projectId: string): Promise<void> {
@@ -1420,7 +1503,7 @@ export class OrganizationOrchestrator {
 function pmPrompt(context: Awaited<ReturnType<OrganizationStore['projectContext']>>): string {
   const roles = context.roles.map((item) => `- ${item.name}: ${item.responsibility}`).join('\n') || '- Software Engineer'
   const teams = context.teams.map((item) => `- ${item.name}: ${item.purpose}`).join('\n') || '- Engineering'
-  return `You are the AI Product Manager for ${context.company.name}.\nMission: ${context.company.mission}\nProject: ${context.project.name}\nObjective: ${context.project.objective}\n\nCreate a practical delivery plan. Respect company/project isolation. Use the existing teams and roles when assigning work. Keep independent work parallel: use dependsOn only for real code/data ordering, never merely to serialize execution. Tests, docs, accessibility, i18n, fixtures and independent components should remain parallel when safe. For each task, declare advisory workScopes when the likely file area is known. Use evidenceKind "artifact" with relative artifactPaths for design, research, or document deliverables that should be verified by produced artifacts instead of a code test command. Return concise reasoning, then exactly one JSON object between <nd-dsh-plan> and </nd-dsh-plan>.\n\nSchema:\n<nd-dsh-plan>{"goal":{"title":"...","description":"..."},"milestones":[{"title":"...","description":"...","tasks":[{"title":"...","description":"...","priority":"medium","acceptanceCriteria":["..."],"dependsOn":["earlier task title"],"role":"Software Engineer","workScopes":["src/feature/**"],"evidenceKind":"code","artifactPaths":[]}]}],"memory":[{"title":"...","content":"...","tags":["plan"]}]}</nd-dsh-plan>\n\nAvailable roles:\n${roles}\nAvailable teams:\n${teams}\nKnown memory:\n${context.memory.map((item) => `- ${item.title}: ${item.content}`).join('\n') || '- none'}\nPolicies:\n${context.policies.map((item) => `- ${item.action}: ${item.effect}`).join('\n')}`
+  return `You are the AI Product Manager for ${context.company.name}.\nMission: ${context.company.mission}\nProject: ${context.project.name}\nObjective: ${context.project.objective}\n\nCreate a practical delivery plan. Organize milestones around small, verifiable user outcomes; the first milestone should deliver the smallest useful MVP slice. ND initially focuses execution on the first milestone and waits for the human to select the next one, so avoid depending on later-milestone work for that first outcome. Respect company/project isolation. Use the existing teams and roles when assigning work. Keep independent work parallel: use dependsOn only for real code/data ordering, never merely to serialize execution. Tests, docs, accessibility, i18n, fixtures and independent components should remain parallel when safe. For each task, declare advisory workScopes when the likely file area is known. Use evidenceKind "artifact" with relative artifactPaths for design, research, or document deliverables that should be verified by produced artifacts instead of a code test command. Return concise reasoning, then exactly one JSON object between <nd-dsh-plan> and </nd-dsh-plan>.\n\nSchema:\n<nd-dsh-plan>{"goal":{"title":"...","description":"..."},"milestones":[{"title":"...","description":"...","tasks":[{"title":"...","description":"...","priority":"medium","acceptanceCriteria":["..."],"dependsOn":["earlier task title"],"role":"Software Engineer","workScopes":["src/feature/**"],"evidenceKind":"code","artifactPaths":[]}]}],"memory":[{"title":"...","content":"...","tags":["plan"]}]}</nd-dsh-plan>\n\nAvailable roles:\n${roles}\nAvailable teams:\n${teams}\nKnown memory:\n${context.memory.map((item) => `- ${item.title}: ${item.content}`).join('\n') || '- none'}\nPolicies:\n${context.policies.map((item) => `- ${item.action}: ${item.effect}`).join('\n')}`
 }
 
 function workerPrompt(
@@ -1440,14 +1523,24 @@ function workerPrompt(
   const isolation = worktree
     ? `\nND task isolation: this session is already rooted at the dedicated worktree ${worktree.root}. Stay on branch ${worktree.branch}; do not switch worktrees/branches, push, merge into the project branch, or modify the base checkout. ND will checkpoint and integrate only after verification.\n`
     : ''
-  return `You are ${context.agent?.name ?? 'an AI worker'} acting as ${context.role?.name ?? 'Software Engineer'} inside company ${context.company.name}.\nCompany mission: ${context.company.mission}\nProject: ${context.project.name}\nObjective: ${context.project.objective}\nTask: ${context.task.title}\nExecution attempt: ${attempt}/${MAX_EXECUTION_ATTEMPTS}\nDescription: ${context.task.description}\nAcceptance criteria:\n${context.task.acceptanceCriteria.map((item) => `- ${item}`).join('\n')}${reviewFeedback}\nResponsibilities: ${context.role?.responsibility ?? 'Complete the assigned work.'}\nRole instructions: ${context.role?.systemPrompt ?? 'Execute carefully and verify the result.'}\nRelevant skills:\n${context.skills.map((item) => `- ${item.name}: ${item.instructions}`).join('\n')}\nRelevant memory:\n${context.memory.map((item) => `- ${item.title}: ${item.content}`).join('\n') || '- none'}\nPolicies:\n${context.policies.map((item) => `- ${item.action}: ${item.effect}`).join('\n')}${engineInstructions}${delegationInstructions}${isolation}\nInspect before editing, run meaningful validation, and finish with a concise result summary for the independent reviewer.`
+  return `You are ${context.agent?.name ?? 'an AI worker'} acting as ${context.role?.name ?? 'Software Engineer'} inside company ${context.company.name}.\nCompany mission: ${context.company.mission}\nProject: ${context.project.name}\nObjective: ${context.project.objective}\nTask: ${context.task.title}\nExecution attempt: ${attempt}/${MAX_EXECUTION_ATTEMPTS}\nDescription: ${context.task.description}\nAcceptance criteria:\n${context.task.acceptanceCriteria.map((item) => `- ${item}`).join('\n')}${taskEvidenceInstructions(context.task, context.project)}${reviewFeedback}\nResponsibilities: ${context.role?.responsibility ?? 'Complete the assigned work.'}\nRole instructions: ${context.role?.systemPrompt ?? 'Execute carefully and verify the result.'}\nRelevant skills:\n${context.skills.map((item) => `- ${item.name}: ${item.instructions}`).join('\n')}\nRelevant memory:\n${context.memory.map((item) => `- ${item.title}: ${item.content}`).join('\n') || '- none'}\nPolicies:\n${context.policies.map((item) => `- ${item.action}: ${item.effect}`).join('\n')}${engineInstructions}${delegationInstructions}${isolation}\nInspect before editing, run meaningful validation, and finish with a concise result summary for the independent reviewer.`
+}
+
+function taskEvidenceInstructions(task: OrganizationTask, project: { testCommand?: string }, reviewing = false): string {
+  if (task.evidenceKind === 'artifact') {
+    return `\nND delivery evidence: artifact.\nRequired artifact paths (relative to the current task workspace):\n${(task.artifactPaths ?? []).map((path) => `- ${path}`).join('\n')}\n${reviewing ? 'Inspect the produced deliverables at these exact paths without editing them.' : 'Produce the deliverables at these exact paths.'} ND checks that every declared artifact exists and records its fingerprint; chat prose or a different output path cannot satisfy this gate. Inspect the content against the acceptance criteria as well. This task uses artifact verification rather than the project test command.\n`
+  }
+  const command = project.testCommand?.trim()
+  return command
+    ? `\nND delivery evidence: code.\nProject machine-verification command: ${command}\nRun this command in the current task workspace and inspect its result before finishing. ND runs it again as the checkpoint gate; a failing check blocks delivery.\n`
+    : '\nND delivery evidence: code.\nNo project machine-verification command is configured; ND will record machine verification as skipped. Run relevant checks and report their actual results, including any checks that could not run.\n'
 }
 
 function reviewPrompt(task: OrganizationTask, context: Awaited<ReturnType<OrganizationStore['taskContext']>>, worktree?: TaskWorktree, decisionSupport = ''): string {
   const isolation = worktree
     ? `\nReview the isolated task branch ${worktree.branch} in the current worktree. Do not edit, commit, switch branches, merge, or push; a PASS is valid only while the exact checkpoint stays unchanged.\n`
     : ''
-  return `You are an independent reviewer for ${context.company.name}. Do not assume the worker succeeded. Inspect the actual workspace and verify the task against acceptance criteria. ND machine verification has already run when a project test command is configured; reviewer prose cannot override a red machine check.\nProject: ${context.project.name}\nTask: ${task.title}\nDescription: ${task.description}\nAcceptance criteria:\n${task.acceptanceCriteria.map((item) => `- ${item}`).join('\n')}\nWorker summary:\n${task.resultSummary ?? 'No summary provided.'}${isolation}${decisionSupport}\n\nRun relevant additional checks. Then return exactly one JSON object between <nd-dsh-review> and </nd-dsh-review>:\n<nd-dsh-review>{"verdict":"pass|fail","summary":"evidence-based review","issues":["..."],"memory":[{"title":"lesson","content":"durable lesson","tags":["review"]}]}</nd-dsh-review>`
+  return `You are an independent reviewer for ${context.company.name}. Do not assume the worker succeeded. Inspect the actual workspace and verify the task against acceptance criteria. ND machine verification has already run when a project test command is configured; reviewer prose cannot override a red machine check.\nProject: ${context.project.name}\nTask: ${task.title}\nDescription: ${task.description}\nAcceptance criteria:\n${task.acceptanceCriteria.map((item) => `- ${item}`).join('\n')}${taskEvidenceInstructions(task, context.project, true)}\nWorker summary:\n${task.resultSummary ?? 'No summary provided.'}${isolation}${decisionSupport}\n\nRun relevant additional checks. Then return exactly one JSON object between <nd-dsh-review> and </nd-dsh-review>:\n<nd-dsh-review>{"verdict":"pass|fail","summary":"evidence-based review","issues":["..."],"memory":[{"title":"lesson","content":"durable lesson","tags":["review"]}]}</nd-dsh-review>`
 }
 
 function receipt(run: OrganizationRun): OrganizationRunReceipt {

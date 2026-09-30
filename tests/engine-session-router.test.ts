@@ -42,6 +42,7 @@ function fixture() {
       harnessCounter += 1
       return `harness-${harnessCounter}`
     }),
+    renameSession: vi.fn(async () => {}),
     gatewayRpc: vi.fn(async (method: string) => {
       if (method === 'session.create') {
         harnessCounter += 1
@@ -187,6 +188,35 @@ describe('direct engine workspace context', () => {
       sessionId: created.sessionId,
       workspaceCwd: taskRoot,
     })
+  })
+
+  it('names harness-created sessions after their real work without touching direct engines', async () => {
+    const { router, harness } = fixture()
+    const taskRoot = 'C:/projects/parent/.nd-dsh-worktrees/repo/task-named'
+    const named = await router.createSession('nd-harness', taskRoot, 'Implement the login flow')
+    expect(harness.renameSession).toHaveBeenCalledWith(named.sessionId, 'Implement the login flow')
+
+    harness.renameSession.mockClear()
+    const workspaceless = await router.createSession('nd-harness', undefined, 'Implement the login flow')
+    expect(harness.renameSession).toHaveBeenCalledWith(workspaceless.sessionId, 'Implement the login flow')
+
+    // Direct engines keep their own thread labels; the title is harness-only today.
+    harness.renameSession.mockClear()
+    await router.createSession('zcode-cli', taskRoot, 'Implement the login flow')
+    expect(harness.renameSession).not.toHaveBeenCalled()
+  })
+
+  it('treats a failed session rename as cosmetic and still returns the session', async () => {
+    const { router, harness } = fixture()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    harness.renameSession.mockRejectedValue(new Error('rename unavailable'))
+    try {
+      const created = await router.createSession('nd-harness', 'C:/work', 'Implement the login flow')
+      expect(created.sessionId).toBe('harness-1')
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('session rename failed'), 'rename unavailable')
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('rejects a caller that tries to re-root an existing Harness session', async () => {

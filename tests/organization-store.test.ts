@@ -10,6 +10,81 @@ async function storeFixture(): Promise<OrganizationStore> {
 }
 
 describe('OrganizationStore', () => {
+  it('persists delivery scope and queue order, keeps dependencies authoritative, and waits at milestone completion', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'nd-delivery-scope-'))
+    const path = join(dir, 'organization.json')
+    const store = new OrganizationStore(path)
+    const company = (await store.mutate({ type: 'company.create', name: 'Delivery', mission: 'Ship a useful slice' })).companies[0]!
+    const project = (await store.mutate({ type: 'project.create', companyId: company.id, name: 'Desk', objective: 'Create a ticket' })).projects[0]!
+    await store.applyPlan(project.id, { goal: { title: 'MVP', description: 'Persist a ticket' }, milestones: [
+      { title: 'First ticket', description: 'Create and reload', tasks: [
+        { title: 'Form', description: 'Build form', priority: 'high' },
+        { title: 'Storage', description: 'Persist', priority: 'low' },
+        { title: 'Reload test', description: 'Verify reload', dependsOn: ['Storage'], priority: 'critical' },
+      ] },
+      { title: 'Search', description: 'Find tickets', tasks: [{ title: 'Search box', description: 'Search', priority: 'critical' }] },
+    ] })
+    let state = await store.state()
+    const milestone = state.milestones[0]!
+    const form = state.tasks.find((task) => task.title === 'Form')!
+    const storage = state.tasks.find((task) => task.title === 'Storage')!
+    const reload = state.tasks.find((task) => task.title === 'Reload test')!
+    expect(state.projects[0]?.deliveryMilestoneId).toBe(milestone.id)
+    expect((await store.readyTasks(project.id)).map((task) => task.title)).toEqual(['Form', 'Storage'])
+    await store.mutate({ type: 'task.reorder', projectId: project.id, milestoneId: milestone.id, taskIds: [reload.id, storage.id, form.id] })
+    expect((await store.readyTasks(project.id)).map((task) => task.title)).toEqual(['Storage', 'Form'])
+    const restored = new OrganizationStore(path)
+    expect((await restored.state()).projects[0]?.deliveryMilestoneId).toBe(milestone.id)
+    expect((await restored.readyTasks(project.id)).map((task) => task.title)).toEqual(['Storage', 'Form'])
+    for (const task of [storage, reload, form]) {
+      await restored.markExecution(task.id, `session-${task.id}`)
+      await restored.markForReview(task.id, 'Actual delivery')
+      await restored.completeReview(task.id, true, 'Verified')
+    }
+    state = await restored.state()
+    expect(state.milestones[0]?.status).toBe('completed')
+    expect(state.projects[0]?.deliveryMilestoneId).toBe(milestone.id)
+    expect(await restored.nextReadyTask(project.id)).toBeUndefined()
+    await restored.mutate({ type: 'project.update', id: project.id, patch: { deliveryMilestoneId: state.milestones[1]!.id } })
+    expect((await restored.nextReadyTask(project.id))?.title).toBe('Search box')
+    await restored.mutate({ type: 'project.update', id: project.id, patch: { deliveryMilestoneId: '' } })
+    expect((await restored.state()).projects[0]?.deliveryMilestoneId).toBeUndefined()
+  })
+
+  it('rejects foreign milestones and invalid reorder lists without partially changing the queue', async () => {
+    const store = await storeFixture()
+    const company = (await store.mutate({ type: 'company.create', name: 'Scoped', mission: 'Keep work scoped' })).companies[0]!
+    const first = (await store.mutate({ type: 'project.create', companyId: company.id, name: 'First', objective: 'Build' })).projects[0]!
+    const second = (await store.mutate({ type: 'project.create', companyId: company.id, name: 'Second', objective: 'Build' })).projects[1]!
+    const milestone = (await store.mutate({ type: 'milestone.create', projectId: first.id, title: 'MVP', description: 'Save one record' })).milestones[0]!
+    const state = await store.mutate({ type: 'task.create', companyId: company.id, projectId: first.id, milestoneId: milestone.id, title: 'Save', description: 'Implement' })
+    const task = state.tasks[0]!
+    expect(task.goalId).toBe(milestone.goalId)
+    await expect(store.mutate({ type: 'project.update', id: second.id, patch: { deliveryMilestoneId: milestone.id } })).rejects.toThrow(/milestone.*project/i)
+    await expect(store.mutate({ type: 'task.create', companyId: company.id, projectId: second.id, milestoneId: milestone.id, title: 'Leak', description: 'Invalid' })).rejects.toThrow(/milestone.*project/i)
+    await expect(store.mutate({ type: 'task.reorder', projectId: first.id, milestoneId: milestone.id, taskIds: [task.id, task.id] })).rejects.toThrow(/exactly once/i)
+    await expect(store.mutate({ type: 'task.reorder', projectId: first.id, milestoneId: milestone.id, taskIds: [] })).rejects.toThrow(/exactly once/i)
+    await expect(store.mutate({ type: 'task.reorder', projectId: second.id, milestoneId: milestone.id, taskIds: [task.id] })).rejects.toThrow(/milestone.*project/i)
+    expect((await store.state()).tasks[0]?.queueOrder).toBeUndefined()
+    await store.markExecution(task.id, 'running')
+    await expect(store.mutate({ type: 'task.update', id: task.id, patch: { milestoneId: '' } })).rejects.toThrow(/in progress/i)
+  })
+
+  it('keeps older projects without delivery scope dispatching all ready work and clears rank when moving a task', async () => {
+    const store = await storeFixture()
+    const company = (await store.mutate({ type: 'company.create', name: 'Legacy', mission: 'Keep compatibility' })).companies[0]!
+    const project = (await store.mutate({ type: 'project.create', companyId: company.id, name: 'Existing', objective: 'Build' })).projects[0]!
+    const unassigned = (await store.mutate({ type: 'task.create', companyId: company.id, projectId: project.id, title: 'Existing task', description: 'Build' })).tasks[0]!
+    expect((await store.nextReadyTask(project.id))?.id).toBe(unassigned.id)
+    const milestone = (await store.mutate({ type: 'milestone.create', projectId: project.id, title: 'MVP', description: 'Use it' })).milestones[0]!
+    expect(await store.nextReadyTask(project.id)).toBeUndefined()
+    await store.mutate({ type: 'task.reorder', projectId: project.id, taskIds: [unassigned.id] })
+    const state = await store.mutate({ type: 'task.update', id: unassigned.id, patch: { milestoneId: milestone.id } })
+    expect(state.tasks[0]?.queueOrder).toBeUndefined()
+    expect(state.tasks[0]?.goalId).toBe(milestone.goalId)
+    expect((await store.nextReadyTask(project.id))?.id).toBe(unassigned.id)
+  })
+
   it('seeds an isolated AI company with workforce, skills, workflow, and safe policies', async () => {
     const store = await storeFixture()
     const a = await store.mutate({ type: 'company.create', name: 'Company A', mission: 'Build A' })

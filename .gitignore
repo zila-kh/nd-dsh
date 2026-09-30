@@ -51,3 +51,5 @@ examples/todo/data/
 beta-qa-report-**
 # Local performance evidence; reviewed baselines are copied intentionally.
 benchmark-results/
+# Isolated desktop exploration profiles, generated projects, and local evidence.
+/output/real-world/

@@ -54,6 +54,8 @@ export interface Project {
   repoUrls: string[]
   teamIds: string[]
   progress: number
+  /** Persisted execution scope. Missing means all milestones, including older projects. */
+  deliveryMilestoneId?: string
   /** Shell command that starts the project's dev server, run in workspacePath. */
   startCommand?: string
   /** Command used when validating or QA-ing the project (informational + agent hint). */
@@ -174,6 +176,8 @@ export interface OrganizationTask {
   projectId: string
   goalId?: string
   milestoneId?: string
+  /** Human queue order within its milestone; absent preserves priority ordering. */
+  queueOrder?: number
   title: string
   description: string
   acceptanceCriteria: string[]
@@ -320,7 +324,7 @@ export type OrganizationMutation =
    */
   | { type: 'company.remove'; id: string }
   | { type: 'project.create'; companyId: string; name: string; objective: string; workspacePath?: string; repoUrls?: string[]; startCommand?: string; testCommand?: string; targetPort?: number; targetUrl?: string; healthCheckPath?: string }
-  | { type: 'project.update'; id: string; patch: Partial<Pick<Project, 'name' | 'objective' | 'status' | 'workspacePath' | 'repoUrls' | 'teamIds' | 'startCommand' | 'testCommand' | 'targetPort' | 'targetUrl' | 'healthCheckPath'>> }
+  | { type: 'project.update'; id: string; patch: Partial<Pick<Project, 'name' | 'objective' | 'status' | 'workspacePath' | 'repoUrls' | 'teamIds' | 'startCommand' | 'testCommand' | 'targetPort' | 'targetUrl' | 'healthCheckPath' | 'deliveryMilestoneId'>> }
   | { type: 'project.activate'; id: string }
   /**
    * Forget a project inside ND: the project and the records ND owns for it
@@ -337,8 +341,10 @@ export type OrganizationMutation =
   | { type: 'skill.create'; scope: Exclude<OrganizationScope, 'builtin'>; name: string; description: string; instructions: string; companyId?: string; projectId?: string; teamId?: string; roleId?: string; agentId?: string }
   | { type: 'workflow.create'; companyId: string; projectId?: string; name: string; steps: WorkflowStep[] }
   | { type: 'goal.create'; companyId: string; projectId: string; title: string; description: string }
+  | { type: 'milestone.create'; projectId: string; title: string; description: string; goalId?: string }
   | { type: 'task.create'; companyId: string; projectId: string; goalId?: string; milestoneId?: string; title: string; description: string; acceptanceCriteria?: string[]; priority?: TaskPriority; dependsOn?: string[]; assignedAgentId?: string; workScopes?: string[]; evidenceKind?: TaskEvidenceKind; artifactPaths?: string[]; sourceScheduleId?: string }
-  | { type: 'task.update'; id: string; patch: Partial<Pick<OrganizationTask, 'title' | 'description' | 'acceptanceCriteria' | 'priority' | 'status' | 'dependsOn' | 'assignedAgentId' | 'workScopes' | 'evidenceKind' | 'artifactPaths'>> }
+  | { type: 'task.update'; id: string; patch: Partial<Pick<OrganizationTask, 'title' | 'description' | 'acceptanceCriteria' | 'priority' | 'status' | 'dependsOn' | 'assignedAgentId' | 'workScopes' | 'evidenceKind' | 'artifactPaths' | 'milestoneId'>> }
+  | { type: 'task.reorder'; projectId: string; milestoneId?: string; taskIds: string[] }
   | { type: 'memory.add'; companyId: string; projectId?: string; title: string; content: string; tags?: string[] }
   | { type: 'policy.set'; companyId: string; action: string; effect: OrganizationPolicyEffect; description?: string }
 
