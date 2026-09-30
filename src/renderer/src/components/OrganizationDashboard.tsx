@@ -3,6 +3,7 @@ import type { WorkspaceState } from '../../../shared/contracts'
 import type { OrganizationSnapshot } from '../../../shared/organization'
 import { OrganizationControlCenter } from './OrganizationControlCenter'
 import { OrganizationDashboard as OrganizationDashboardLegacy } from './OrganizationDashboardLegacy'
+import { OrganizationCollaborationCenter } from './OrganizationCollaborationCenter'
 import { OrganizationStrategyCenter } from './OrganizationStrategyCenter'
 
 interface Props {
@@ -15,7 +16,7 @@ interface Props {
   onCompanyViewChange(view: CompanyView): void
 }
 
-export type CompanyView = 'workspace' | 'operations' | 'strategy'
+export type CompanyView = 'workspace' | 'collaboration' | 'operations' | 'strategy'
 
 export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, onError, companyView, onCompanyViewChange }: Props) {
   const [state, setState] = useState<OrganizationSnapshot | null>(null)
@@ -77,6 +78,7 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
           ) : null}
           <div className="flex items-center rounded-md border border-border-strong bg-secondary p-0.5">
             <button type="button" className={viewButton(companyView === 'workspace')} onClick={() => onCompanyViewChange('workspace')}>Company Workspace</button>
+            <button type="button" className={viewButton(companyView === 'collaboration')} onClick={() => onCompanyViewChange('collaboration')}>Team</button>
             <button type="button" className={viewButton(companyView === 'operations')} onClick={() => onCompanyViewChange('operations')}>Operations</button>
             <button type="button" className={viewButton(companyView === 'strategy')} onClick={() => onCompanyViewChange('strategy')}>Strategy</button>
           </div>
@@ -88,7 +90,14 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
           <OrganizationDashboardLegacy workspace={workspace} onOpenDeepSeek={onOpenDeepSeek} {...(onAskAgent ? { onAskAgent } : {})} onError={onError} />
         ) : company ? (
           <div className="h-full overflow-auto p-[14px]">
-            {companyView === 'operations' ? (
+            {companyView === 'collaboration' ? (
+              <OrganizationCollaborationCenter
+                companyId={company.id}
+                {...(project ? { projectId: project.id } : {})}
+                {...(onAskAgent ? { onAskAgent } : {})}
+                onError={onError}
+              />
+            ) : companyView === 'operations' ? (
               <OrganizationControlCenter
                 companyId={company.id}
                 {...(project ? { projectId: project.id } : {})}

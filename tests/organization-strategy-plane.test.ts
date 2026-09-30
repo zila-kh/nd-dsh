@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -88,6 +88,65 @@ describe('organization strategy plane', () => {
     await strategy.finishSchedule(schedule.id, 'success', 'run dispatched')
     state = await strategy.state()
     expect(state.schedules[0]?.lastOutcome).toBe('success')
+  })
+
+  it('recovers durable automation state from backup when the primary strategy file is corrupt', async () => {
+    const { root, strategy } = await fixture()
+    let state = await strategy.mutate({
+      type: 'schedule.add',
+      companyId: 'company-1',
+      projectId: 'project-1',
+      title: 'Durable routine',
+      intervalMinutes: 30,
+    })
+    expect(state.schedules).toHaveLength(1)
+
+    const primary = join(root, 'strategy.json')
+    const backup = `${primary}.bak`
+    expect(JSON.parse(await readFile(backup, 'utf8')).schedules).toHaveLength(1)
+    await writeFile(primary, '{corrupt', 'utf8')
+
+    const value = organization()
+    const recovered = new OrganizationStrategyPlane(primary, { state: async () => structuredClone(value) } as never)
+    state = await recovered.state()
+    expect(state.schedules[0]?.title).toBe('Durable routine')
+    expect(JSON.parse(await readFile(primary, 'utf8')).schedules[0]?.title).toBe('Durable routine')
+  })
+
+  it('uses the backup instead of silently erasing structurally malformed automation state', async () => {
+    const { root, strategy } = await fixture()
+    await strategy.mutate({
+      type: 'heartbeat.add',
+      companyId: 'company-1',
+      projectId: 'project-1',
+      title: 'Durable heartbeat',
+      intervalMinutes: 15,
+    })
+    const primary = join(root, 'strategy.json')
+    await writeFile(primary, JSON.stringify({ version: 1, heartbeats: 'damaged' }), 'utf8')
+
+    const value = organization()
+    const recovered = new OrganizationStrategyPlane(primary, { state: async () => structuredClone(value) } as never)
+    const state = await recovered.state()
+    expect(state.heartbeats[0]?.title).toBe('Durable heartbeat')
+  })
+
+  it('prunes automation and strategy records when their project is removed', async () => {
+    const { strategy, value } = await fixture()
+    await strategy.mutate({ type: 'anchor.add', companyId: 'company-1', projectId: 'project-1', title: 'Anchor', outcome: 'Ship' })
+    await strategy.mutate({ type: 'schedule.add', companyId: 'company-1', projectId: 'project-1', title: 'Routine', intervalMinutes: 60 })
+    await strategy.mutate({ type: 'heartbeat.add', companyId: 'company-1', projectId: 'project-1', title: 'Heartbeat', intervalMinutes: 30 })
+    await strategy.mutate({ type: 'trigger.add', companyId: 'company-1', projectId: 'project-1', title: 'Trigger', eventType: 'task.blocked', action: 'signal', prompt: 'Inspect' })
+    await strategy.mutate({ type: 'skill-candidate.add', companyId: 'company-1', projectId: 'project-1', name: 'Candidate', description: 'D', instructions: 'I' })
+    value.projects = []
+    value.tasks = []
+    await strategy.pruneToOrganization(value)
+    const state = await strategy.state()
+    expect(state.anchors).toHaveLength(0)
+    expect(state.schedules).toHaveLength(0)
+    expect(state.heartbeats).toHaveLength(0)
+    expect(state.triggers).toHaveLength(0)
+    expect(state.skillCandidates).toHaveLength(0)
   })
 
   it('projects release readiness from task state and exact review evidence', async () => {

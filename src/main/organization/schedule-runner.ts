@@ -13,9 +13,9 @@ export interface ScheduleRunnerDeps {
     releaseSchedule(id: string, outcome: 'success' | 'skipped' | 'failed', detail: string, retryInMs: number): Promise<void>
     mutate(mutation: OrganizationStrategyMutation): Promise<unknown>
   }
-  control: { shouldRun(projectId: string | undefined, action: OrganizationControlAction): Promise<OrganizationTurnDecision> }
+  control: { shouldRun(projectId: string | undefined, action: OrganizationControlAction, taskId?: string): Promise<OrganizationTurnDecision> }
   store: { state(): Promise<OrganizationSnapshot>; mutate(mutation: OrganizationMutation): Promise<OrganizationSnapshot> }
-  orchestrator: { runNext(projectId?: string, explicit?: boolean): Promise<OrganizationRunReceipt | null> }
+  orchestrator: { runTask(taskId: string, explicit?: boolean): Promise<OrganizationRunReceipt> }
   now?: () => number
 }
 
@@ -50,21 +50,37 @@ export async function runDueSchedules(deps: ScheduleRunnerDeps): Promise<void> {
       const company = state.companies.find((item) => item.id === schedule.companyId)
       if (!project || !company) throw new Error('Scheduled project no longer exists')
       const open = state.tasks.find((task) => task.sourceScheduleId === schedule.id && task.status !== 'completed')
+      let scheduledTask = open
       let created: string | undefined
       if (!open) {
         const title = `${schedule.title} · ${new Date(now()).toISOString().slice(0, 10)}`
-        await deps.store.mutate({
+        const cadence = describeCadence(schedule)
+        const routine = schedule.mode === 'routine' ? `\nAgent routine: ${schedule.prompt ?? schedule.title}${schedule.skillIds?.length ? `\nPreferred skills: ${schedule.skillIds.join(', ')}` : ''}` : ''
+        const next = await deps.store.mutate({
           type: 'task.create', companyId: company.id, projectId: project.id, title,
-          description: `Recurring work from the company schedule "${schedule.title}" (every ${formatInterval(schedule.intervalMinutes)}).`,
+          description: `Automated work from "${schedule.title}" (${cadence}).${routine}`,
           sourceScheduleId: schedule.id,
+          ...(schedule.agentId ? { assignedAgentId: schedule.agentId } : {}),
+          ...(schedule.skillIds?.length ? { requestedSkillIds: schedule.skillIds } : {}),
         })
+        scheduledTask = next.tasks.find((task) => task.sourceScheduleId === schedule.id && task.status !== 'completed')
         created = title
       }
 
-      const parts = [created ? `Created task "${created}".` : `Task "${open!.title}" from the previous run is still open.`]
+      if (!scheduledTask) throw new Error('Scheduled task was not materialized')
+      const parts = [created ? `Created task "${created}".` : `Task "${scheduledTask.title}" from the previous run is still open.`]
       if (company.autonomyLevel >= 3) {
-        const receipt = await deps.orchestrator.runNext(schedule.projectId, false)
-        parts.push(receipt ? `Dispatched ${receipt.kind} run ${receipt.runId}.` : 'No runnable work was available yet.')
+        if (scheduledTask.status !== 'ready') {
+          parts.push(`Scheduled task is ${scheduledTask.status}; ND will not auto-restart non-ready work.`)
+        } else {
+          const executionDecision = await deps.control.shouldRun(schedule.projectId, 'task.execute', scheduledTask.id)
+          if (executionDecision.route === 'ready') {
+            const receipt = await deps.orchestrator.runTask(scheduledTask.id, false)
+            parts.push(`Dispatched ${receipt.kind} run ${receipt.runId} for the scheduled task.`)
+          } else {
+            parts.push(`Scheduled task is waiting on the board: ${executionDecision.reason}`)
+          }
+        }
       } else {
         parts.push('It is waiting on the board for a human to start it; raise the company to autonomy 3 to let schedules start work.')
       }
@@ -77,6 +93,13 @@ export async function runDueSchedules(deps: ScheduleRunnerDeps): Promise<void> {
       await audit('deny', 'Scheduled company work failed closed.', detail)
     }
   }
+}
+
+function describeCadence(schedule: OrganizationCompanySchedule): string {
+  const mode = schedule.mode ?? 'interval'
+  if (mode === 'once') return `one time at ${new Date(schedule.runAt ?? schedule.nextRunAt).toISOString()}`
+  if (mode === 'cron') return `cron ${schedule.cron ?? ''} in ${schedule.timezone ?? 'UTC'}`
+  return `every ${formatInterval(schedule.intervalMinutes ?? 60)}`
 }
 
 function formatInterval(minutes: number): string {

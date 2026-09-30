@@ -16,6 +16,14 @@ export type OrganizationTeamEventKind =
   | 'handoff'
   | 'review-request'
   | 'dependency-unblocked'
+export type OrganizationMemberStatus = 'active' | 'inactive'
+export type OrganizationActorKind = 'human' | 'agent' | 'system'
+export type OrganizationMessageKind = 'project' | 'task' | 'review'
+export type OrganizationDecisionStatus = 'active' | 'superseded' | 'archived'
+export type OrganizationApprovalStatus = 'pending' | 'approved' | 'changes_requested' | 'rejected' | 'cancelled'
+export type OrganizationApprovalVerdictKind = 'approve' | 'request_changes' | 'reject'
+export type OrganizationApprovalTargetKind = 'task-review' | 'integration' | 'action'
+
 export type OrganizationRunKind = 'pm-plan' | 'task-execution' | 'task-review'
 export type OrganizationRunStatus = 'running' | 'completed' | 'failed'
 export type OrganizationSubagentMode = 'auto' | 'off'
@@ -195,6 +203,11 @@ export interface OrganizationTask {
   integratedHead?: string
   /** Set when a recurring company schedule created this task. */
   sourceScheduleId?: string
+  /** Event-trigger provenance prevents duplicate task creation after a crash/retry. */
+  sourceTriggerId?: string
+  sourceActivityId?: string
+  /** Skills requested by an automation/routine in addition to role/team/agent skills. */
+  requestedSkillIds?: string[]
   /** Why ND blocked the task, shown to the human until the task moves again. */
   blockedReason?: string
   createdAt: number
@@ -243,6 +256,74 @@ export interface OrganizationTeamEvent {
   createdAt: number
 }
 
+export interface OrganizationMember {
+  id: string
+  companyId: string
+  displayName: string
+  title?: string
+  status: OrganizationMemberStatus
+  createdAt: number
+  updatedAt: number
+}
+
+export interface OrganizationActorRef {
+  kind: OrganizationActorKind
+  id: string
+}
+
+export interface OrganizationMessage {
+  id: string
+  companyId: string
+  projectId: string
+  kind: OrganizationMessageKind
+  taskId?: string
+  replyToId?: string
+  author: OrganizationActorRef
+  body: string
+  mentionActorIds: string[]
+  createdAt: number
+  updatedAt: number
+}
+
+export interface OrganizationDecision {
+  id: string
+  companyId: string
+  projectId: string
+  taskId?: string
+  title: string
+  summary: string
+  rationale: string
+  status: OrganizationDecisionStatus
+  createdBy: OrganizationActorRef
+  supersedesDecisionId?: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface OrganizationApprovalRequest {
+  id: string
+  companyId: string
+  projectId: string
+  taskId?: string
+  targetKind: OrganizationApprovalTargetKind
+  targetId: string
+  targetRevision?: string
+  requestedBy: OrganizationActorRef
+  requiredApproverKind: 'human'
+  status: OrganizationApprovalStatus
+  createdAt: number
+  resolvedAt?: number
+}
+
+export interface OrganizationApprovalVerdict {
+  id: string
+  requestId: string
+  actor: OrganizationActorRef
+  verdict: OrganizationApprovalVerdictKind
+  comment?: string
+  createdAt: number
+}
+
 export interface OrganizationRun {
   id: string
   companyId: string
@@ -284,7 +365,14 @@ export interface OrganizationSnapshot {
   policies: OrganizationPolicy[]
   activity: OrganizationActivity[]
   runs: OrganizationRun[]
-  /** Structured team/task handoffs. Missing in older v1 snapshots and normalized to []. */
+  /** Local human identities for attribution. These are not remote authentication principals. */
+  members?: OrganizationMember[]
+  /** Durable human-grade project/task/review collaboration. */
+  messages?: OrganizationMessage[]
+  decisions?: OrganizationDecision[]
+  approvalRequests?: OrganizationApprovalRequest[]
+  approvalVerdicts?: OrganizationApprovalVerdict[]
+  /** Structured machine-oriented team/task handoffs. Missing in older v1 snapshots and normalized to []. */
   coordination: OrganizationTeamEvent[]
 }
 
@@ -330,6 +418,8 @@ export type OrganizationMutation =
    */
   | { type: 'project.remove'; id: string }
   | { type: 'team.create'; companyId: string; name: string; purpose: string; roleIds?: string[]; skillIds?: string[] }
+  | { type: 'member.create'; companyId: string; displayName: string; title?: string }
+  | { type: 'member.update'; id: string; patch: Partial<Pick<OrganizationMember, 'displayName' | 'title' | 'status'>> }
   | { type: 'role.create'; companyId: string; name: string; responsibility: string; systemPrompt: string; skillIds?: string[]; providerId?: string; modelId?: string }
   | { type: 'role.update'; id: string; patch: Partial<Pick<OrganizationRole, 'name' | 'responsibility' | 'systemPrompt' | 'skillIds' | 'providerId' | 'modelId'>> }
   | { type: 'agent.create'; companyId: string; name: string; roleId: string; teamId?: string; skillIds?: string[]; providerId?: string; modelId?: string }
@@ -337,8 +427,13 @@ export type OrganizationMutation =
   | { type: 'skill.create'; scope: Exclude<OrganizationScope, 'builtin'>; name: string; description: string; instructions: string; companyId?: string; projectId?: string; teamId?: string; roleId?: string; agentId?: string }
   | { type: 'workflow.create'; companyId: string; projectId?: string; name: string; steps: WorkflowStep[] }
   | { type: 'goal.create'; companyId: string; projectId: string; title: string; description: string }
-  | { type: 'task.create'; companyId: string; projectId: string; goalId?: string; milestoneId?: string; title: string; description: string; acceptanceCriteria?: string[]; priority?: TaskPriority; dependsOn?: string[]; assignedAgentId?: string; workScopes?: string[]; evidenceKind?: TaskEvidenceKind; artifactPaths?: string[]; sourceScheduleId?: string }
-  | { type: 'task.update'; id: string; patch: Partial<Pick<OrganizationTask, 'title' | 'description' | 'acceptanceCriteria' | 'priority' | 'status' | 'dependsOn' | 'assignedAgentId' | 'workScopes' | 'evidenceKind' | 'artifactPaths'>> }
+  | { type: 'task.create'; companyId: string; projectId: string; goalId?: string; milestoneId?: string; title: string; description: string; acceptanceCriteria?: string[]; priority?: TaskPriority; dependsOn?: string[]; assignedAgentId?: string; workScopes?: string[]; evidenceKind?: TaskEvidenceKind; artifactPaths?: string[]; sourceScheduleId?: string; sourceTriggerId?: string; sourceActivityId?: string; requestedSkillIds?: string[] }
+  | { type: 'task.update'; id: string; patch: Partial<Pick<OrganizationTask, 'title' | 'description' | 'acceptanceCriteria' | 'priority' | 'status' | 'dependsOn' | 'assignedAgentId' | 'workScopes' | 'evidenceKind' | 'artifactPaths' | 'requestedSkillIds'>> }
+  | { type: 'collaboration.message.add'; companyId: string; projectId: string; authorMemberId: string; body: string; taskId?: string; replyToId?: string; mentionActorIds?: string[]; kind?: OrganizationMessageKind }
+  | { type: 'decision.create'; companyId: string; projectId: string; authorMemberId: string; title: string; summary: string; rationale: string; taskId?: string }
+  | { type: 'decision.supersede'; id: string; authorMemberId: string; title: string; summary: string; rationale: string }
+  | { type: 'approval.request'; companyId: string; projectId: string; requesterMemberId: string; targetKind: OrganizationApprovalTargetKind; targetId: string; taskId?: string; targetRevision?: string }
+  | { type: 'approval.resolve'; id: string; actorMemberId: string; verdict: OrganizationApprovalVerdictKind; comment?: string }
   | { type: 'memory.add'; companyId: string; projectId?: string; title: string; content: string; tags?: string[] }
   | { type: 'policy.set'; companyId: string; action: string; effect: OrganizationPolicyEffect; description?: string }
 

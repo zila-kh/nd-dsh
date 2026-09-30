@@ -7,6 +7,11 @@ export type CompanyKnowledgeConfidence = 'authoritative' | 'high' | 'medium' | '
 export type CompanyKnowledgeStatus = 'active' | 'superseded' | 'stale' | 'archived'
 export type CompanyScheduleStatus = 'active' | 'paused' | 'completed'
 export type CompanyScheduleOutcome = 'success' | 'skipped' | 'failed'
+export type CompanyScheduleMode = 'interval' | 'once' | 'cron' | 'routine'
+export type CompanyHeartbeatStatus = 'active' | 'paused'
+export type AutomationTriggerStatus = 'active' | 'paused' | 'completed'
+export type AutomationTriggerAction = 'task' | 'signal'
+export type SkillCandidateStatus = 'proposed' | 'approved' | 'rejected'
 export type NormalizedActionRisk = 'low' | 'medium' | 'high' | 'critical'
 export type NormalizedActionExternality = 'internal' | 'external'
 export type NormalizedActionDestructiveLevel = 'none' | 'reversible' | 'destructive'
@@ -48,7 +53,14 @@ export interface OrganizationCompanySchedule {
   companyId: string
   projectId: string
   title: string
-  intervalMinutes: number
+  mode?: CompanyScheduleMode
+  intervalMinutes?: number
+  cron?: string
+  timezone?: string
+  runAt?: number
+  agentId?: string
+  prompt?: string
+  skillIds?: string[]
   status: CompanyScheduleStatus
   nextRunAt: number
   lastRunAt?: number
@@ -58,6 +70,60 @@ export interface OrganizationCompanySchedule {
   maxRuns?: number
   createdAt: number
   updatedAt: number
+}
+
+export interface OrganizationHeartbeat {
+  id: string
+  companyId: string
+  projectId: string
+  title: string
+  intervalMinutes: number
+  status: CompanyHeartbeatStatus
+  nextRunAt: number
+  lastRunAt?: number
+  lastDetail?: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface OrganizationAutomationTrigger {
+  id: string
+  companyId: string
+  projectId: string
+  title: string
+  eventType: string
+  action: AutomationTriggerAction
+  prompt: string
+  agentId?: string
+  status: AutomationTriggerStatus
+  runCount: number
+  maxRuns?: number
+  createdAt: number
+  updatedAt: number
+}
+
+export interface OrganizationTriggerReceipt {
+  id: string
+  triggerId: string
+  activityId: string
+  outcome: CompanyScheduleOutcome
+  detail: string
+  createdAt: number
+}
+
+export interface OrganizationSkillCandidate {
+  id: string
+  companyId: string
+  projectId?: string
+  sourceAgentId?: string
+  name: string
+  description: string
+  instructions: string
+  evidence: string[]
+  status: SkillCandidateStatus
+  createdAt: number
+  updatedAt: number
+  promotedAt?: number
 }
 
 export interface OrganizationActionAuditReceipt {
@@ -91,6 +157,10 @@ export interface OrganizationStrategySnapshot {
   anchors: OrganizationStrategicAnchor[]
   knowledge: OrganizationCompanyKnowledge[]
   schedules: OrganizationCompanySchedule[]
+  heartbeats: OrganizationHeartbeat[]
+  triggers: OrganizationAutomationTrigger[]
+  triggerReceipts: OrganizationTriggerReceipt[]
+  skillCandidates: OrganizationSkillCandidate[]
   audit: OrganizationActionAuditReceipt[]
 }
 
@@ -114,12 +184,18 @@ export interface OrganizationStrategyProjection {
   activeAnchors: OrganizationStrategicAnchor[]
   activeKnowledge: OrganizationCompanyKnowledge[]
   schedules: OrganizationCompanySchedule[]
+  heartbeats: OrganizationHeartbeat[]
+  triggers: OrganizationAutomationTrigger[]
+  skillCandidates: OrganizationSkillCandidate[]
   recentAudit: OrganizationActionAuditReceipt[]
   release?: OrganizationReleaseReadiness
   metrics: {
     activeAnchors: number
     activeKnowledge: number
     activeSchedules: number
+    activeHeartbeats: number
+    activeTriggers: number
+    proposedSkills: number
     auditReceipts: number
   }
 }
@@ -129,8 +205,15 @@ export type OrganizationStrategyMutation =
   | { type: 'anchor.update'; id: string; patch: Partial<Pick<OrganizationStrategicAnchor, 'title' | 'outcome' | 'successCriteria' | 'priority' | 'status'>> }
   | { type: 'knowledge.add'; companyId: string; projectId?: string; kind: CompanyKnowledgeKind; title: string; content: string; tags?: string[]; confidence?: CompanyKnowledgeConfidence; source?: OrganizationCompanyKnowledge['source']; sourceRef?: string; supersedesId?: string }
   | { type: 'knowledge.update'; id: string; patch: Partial<Pick<OrganizationCompanyKnowledge, 'title' | 'content' | 'tags' | 'confidence' | 'status'>> }
-  | { type: 'schedule.add'; companyId: string; projectId: string; title: string; intervalMinutes: number; nextRunAt?: number; maxRuns?: number }
-  | { type: 'schedule.update'; id: string; patch: Partial<Pick<OrganizationCompanySchedule, 'title' | 'intervalMinutes' | 'status' | 'nextRunAt' | 'maxRuns'>> }
+  | { type: 'schedule.add'; companyId: string; projectId: string; title: string; mode?: CompanyScheduleMode; intervalMinutes?: number; cron?: string; timezone?: string; runAt?: number; nextRunAt?: number; maxRuns?: number; agentId?: string; prompt?: string; skillIds?: string[] }
+  | { type: 'schedule.update'; id: string; patch: Partial<Pick<OrganizationCompanySchedule, 'title' | 'intervalMinutes' | 'cron' | 'timezone' | 'runAt' | 'status' | 'nextRunAt' | 'maxRuns' | 'agentId' | 'prompt' | 'skillIds'>> }
+  | { type: 'heartbeat.add'; companyId: string; projectId: string; title: string; intervalMinutes: number }
+  | { type: 'heartbeat.update'; id: string; patch: Partial<Pick<OrganizationHeartbeat, 'title' | 'intervalMinutes' | 'status' | 'nextRunAt'>> }
+  | { type: 'trigger.add'; companyId: string; projectId: string; title: string; eventType: string; action: AutomationTriggerAction; prompt: string; agentId?: string; maxRuns?: number }
+  | { type: 'trigger.update'; id: string; patch: Partial<Pick<OrganizationAutomationTrigger, 'title' | 'eventType' | 'action' | 'prompt' | 'agentId' | 'status' | 'maxRuns'>> }
+  | { type: 'skill-candidate.add'; companyId: string; projectId?: string; sourceAgentId?: string; name: string; description: string; instructions: string; evidence?: string[] }
+  | { type: 'skill-candidate.update'; id: string; patch: Partial<Pick<OrganizationSkillCandidate, 'name' | 'description' | 'instructions' | 'evidence' | 'status'>> }
+  | { type: 'skill-candidate.promote'; id: string }
   | { type: 'action.record'; companyId: string; projectId?: string; taskId?: string; action: string; target: string; scope: string; risk: NormalizedActionRisk; externality: NormalizedActionExternality; destructiveLevel: NormalizedActionDestructiveLevel; costUsd?: number; credentialScope?: string[]; engine?: string; model?: string; agentId?: string; provider?: string; capability?: string; provenance?: string[]; requestedAt?: number; decision: NormalizedActionDecision; reason: string; result?: string }
 
 export interface OrganizationStrategyDesktopApi {

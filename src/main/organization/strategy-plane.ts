@@ -9,18 +9,29 @@ import {
   type OrganizationActionAuditReceipt,
   type OrganizationCompanyKnowledge,
   type OrganizationCompanySchedule,
+  type OrganizationHeartbeat,
+  type OrganizationAutomationTrigger,
+  type OrganizationSkillCandidate,
+  type OrganizationTriggerReceipt,
   type OrganizationStrategicAnchor,
   type OrganizationStrategyMutation,
   type OrganizationStrategyProjection,
   type OrganizationStrategySnapshot,
 } from '../../shared/organization-strategy.js'
+import { nextCronAt, validateCron } from './cron.js'
 import type { OrganizationStore } from './store.js'
+
+const TRIGGER_RETRY_MS = 60_000
 
 const EMPTY: OrganizationStrategySnapshot = {
   version: 1,
   anchors: [],
   knowledge: [],
   schedules: [],
+  heartbeats: [],
+  triggers: [],
+  triggerReceipts: [],
+  skillCandidates: [],
   audit: [],
 }
 
@@ -31,13 +42,14 @@ const EMPTY: OrganizationStrategySnapshot = {
  */
 export class OrganizationStrategyPlane {
   private loaded = false
+  private loadPromise: Promise<void> | undefined
   private value: OrganizationStrategySnapshot = clone(EMPTY)
   private saveChain: Promise<void> = Promise.resolve()
   private onChanged: ((state: OrganizationStrategySnapshot) => void) | undefined
 
   constructor(
     private readonly filePath: string,
-    private readonly store: Pick<OrganizationStore, 'state'>,
+    private readonly store: Pick<OrganizationStore, 'state' | 'mutate'>,
   ) {}
 
   setOnChanged(listener: ((state: OrganizationStrategySnapshot) => void) | undefined): void {
@@ -49,6 +61,23 @@ export class OrganizationStrategyPlane {
     return clone(this.value)
   }
 
+  async pruneToOrganization(organization: OrganizationSnapshot): Promise<void> {
+    await this.load()
+    const companyIds = new Set(organization.companies.map((item) => item.id))
+    const projectIds = new Set(organization.projects.map((item) => item.id))
+    const before = strategyRowCount(this.value)
+    this.value.anchors = this.value.anchors.filter((item) => companyIds.has(item.companyId) && (!item.projectId || projectIds.has(item.projectId)))
+    this.value.knowledge = this.value.knowledge.filter((item) => companyIds.has(item.companyId) && (!item.projectId || projectIds.has(item.projectId)))
+    this.value.schedules = this.value.schedules.filter((item) => companyIds.has(item.companyId) && projectIds.has(item.projectId))
+    this.value.heartbeats = this.value.heartbeats.filter((item) => companyIds.has(item.companyId) && projectIds.has(item.projectId))
+    this.value.triggers = this.value.triggers.filter((item) => companyIds.has(item.companyId) && projectIds.has(item.projectId))
+    const triggerIds = new Set(this.value.triggers.map((item) => item.id))
+    this.value.triggerReceipts = this.value.triggerReceipts.filter((item) => triggerIds.has(item.triggerId))
+    this.value.skillCandidates = this.value.skillCandidates.filter((item) => companyIds.has(item.companyId) && (!item.projectId || projectIds.has(item.projectId)))
+    this.value.audit = this.value.audit.filter((item) => companyIds.has(item.companyId) && (!item.projectId || projectIds.has(item.projectId)))
+    if (strategyRowCount(this.value) !== before) await this.save()
+  }
+
   async mutate(mutation: OrganizationStrategyMutation): Promise<OrganizationStrategySnapshot> {
     await this.load()
     const organization = await this.store.state()
@@ -58,7 +87,14 @@ export class OrganizationStrategyPlane {
       case 'knowledge.add': this.addKnowledge(organization, mutation); break
       case 'knowledge.update': this.updateKnowledge(mutation.id, mutation.patch); break
       case 'schedule.add': this.addSchedule(organization, mutation); break
-      case 'schedule.update': this.updateSchedule(mutation.id, mutation.patch); break
+      case 'schedule.update': this.updateSchedule(organization, mutation.id, mutation.patch); break
+      case 'heartbeat.add': this.addHeartbeat(organization, mutation); break
+      case 'heartbeat.update': this.updateHeartbeat(mutation.id, mutation.patch); break
+      case 'trigger.add': this.addTrigger(organization, mutation); break
+      case 'trigger.update': this.updateTrigger(mutation.id, mutation.patch); break
+      case 'skill-candidate.add': this.addSkillCandidate(organization, mutation); break
+      case 'skill-candidate.update': this.updateSkillCandidate(mutation.id, mutation.patch); break
+      case 'skill-candidate.promote': await this.promoteSkillCandidate(mutation.id); break
       case 'action.record': this.recordAction(organization, mutation); break
     }
     await this.save()
@@ -77,6 +113,9 @@ export class OrganizationStrategyPlane {
     const activeAnchors = this.value.anchors.filter((item) => companyFilter(item.companyId) && projectFilter(item.projectId) && (item.status === 'active' || item.status === 'proposed'))
     const activeKnowledge = this.value.knowledge.filter((item) => companyFilter(item.companyId) && projectFilter(item.projectId) && item.status === 'active')
     const schedules = this.value.schedules.filter((item) => companyFilter(item.companyId) && (!project || item.projectId === project.id))
+    const heartbeats = this.value.heartbeats.filter((item) => companyFilter(item.companyId) && (!project || item.projectId === project.id))
+    const triggers = this.value.triggers.filter((item) => companyFilter(item.companyId) && (!project || item.projectId === project.id))
+    const skillCandidates = this.value.skillCandidates.filter((item) => companyFilter(item.companyId) && projectFilter(item.projectId))
     const recentAudit = this.value.audit.filter((item) => companyFilter(item.companyId) && projectFilter(item.projectId)).slice(0, 30)
     return {
       generatedAt: Date.now(),
@@ -85,11 +124,17 @@ export class OrganizationStrategyPlane {
       activeAnchors: clone(activeAnchors),
       activeKnowledge: clone(activeKnowledge),
       schedules: clone(schedules),
+      heartbeats: clone(heartbeats),
+      triggers: clone(triggers),
+      skillCandidates: clone(skillCandidates),
       recentAudit: clone(recentAudit),
       metrics: {
         activeAnchors: activeAnchors.length,
         activeKnowledge: activeKnowledge.length,
         activeSchedules: schedules.filter((item) => item.status === 'active').length,
+        activeHeartbeats: heartbeats.filter((item) => item.status === 'active').length,
+        activeTriggers: triggers.filter((item) => item.status === 'active').length,
+        proposedSkills: skillCandidates.filter((item) => item.status === 'proposed').length,
         auditReceipts: recentAudit.length,
       },
     }
@@ -107,8 +152,14 @@ export class OrganizationStrategyPlane {
     if (!item || item.status !== 'active' || item.nextRunAt > now || (item.maxRuns !== undefined && item.runCount >= item.maxRuns)) return null
     item.lastRunAt = now
     item.runCount += 1
-    item.nextRunAt = now + item.intervalMinutes * 60_000
-    if (item.maxRuns !== undefined && item.runCount >= item.maxRuns) item.status = 'completed'
+    const mode = item.mode ?? 'interval'
+    if (mode === 'once') {
+      item.status = 'completed'
+      item.nextRunAt = Number.MAX_SAFE_INTEGER
+    } else {
+      item.nextRunAt = nextScheduleRun(item, now)
+      if (item.maxRuns !== undefined && item.runCount >= item.maxRuns) item.status = 'completed'
+    }
     item.updatedAt = now
     await this.save()
     return clone(item)
@@ -124,11 +175,85 @@ export class OrganizationStrategyPlane {
     const item = this.value.schedules.find((row) => row.id === id)
     if (!item) return
     item.runCount = Math.max(0, item.runCount - 1)
-    if (item.status === 'completed' && item.maxRuns !== undefined && item.runCount < item.maxRuns) item.status = 'active'
-    item.nextRunAt = now + Math.max(60_000, Math.min(retryInMs, item.intervalMinutes * 60_000))
+    if (item.status === 'completed') item.status = 'active'
+    const intervalCap = (item.intervalMinutes ?? 15) * 60_000
+    item.nextRunAt = now + Math.max(60_000, Math.min(retryInMs, intervalCap))
     item.lastOutcome = outcome
     item.lastDetail = clean(detail)
     item.updatedAt = now
+    await this.save()
+  }
+
+  async dueHeartbeats(now = Date.now()): Promise<OrganizationHeartbeat[]> {
+    await this.load()
+    return clone(this.value.heartbeats.filter((item) => item.status === 'active' && item.nextRunAt <= now))
+  }
+
+  async beginHeartbeat(id: string, now = Date.now()): Promise<OrganizationHeartbeat | null> {
+    await this.load()
+    const item = this.value.heartbeats.find((row) => row.id === id)
+    if (!item || item.status !== 'active' || item.nextRunAt > now) return null
+    item.lastRunAt = now
+    item.nextRunAt = now + item.intervalMinutes * 60_000
+    item.updatedAt = now
+    await this.save()
+    return clone(item)
+  }
+
+  async finishHeartbeat(id: string, detail: string, now = Date.now()): Promise<void> {
+    await this.load()
+    const item = this.value.heartbeats.find((row) => row.id === id)
+    if (!item) return
+    item.lastDetail = clean(detail)
+    item.updatedAt = now
+    await this.save()
+  }
+
+  async pendingTriggerFirings(now = Date.now()): Promise<Array<{ trigger: OrganizationAutomationTrigger; activity: OrganizationSnapshot['activity'][number] }>> {
+    await this.load()
+    const organization = await this.store.state()
+    const latestReceipts = new Map<string, OrganizationTriggerReceipt>()
+    for (const receipt of this.value.triggerReceipts) {
+      const key = `${receipt.triggerId}:${receipt.activityId}`
+      if (!latestReceipts.has(key)) latestReceipts.set(key, receipt)
+    }
+    const output: Array<{ trigger: OrganizationAutomationTrigger; activity: OrganizationSnapshot['activity'][number] }> = []
+    for (const trigger of this.value.triggers.filter((item) => item.status === 'active')) {
+      if (trigger.maxRuns !== undefined && trigger.runCount >= trigger.maxRuns) continue
+      for (const activity of organization.activity) {
+        if (activity.companyId !== trigger.companyId || activity.projectId !== trigger.projectId || activity.type !== trigger.eventType || activity.createdAt < trigger.createdAt) continue
+        const receipt = latestReceipts.get(`${trigger.id}:${activity.id}`)
+        if (receipt?.outcome === 'success' || receipt?.outcome === 'skipped') continue
+        if (receipt?.outcome === 'failed' && receipt.createdAt + TRIGGER_RETRY_MS > now) continue
+        output.push({ trigger: clone(trigger), activity: clone(activity) })
+        if (output.length >= 50) return output
+      }
+    }
+    return output
+  }
+
+  async recordTriggerFire(triggerId: string, activityId: string, outcome: CompanyScheduleOutcome, detail: string): Promise<void> {
+    await this.load()
+    const trigger = must(this.value.triggers.find((item) => item.id === triggerId), 'Automation trigger')
+    const now = Date.now()
+    const existing = this.value.triggerReceipts.find((item) => item.triggerId === triggerId && item.activityId === activityId)
+    const previousOutcome = existing?.outcome
+    if (previousOutcome === 'success' || previousOutcome === 'skipped') return
+    if (existing) {
+      existing.outcome = outcome
+      existing.detail = clean(detail)
+      existing.createdAt = now
+    } else {
+      this.value.triggerReceipts.unshift({
+        id: randomUUID(), triggerId, activityId, outcome, detail: clean(detail), createdAt: now,
+      })
+      this.value.triggerReceipts = this.value.triggerReceipts.slice(0, 2_000)
+    }
+    // The early return above already ruled out a previously recorded success,
+    // so counting here cannot double-count a retried success receipt.
+    if (outcome === 'success') trigger.runCount += 1
+    if (trigger.maxRuns !== undefined && trigger.runCount >= trigger.maxRuns) trigger.status = 'completed'
+    trigger.updatedAt = now
     await this.save()
   }
 
@@ -199,12 +324,37 @@ export class OrganizationStrategyPlane {
 
   private addSchedule(organization: OrganizationSnapshot, input: Extract<OrganizationStrategyMutation, { type: 'schedule.add' }>): void {
     assertCompanyProject(organization, input.companyId, input.projectId)
-    const intervalMinutes = positiveInteger(input.intervalMinutes, 'intervalMinutes')
+    const mode = input.mode ?? 'interval'
     const now = Date.now()
+    if (input.agentId && !organization.agents.some((item) => item.id === input.agentId && item.companyId === input.companyId)) throw new Error('Scheduled agent not found in company')
+    const intervalMinutes = mode === 'interval' || mode === 'routine'
+      ? positiveInteger(input.intervalMinutes ?? 60, 'intervalMinutes')
+      : input.intervalMinutes === undefined ? undefined : positiveInteger(input.intervalMinutes, 'intervalMinutes')
+    if (mode === 'routine' && !input.agentId) throw new Error('Agent routine requires agentId')
+    if (mode === 'routine' && !input.prompt?.trim()) throw new Error('Agent routine requires a prompt')
+    for (const skillId of input.skillIds ?? []) {
+      const skill = organization.skills.find((item) => item.id === skillId)
+      if (!skill) throw new Error(`Routine skill not found: ${skillId}`)
+      if (skill.scope !== 'builtin' && skill.companyId !== input.companyId) throw new Error('Routine skill crosses company boundary')
+      if (skill.projectId && skill.projectId !== input.projectId) throw new Error('Routine skill crosses project boundary')
+    }
+    if (mode === 'cron') validateCron(clean(input.cron ?? ''), input.timezone)
+    const runAt = mode === 'once' ? positiveInteger(input.runAt ?? input.nextRunAt ?? now + 60_000, 'runAt') : undefined
     const row: OrganizationCompanySchedule = {
       id: randomUUID(), companyId: input.companyId, projectId: input.projectId,
-      title: clean(input.title), intervalMinutes, status: 'active',
-      nextRunAt: input.nextRunAt === undefined ? now + intervalMinutes * 60_000 : positiveInteger(input.nextRunAt, 'nextRunAt'),
+      title: clean(input.title), mode,
+      ...(intervalMinutes === undefined ? {} : { intervalMinutes }),
+      ...(mode === 'cron' ? { cron: clean(input.cron ?? ''), timezone: input.timezone?.trim() || 'UTC' } : {}),
+      ...(runAt === undefined ? {} : { runAt }),
+      ...(input.agentId ? { agentId: input.agentId } : {}),
+      ...(input.prompt?.trim() ? { prompt: clean(input.prompt) } : {}),
+      ...(input.skillIds?.length ? { skillIds: cleanList(input.skillIds) } : {}),
+      status: 'active',
+      nextRunAt: mode === 'once'
+        ? runAt!
+        : mode === 'cron'
+          ? nextCronAt(clean(input.cron ?? ''), input.timezone, now)
+          : input.nextRunAt === undefined ? now + (intervalMinutes ?? 60) * 60_000 : positiveInteger(input.nextRunAt, 'nextRunAt'),
       runCount: 0,
       ...(input.maxRuns === undefined ? {} : { maxRuns: positiveInteger(input.maxRuns, 'maxRuns') }),
       createdAt: now, updatedAt: now,
@@ -212,14 +362,147 @@ export class OrganizationStrategyPlane {
     this.value.schedules.unshift(row)
   }
 
-  private updateSchedule(id: string, patch: Extract<OrganizationStrategyMutation, { type: 'schedule.update' }>['patch']): void {
+  private updateSchedule(
+    organization: OrganizationSnapshot,
+    id: string,
+    patch: Extract<OrganizationStrategyMutation, { type: 'schedule.update' }>['patch'],
+  ): void {
     const row = must(this.value.schedules.find((item) => item.id === id), 'Company schedule')
+    if (patch.title !== undefined) row.title = clean(patch.title)
+    if (patch.intervalMinutes !== undefined) row.intervalMinutes = positiveInteger(patch.intervalMinutes, 'intervalMinutes')
+
+    if (patch.agentId !== undefined) {
+      if (!organization.agents.some((item) => item.id === patch.agentId && item.companyId === row.companyId)) {
+        throw new Error('Scheduled agent not found in company')
+      }
+      row.agentId = patch.agentId
+    }
+    if (patch.skillIds !== undefined) {
+      for (const skillId of patch.skillIds) {
+        const skill = organization.skills.find((item) => item.id === skillId)
+        if (!skill) throw new Error(`Routine skill not found: ${skillId}`)
+        if (skill.scope !== 'builtin' && skill.companyId !== row.companyId) throw new Error('Routine skill crosses company boundary')
+        if (skill.projectId && skill.projectId !== row.projectId) throw new Error('Routine skill crosses project boundary')
+      }
+      row.skillIds = cleanList(patch.skillIds)
+    }
+
+    const nextTimezone = patch.timezone !== undefined ? clean(patch.timezone) : row.timezone
+    const nextCron = patch.cron !== undefined ? clean(patch.cron) : row.cron
+    if (row.mode === 'cron' && (patch.cron !== undefined || patch.timezone !== undefined)) {
+      const cron = nextCron ?? ''
+      const timezone = nextTimezone ?? 'UTC'
+      validateCron(cron, timezone)
+      row.cron = cron
+      row.timezone = timezone
+      if (patch.nextRunAt === undefined) row.nextRunAt = nextCronAt(cron, timezone, Date.now())
+    } else {
+      if (patch.cron !== undefined) {
+        const cron = clean(patch.cron)
+        validateCron(cron, nextTimezone)
+        row.cron = cron
+      }
+      if (patch.timezone !== undefined) row.timezone = clean(patch.timezone)
+    }
+
+    if (patch.runAt !== undefined) {
+      row.runAt = positiveInteger(patch.runAt, 'runAt')
+      if (row.mode === 'once' && patch.nextRunAt === undefined) row.nextRunAt = row.runAt
+    }
+    if (patch.status !== undefined) row.status = patch.status
+    if (patch.nextRunAt !== undefined) row.nextRunAt = positiveInteger(patch.nextRunAt, 'nextRunAt')
+    if (patch.maxRuns !== undefined) row.maxRuns = positiveInteger(patch.maxRuns, 'maxRuns')
+    if (patch.prompt !== undefined) row.prompt = clean(patch.prompt)
+    row.updatedAt = Date.now()
+  }
+
+  private addHeartbeat(organization: OrganizationSnapshot, input: Extract<OrganizationStrategyMutation, { type: 'heartbeat.add' }>): void {
+    assertCompanyProject(organization, input.companyId, input.projectId)
+    const intervalMinutes = positiveInteger(input.intervalMinutes, 'intervalMinutes')
+    const now = Date.now()
+    this.value.heartbeats.unshift({
+      id: randomUUID(), companyId: input.companyId, projectId: input.projectId,
+      title: clean(input.title), intervalMinutes, status: 'active',
+      nextRunAt: now + intervalMinutes * 60_000, createdAt: now, updatedAt: now,
+    })
+  }
+
+  private updateHeartbeat(id: string, patch: Extract<OrganizationStrategyMutation, { type: 'heartbeat.update' }>['patch']): void {
+    const row = must(this.value.heartbeats.find((item) => item.id === id), 'Heartbeat')
     if (patch.title !== undefined) row.title = clean(patch.title)
     if (patch.intervalMinutes !== undefined) row.intervalMinutes = positiveInteger(patch.intervalMinutes, 'intervalMinutes')
     if (patch.status !== undefined) row.status = patch.status
     if (patch.nextRunAt !== undefined) row.nextRunAt = positiveInteger(patch.nextRunAt, 'nextRunAt')
+    row.updatedAt = Date.now()
+  }
+
+  private addTrigger(organization: OrganizationSnapshot, input: Extract<OrganizationStrategyMutation, { type: 'trigger.add' }>): void {
+    assertCompanyProject(organization, input.companyId, input.projectId)
+    if (input.agentId && !organization.agents.some((item) => item.id === input.agentId && item.companyId === input.companyId)) throw new Error('Trigger agent not found in company')
+    const now = Date.now()
+    this.value.triggers.unshift({
+      id: randomUUID(), companyId: input.companyId, projectId: input.projectId,
+      title: clean(input.title), eventType: clean(input.eventType), action: input.action, prompt: clean(input.prompt),
+      ...(input.agentId ? { agentId: input.agentId } : {}),
+      status: 'active', runCount: 0,
+      ...(input.maxRuns === undefined ? {} : { maxRuns: positiveInteger(input.maxRuns, 'maxRuns') }),
+      createdAt: now, updatedAt: now,
+    })
+  }
+
+  private updateTrigger(id: string, patch: Extract<OrganizationStrategyMutation, { type: 'trigger.update' }>['patch']): void {
+    const row = must(this.value.triggers.find((item) => item.id === id), 'Automation trigger')
+    if (patch.title !== undefined) row.title = clean(patch.title)
+    if (patch.eventType !== undefined) row.eventType = clean(patch.eventType)
+    if (patch.action !== undefined) row.action = patch.action
+    if (patch.prompt !== undefined) row.prompt = clean(patch.prompt)
+    if (patch.agentId !== undefined) row.agentId = patch.agentId
+    if (patch.status !== undefined) row.status = patch.status
     if (patch.maxRuns !== undefined) row.maxRuns = positiveInteger(patch.maxRuns, 'maxRuns')
     row.updatedAt = Date.now()
+  }
+
+  private addSkillCandidate(organization: OrganizationSnapshot, input: Extract<OrganizationStrategyMutation, { type: 'skill-candidate.add' }>): void {
+    assertCompanyProject(organization, input.companyId, input.projectId)
+    if (input.sourceAgentId && !organization.agents.some((item) => item.id === input.sourceAgentId && item.companyId === input.companyId)) throw new Error('Skill candidate agent not found in company')
+    const now = Date.now()
+    this.value.skillCandidates.unshift({
+      id: randomUUID(), companyId: input.companyId,
+      ...(input.projectId ? { projectId: input.projectId } : {}),
+      ...(input.sourceAgentId ? { sourceAgentId: input.sourceAgentId } : {}),
+      name: clean(input.name), description: clean(input.description), instructions: clean(input.instructions),
+      evidence: cleanList(input.evidence ?? []), status: 'proposed', createdAt: now, updatedAt: now,
+    })
+  }
+
+  private updateSkillCandidate(id: string, patch: Extract<OrganizationStrategyMutation, { type: 'skill-candidate.update' }>['patch']): void {
+    const row = must(this.value.skillCandidates.find((item) => item.id === id), 'Skill candidate')
+    if (patch.name !== undefined) row.name = clean(patch.name)
+    if (patch.description !== undefined) row.description = clean(patch.description)
+    if (patch.instructions !== undefined) row.instructions = clean(patch.instructions)
+    if (patch.evidence !== undefined) row.evidence = cleanList(patch.evidence)
+    if (patch.status !== undefined) {
+      if (patch.status === 'approved') throw new Error('Use skill-candidate.promote to approve and activate a learned skill')
+      row.status = patch.status
+    }
+    row.updatedAt = Date.now()
+  }
+
+  private async promoteSkillCandidate(id: string): Promise<void> {
+    const row = must(this.value.skillCandidates.find((item) => item.id === id), 'Skill candidate')
+    if (row.status !== 'proposed') throw new Error('Only proposed skill candidates can be promoted')
+    await this.store.mutate({
+      type: 'skill.create',
+      scope: row.projectId ? 'project' : 'company',
+      companyId: row.companyId,
+      ...(row.projectId ? { projectId: row.projectId } : {}),
+      name: row.name,
+      description: row.description,
+      instructions: row.instructions,
+    })
+    row.status = 'approved'
+    row.promotedAt = Date.now()
+    row.updatedAt = row.promotedAt
   }
 
   private recordAction(organization: OrganizationSnapshot, input: Extract<OrganizationStrategyMutation, { type: 'action.record' }>): void {
@@ -249,13 +532,44 @@ export class OrganizationStrategyPlane {
 
   private async load(): Promise<void> {
     if (this.loaded) return
+    if (this.loadPromise) return this.loadPromise
+    const pending = this.loadFromDisk()
+    this.loadPromise = pending
     try {
-      const parsed = JSON.parse(await fs.readFile(this.filePath, 'utf8')) as unknown
-      this.value = normalize(parsed)
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException | undefined)?.code !== 'ENOENT') throw error
+      await pending
+    } finally {
+      this.loadPromise = undefined
     }
-    this.loaded = true
+  }
+
+  private async loadFromDisk(): Promise<void> {
+    let primaryError: unknown
+    try {
+      this.value = await this.readSnapshot(this.filePath)
+      this.loaded = true
+      return
+    } catch (error) {
+      primaryError = error
+    }
+
+    try {
+      this.value = await this.readSnapshot(this.backupPath())
+      this.loaded = true
+      console.warn(`Recovered organization strategy from backup after primary load failed: ${errorMessage(primaryError)}`)
+      await this.save()
+      return
+    } catch (backupError) {
+      if (isMissing(primaryError) && isMissing(backupError)) {
+        this.loaded = true
+        return
+      }
+      throw new Error(`Organization strategy could not be loaded. Primary: ${errorMessage(primaryError)}. Backup: ${errorMessage(backupError)}.`)
+    }
+  }
+
+  private async readSnapshot(path: string): Promise<OrganizationStrategySnapshot> {
+    const parsed = JSON.parse(await fs.readFile(path, 'utf8')) as unknown
+    return normalize(parsed)
   }
 
   private async save(): Promise<void> {
@@ -263,26 +577,80 @@ export class OrganizationStrategyPlane {
     const serialized = `${JSON.stringify(snapshot, null, 2)}\n`
     const write = this.saveChain.catch(() => undefined).then(async () => {
       await fs.mkdir(dirname(this.filePath), { recursive: true })
-      const temp = `${this.filePath}.tmp-${process.pid}-${Date.now()}`
-      await fs.writeFile(temp, serialized, { mode: 0o600 })
-      await fs.rename(temp, this.filePath)
+      await writeAtomic(this.filePath, serialized)
+      try {
+        await writeAtomic(this.backupPath(), serialized)
+      } catch (error) {
+        console.warn('Failed to persist organization strategy backup:', error)
+      }
     })
     this.saveChain = write
     await write
     this.onChanged?.(snapshot)
   }
+
+  private backupPath(): string {
+    return `${this.filePath}.bak`
+  }
+}
+
+async function writeAtomic(path: string, content: string): Promise<void> {
+  const temp = `${path}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    await fs.writeFile(temp, content, { encoding: 'utf8', mode: 0o600 })
+    await fs.rename(temp, path)
+  } catch (error) {
+    await fs.rm(temp, { force: true }).catch(() => undefined)
+    throw error
+  }
+}
+
+function isMissing(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT'
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 function normalize(value: unknown): OrganizationStrategySnapshot {
-  if (!value || typeof value !== 'object') return clone(EMPTY)
+  if (!value || typeof value !== 'object') throw new Error('Organization strategy snapshot must be a JSON object')
+  const record = value as Record<string, unknown>
+  if (record.version !== 1) throw new Error(`Unsupported organization strategy snapshot version: ${String(record.version)}`)
+  for (const key of ['anchors', 'knowledge', 'schedules', 'heartbeats', 'triggers', 'triggerReceipts', 'skillCandidates', 'audit'] as const) {
+    if (record[key] !== undefined && !Array.isArray(record[key])) {
+      throw new Error(`Organization strategy snapshot field ${key} must be an array when present`)
+    }
+  }
   const input = value as Partial<OrganizationStrategySnapshot>
   return {
     version: 1,
     anchors: Array.isArray(input.anchors) ? input.anchors : [],
     knowledge: Array.isArray(input.knowledge) ? input.knowledge : [],
-    schedules: Array.isArray(input.schedules) ? input.schedules : [],
+    schedules: Array.isArray(input.schedules) ? input.schedules.map((item) => ({ ...item, mode: item.mode ?? 'interval' })) : [],
+    heartbeats: Array.isArray(input.heartbeats) ? input.heartbeats : [],
+    triggers: Array.isArray(input.triggers) ? input.triggers : [],
+    triggerReceipts: Array.isArray(input.triggerReceipts) ? input.triggerReceipts : [],
+    skillCandidates: Array.isArray(input.skillCandidates) ? input.skillCandidates : [],
     audit: Array.isArray(input.audit) ? input.audit : [],
   }
+}
+
+function strategyRowCount(value: OrganizationStrategySnapshot): number {
+  return value.anchors.length
+    + value.knowledge.length
+    + value.schedules.length
+    + value.heartbeats.length
+    + value.triggers.length
+    + value.triggerReceipts.length
+    + value.skillCandidates.length
+    + value.audit.length
+}
+
+function nextScheduleRun(schedule: OrganizationCompanySchedule, now: number): number {
+  const mode = schedule.mode ?? 'interval'
+  if (mode === 'cron') return nextCronAt(schedule.cron ?? '', schedule.timezone, now)
+  return now + positiveInteger(schedule.intervalMinutes ?? 60, 'intervalMinutes') * 60_000
 }
 
 function assertCompanyProject(organization: OrganizationSnapshot, companyId: string, projectId?: string): void {
