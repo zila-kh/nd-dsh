@@ -31,6 +31,7 @@ import { HomeView } from './components/HomeView'
 import { ExtensionPackagesCard } from './components/ExtensionPackages'
 import { cn } from './lib/utils'
 import { fileAccent } from './lib/file-accents'
+import { isWorkspaceSelected } from './lib/workspace-selection'
 import {
   buildLauncherMemoryMutation,
   buildLauncherTaskMutation,
@@ -813,7 +814,7 @@ export default function App() {
   // The boot fallback root is a runtime cwd, never a project: only a folder the
   // user opened — or the workspace of a selected organization project — may be
   // presented as one.
-  const workspaceSelected = workspace?.selectedByUser === true
+  const workspaceSelected = isWorkspaceSelected(workspace)
 
   // An unselected boot root is a runtime cwd, not a project: the title bar stays
   // neutral until the user opens a folder or selects an organization project.

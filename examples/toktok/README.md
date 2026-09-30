@@ -1,6 +1,6 @@
-# TokTok Clone (Vanilla JS + CSS)
+# TokTok Clone (Vanilla JS + CSS, built with Vite 8)
 
-A self-contained TikTok-style short-form video app built with pure **Vanilla JavaScript** and modern **CSS**, designed according to the specification:
+A self-contained TikTok-style short-form video app built with pure **Vanilla JavaScript** and modern **CSS**, bundled with **Vite 8**, designed according to the specification:
 > **Objective**: TokTok clone without real URL without server  
 > **Company**: Jonh (`build and ship`)
 
@@ -53,20 +53,25 @@ A self-contained TikTok-style short-form video app built with pure **Vanilla Jav
 
 ## Quick Start
 
-Open `index.html` directly in any web browser, or run a local static server:
+The shipped app needs **no server and no real URL**: `npm run build` emits `dist/` with relative asset paths and a single classic script bundle, so you can open `dist/index.html` straight from the filesystem (file://).
 
 ```bash
-# Using Node.js built-in script
-npm start
+npm install        # once: installs jsdom + Vite 8 dev tooling
 
-# Or open directly in your favorite browser:
-# double click index.html or run:
-# start index.html (Windows) / open index.html (macOS)
+# Development (optional, local-only Vite dev server — not required by the app):
+npm run dev
+
+# Production build (static output, no server required):
+npm run build
+# then open dist/index.html directly in your browser:
+# start dist/index.html (Windows) / open dist/index.html (macOS)
 ```
+
+The four runtime files (`data.js`, `canvas-engine.js`, `audio-synth.js`, `app.js`) stay plain scripts that publish their API on the shared `globalThis.TokTok` namespace; `main.js` is the Vite entry that imports them in dependency order. `vite.config.js` emits an IIFE bundle and rewrites the built HTML to a deferred classic script so the build still runs from file:// (ES module scripts are blocked there).
 
 Run test suite:
 ```bash
 npm test
-# Or comprehensive verification:
+# Or comprehensive verification (static checks + real vite build + dist validation):
 npm run verify
 ```

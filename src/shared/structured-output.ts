@@ -9,6 +9,7 @@ export interface ReviewVerdict {
 
 export type AssistantSegment =
   | { kind: 'text'; text: string }
+  | { kind: 'reasoning'; text: string }
   | { kind: 'review'; review: ReviewVerdict }
   | { kind: 'plan'; plan: ProjectPlanInput }
 
@@ -51,17 +52,63 @@ function parseTaggedBody<T>(raw: string, repeatedArrayKeys: readonly string[] = 
 }
 
 /**
+ * Leading "Reasoning"/"Thinking" label a model writes ahead of its answer.
+ * ND's planning and review prompts ask for "concise reasoning, then" a tagged
+ * block, and models reproduce that shape in plain chat too, so the label is
+ * what separates deliberation from the answer.
+ */
+const REASONING_LABEL = new RegExp(
+  [
+    // Bold/strong label, punctuation inside or outside the markers.
+    '^(?:\\*\\*|__)\\s*(?:reasoning|thinking)\\s*[:.\\u2014\\u2013-]?\\s*(?:\\*\\*|__)\\s*[:.\\u2014\\u2013-]?\\s*',
+    // Markdown heading label.
+    '|^#{1,6}\\s+(?:reasoning|thinking)\\s*[:.\\u2014\\u2013-]?\\s*',
+    // Bare label followed by punctuation; a bare "Reasoning about…" is prose.
+    '|^(?:reasoning|thinking)\\s*[:.\\u2014\\u2013-]\\s*',
+  ].join(''),
+  'i',
+)
+
+/**
+ * Splits a text chunk that opens with a reasoning label into its deliberation
+ * and the answer that follows. `preamble` marks a chunk the model wrote
+ * immediately before a tagged block: the prompt asked for reasoning "then"
+ * the block, so the whole chunk is deliberation. Elsewhere the first blank
+ * line ends it, so an unlabelled answer is never swallowed.
+ */
+function splitReasoningLead(text: string, preamble: boolean): { reasoning: string | undefined; rest: string } {
+  const match = REASONING_LABEL.exec(text)
+  if (!match) return { reasoning: undefined, rest: text }
+  const body = text.slice(match[0].length)
+  if (preamble) return { reasoning: body.trim(), rest: '' }
+  const breakIndex = body.search(/\n[ \t]*\n/)
+  if (breakIndex === -1) return { reasoning: body.trim(), rest: '' }
+  return { reasoning: body.slice(0, breakIndex).trim(), rest: body.slice(breakIndex).trim() }
+}
+
+/**
  * Splits an assistant message into plain-text segments and structured
  * protocol blocks (review verdicts, project plans) so the chat can render
- * cards instead of raw tagged JSON. Blocks whose JSON is malformed or not
- * yet fully streamed stay as plain text.
+ * cards instead of raw tagged JSON. A leading reasoning preamble becomes its
+ * own segment so deliberation never renders as answer prose. Blocks whose
+ * JSON is malformed or not yet fully streamed stay as plain text.
  */
 export function splitAssistantSegments(text: string): AssistantSegment[] {
   const segments: AssistantSegment[] = []
+  const pushText = (chunk: string, preamble: boolean): void => {
+    const trimmed = chunk.trim()
+    if (!trimmed) return
+    const { reasoning, rest } = splitReasoningLead(trimmed, preamble)
+    if (reasoning !== undefined) {
+      segments.push({ kind: 'reasoning', text: reasoning })
+      if (rest) segments.push({ kind: 'text', text: rest })
+      return
+    }
+    segments.push({ kind: 'text', text: trimmed })
+  }
   let cursor = 0
   for (const match of text.matchAll(TAGGED_BLOCK_PATTERN)) {
-    const before = text.slice(cursor, match.index)
-    if (before.trim()) segments.push({ kind: 'text', text: before.trim() })
+    pushText(text.slice(cursor, match.index), true)
     cursor = (match.index ?? 0) + match[0].length
     const tag = match[1]
     const body = match[2] ?? ''
@@ -78,9 +125,8 @@ export function splitAssistantSegments(text: string): AssistantSegment[] {
         continue
       }
     }
-    if (body.trim()) segments.push({ kind: 'text', text: body.trim() })
+    pushText(body, false)
   }
-  const tail = text.slice(cursor)
-  if (tail.trim()) segments.push({ kind: 'text', text: tail.trim() })
+  pushText(text.slice(cursor), false)
   return segments
 }
