@@ -54,7 +54,9 @@ This was an agent-operated Windows UI exploration with a real configured model r
 | P2 | Restore and inspect all worktree chat history after restart. | Every persisted task run can reopen its transcript and its correct workspace without starting a new task first. |
 | P2 | Improve Windows test execution within governed workers. | Standard child-process tests run with an explicit scoped permission flow; no repeated unexplained approvals or false green fallback. |
 
-## Final trial state
+## Trial state before the milestone/delegation follow-up
+
+Later milestone and actual-child checks are recorded in [the follow-up QA report](milestones-and-delegation-2026-10-01.md). The state below describes this first exploration round.
 
 The isolated Service Desk project is retained for inspection with autonomy at **2 Internal** and no active workers. Two tasks are completed and integrated: scaffold and UX/accessibility/i18n research. The architecture task remains blocked, the domain task was deliberately cancelled during verification, the recurring maintenance task is still ready, and 17 tasks remain in backlog. The full business application is unfinished.
 
