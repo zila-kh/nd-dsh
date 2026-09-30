@@ -3,6 +3,8 @@
 > Updated: 2026-09-29 · Tree: `main` @ `1608057` (PR #60 + #62 merged) plus the uncommitted release-prep fixes listed at the end.
 > Machine: Windows 10.0.26200, Node 24.19.0, pnpm 11.7.0, Rust 1.98.1, Electron 43.4.0.
 > Companion documents: [beta-release-gate.md](beta-release-gate.md) (per-area gate definitions), [beta-release-readiness.md](beta-release-readiness.md) (ordered plan), [blocked-0004](../tasks/blocked-0004-windows-release-validation.md) (runner evidence).
+>
+> **2026-09-30 update (RC freeze):** the recorded A10 failure is triaged, fixed, and live-verified — see [reliability-gate-2026-09-30](../qa/reliability-gate-2026-09-30.md). Freeze executed per Phase 0 of the readiness plan: branch `rc/0.1.1`, tag `rc-0.1.1-candidate-1` @ `d519791`, evidence skeleton `beta-three-layer-evidence-rc-0.1.1.json`. Only P0/P1 fixes and release-test changes until GO/NO-GO. Rows below reflect the 2026-09-29 record except where annotated.
 
 ## Status legend
 
@@ -42,7 +44,7 @@
 | A7 | Production renderer build | `build` | Verified | — | |
 | A8 | Full Playwright suite | `e2e` | Fail — 45 passed, 5 failed, 7 not run | **In progress** — 60 passed, 0 failed, 3 skipped | Specs updated for PR #60's Settings/Company redesign. Suite still exits 1 on the known Playwright worker-teardown timeout after the last test; fix or classify before GO. |
 | A9 | 3 companies × 2 projects matrix | `e2e:beta:matrix` | Verified | — | |
-| A10 | Live-model production journey | `e2e:prod` | Skipped (no `.env.e2e`) | **Fail** | Layer 1 portfolio isolation and layer 2 live 3-model portfolio passed. The real-user journey failed: the first workbench turn stayed "running" in Harness for 10 min and never completed, and "Timed out waiting for session list" appeared. Suspect the new Harness `0.1.7-rc.2`; evidence in `e2e-results/real-user-prod-2026-09-29T04-19-17-804Z`. Release blocker (P0 until triaged). |
+| A10 | Live-model production journey | `e2e:prod` | Skipped (no `.env.e2e`) | **Triaged + fixed 2026-09-30** | Root cause: remote-face approval/question waterfalls were dropped by ND's gateway client, so escalated tool calls (e.g. `pwsh` `node --test`) blocked invisibly (see [reliability-gate-2026-09-30](../qa/reliability-gate-2026-09-30.md)). Fixed in `b999126`; on the fixed tree the full journey **passed 19/20 gates in 14.3 min** incl. two live approval round-trips and restart-during-active-work recovery (`e2e-results/real-user-prod-2026-09-30T07-21-12-497Z`). Remaining: re-run on the packaged RC artifact. |
 | A11 | Built-in browser runtime proof | `bench:browser-runtime` | Fail — hung | **Verified** — pass, decision `B-candidate` | Top-level `await app.whenReady()` deadlocked on Electron 43; every probe step now has a timeout. |
 | A12 | ND Core contract benchmark | `bench:contract` | Verified | — | |
 | A13 | Agent-task baseline check | `bench:tasks:check` | Verified | — | |
@@ -58,7 +60,7 @@ Detail and evidence per row: [beta-release-gate.md](beta-release-gate.md).
 | --- | --- | --- | --- | --- | --- |
 | 1 | Fresh install / upgrade | Partial | Pending | Verify | No config-schema migration tests; clean-machine install unproven. |
 | 2 | Startup / sidecar lifecycle | Verified | Pending | Verify | Packaged mid-task nd-core interruption drill. |
-| 3 | Core agent flow (company → project → task → result) | Fail | Pending | Fail | `qa-functional` only proves a run starts; the live journey (A10) could not complete its first chat turn. |
+| 3 | Core agent flow (company → project → task → result) | Fail | Pending | **Fixed on source 2026-09-30** | Live journey passed end-to-end after the waterfall fix (gates 9–13, 15–16); human/RC confirmation on the packaged artifact still required. |
 | 4 | Workflow templates | Internal only | — | Stable | Not exposed as a user feature; do not advertise. |
 | 5 | Multi-company / project isolation | Verified | Pending | Verify | Provider keys are desktop-global by design. |
 | 6 | Parallel agents | Stable | — | Stable | |
