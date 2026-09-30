@@ -230,8 +230,13 @@ export async function closeApp(launched: LaunchedApp | undefined, options: Close
     // sockets alive until the ElectronApplication is disposed, which makes it
     // miss the 120 s teardown window even though every spec passed (task 0010).
     // Bounded, so a stuck dispose cannot reintroduce the hang this graceful
-    // close path exists to avoid.
-    await settlesWithin(app.close().catch(() => undefined), 15_000)
+    // close path exists to avoid. The bound is 60 s, not 15 s: a dispose that
+    // still runs past 15 s (observed after specs that touch the extension
+    // runtime) gets abandoned mid-handshake, which leaves the driver pipe
+    // ref'd and the CDP socket open — the worker then always hits the 120 s
+    // teardown watchdog. At 60 s the same dispose completes and the worker
+    // exits cleanly (ND_E2E_TEARDOWN_DIAG before/after evidence, 2026-09-30).
+    await settlesWithin(app.close().catch(() => undefined), 60_000)
     if (process.env.ND_E2E_TEARDOWN_DIAG) logActiveHandles()
   } finally {
     appDiagnostics.delete(app)

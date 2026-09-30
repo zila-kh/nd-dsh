@@ -308,7 +308,7 @@ test('Organization Strategy Center: strategy view renders projection cards', asy
   await expect(page.getByText('Release Readiness', { exact: true })).toBeVisible()
   await expect(page.getByText('Strategic Anchors', { exact: true })).toBeVisible()
   await expect(page.getByText('Company Brain', { exact: true })).toBeVisible()
-  await expect(page.getByText('Scheduled Company Work', { exact: true })).toBeVisible()
+  await expect(page.getByText('Automation & Agent Routines', { exact: true })).toBeVisible()
 
   expect(rendererErrors).toEqual([])
 })

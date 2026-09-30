@@ -261,7 +261,7 @@ test('Company exposes operations and long-horizon strategy controls', async () =
   await expect(page.getByRole('heading', { name: 'Release Readiness', exact: true })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Strategic Anchors', exact: true })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Company Brain', exact: true })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Scheduled Company Work', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Automation & Agent Routines', exact: true })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Human Review Feed', exact: true })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Action Audit', exact: true })).toBeVisible()
 
