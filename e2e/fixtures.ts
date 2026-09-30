@@ -236,7 +236,22 @@ export async function closeApp(launched: LaunchedApp | undefined, options: Close
     // ref'd and the CDP socket open — the worker then always hits the 120 s
     // teardown watchdog. At 60 s the same dispose completes and the worker
     // exits cleanly (ND_E2E_TEARDOWN_DIAG before/after evidence, 2026-09-30).
-    await settlesWithin(app.close().catch(() => undefined), 60_000)
+    // A dispose can also stall indefinitely rather than merely run long (seen
+    // once in a 61-spec worker). An abandoned dispose leaves the driver
+    // transport half-closed, which the 120 s teardown watchdog then punishes,
+    // so one bounded retry resumes the handshake before giving up; both calls
+    // are bounded and a rejected second close is swallowed.
+    if (!(await settlesWithin(app.close().catch(() => undefined), 60_000))) {
+      await settlesWithin(app.close().catch(() => undefined), 60_000)
+    }
+    // Even a settled dispose can leave the transport's ref'd pipe and CDP
+    // sockets behind, and the worker then always hits the 120 s teardown
+    // watchdog even though the app itself exited gracefully (verified:
+    // exited=true, zero survivor processes, on every close). After the close
+    // attempts this worker owns no app anymore, so any leftover driver pipe
+    // or network socket is dead plumbing: sweep it so the worker's event loop
+    // can actually empty. Stdio (fd 0-2) is left untouched.
+    sweepDeadTransportHandles()
     if (process.env.ND_E2E_TEARDOWN_DIAG) logActiveHandles()
   } finally {
     appDiagnostics.delete(app)
@@ -277,6 +292,39 @@ function logActiveHandles(): void {
   const requests = internals._getActiveRequests?.() ?? []
   console.log(`[e2e-teardown] handles=${handles.length}: ${handles.map(describe).join(' | ') || 'none'}`)
   console.log(`[e2e-teardown] requests=${requests.length}: ${requests.map(describe).join(' | ') || 'none'}`)
+}
+
+/**
+ * Destroy leftover driver-transport handles after a bounded app close.
+ *
+ * Targets exactly two handle shapes seen in ND_E2E_TEARDOWN_DIAG dumps of
+ * hung workers: net.Socket handles with a remote peer (Playwright's CDP
+ * connections) and Pipe handles (the Electron driver transport). Both are
+ * dead once the app process has exited and close() has been attempted; if
+ * either survives with a ref, the worker's event loop never empties and the
+ * 120 s worker-teardown watchdog fires even though every test passed. Stdio
+ * (fd 0-2) is never touched.
+ */
+function sweepDeadTransportHandles(): void {
+  const internals = process as unknown as { _getActiveHandles?: () => unknown[] }
+  for (const handle of internals._getActiveHandles?.() ?? []) {
+    const record = handle as {
+      constructor?: { name?: string }
+      fd?: number
+      remotePort?: number
+      destroy?: () => void
+      destroySoon?: () => void
+    }
+    const kind = record?.constructor?.name
+    if (kind !== 'Socket' && kind !== 'Pipe') continue
+    if (typeof record.fd === 'number' && record.fd <= 2) continue
+    if (kind === 'Socket' && typeof record.remotePort !== 'number') continue
+    try {
+      record.destroy?.()
+    } catch {
+      // The handle may already be closed; nothing else to do.
+    }
+  }
 }
 
 async function settlesWithin(promise: Promise<unknown>, timeoutMs: number): Promise<boolean> {
