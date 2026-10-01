@@ -47,6 +47,13 @@ if (!flags.has('--skip-install')) {
   await run('corepack', ['pnpm', '--dir', harnessRoot, 'install', '--frozen-lockfile'], root, harnessEnv)
 }
 
+// Updating the submodule leaves ignored output for packages upstream removed.
+// tsdown's workspace glob can still bundle those obsolete lib/types entries
+// against the new API. Use upstream's boundary-checked cleaner before building
+// either face; it preserves source and refuses unknown files in orphan folders.
+console.log('\nCleaning the Harness generated runtime output...')
+await run('corepack', ['pnpm', '--dir', harnessRoot, 'run', 'clean'], root, harnessEnv)
+
 const nativeSystemScript = join(harnessRoot, 'native', 'system', 'scripts', 'build.ts')
 if (existsSync(nativeSystemScript)) {
   console.log('\nBuilding the Harness native system addons...')
