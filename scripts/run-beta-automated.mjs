@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, statfsSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
+import { releaseArtifact } from './release-artifact.mjs'
+import { prepareReleaseTarget } from './prepare-release-target.mjs'
+import { electronTargetIdentity } from './e2e-electron-target.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const flags = new Set(process.argv.slice(2))
@@ -16,6 +19,7 @@ const skipBenchmarks = flags.has('--skip-benchmarks')
 const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 const commit = gitValue(['rev-parse', 'HEAD']) || 'unknown'
 const branch = gitValue(['branch', '--show-current']) || 'detached'
+const initialSourceStatus = gitValue(['status', '--porcelain', '--untracked-files=all'])
 const startedAt = new Date()
 const outputDir = join(root, 'e2e-results', `beta-automated-${startedAt.toISOString().replace(/[:.]/g, '-')}`)
 mkdirSync(outputDir, { recursive: true })
@@ -28,6 +32,11 @@ const stages = [
   stage('unit', 'browser native host Rust tests', 'browser:host:test'),
   stage('unit', 'browser platform focused tests', 'browser:platform:test'),
   stage('e2e', 'production renderer build', 'build'),
+  ...(process.platform === 'win32' && !skipPackage ? [
+    stage('artifact', 'Windows portable release build', 'dist:win:portable'),
+    stage('artifact', 'forced packaged nd-core crash cleans managed descendants', 'release:smoke:core-crash'),
+    stage('artifact', 'packaged runtime/core/terminal/Git smoke', 'release:smoke:packaged'),
+  ] : []),
   stage('e2e', 'full Playwright desktop suite', 'e2e'),
   stage('e2e', 'explicit 3 companies x 2 projects matrix', 'e2e:beta:matrix'),
   ...(skipLive ? [] : [stage('e2e', 'live-model production journey + model stress', 'e2e:prod')]),
@@ -36,15 +45,13 @@ const stages = [
     stage('evidence', 'ND Core contract benchmark', 'bench:contract'),
     stage('evidence', 'agent-task committed baseline check', 'bench:tasks:check'),
   ]),
-  ...(process.platform === 'win32' && !skipPackage ? [
-    stage('artifact', 'Windows portable release build', 'dist:win:portable'),
-    stage('artifact', 'forced nd-core crash cleans managed descendants', 'release:smoke:core-crash'),
-    stage('artifact', 'packaged runtime/core/terminal/Git smoke', 'release:smoke:packaged'),
-  ] : []),
 ]
 
 const results = []
 let failed = false
+let testedArtifact = null
+let packagedTarget = null
+let sourceChanged = initialSourceStatus !== ''
 for (const item of stages) {
   if (failed && !continueOnFailure) {
     results.push({ ...item, status: 'not-run', durationMs: 0 })
@@ -52,7 +59,45 @@ for (const item of stages) {
   }
   console.log(`\n=== beta automated — ${item.layer} — ${item.name} (${item.script}) ===`)
   const began = Date.now()
-  const outcome = runPnpmScript(item.script)
+  let outcome
+  let applicationTarget
+  try {
+    assertCleanCandidate()
+    if (item.script === 'dist:win:portable') {
+      // This check creates a built app, an exact-payload extraction, and NSIS
+      // temporary copies. A full disk can stall the portable before Electron
+      // starts and produces no application diagnostic.
+      for (const directory of [root, tmpdir()]) {
+        const disk = statfsSync(directory)
+        if (disk.bavail * disk.bsize < 8 * 1024 ** 3) throw new Error(`Release validation needs at least 8 GiB free at ${directory}. Remove disposable build copies before retrying.`)
+      }
+    }
+    const env = { ...process.env }
+    if (process.platform === 'win32' && !skipPackage && (item.script.startsWith('e2e')
+      || item.script.startsWith('release:smoke'))) {
+      if (!packagedTarget) throw new Error('The current portable artifact has not been extracted for acceptance testing.')
+      const target = electronTargetIdentity(packagedTarget.env)
+      if (testedArtifact && testedArtifact.artifact !== target.artifact) throw new Error('Release artifact changed during acceptance testing.')
+      testedArtifact = target
+      if (item.script.startsWith('e2e')) Object.assign(env, packagedTarget.env)
+      else {
+        env.ND_DSH_E2E_EXECUTABLE = releaseArtifact(root).executable
+        delete env.ND_DSH_E2E_PACKAGE_RECEIPT
+      }
+      applicationTarget = target
+      if (item.script === 'release:smoke:core-crash') {
+        env.ND_DSH_CORE_BIN = join(dirname(target.executable), 'resources', 'nd-core', 'nd-core.exe')
+      }
+    }
+    outcome = runPnpmScript(item.script, env)
+    if (item.script === 'dist:win:portable' && outcome.status === 0) {
+      packagedTarget = await prepareReleaseTarget(root, outputDir)
+    }
+    assertCleanCandidate()
+  } catch (error) {
+    console.error(String(error))
+    outcome = { status: 1 }
+  }
   const durationMs = Date.now() - began
   const status = outcome.status === 0 ? 'pass' : 'fail'
   results.push({
@@ -60,6 +105,7 @@ for (const item of stages) {
     status,
     exitCode: outcome.status,
     durationMs,
+    ...(applicationTarget ? { applicationTarget } : {}),
     ...(outcome.signal ? { signal: outcome.signal } : {}),
   })
   if (status === 'fail') failed = true
@@ -73,10 +119,22 @@ const requiredSkips = [
 ]
 const allExecutedPassed = results.filter((row) => row.status !== 'not-run').every((row) => row.status === 'pass')
 const artifact = resolvePackagedArtifact()
+let payloadVerified = false
+if (packagedTarget) {
+  try { payloadVerified = electronTargetIdentity(packagedTarget.env).artifact === artifact?.identity }
+  catch (error) { console.error(String(error)); failed = true }
+}
+const finalCommit = gitValue(['rev-parse', 'HEAD']) || 'unknown'
+const finalSourceStatus = gitValue(['status', '--porcelain', '--untracked-files=all'])
+const sourceStable = !sourceChanged && commit !== 'unknown' && commit === finalCommit
+  && initialSourceStatus === '' && finalSourceStatus === ''
 const releaseCompleteAutomated = allExecutedPassed
   && requiredSkips.length === 0
   && results.every((row) => row.status === 'pass')
   && artifact !== null
+  && artifact.identity === testedArtifact?.artifact
+  && sourceStable
+  && payloadVerified
 const report = {
   schemaVersion: 1,
   kind: 'nd-beta-automated-release-evidence',
@@ -86,6 +144,11 @@ const report = {
     commit,
     branch,
     artifact,
+    sourceStable,
+    payloadVerified,
+    finalCommit,
+    initialSourceStatus,
+    finalSourceStatus,
   },
   environment: {
     platform: process.platform,
@@ -119,6 +182,8 @@ for (const row of results) {
 }
 const missingEvidence = [...requiredSkips]
 if (!artifact) missingEvidence.push('one exact versioned Windows portable artifact with SHA-256 identity')
+if (!sourceStable) missingEvidence.push('an unchanged clean candidate commit throughout this run')
+if (artifact && artifact.identity !== testedArtifact?.artifact) missingEvidence.push('acceptance tests against this exact artifact')
 if (missingEvidence.length > 0) {
   console.log('\nRelease-complete automated evidence is still missing:')
   for (const item of missingEvidence) console.log(`  - ${item}`)
@@ -130,45 +195,42 @@ process.exitCode = releaseCompleteAutomated ? 0 : 1
 
 function resolvePackagedArtifact() {
   if (process.platform !== 'win32' || skipPackage) return null
-  const dist = join(root, 'dist')
-  if (!existsSync(dist)) return null
-  const version = String(packageJson.version).replaceAll('.', '\\.')
-  const matcher = new RegExp('^ND-DSH-' + version + '-private-beta-.+\\.exe$', 'i')
-  const matches = readdirSync(dist).filter((entry) => matcher.test(entry))
-  if (matches.length !== 1) return null
-  const name = matches[0]
-  const artifactPath = join(dist, name)
-  const sha256 = createHash('sha256').update(readFileSync(artifactPath)).digest('hex')
-  return {
-    file: name,
-    sha256,
-    identity: name + '#sha256:' + sha256,
-  }
+  try {
+    const target = releaseArtifact(root)
+    return { file: target.artifact.split('#sha256:')[0], sha256: target.sha256, identity: target.artifact }
+  } catch { return null }
 }
 
 function stage(layer, name, script) {
   return { layer, name, script }
 }
 
-function runPnpmScript(script) {
+function runPnpmScript(script, env = process.env) {
   const args = ['run', script]
   const pnpmEntrypoint = process.env.npm_execpath
   if (pnpmEntrypoint) {
     return spawnSync(process.execPath, [pnpmEntrypoint, ...args], {
       cwd: root,
       stdio: 'inherit',
-      env: process.env,
+      env,
     })
   }
   return spawnSync(process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', args, {
     cwd: root,
     stdio: 'inherit',
     shell: process.platform === 'win32',
-    env: process.env,
+    env,
   })
 }
 
 function gitValue(args) {
   const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true })
-  return result.status === 0 ? result.stdout.trim() : ''
+  return result.status === 0 ? result.stdout.trim() : 'unknown'
+}
+
+function assertCleanCandidate() {
+  if (gitValue(['rev-parse', 'HEAD']) !== commit || gitValue(['status', '--porcelain', '--untracked-files=all']) !== '') {
+    sourceChanged = true
+    throw new Error('Release checks require the same clean candidate commit before and after every stage.')
+  }
 }

@@ -56,7 +56,7 @@ test.beforeAll(async () => {
 })
 
 test.afterAll(async () => {
-  await closeApp(launched).catch(() => undefined)
+  await closeApp(launched)
 })
 
 test('creates two companies, three projects and four tiny tasks with hard ownership boundaries', async () => {

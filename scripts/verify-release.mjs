@@ -122,11 +122,14 @@ const overlay = readFileSync(join(root, 'configs', 'dsh', 'nd-dsh.patch.yml'), '
 if (!/- id: office-to-pdf\s+disabled: true/.test(overlay)) {
   throw new Error('ND must disable Office-to-PDF when native Office engines are excluded')
 }
-if (!builderConfig.includes('compression: normal') || !builderConfig.includes('afterAllArtifactBuild: scripts/check-release-size.cjs')) {
-  throw new Error('The release must use compression and enforce the 400 MB download budget')
+if (!builderConfig.includes('compression: normal')
+  || !builderConfig.includes('afterPack: scripts/check-release-payload.cjs')
+  || !builderConfig.includes('afterAllArtifactBuild: scripts/check-release-size.cjs')) {
+  throw new Error('The release must use compression, enforce the payload policy, and enforce the 400 MB download budget')
 }
-if (!builderConfig.includes('useZip: false')) {
-  throw new Error('The Windows portable must embed a 7z archive to support long runtime dependency paths')
+if (!builderConfig.includes('script: scripts/nd-portable-launcher.nsi')
+  || !builderConfig.includes('differentialPackage: false')) {
+  throw new Error('The Windows portable must use ND\'s reviewed one-shot NSIS extraction launcher')
 }
 
 console.log(configOnly ? 'Release packaging configuration verified.' : 'Release runtime inputs verified.')

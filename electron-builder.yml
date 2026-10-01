@@ -7,6 +7,7 @@ directories:
 
 asar: true
 npmRebuild: false
+# The ND launcher extracts the compressed archive once into a unique directory.
 compression: normal
 afterPack: scripts/check-release-payload.cjs
 afterAllArtifactBuild: scripts/check-release-size.cjs
@@ -65,11 +66,11 @@ extraResources:
 
 win:
   target:
-    - portable
+    - nsis
   artifactName: ND-DSH-${version}-${os}-${arch}.${ext}
 
-portable:
+nsis:
   artifactName: ND-DSH-${version}-private-beta-${arch}.${ext}
-  # Embed a 7z archive; direct NSIS File /r fails on long runtime dependency paths.
-  useZip: false
-  unpackDirName: true
+  script: scripts/nd-portable-launcher.nsi
+  differentialPackage: false
+  perMachine: false

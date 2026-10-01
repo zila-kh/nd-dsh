@@ -1865,7 +1865,7 @@ export default function App() {
           onCaptureUrl={(url) => launcherQuickNote(url, ['capture', 'url'])}
         />
       ) : null}
-      <RuntimePrompts onError={notify} />
+      <RuntimePrompts onError={notify} organization={orgState} />
       {pendingPick ? (
         <div role="dialog" aria-label="Picked element" className="fixed right-4 bottom-[46px] z-[150] flex w-[300px] flex-col gap-2 rounded-[10px] border border-border-strong bg-surface-1 p-3 shadow-[0_14px_40px_rgba(0,0,0,0.5)]">
           <div title={pendingPick.hover} className="flex min-w-0 cursor-help items-center gap-[7px]">

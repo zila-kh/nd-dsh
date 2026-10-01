@@ -5,6 +5,8 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
+import { electronLaunchOptions, electronTargetIdentity } from '../scripts/e2e-electron-target.mjs'
+import { matchingProcesses, processDescendants, readProcessRows, type ProcessRow } from '../scripts/e2e-process-tree.mjs'
 
 // E2E credentials live in the gitignored .env.e2e; plain .env supplies the rest
 // (for example ND_DSH_CDP_PORT). Load .env.e2e first so it wins.
@@ -119,12 +121,6 @@ export interface LaunchedApp {
   userDataDir: string
 }
 
-interface ProcessRow {
-  pid: number
-  ppid: number
-  command: string
-}
-
 interface AppDiagnostics {
   stdout: string
   stderr: string
@@ -148,9 +144,8 @@ export interface LaunchAppOptions {
 export async function launchApp(options: LaunchAppOptions = {}): Promise<LaunchedApp> {
   const userDataDir = options.userDataDir ?? await mkdtemp(join(tmpdir(), 'nd-dsh-e2e-'))
   await seedProviders(userDataDir, options.useConfiguredModels ?? false)
-  const app = await electron.launch({
-    args: ['.', `--user-data-dir=${userDataDir}`],
-  })
+  const target = electronTargetIdentity()
+  const app = await electron.launch(electronLaunchOptions(userDataDir))
   const child = app.process()
   const diagnostics: AppDiagnostics = { stdout: '', stderr: '' }
   appDiagnostics.set(app, diagnostics)
@@ -158,9 +153,17 @@ export async function launchApp(options: LaunchAppOptions = {}): Promise<Launche
   child.stderr?.setEncoding('utf8')
   child.stdout?.on('data', (chunk: string) => { diagnostics.stdout = tail(diagnostics.stdout + chunk) })
   child.stderr?.on('data', (chunk: string) => { diagnostics.stderr = tail(diagnostics.stderr + chunk) })
-  const page = await app.firstWindow()
-  await page.waitForLoadState('domcontentloaded')
-  return { app, page, userDataDir }
+  try {
+    const page = await app.firstWindow()
+    await page.waitForLoadState('domcontentloaded')
+    if (target.kind === 'packaged' && !(await app.evaluate(({ app }) => app.isPackaged))) {
+      throw new Error('The selected E2E executable did not launch a packaged application')
+    }
+    return { app, page, userDataDir }
+  } catch (error) {
+    await closeApp({ app, userDataDir })
+    throw error
+  }
 }
 
 /**
@@ -183,7 +186,7 @@ export interface CloseAppOptions {
   removeUserData?: boolean
 }
 
-export async function closeApp(launched: LaunchedApp | undefined, options: CloseAppOptions = {}): Promise<void> {
+export async function closeApp(launched: Pick<LaunchedApp, 'app' | 'userDataDir'> | undefined, options: CloseAppOptions = {}): Promise<void> {
   if (!launched) return
   const { app, userDataDir } = launched
   const child = app.process()
@@ -226,6 +229,13 @@ export async function closeApp(launched: LaunchedApp | undefined, options: Close
     console.log(`[e2e-close] path=${path} pid=${child.pid ?? 'unknown'} quitRequestSettled=${quitRequestSettled} exited=${exited} descendantsBefore=${initialTree.length}`)
     if (!exited) throw new Error('Electron process did not exit after bounded e2e shutdown cleanup.')
 
+    // Playwright allocates stdio[3] and [4] even for Electron's WebSocket
+    // transport. Node's ChildProcess "close" waits for every pipe, so leaving
+    // those open prevents Playwright's app-close event after the OS exit.
+    // All actual descendants have been verified gone before closing any pipe.
+    for (const stream of child.stdio) stream?.destroy()
+    child.unref()
+
     // The worker keeps Playwright's own Electron child handle and its CDP
     // sockets alive until the ElectronApplication is disposed, which makes it
     // miss the 120 s teardown window even though every spec passed (task 0010).
@@ -239,10 +249,11 @@ export async function closeApp(launched: LaunchedApp | undefined, options: Close
     // A dispose can also stall indefinitely rather than merely run long (seen
     // once in a 61-spec worker). An abandoned dispose leaves the driver
     // transport half-closed, which the 120 s teardown watchdog then punishes,
-    // so one bounded retry resumes the handshake before giving up; both calls
-    // are bounded and a rejected second close is swallowed.
+    // so one bounded retry resumes the handshake before giving up. Keep the
+    // retry shorter: two 60 s waits exceed the worker's 120 s cleanup budget.
+    if (process.env.ND_E2E_TEARDOWN_DIAG) logActiveHandles()
     if (!(await settlesWithin(app.close().catch(() => undefined), 60_000))) {
-      await settlesWithin(app.close().catch(() => undefined), 60_000)
+      await settlesWithin(app.close().catch(() => undefined), 15_000)
     }
     // Even a settled dispose can leave the transport's ref'd pipe and CDP
     // sockets behind, and the worker then always hits the 120 s teardown
@@ -254,6 +265,13 @@ export async function closeApp(launched: LaunchedApp | undefined, options: Close
     sweepDeadTransportHandles()
     if (process.env.ND_E2E_TEARDOWN_DIAG) logActiveHandles()
   } finally {
+    if (exited) {
+      // A survivor assertion can throw before driver disposal. Release the
+      // verified-dead child's pipes on that failure path as well.
+      for (const stream of child.stdio) stream?.destroy()
+      child.unref()
+      sweepDeadTransportHandles()
+    }
     appDiagnostics.delete(app)
     if (options.removeUserData !== false) {
       await rm(userDataDir, { recursive: true, force: true }).catch(() => undefined)
@@ -279,6 +297,9 @@ function logActiveHandles(): void {
     const bits: string[] = []
     if (typeof record.pid === 'number') bits.push(`pid=${record.pid}`)
     if (typeof record.fd === 'number') bits.push(`fd=${record.fd}`)
+    const nativeHandle = record._handle as { constructor?: { name?: string } } | undefined
+    if (nativeHandle?.constructor?.name) bits.push(`native=${nativeHandle.constructor.name}`)
+    if (typeof record.destroyed === 'boolean') bits.push(`destroyed=${record.destroyed}`)
     if (typeof record.remoteAddress === 'string' && record.remoteAddress) {
       bits.push(`peer=${record.remoteAddress}:${String(record.remotePort ?? '')}`)
     }
@@ -365,29 +386,8 @@ function forceKillProcessTree(pid: number | undefined): void {
 }
 
 function processTree(rootPid: number | undefined): ProcessRow[] {
-  if (rootPid == null || process.platform === 'win32') return []
-  const result = spawnSync('ps', ['-eo', 'pid=,ppid=,args='], { encoding: 'utf8' })
-  if (result.status !== 0 || !result.stdout) return []
-  const rows = result.stdout
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line): ProcessRow | undefined => {
-      const match = line.match(/^(\d+)\s+(\d+)\s+(.*)$/)
-      if (!match) return undefined
-      return { pid: Number(match[1]), ppid: Number(match[2]), command: match[3] ?? '' }
-    })
-    .filter((row): row is ProcessRow => row !== undefined)
-
-  const descendants: ProcessRow[] = []
-  const queue = [rootPid]
-  while (queue.length > 0) {
-    const parent = queue.shift()!
-    const children = rows.filter((row) => row.ppid === parent)
-    descendants.push(...children)
-    queue.push(...children.map((row) => row.pid))
-  }
-  return descendants
+  if (rootPid == null) return []
+  return processDescendants(rootPid, readProcessRows())
 }
 
 async function waitForDescendantsToExit(initial: ProcessRow[], timeoutMs: number): Promise<ProcessRow[]> {
@@ -401,15 +401,8 @@ async function waitForDescendantsToExit(initial: ProcessRow[], timeoutMs: number
 }
 
 function survivingRows(initial: ProcessRow[]): ProcessRow[] {
-  if (initial.length === 0 || process.platform === 'win32') return []
-  const result = spawnSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' })
-  if (result.status !== 0 || !result.stdout) return []
-  const current = new Map<number, string>()
-  for (const line of result.stdout.split(/\r?\n/)) {
-    const match = line.trim().match(/^(\d+)\s+(.*)$/)
-    if (match) current.set(Number(match[1]), match[2] ?? '')
-  }
-  return initial.filter((row) => current.get(row.pid) === row.command)
+  if (initial.length === 0) return []
+  return matchingProcesses(initial, readProcessRows())
 }
 
 function logShutdownDiagnostics(

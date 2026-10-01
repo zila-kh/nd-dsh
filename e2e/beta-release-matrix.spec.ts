@@ -48,7 +48,7 @@ test.beforeAll(async () => {
 })
 
 test.afterAll(async () => {
-  await closeApp(launched).catch(() => undefined)
+  await closeApp(launched)
   await Promise.all(workspaceDirs.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
 })
 

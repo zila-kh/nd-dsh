@@ -335,6 +335,9 @@ export class TerminalManager {
         // nd-core owns hot scrollback; this field is only a persistence/recovery
         // slot for native PTYs. Test/fallback PTYs keep the legacy JS buffer.
         if (pty.tailState) {
+          // ConPTY can ask before terminal.create returns and listeners attach.
+          // Its retained tail recovers that query. Ignore seeded recovery history
+          // when deciding whether this new shell has produced payload yet.
           const seededBuffer = terminal.buffer
           terminal.buffer = ''
           const tail = await pty.tailState().catch(() => undefined)
