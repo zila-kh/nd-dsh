@@ -62,6 +62,7 @@
     "e2e:beta:matrix": "playwright test e2e/beta-release-matrix.spec.ts",
     "e2e:beta:soak": "node scripts/run-beta-soak.mjs",
     "release:smoke:packaged": "node scripts/packaged-runtime-smoke.mjs",
+    "release:soak": "node scripts/run-beta-soak.mjs --release",
     "beta:automated": "node scripts/run-beta-automated.mjs",
     "release:smoke:core-crash": "node benchmarks/windows-core-crash-cleanup.mjs",
     "beta:unit": "corepack pnpm verify && corepack pnpm typecheck && corepack pnpm test && corepack pnpm core:test && corepack pnpm browser:host:test",

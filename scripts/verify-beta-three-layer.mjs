@@ -86,6 +86,16 @@ if (soakReceipt) {
   if (typeof soakReceipt.requestedMinutes !== 'number' || soakReceipt.requestedMinutes < 24 * 60) {
     errors.push('soak receipt requestedMinutes must be at least 1440')
   }
+  const elapsedMinutes = (Date.parse(soakReceipt.finishedAt) - Date.parse(soakReceipt.startedAt)) / 60_000
+  if (!Number.isFinite(elapsedMinutes) || elapsedMinutes < 24 * 60) {
+    errors.push('soak receipt must record at least 1440 minutes of actual elapsed time')
+  }
+  if (soakReceipt.target?.kind !== 'packaged' || soakReceipt.runtime?.isPackaged !== true) {
+    errors.push('soak receipt must come from the packaged application')
+  }
+  if (soakReceipt.target?.artifact !== evidence.release?.artifact) {
+    errors.push('soak receipt artifact must match release.artifact')
+  }
 }
 
 if (!Array.isArray(evidence.features) || evidence.features.length === 0) {

@@ -1,12 +1,15 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { DshEventFrame } from '../../../shared/contracts'
+import type { OrganizationSnapshot } from '../../../shared/organization'
 import type { AskQuestion } from '../lib/types'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { cn } from '../lib/utils'
+import { runtimePromptContext } from '../lib/runtime-prompt-context'
+import { runtimePromptAction } from '../lib/runtime-prompt-action'
 
-interface Props { onError(message: string): void }
-type PendingApproval = { kind: 'approval'; id: string; sessionId: string; rpcId: string; approvalId: string; toolName: string; reason?: string }
+interface Props { onError(message: string): void; organization: OrganizationSnapshot | null }
+type PendingApproval = { kind: 'approval'; id: string; sessionId: string; rpcId: string; approvalId: string; toolName: string; reason?: string; callId?: string; action?: string }
 type PendingQuestion = { kind: 'question'; id: string; sessionId: string; rpcId: string; questions: AskQuestion[] }
 type Pending = PendingApproval | PendingQuestion
 
@@ -18,16 +21,33 @@ const primaryChipClasses = cn(
   'h-[27px] rounded-md border border-primary/30 bg-primary/10 px-2 text-xs text-primary transition-colors hover:bg-primary/15',
 )
 
-export function RuntimePrompts({ onError }: Props) {
+export function RuntimePrompts({ onError, organization }: Props) {
   const [pending, setPending] = useState<Pending[]>([])
+  const inFlight = useRef(new Set<string>())
+  const [responding, setResponding] = useState(new Set<string>())
+  const toolActions = useRef(new Map<string, string>())
 
   useEffect(() => window.ndDsh.dsh.onEvent((frame) => handleFrame(frame)), [])
 
   function handleFrame(frame: DshEventFrame): void {
+    if (frame.kind === 'session-event' && frame.sessionId && frame.event?.type === 'tool/call') {
+      const data = frame.event.data
+      if (!data || typeof data !== 'object') return
+      const call = data as Record<string, unknown>
+      const callId = typeof call.callId === 'string' ? call.callId : undefined
+      const action = runtimePromptAction(call.arguments)
+      if (!callId || !action) return
+      toolActions.current.set(`${frame.sessionId}:${callId}`, action)
+      while (toolActions.current.size > 128) toolActions.current.delete(toolActions.current.keys().next().value!)
+      setPending((current) => current.map((entry) => entry.kind === 'approval' && entry.sessionId === frame.sessionId && entry.callId === callId ? { ...entry, action } : entry))
+      return
+    }
     if (frame.kind === 'approval-requested' && frame.sessionId && frame.rpcId) {
+      const action = frame.callId ? toolActions.current.get(`${frame.sessionId}:${frame.callId}`) : undefined
       const item: PendingApproval = {
         kind: 'approval', id: `approval:${frame.rpcId}`, sessionId: frame.sessionId, rpcId: frame.rpcId,
         approvalId: frame.approvalId ?? frame.rpcId, toolName: frame.toolName ?? 'tool', ...(frame.reason ? { reason: frame.reason } : {}),
+        ...(frame.callId ? { callId: frame.callId } : {}), ...(action ? { action } : {}),
       }
       setPending((current) => current.some((entry) => entry.id === item.id) ? current : [...current, item])
       return
@@ -38,7 +58,8 @@ export function RuntimePrompts({ onError }: Props) {
       return
     }
     if (frame.kind === 'approval-resolved') {
-      setPending((current) => current.filter((entry) => entry.kind !== 'approval' || (frame.approvalId && entry.approvalId !== frame.approvalId)))
+      const resolvedId = frame.approvalId ?? frame.rpcId
+      if (resolvedId) setPending((current) => current.filter((entry) => entry.kind !== 'approval' || entry.approvalId !== resolvedId))
       return
     }
     if (frame.kind === 'question-resolved' && frame.rpcId) {
@@ -47,10 +68,17 @@ export function RuntimePrompts({ onError }: Props) {
   }
 
   async function answerApproval(item: PendingApproval, outcome: 'allowed-once' | 'rejected'): Promise<void> {
+    if (inFlight.current.has(item.id)) return
+    inFlight.current.add(item.id)
+    setResponding(new Set(inFlight.current))
     try {
       await window.ndDsh.dsh.respond(item.rpcId, { sessionId: item.sessionId, approvalId: item.approvalId, outcome })
       setPending((current) => current.filter((entry) => entry.id !== item.id))
     } catch (cause) { onError(errorMessage(cause)) }
+    finally {
+      inFlight.current.delete(item.id)
+      setResponding(new Set(inFlight.current))
+    }
   }
 
   if (pending.length === 0) return null
@@ -63,30 +91,49 @@ export function RuntimePrompts({ onError }: Props) {
       {pending.map((item) => item.kind === 'approval'
         ? <article className="mb-[7px] rounded-[7px] border border-border-soft bg-surface-0 p-[9px] last:mb-0" key={item.id}>
             <small className="mb-[5px] block text-[11px] tracking-[0.1em] text-warning">APPROVAL</small>
+            <RequestContext sessionId={item.sessionId} organization={organization} />
             <strong className="text-sm">{item.toolName}</strong>
             {item.reason ? <p className="my-[5px] text-xs leading-relaxed text-muted-foreground">{item.reason}</p> : null}
+            {item.action ? <details className="my-2 text-xs"><summary className="cursor-pointer">Requested tool arguments</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-secondary p-2">{item.action}</pre></details> : null}
             <footer className="mt-2 flex justify-end gap-1.5">
-              <Button variant="ghost" className={chipClasses} onClick={() => void answerApproval(item, 'rejected')}>Reject</Button>
-              <Button variant="ghost" className={primaryChipClasses} onClick={() => void answerApproval(item, 'allowed-once')}>Allow once</Button>
+              <Button variant="ghost" className={chipClasses} disabled={responding.has(item.id)} onClick={() => void answerApproval(item, 'rejected')}>Reject</Button>
+              <Button variant="ghost" className={primaryChipClasses} disabled={responding.has(item.id)} onClick={() => void answerApproval(item, 'allowed-once')}>Allow once</Button>
             </footer>
           </article>
-        : <QuestionPrompt key={item.id} item={item} onDone={() => setPending((current) => current.filter((entry) => entry.id !== item.id))} onError={onError} />)}
+        : <QuestionPrompt key={item.id} item={item} organization={organization} onDone={() => setPending((current) => current.filter((entry) => entry.id !== item.id))} onError={onError} />)}
     </div>
   </aside>
 }
 
-function QuestionPrompt({ item, onDone, onError }: { item: PendingQuestion; onDone(): void; onError(message: string): void }) {
+function RequestContext({ sessionId, organization }: { sessionId: string; organization: OrganizationSnapshot | null }) {
+  const context = runtimePromptContext(sessionId, organization)
+  return <div className="mb-2 text-xs text-muted-foreground">
+    {context.company || context.project ? <p>{[context.company, context.project].filter(Boolean).join(' / ')}</p> : null}
+    {context.worker || context.task ? <p>{[context.worker, context.task].filter(Boolean).join(' · ')}</p> : null}
+    {context.workspace ? <p className="break-all">Workspace: {context.workspace}</p> : null}
+    <p className="break-all">Session: {context.sessionId}</p>
+  </div>
+}
+
+function QuestionPrompt({ item, organization, onDone, onError }: { item: PendingQuestion; organization: OrganizationSnapshot | null; onDone(): void; onError(message: string): void }) {
   const [selections, setSelections] = useState<Record<string, string[]>>({})
   const [custom, setCustom] = useState<Record<string, string>>({})
+  const inFlight = useRef(false)
+  const [responding, setResponding] = useState(false)
   async function submit(): Promise<void> {
+    if (inFlight.current) return
+    inFlight.current = true
+    setResponding(true)
     try {
       const answers = item.questions.map((question) => ({ id: question.id, selected: selections[question.id] ?? [], ...(custom[question.id]?.trim() ? { custom: custom[question.id]!.trim() } : {}) }))
       await window.ndDsh.dsh.respond(item.rpcId, { sessionId: item.sessionId, answer: { answers } })
       onDone()
     } catch (cause) { onError(errorMessage(cause)) }
+    finally { inFlight.current = false; setResponding(false) }
   }
   return <article className="mb-0 rounded-[7px] border border-border-soft bg-surface-0 p-[9px]">
     <small className="mb-[5px] block text-[11px] tracking-[0.1em] text-warning">QUESTION</small>
+    <RequestContext sessionId={item.sessionId} organization={organization} />
     {item.questions.length === 0 ? <p className="my-[5px] text-xs leading-relaxed text-muted-foreground">The agent requested input. Add a response below.</p> : item.questions.map((question) => <section key={question.id} className="border-b border-border-soft py-2 last:border-b-0">
       <strong className="text-sm">{question.question}</strong>
       {question.detail ? <p className="my-[5px] text-xs leading-relaxed text-muted-foreground">{question.detail}</p> : null}
@@ -94,11 +141,13 @@ function QuestionPrompt({ item, onDone, onError }: { item: PendingQuestion; onDo
         <Button
           key={option.label}
           variant="ghost"
+          disabled={responding}
           className={selected ? primaryChipClasses : chipClasses}
           onClick={() => setSelections((current) => { const existing = current[question.id] ?? []; const next = question.multiSelect ? selected ? existing.filter((value) => value !== option.label) : [...existing, option.label] : [option.label]; return { ...current, [question.id]: next } })}
         >{option.label}</Button>
       ) })}</div>
       <Input
+        disabled={responding}
         value={custom[question.id] ?? ''}
         onChange={(event) => setCustom((current) => ({ ...current, [question.id]: event.target.value }))}
         placeholder="Other answer…"
@@ -106,7 +155,7 @@ function QuestionPrompt({ item, onDone, onError }: { item: PendingQuestion; onDo
       />
     </section>)}
     <footer className="mt-2 flex justify-end gap-1.5">
-      <Button variant="ghost" className={primaryChipClasses} onClick={() => void submit()}>Submit answer</Button>
+      <Button variant="ghost" className={primaryChipClasses} disabled={responding} onClick={() => void submit()}>Submit answer</Button>
     </footer>
   </article>
 }

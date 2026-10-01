@@ -5,6 +5,8 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
+import { electronLaunchOptions, electronTargetIdentity } from '../scripts/e2e-electron-target.mjs'
+import { matchingProcesses, processDescendants, readProcessRows, type ProcessRow } from '../scripts/e2e-process-tree.mjs'
 
 // E2E credentials live in the gitignored .env.e2e; plain .env supplies the rest
 // (for example ND_DSH_CDP_PORT). Load .env.e2e first so it wins.
@@ -119,12 +121,6 @@ export interface LaunchedApp {
   userDataDir: string
 }
 
-interface ProcessRow {
-  pid: number
-  ppid: number
-  command: string
-}
-
 interface AppDiagnostics {
   stdout: string
   stderr: string
@@ -148,9 +144,8 @@ export interface LaunchAppOptions {
 export async function launchApp(options: LaunchAppOptions = {}): Promise<LaunchedApp> {
   const userDataDir = options.userDataDir ?? await mkdtemp(join(tmpdir(), 'nd-dsh-e2e-'))
   await seedProviders(userDataDir, options.useConfiguredModels ?? false)
-  const app = await electron.launch({
-    args: ['.', `--user-data-dir=${userDataDir}`],
-  })
+  const target = electronTargetIdentity()
+  const app = await electron.launch(electronLaunchOptions(userDataDir))
   const child = app.process()
   const diagnostics: AppDiagnostics = { stdout: '', stderr: '' }
   appDiagnostics.set(app, diagnostics)
@@ -160,6 +155,10 @@ export async function launchApp(options: LaunchAppOptions = {}): Promise<Launche
   child.stderr?.on('data', (chunk: string) => { diagnostics.stderr = tail(diagnostics.stderr + chunk) })
   const page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')
+  if (target.kind === 'packaged' && !(await app.evaluate(({ app }) => app.isPackaged))) {
+    await closeApp({ app, page, userDataDir })
+    throw new Error('The selected E2E executable did not launch a packaged application')
+  }
   return { app, page, userDataDir }
 }
 
@@ -365,29 +364,8 @@ function forceKillProcessTree(pid: number | undefined): void {
 }
 
 function processTree(rootPid: number | undefined): ProcessRow[] {
-  if (rootPid == null || process.platform === 'win32') return []
-  const result = spawnSync('ps', ['-eo', 'pid=,ppid=,args='], { encoding: 'utf8' })
-  if (result.status !== 0 || !result.stdout) return []
-  const rows = result.stdout
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line): ProcessRow | undefined => {
-      const match = line.match(/^(\d+)\s+(\d+)\s+(.*)$/)
-      if (!match) return undefined
-      return { pid: Number(match[1]), ppid: Number(match[2]), command: match[3] ?? '' }
-    })
-    .filter((row): row is ProcessRow => row !== undefined)
-
-  const descendants: ProcessRow[] = []
-  const queue = [rootPid]
-  while (queue.length > 0) {
-    const parent = queue.shift()!
-    const children = rows.filter((row) => row.ppid === parent)
-    descendants.push(...children)
-    queue.push(...children.map((row) => row.pid))
-  }
-  return descendants
+  if (rootPid == null) return []
+  return processDescendants(rootPid, readProcessRows())
 }
 
 async function waitForDescendantsToExit(initial: ProcessRow[], timeoutMs: number): Promise<ProcessRow[]> {
@@ -401,15 +379,8 @@ async function waitForDescendantsToExit(initial: ProcessRow[], timeoutMs: number
 }
 
 function survivingRows(initial: ProcessRow[]): ProcessRow[] {
-  if (initial.length === 0 || process.platform === 'win32') return []
-  const result = spawnSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' })
-  if (result.status !== 0 || !result.stdout) return []
-  const current = new Map<number, string>()
-  for (const line of result.stdout.split(/\r?\n/)) {
-    const match = line.trim().match(/^(\d+)\s+(.*)$/)
-    if (match) current.set(Number(match[1]), match[2] ?? '')
-  }
-  return initial.filter((row) => current.get(row.pid) === row.command)
+  if (initial.length === 0) return []
+  return matchingProcesses(initial, readProcessRows())
 }
 
 function logShutdownDiagnostics(

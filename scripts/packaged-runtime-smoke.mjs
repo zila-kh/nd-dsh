@@ -1,15 +1,17 @@
 #!/usr/bin/env node
 import { execFile, spawn } from 'node:child_process'
-import { existsSync, promises as fs } from 'node:fs'
+import { promises as fs } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
+import { releaseArtifact } from './release-artifact.mjs'
 
 const execFileAsync = promisify(execFile)
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const executable = await resolvePortable(process.argv[2])
+const target = releaseArtifact(root, process.argv[2] || process.env.ND_DSH_E2E_EXECUTABLE)
+const executable = target.executable
 const outputDir = resolve(process.env.ND_DSH_PACKAGED_SMOKE_DIR || join(root, 'benchmark-results', 'packaged-smoke'))
 const workspace = await fs.mkdtemp(join(tmpdir(), 'nd-dsh-packaged-smoke-'))
 const userData = await fs.mkdtemp(join(tmpdir(), 'nd-dsh-packaged-user-data-'))
@@ -71,7 +73,8 @@ try {
   if (startupRecord.core?.protocolVersion !== 1 || !Number.isFinite(startupRecord.marks?.usable)) {
     throw new Error('Packaged startup telemetry did not prove bundled core readiness and usable startup.')
   }
-  console.log(JSON.stringify({ status: 'pass', executable: basename(executable), outputDir, runtime, startup: startupRecord }, null, 2))
+  await fs.writeFile(join(outputDir, 'application-target.json'), JSON.stringify(target, null, 2) + '\n')
+  console.log(JSON.stringify({ status: 'pass', executable: basename(executable), target, outputDir, runtime, startup: startupRecord }, null, 2))
 } catch (error) {
   console.error(stdout.slice(-6000))
   console.error(stderr.slice(-6000))
@@ -79,17 +82,4 @@ try {
 } finally {
   await fs.rm(workspace, { recursive: true, force: true })
   await fs.rm(userData, { recursive: true, force: true })
-}
-
-async function resolvePortable(argument) {
-  if (argument?.trim()) {
-    const path = resolve(argument)
-    if (!existsSync(path)) throw new Error('Packaged executable does not exist: ' + path)
-    return path
-  }
-  const dist = join(root, 'dist')
-  const entries = await fs.readdir(dist)
-  const name = entries.find((entry) => /^ND-DSH-.+-private-beta-.+\.exe$/i.test(entry))
-  if (!name) throw new Error('Could not find a Windows portable ND-DSH executable in ' + dist)
-  return join(dist, name)
 }

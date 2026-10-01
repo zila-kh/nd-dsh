@@ -48,6 +48,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { config as loadDotenv } from 'dotenv'
 import { _electron as electron } from '@playwright/test'
+import { electronLaunchOptions, electronTargetIdentity } from '../scripts/e2e-electron-target.mjs'
 import {
   buildRouteEvidence,
   computeConcurrency,
@@ -439,7 +440,8 @@ const seenToasts = new Set()
 async function launchApp(profileDir) {
   const dir = profileDir ?? mkdtempSync(join(tmpdir(), 'nd-prod-e2e-profile-'))
   seedProviders(dir)
-  const app = await electron.launch({ args: ['.', `--user-data-dir=${dir}`], cwd: REPO })
+  const target = electronTargetIdentity()
+  const app = await electron.launch(electronLaunchOptions(dir, REPO))
   // Main-process narration is the only place IPC-level failures are logged;
   // keep a tail of it in evidence for every launch (fresh and relaunch).
   const stdoutLog = join(evidence.dir, 'main-stdout.log')
@@ -452,6 +454,11 @@ async function launchApp(profileDir) {
   }
   const page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')
+  if (target.kind === 'packaged' && !(await app.evaluate(({ app }) => app.isPackaged))) {
+    await app.close()
+    throw new Error('The selected E2E executable did not launch a packaged application')
+  }
+  evidence.writeJson('application-target.json', target)
   page.setDefaultTimeout(45_000)
   attachPageHandlers(page)
   await installFrameRecorder(page)
@@ -2143,6 +2150,7 @@ async function finalize(opts) {
   const terminalFinal = terminal ?? (gateFailures.length ? 'fail' : 'pass')
 
   const summary = {
+    applicationTarget: electronTargetIdentity(),
     terminal: terminalFinal,
     failureClass,
     failureMessage: failureMessage ?? null,
@@ -2247,7 +2255,7 @@ async function main() {
   log(`workspaces seeded: ${Object.entries(workspaces).map(([key, value]) => `${key}=${value}`).join(' | ')}`)
 
   const built = existsSync(join(REPO, 'out', 'main', 'index.js'))
-  if (!built) throw new Error('App is not built — run `pnpm build` before e2e:prod:user.')
+  if (!built && electronTargetIdentity().kind === 'source') throw new Error('App is not built — run `pnpm build` before e2e:prod:user.')
 
   await launchApp()
   log(`launched with fresh profile ${userDataDir}`)
