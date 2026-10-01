@@ -1,5 +1,13 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { wallpaperCommands } from '../src/main/os/wallpaper.js'
+import {
+  getActiveWallpaperState,
+  listWallpapersInFolder,
+  setActiveWallpaperState,
+  wallpaperCommands,
+} from '../src/main/os/wallpaper.js'
 
 describe('desktop wallpaper adapter', () => {
   it('does not interpolate a Windows path into the PowerShell program', () => {
@@ -33,5 +41,29 @@ describe('desktop wallpaper adapter', () => {
 
   it('fails closed on unsupported platforms', () => {
     expect(() => wallpaperCommands('aix', '/tmp/a.png')).toThrow(/not supported/)
+  })
+
+  it('lists only supported image formats in a folder and sorts them naturally', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'nd-wp-'))
+    try {
+      await writeFile(join(dir, 'wall-2.jpg'), 'fake-image-2')
+      await writeFile(join(dir, 'wall-1.png'), 'fake-image-1')
+      await writeFile(join(dir, 'notes.txt'), 'not-an-image')
+      await writeFile(join(dir, 'wall-10.webp'), 'fake-image-10')
+
+      const items = await listWallpapersInFolder(dir)
+      expect(items.map((item) => item.filename)).toEqual(['wall-1.png', 'wall-2.jpg', 'wall-10.webp'])
+      expect(items[0]?.size).toBeGreaterThan(0)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('manages wallpaper active state safely', () => {
+    setActiveWallpaperState('/tmp/test-wallpaper.png', '/tmp')
+    expect(getActiveWallpaperState()).toEqual({
+      path: '/tmp/test-wallpaper.png',
+      folder: '/tmp',
+    })
   })
 })

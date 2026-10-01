@@ -1006,7 +1006,10 @@ export default function App() {
         if (result.opened) notify(`Opened ${String(result.path)}`)
         return
       case 'os.wallpaper.chooseAndSet':
-        if (result.changed) notify('Desktop wallpaper updated.')
+      case 'os.wallpaper.next':
+      case 'os.wallpaper.random':
+      case 'os.wallpaper.applySelected':
+        if (result.changed) notify(typeof result.name === 'string' ? `Wallpaper changed to ${result.name}.` : 'Desktop wallpaper updated.')
         return
       case 'browser.openExternal':
         notify('Opened in your system browser.')

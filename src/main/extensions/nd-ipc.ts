@@ -12,9 +12,15 @@ import {
   type NdInvocationRequest,
 } from '../../shared/nd-invocations.js'
 import type { OrganizationMutation, OrganizationSnapshot } from '../../shared/organization.js'
-import { BUILTIN_EXTENSION_PACKAGES, defaultActivationContexts } from '../../shared/builtin-extension-packages.js'
+import { BUILTIN_EXTENSION_PACKAGES, defaultActivationContexts, WALLPAPER_MANAGER_ID } from '../../shared/builtin-extension-packages.js'
 import { captureDisplayUnderPointer, captureScreenRegion } from '../capture/app-capture.js'
-import { setDesktopWallpaper } from '../os/wallpaper.js'
+import {
+  applyWallpaperFromFolder,
+  cycleWallpaper,
+  getActiveWallpaperState,
+  listWallpapersInFolder,
+  setDesktopWallpaper,
+} from '../os/wallpaper.js'
 import { ProcessInventory } from '../os/process-inventory.js'
 import type { BrowserController } from '../browser/browser-controller.js'
 import type { WorkflowService } from '../workflows/workflow-service.js'
@@ -64,9 +70,34 @@ function quitProcessPackagePath(): string {
 export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
   const channels: string[] = []
   let seeded: Promise<void> | undefined
+  let wallpaperTimer: NodeJS.Timeout | null = null
+
+  const syncWallpaperRotation = async (): Promise<void> => {
+    if (wallpaperTimer) {
+      clearInterval(wallpaperTimer)
+      wallpaperTimer = null
+    }
+    try {
+      const personalContext: NdContext = { kind: 'personal' }
+      const activation = await deps.state.activation(WALLPAPER_MANAGER_ID, personalContext)
+      if (!activation?.enabled) return
+      const intervalMinutes = typeof activation.settings.intervalMinutes === 'number' ? activation.settings.intervalMinutes : 0
+      if (intervalMinutes <= 0) return
+      const folder = typeof activation.settings.folder === 'string' && activation.settings.folder ? activation.settings.folder : undefined
+      const mode = activation.settings.mode === 'random' ? 'random' : 'next'
+      const intervalMs = Math.max(1, intervalMinutes) * 60 * 1000
+      wallpaperTimer = setInterval(() => {
+        void cycleWallpaper({ folder, mode }).catch(() => undefined)
+      }, intervalMs)
+    } catch {
+      // Ignore background rotation failure
+    }
+  }
 
   const ensureSeeded = (): Promise<void> => {
-    seeded ??= seedBuiltinPackages(deps)
+    seeded ??= seedBuiltinPackages(deps).then(() => {
+      void syncWallpaperRotation()
+    })
     return seeded
   }
 
@@ -185,6 +216,7 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
     if (!manifest) throw new Error(`Unknown extension package: ${id}`)
     await deps.state.setActivation(id, target, enabled === true)
     if (enabled !== true) await deps.state.revokeGrantsForExtension(id)
+    if (id === WALLPAPER_MANAGER_ID) void syncWallpaperRotation()
     await emitState()
     return stateView()
   })
@@ -198,6 +230,7 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
     if (!field) throw new Error(`Unknown setting for ${manifest.name}: ${String(key)}`)
     if (typeof value !== field.type) throw new Error(`"${field.title}" must be a ${field.type}`)
     await deps.state.setSetting(id, target, field.key, value)
+    if (id === WALLPAPER_MANAGER_ID) void syncWallpaperRotation()
     await emitState()
     return stateView()
   })
@@ -303,6 +336,7 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
   void ensureSeeded().catch((error) => console.warn('ND built-in extension packages failed to seed:', error))
 
   return () => {
+    if (wallpaperTimer) clearInterval(wallpaperTimer)
     for (const channel of channels) ipcMain.removeHandler(channel)
     deps.broker.setOnApprovalRequested(undefined)
     deps.home.setOnChanged(undefined)
@@ -505,13 +539,60 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): void {
       title: 'Choose desktop wallpaper',
       properties: ['openFile'],
       filters: [
-        { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'bmp'] },
+        { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'bmp', 'webp'] },
       ],
     })
     if (result.canceled || result.filePaths.length !== 1) return { changed: false }
     const target = result.filePaths[0]!
     await setDesktopWallpaper(target)
     return { changed: true, path: target, platform: process.platform }
+  })
+
+  host.register('os.wallpaper.next', async (_input, context) => {
+    const folder = typeof context.settings?.folder === 'string' && context.settings.folder ? context.settings.folder : undefined
+    const result = await cycleWallpaper({ folder, mode: 'next' })
+    return { changed: result.changed, name: result.name, path: result.path }
+  })
+
+  host.register('os.wallpaper.random', async (_input, context) => {
+    const folder = typeof context.settings?.folder === 'string' && context.settings.folder ? context.settings.folder : undefined
+    const result = await cycleWallpaper({ folder, mode: 'random' })
+    return { changed: result.changed, name: result.name, path: result.path }
+  })
+
+  host.register('os.wallpaper.setFolder', async (_input, context) => {
+    const result = await dialog.showOpenDialog(deps.window, {
+      title: 'Choose wallpaper folder',
+      properties: ['openDirectory'],
+    })
+    if (result.canceled || result.filePaths.length !== 1) return { changed: false }
+    const selected = result.filePaths[0]!
+    await deps.state.setSetting(WALLPAPER_MANAGER_ID, context.context, 'folder', selected)
+    const items = await listWallpapersInFolder(selected)
+    return { changed: true, folder: selected, count: items.length }
+  })
+
+  host.register('os.wallpaper.applySelected', async (input, context) => {
+    const filename = requiredText(input.id ?? input.filename, 'Wallpaper file', 260)
+    const folder = typeof context.settings?.folder === 'string' && context.settings.folder ? context.settings.folder : undefined
+    const result = await applyWallpaperFromFolder(folder, filename)
+    return { changed: result.changed, name: result.name, path: result.path }
+  })
+
+  host.register('os.wallpaper.status', async (_input, context) => {
+    const folder = typeof context.settings?.folder === 'string' && context.settings.folder ? context.settings.folder : undefined
+    const items = await listWallpapersInFolder(folder)
+    const active = getActiveWallpaperState()
+    return items.map((item) => {
+      const isActive = active.path === item.path || (active.path !== null && active.path.endsWith(item.filename))
+      return {
+        id: item.filename,
+        title: item.filename,
+        detail: `${Math.round(item.size / 1024)} KB · ${item.path}`,
+        status: isActive ? 'Active' : undefined,
+        sortValues: { size: item.size, date: item.modifiedAt },
+      }
+    })
   })
 
   host.register('process.list', async () => processes.list())

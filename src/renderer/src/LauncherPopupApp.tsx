@@ -276,8 +276,11 @@ export default function LauncherPopupApp(): React.ReactNode {
           hidePopup()
           return
         case 'os.wallpaper.chooseAndSet':
+        case 'os.wallpaper.next':
+        case 'os.wallpaper.random':
+        case 'os.wallpaper.applySelected':
           hidePopup()
-          if (value.changed) toast('Desktop wallpaper updated.')
+          if (value.changed) toast(typeof value.name === 'string' ? `Wallpaper changed to ${value.name}.` : 'Desktop wallpaper updated.')
           return
         case 'browser.openExternal':
           hidePopup()

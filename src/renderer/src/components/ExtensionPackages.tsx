@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Download, Package, RefreshCw, ShieldCheck, Undo2 } from 'lucide-react'
+import { Download, FolderOpen, Image, Package, RefreshCw, ShieldCheck, Shuffle, SkipForward, Undo2 } from 'lucide-react'
+import { cn } from '../lib/utils'
 import type { NdContext } from '../../../shared/nd-context'
 import { contextKey } from '../../../shared/nd-context'
 import type {
@@ -402,15 +403,20 @@ function ExtensionViewDialog({
       ? left.title.localeCompare(right.title)
       : (right.sortValues?.[sortBy] ?? -1) - (left.sortValues?.[sortBy] ?? -1))
 
-  const runAction = async (actionId: string, host: string, row: { id: string; title: string }): Promise<void> => {
+  const isDetail = data?.kind === 'detail'
+  const globalActions = isDetail ? data?.actions.filter((action) => action.id !== 'apply') ?? [] : []
+
+  const runAction = async (actionId: string, host: string, row?: { id: string; title: string }): Promise<void> => {
     if (!target) return
     setBusy(true)
     try {
-      const input = host === 'note.open' || host === 'note.delete'
-        ? { noteId: row.id }
-        : host === 'capture.copy' || host === 'capture.export'
-          ? { captureId: row.id }
-          : { id: row.id }
+      const input = row
+        ? host === 'note.open' || host === 'note.delete'
+          ? { noteId: row.id }
+          : host === 'capture.copy' || host === 'capture.export'
+            ? { captureId: row.id }
+            : { id: row.id }
+        : {}
       const result = await window.ndDsh.ndExtensions.invoke({
         extensionId: target.extensionId,
         contributionId: target.viewId,
@@ -426,7 +432,7 @@ function ExtensionViewDialog({
       if (host === 'note.open' && result.value && typeof result.value === 'object') {
         const value = result.value as { title?: string; body?: string }
         setSelected({
-          title: value.title ?? row.title,
+          title: value.title ?? row?.title ?? 'Note',
           ...(typeof value.body === 'string' ? { body: value.body } : {}),
         })
         return
@@ -443,14 +449,56 @@ function ExtensionViewDialog({
 
   return (
     <Dialog open={target !== null} onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogContent className="max-w-xl border-border-strong bg-surface-1">
+      <DialogContent className={cn("border-border-strong bg-surface-1 transition-all", isDetail ? "max-w-3xl sm:max-w-4xl" : "max-w-xl")}>
         <DialogHeader>
-          <DialogTitle>{data?.title ?? 'Extension view'}</DialogTitle>
+          <DialogTitle className="flex items-center gap-2">
+            {isDetail ? <Image className="size-4 text-primary" /> : null}
+            {data?.title ?? 'Extension view'}
+          </DialogTitle>
           <DialogDescription>
             {target ? `${target.extensionId} · ${describeContextForUi(target.context, organization)}` : ''}
           </DialogDescription>
         </DialogHeader>
-        {data && !selected ? (
+
+        {isDetail && globalActions.length > 0 ? (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border-soft bg-surface-0/60 p-2.5">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs font-semibold text-foreground mr-1">Actions:</span>
+              {globalActions.map((action) => (
+                <Button
+                  key={action.id}
+                  size="sm"
+                  variant={action.id === 'next' ? 'default' : 'outline'}
+                  className="h-7 text-xs"
+                  disabled={busy}
+                  onClick={() => void runAction(action.id, action.host)}
+                >
+                  {action.id === 'next' ? <SkipForward className="mr-1.5 size-3.5" /> : null}
+                  {action.id === 'random' ? <Shuffle className="mr-1.5 size-3.5" /> : null}
+                  {action.id === 'choose' ? <Image className="mr-1.5 size-3.5" /> : null}
+                  {action.id === 'set-folder' ? <FolderOpen className="mr-1.5 size-3.5" /> : null}
+                  {action.title}
+                </Button>
+              ))}
+            </div>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 text-xs"
+              disabled={busy}
+              onClick={() => {
+                if (!target) return
+                void window.ndDsh.ndExtensions.loadView(target.extensionId, target.viewId, target.context)
+                  .then(setData)
+                  .catch((cause) => onError(cause instanceof Error ? cause.message : String(cause)))
+              }}
+            >
+              <RefreshCw className="mr-1 size-3" /> Refresh
+            </Button>
+          </div>
+        ) : null}
+
+        {data && !selected && !isDetail ? (
           <div className="flex items-center gap-2">
             <Input aria-label="Search extension view" placeholder="Search" value={query} onChange={(event) => setQuery(event.target.value)} className="h-8 flex-1 text-xs" />
             {sortKeys.length > 0 ? (
@@ -465,6 +513,14 @@ function ExtensionViewDialog({
             }}>Refresh</Button>
           </div>
         ) : null}
+
+        {data && !selected && isDetail && visibleRows.length > 0 ? (
+          <div className="flex items-center gap-2">
+            <Input aria-label="Search wallpapers" placeholder="Search wallpapers..." value={query} onChange={(event) => setQuery(event.target.value)} className="h-8 flex-1 text-xs" />
+            <span className="text-xs text-faint shrink-0">{visibleRows.length} wallpapers</span>
+          </div>
+        ) : null}
+
         {selected ? (
           <div className="space-y-2">
             <h4 className="text-sm font-medium text-foreground">{selected.title}</h4>
@@ -472,30 +528,119 @@ function ExtensionViewDialog({
             <Button size="sm" variant="outline" onClick={() => setSelected(null)}>Back to list</Button>
           </div>
         ) : data && visibleRows.length > 0 ? (
-          <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
-            {visibleRows.map((row) => (
-              <div key={row.id} className="rounded-md border border-border-soft bg-surface-0/40 p-2">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <span className="block truncate text-xs font-medium text-foreground">{row.title}</span>
-                    {row.body ? <span className="mt-0.5 block line-clamp-2 text-[11px] text-faint">{row.body}</span> : null}
-                    {row.meta ? <Badge variant="outline">{row.meta}</Badge> : null}
-                  </div>
-                </div>
-                {data.actions.length > 0 ? (
-                  <div className="mt-1.5 flex flex-wrap gap-1.5">
-                    {data.actions.map((action) => (
-                      <Button key={action.id} size="sm" variant="ghost" className="h-6 px-2 text-[11px]" disabled={busy || row.actionsDisabled} onClick={() => void runAction(action.id, action.host, row)}>
-                        {action.title}
+          isDetail ? (
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 md:grid-cols-3 max-h-[440px] overflow-y-auto pr-1">
+              {visibleRows.map((row) => {
+                const isActive = row.meta === 'Active'
+                return (
+                  <div
+                    key={row.id}
+                    className={cn(
+                      "relative flex flex-col justify-between rounded-lg border p-3 transition-colors",
+                      isActive
+                        ? "border-primary/60 bg-primary/10 shadow-sm ring-1 ring-primary/40"
+                        : "border-border-soft bg-surface-0/50 hover:bg-surface-0/80"
+                    )}
+                  >
+                    <div className="flex items-start justify-between gap-2 min-w-0">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className={cn(
+                          "flex size-7 shrink-0 items-center justify-center rounded",
+                          isActive ? "bg-primary text-primary-foreground" : "bg-surface-2 text-foreground/80"
+                        )}>
+                          <Image className="size-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <span className="block truncate text-xs font-medium text-foreground" title={row.title}>
+                            {row.title}
+                          </span>
+                          {row.body ? (
+                            <span className="block truncate text-[10px] text-faint" title={row.body}>
+                              {row.body}
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                      {row.meta ? (
+                        <Badge variant={isActive ? "default" : "outline"} className="text-[10px] shrink-0">
+                          {row.meta}
+                        </Badge>
+                      ) : null}
+                    </div>
+
+                    <div className="mt-3 flex items-center justify-between border-t border-border-soft/60 pt-2">
+                      <span className="text-[10px] text-faint">
+                        {isActive ? 'Active wallpaper' : 'Available'}
+                      </span>
+                      <Button
+                        size="sm"
+                        variant={isActive ? "secondary" : "outline"}
+                        className="h-6 text-[11px] px-2.5"
+                        disabled={busy || row.actionsDisabled || isActive}
+                        onClick={() => void runAction('apply', 'os.wallpaper.applySelected', row)}
+                      >
+                        {isActive ? 'Active' : 'Apply'}
                       </Button>
-                    ))}
+                    </div>
                   </div>
-                ) : null}
-              </div>
-            ))}
-          </div>
+                )
+              })}
+            </div>
+          ) : (
+            <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+              {visibleRows.map((row) => (
+                <div key={row.id} className="rounded-md border border-border-soft bg-surface-0/40 p-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <span className="block truncate text-xs font-medium text-foreground">{row.title}</span>
+                      {row.body ? <span className="mt-0.5 block line-clamp-2 text-[11px] text-faint">{row.body}</span> : null}
+                      {row.meta ? <Badge variant="outline">{row.meta}</Badge> : null}
+                    </div>
+                  </div>
+                  {data.actions.length > 0 ? (
+                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                      {data.actions.map((action) => (
+                        <Button key={action.id} size="sm" variant="ghost" className="h-6 px-2 text-[11px]" disabled={busy || row.actionsDisabled} onClick={() => void runAction(action.id, action.host, row)}>
+                          {action.title}
+                        </Button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          )
         ) : (
-          <p className="text-xs text-faint">{query && data?.rows.length ? 'No rows match your search.' : data?.empty ?? 'This view has no rows yet.'}</p>
+          isDetail ? (
+            <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border-soft py-10 px-4 text-center">
+              <div className="flex size-12 items-center justify-center rounded-full bg-surface-2 text-primary mb-3">
+                <Image className="size-6" />
+              </div>
+              <h4 className="text-sm font-medium text-foreground">No wallpapers in current library</h4>
+              <p className="mt-1 max-w-sm text-xs text-faint">
+                {data?.empty ?? 'Select a folder containing images (.png, .jpg, .webp) or pick a single file to set as your desktop wallpaper.'}
+              </p>
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => void runAction('set-folder', 'os.wallpaper.setFolder')}
+                >
+                  <FolderOpen className="mr-1.5 size-3.5" /> Select Wallpaper Folder
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => void runAction('choose', 'os.wallpaper.chooseAndSet')}
+                >
+                  <Image className="mr-1.5 size-3.5" /> Pick Image File...
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs text-faint">{query && data?.rows.length ? 'No rows match your search.' : data?.empty ?? 'This view has no rows yet.'}</p>
+          )
         )}
       </DialogContent>
     </Dialog>
@@ -510,9 +655,11 @@ const PERMISSION_LABELS: Record<string, string> = {
   'capture.area': 'Capture parts of the screen',
   'capture.read': 'Read saved captures',
   'clipboard.read': 'Read copied text',
+  'clipboard.write': 'Write copied text',
   'browser.navigate': 'Navigate the built-in browser',
   'browser.openExternal': 'Open links in your system browser',
   'os.launch': 'Open apps and files on this device',
+  'os.wallpaper.write': 'Change desktop wallpaper',
   'process.read': 'See running processes',
   'process.quit': 'Quit running processes',
   'workflow.read': 'Read the project task board',

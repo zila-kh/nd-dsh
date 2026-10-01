@@ -33,9 +33,12 @@ beforeEach(async () => {
   host = new NativeHostRegistry()
   calls = []
   policyEffect = 'allow'
-  for (const method of ['note.create', 'note.search', 'capture.screen', 'clipboard.read', 'workflow.list', 'os.wallpaper.chooseAndSet'] as const) {
+  for (const method of ['note.create', 'note.search', 'capture.screen', 'clipboard.read', 'workflow.list', 'os.wallpaper.chooseAndSet', 'os.wallpaper.next', 'os.wallpaper.random', 'os.wallpaper.setFolder', 'os.wallpaper.status', 'os.wallpaper.applySelected'] as const) {
     host.register(method, async (input, context) => {
       calls.push({ host: method, input, contextKey: context.context.kind })
+      if (method === 'os.wallpaper.status') {
+        return [{ id: 'mountains.jpg', title: 'mountains.jpg', detail: '1024 KB' }]
+      }
       return { ok: true, method }
     })
   }
@@ -130,6 +133,30 @@ describe('InvocationBroker authorization', () => {
       input: {},
     })
     expect(wrongContext).toMatchObject({ ok: false, error: { code: 'denied' } })
+  })
+
+  it('supports wallpaper cycling commands and loads the wallpaper-studio detail view', async () => {
+    await state.setActivation(WALLPAPER_MANAGER_MANIFEST.id, personal, true)
+
+    const next = await broker.invoke({
+      extensionId: WALLPAPER_MANAGER_MANIFEST.id,
+      contributionId: 'next-wallpaper',
+      contributionKind: 'command',
+      context: personal,
+      caller: 'user',
+      input: {},
+    })
+    expect(next.ok).toBe(true)
+    expect(calls.at(-1)?.host).toBe('os.wallpaper.next')
+
+    const view = await broker.loadView(WALLPAPER_MANAGER_MANIFEST.id, 'wallpaper-studio', personal)
+    expect(view.kind).toBe('detail')
+    expect(view.title).toBe('Wallpaper Studio')
+    expect(view.rows).toHaveLength(1)
+    expect(view.rows[0]?.title).toBe('mountains.jpg')
+    expect(view.actions.map((a) => a.id)).toContain('apply')
+    expect(view.actions.map((a) => a.id)).toContain('next')
+    expect(view.actions.map((a) => a.id)).toContain('random')
   })
 
   it('denies an unknown package or contribution', async () => {

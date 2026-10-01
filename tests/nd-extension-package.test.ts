@@ -71,6 +71,30 @@ describe('extension package manifests', () => {
         host: 'os.wallpaper.chooseAndSet',
         contexts: ['personal'],
       }),
+      expect.objectContaining({
+        id: 'next-wallpaper',
+        host: 'os.wallpaper.next',
+        contexts: ['personal'],
+      }),
+      expect.objectContaining({
+        id: 'random-wallpaper',
+        host: 'os.wallpaper.random',
+        contexts: ['personal'],
+      }),
+      expect.objectContaining({
+        id: 'open-wallpaper-studio',
+        host: 'os.wallpaper.status',
+        openViewId: 'wallpaper-studio',
+        contexts: ['personal'],
+      }),
+    ])
+    expect(WALLPAPER_MANAGER_MANIFEST.contributions.views).toEqual([
+      expect.objectContaining({
+        id: 'wallpaper-studio',
+        kind: 'detail',
+        host: 'os.wallpaper.status',
+        contexts: ['personal'],
+      }),
     ])
   })
 
