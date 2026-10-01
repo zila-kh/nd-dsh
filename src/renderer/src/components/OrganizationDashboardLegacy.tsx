@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
-import { MoreHorizontal, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, MoreHorizontal, Trash2 } from 'lucide-react'
 import type { CodingEngineDescriptor, ModelProvider, WorkspaceState } from '../../../shared/contracts'
 import type { CapabilityAssignmentSnapshot, CapabilityDescriptor, CapabilityKind, CapabilityProviderStatus } from '../../../shared/capabilities'
 import { DEFAULT_CAPABILITY_PROVIDER } from '../../../shared/capabilities'
 import { ND_HARNESS_ENGINE_ID } from '../../../shared/coding-engines'
 import type { OrganizationPolicyEffect, OrganizationRun, OrganizationRunReceipt, OrganizationSnapshot, OrganizationSubagentMode, OrganizationTask, ProjectRuntimeStatus, TaskPriority } from '../../../shared/organization'
 import { DEFAULT_PROJECT_PORT } from '../../../shared/organization'
+import { compareDeliveryTasks, taskInDeliveryScope } from '../../../shared/organization-delivery'
+import { DeliveryMilestones } from './DeliveryMilestones'
 import type { RepositoryBoardCard, RepositoryWorkflowPrd, RepositoryWorkflowTask, WorkflowProjectView } from '../../../shared/workflow-plugins'
 import { projectRepositoryBoard, WORKFLOW_BOARD_COLUMNS } from '../../../shared/workflow-plugins'
 import { Card as UiCard } from './ui/card'
@@ -114,6 +116,9 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
   const projects = useMemo(() => state?.projects.filter((item) => item.companyId === company?.id) ?? [], [state, company?.id])
   const project = useMemo(() => projects.find((item) => item.id === state?.activeProjectId) ?? projects[0] ?? null, [projects, state?.activeProjectId])
   const tasks = useMemo(() => state?.tasks.filter((item) => item.projectId === project?.id) ?? [], [state, project?.id])
+  const milestones = useMemo(() => state?.milestones.filter((item) => item.projectId === project?.id).sort((a, b) => a.order - b.order) ?? [], [state, project?.id])
+  const boardTasks = useMemo(() => tasks.filter((task) => project && (taskInDeliveryScope(task, project) || task.status === 'in_progress' || task.status === 'review')).sort(compareDeliveryTasks), [tasks, project])
+  const otherTasks = useMemo(() => tasks.filter((task) => !boardTasks.some((visible) => visible.id === task.id)).sort(compareDeliveryTasks), [tasks, boardTasks])
   const editingTask = useMemo(() => state?.tasks.find((item) => item.id === editingTaskId) ?? null, [state, editingTaskId])
   const goals = useMemo(() => state?.goals.filter((item) => item.projectId === project?.id) ?? [], [state, project?.id])
   const agents = useMemo(() => state?.agents.filter((item) => item.companyId === company?.id) ?? [], [state, company?.id])
@@ -345,7 +350,7 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
     event.preventDefault()
     if (!company || !project) return
     await action('task', async () => {
-      await mutate({ type: 'task.create', companyId: company.id, projectId: project.id, title: taskDraft.title, description: taskDraft.description, priority: taskDraft.priority, acceptanceCriteria: ['Requested outcome is implemented and verified.'] })
+      await mutate({ type: 'task.create', companyId: company.id, projectId: project.id, ...(project.deliveryMilestoneId ? { milestoneId: project.deliveryMilestoneId } : {}), title: taskDraft.title, description: taskDraft.description, priority: taskDraft.priority, acceptanceCriteria: ['Requested outcome is implemented and verified.'] })
       setTaskDraft({ title: '', description: '', priority: 'medium' })
     })
   }
@@ -357,13 +362,25 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
     const draft = columnDraft
     await action('task', async () => {
       const existingIds = new Set(state?.tasks.map((item) => item.id) ?? [])
-      const next = await mutate({ type: 'task.create', companyId: company.id, projectId: project.id, title: draft.title, description: draft.description, priority: 'medium', acceptanceCriteria: ['Requested outcome is implemented and verified.'] })
+      const next = await mutate({ type: 'task.create', companyId: company.id, projectId: project.id, ...(project.deliveryMilestoneId ? { milestoneId: project.deliveryMilestoneId } : {}), title: draft.title, description: draft.description, priority: 'medium', acceptanceCriteria: ['Requested outcome is implemented and verified.'] })
       if (draft.status !== 'ready') {
         const created = next.tasks.find((item) => !existingIds.has(item.id))
         if (created) await mutate({ type: 'task.update', id: created.id, patch: { status: draft.status } })
       }
       setColumnDraft(null)
     })
+  }
+
+  async function moveTask(task: OrganizationTask, direction: -1 | 1): Promise<void> {
+    if (!project) return
+    const scope = tasks.filter((item) => item.milestoneId === task.milestoneId).sort(compareDeliveryTasks)
+    const column = scope.filter((item) => item.status === task.status)
+    const neighbor = column[column.findIndex((item) => item.id === task.id) + direction]
+    if (!neighbor) return
+    const ids = scope.map((item) => item.id)
+    const from = ids.indexOf(task.id), to = ids.indexOf(neighbor.id)
+    ;[ids[from], ids[to]] = [ids[to]!, ids[from]!]
+    await action('task-order', () => mutate({ type: 'task.reorder', projectId: project.id, ...(task.milestoneId ? { milestoneId: task.milestoneId } : {}), taskIds: ids }))
   }
 
   async function addMemory(event: FormEvent): Promise<void> {
@@ -802,6 +819,9 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
         ) : undefined}
       >
         {project ? (
+          <>
+          <DeliveryMilestones key={project.id} project={project} milestones={milestones} goals={goals} tasks={tasks} busy={busy !== null}
+            onMutate={async (mutation) => { let saved = false; await action('delivery', async () => { await mutate(mutation); setColumnDraft(null); saved = true }); return saved }} />
           <form className="mb-2 grid grid-cols-[1fr_2fr_1.5fr_auto] gap-[7px]" onSubmit={(event) => void createTask(event)}>
             <input placeholder="Task title" value={taskDraft.title} onChange={(event) => setTaskDraft((value) => ({ ...value, title: event.target.value }))} required className={orgInput} />
             <input placeholder="Required outcome" value={taskDraft.description} onChange={(event) => setTaskDraft((value) => ({ ...value, description: event.target.value }))} required className={orgInput} />
@@ -818,17 +838,18 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
             </Select>
             <button className={orgButton}>Add task</button>
           </form>
+          </>
         ) : null}
         <div className="grid grid-cols-[repeat(6,minmax(160px,1fr))] gap-2 overflow-x-auto max-[1100px]:grid-cols-[repeat(6,220px)]">
           {(['backlog', ...BOARD_STATUSES] as const).map((status) => {
-            const repoCards = status === 'backlog' ? [] : repoBoard[status] ?? []
+            const repoCards = status === 'backlog' || project?.deliveryMilestoneId ? [] : repoBoard[status] ?? []
             const draftStatus = status === 'backlog' ? null : status
             return (
               <section key={status} className="min-h-[300px] rounded-[7px] border border-border-soft bg-surface-0 p-2">
                 <header className="mb-[7px] flex items-center justify-between text-xs font-bold uppercase text-muted-foreground">
                   <span>{status.replace('_', ' ')}</span>
                   <span className="flex items-center gap-1">
-                    <b>{tasks.filter((item) => item.status === status).length}{repoCards.length ? <span className="font-normal normal-case text-faint">+{repoCards.length} repo</span> : null}</b>
+                    <b>{boardTasks.filter((item) => item.status === status).length}{repoCards.length ? <span className="font-normal normal-case text-faint">+{repoCards.length} repo</span> : null}</b>
                     {draftStatus ? (
                       <button
                         type="button"
@@ -867,7 +888,7 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
                     </div>
                   </form>
                 ) : null}
-                {tasks.filter((item) => item.status === status).map((item) => (
+                {boardTasks.filter((item) => item.status === status).map((item) => (
                   <TaskCard
                     key={item.id}
                     task={item}
@@ -876,6 +897,9 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
                     run={action}
                     startRun={startRun}
                     onEdit={() => setEditingTaskId(item.id)}
+                    onMove={(direction) => void moveTask(item, direction)}
+                    canMoveUp={boardTasks.filter((task) => task.status === status && task.milestoneId === item.milestoneId).findIndex((task) => task.id === item.id) > 0}
+                    canMoveDown={boardTasks.filter((task) => task.status === status && task.milestoneId === item.milestoneId).at(-1)?.id !== item.id}
                   />
                 ))}
                 {repoCards.map((card) => {
@@ -894,7 +918,18 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
             )
           })}
         </div>
-        {repoBoard.needs_attention.length ? (
+        {otherTasks.length ? <details className="mt-3 rounded-md border border-border-soft p-3 text-xs">
+          <summary className="cursor-pointer font-medium text-muted-foreground">Other work · {otherTasks.length} tasks</summary>
+          <p className="my-2 text-faint">These tasks are outside the selected milestone. Select their milestone or All work to dispatch them.</p>
+          <ul className="max-h-64 space-y-2 overflow-auto">
+            {otherTasks.map((task) => <li key={task.id} className="flex items-center justify-between gap-2">
+              <span className="min-w-0"><strong>{task.title}</strong><span className="ml-2 text-faint">{milestones.find((item) => item.id === task.milestoneId)?.title ?? 'Unassigned'} · {task.status.replace('_', ' ')}</span></span>
+              <button type="button" className={orgButton} onClick={() => setEditingTaskId(task.id)}>Edit</button>
+            </li>)}
+          </ul>
+        </details> : null}
+        {project?.deliveryMilestoneId && workflowView?.snapshot?.tasks.length ? <p className="mt-2 text-xs text-faint">Repository tickets have their own workflow. Select All work to view them alongside ND tasks.</p> : null}
+        {!project?.deliveryMilestoneId && repoBoard.needs_attention.length ? (
           <div className="mt-2 rounded-[7px] border border-warning/25 bg-warning/[0.06] p-2">
             <header className="mb-[7px] text-xs font-bold uppercase text-warning">
               Repository · needs attention <b>{repoBoard.needs_attention.length}</b>
@@ -1064,9 +1099,12 @@ interface TaskCardProps {
   run(key: string, fn: () => Promise<unknown>): Promise<void>
   startRun(label: string, fn: () => Promise<OrganizationRunReceipt | null>): Promise<void>
   onEdit(): void
+  onMove?(direction: -1 | 1): void
+  canMoveUp?: boolean
+  canMoveDown?: boolean
 }
 
-function TaskCard({ task, state, busy, run, startRun, onEdit }: TaskCardProps) {
+function TaskCard({ task, state, busy, run, startRun, onEdit, onMove, canMoveUp, canMoveDown }: TaskCardProps) {
   const agent = state.agents.find((item) => item.id === task.assignedAgentId)
   const waitingOn = task.dependsOn
     .map((id) => state.tasks.find((item) => item.id === id))
@@ -1098,6 +1136,13 @@ function TaskCard({ task, state, busy, run, startRun, onEdit }: TaskCardProps) {
         <button type="button" className="ml-auto rounded px-1 normal-case text-faint transition-colors hover:bg-secondary hover:text-foreground" onClick={onEdit}>Edit</button>
       </div>
       <strong className="text-sm">{task.title}</strong>
+      {state.projects.find((project) => project.id === task.projectId)?.deliveryMilestoneId && task.milestoneId !== state.projects.find((project) => project.id === task.projectId)?.deliveryMilestoneId ? <small className="text-warning">Finishing outside selected milestone</small> : null}
+      {task.milestoneId ? <small className="text-faint">{state.milestones.find((milestone) => milestone.id === task.milestoneId)?.title}</small> : null}
+      {onMove && (task.status === 'backlog' || task.status === 'ready' || task.status === 'blocked') ? <div className="flex items-center gap-1 text-faint">
+        <button type="button" aria-label={`Move ${task.title} earlier`} title="Move earlier in this milestone's queue" disabled={busy !== null || !canMoveUp} onClick={() => onMove(-1)} className="rounded p-1 hover:bg-secondary disabled:opacity-30"><ArrowUp className="size-3" /></button>
+        <button type="button" aria-label={`Move ${task.title} later`} title="Move later in this milestone's queue" disabled={busy !== null || !canMoveDown} onClick={() => onMove(1)} className="rounded p-1 hover:bg-secondary disabled:opacity-30"><ArrowDown className="size-3" /></button>
+        {task.queueOrder !== undefined ? <small>Queue {task.queueOrder + 1}</small> : null}
+      </div> : null}
       <p className="m-0 text-xs/[1.45] text-muted-foreground">{task.description}</p>
       {waitingOn.length ? (
         <p className="m-0 text-[11px]/[1.4] text-faint" title={waitingOn.map((item) => item.title).join('\n')}>
@@ -1176,11 +1221,13 @@ function TaskEditDialog({ task, state, onClose, onSave }: {
     priority: task.priority,
     status: task.status,
     assignedAgentId: task.assignedAgentId ?? '',
+    milestoneId: task.milestoneId ?? '',
   })
   const [saving, setSaving] = useState(false)
   const active = task.status === 'in_progress' || task.status === 'review'
   const agents = state.agents.filter((item) => item.companyId === task.companyId)
   const statusChoices = EDITABLE_STATUSES.includes(task.status) ? EDITABLE_STATUSES : [task.status]
+  const testCommand = state.projects.find((item) => item.id === task.projectId)?.testCommand?.trim()
 
   async function save(event: FormEvent): Promise<void> {
     event.preventDefault()
@@ -1194,6 +1241,7 @@ function TaskEditDialog({ task, state, onClose, onSave }: {
         priority: draft.priority,
         ...(draft.status !== task.status ? { status: draft.status } : {}),
         ...(draft.assignedAgentId && draft.assignedAgentId !== task.assignedAgentId ? { assignedAgentId: draft.assignedAgentId } : {}),
+        ...(draft.milestoneId !== (task.milestoneId ?? '') ? { milestoneId: draft.milestoneId } : {}),
       })
       onClose()
     } finally {
@@ -1203,14 +1251,36 @@ function TaskEditDialog({ task, state, onClose, onSave }: {
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogContent className="max-w-[560px]">
+      <DialogContent className="max-h-[calc(100vh-32px)] max-w-[560px] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Edit task</DialogTitle>
           <DialogDescription>
             {active ? 'An agent is working on this task; assignee and status change after the run ends.' : 'Changes apply to the board immediately.'}
           </DialogDescription>
         </DialogHeader>
+        <section aria-label="Delivery verification" className="rounded-md border border-border-soft bg-secondary/40 p-2.5 text-xs text-muted-foreground">
+          <strong className="text-foreground">Delivery verification</strong>
+          {task.evidenceKind === 'artifact' ? <>
+            <p className="mt-1">Required artifacts, relative to this task's workspace:</p>
+            <ul className="mt-1 max-h-24 list-disc overflow-auto pl-4">
+              {(task.artifactPaths ?? []).map((path) => <li key={path}><code className="break-all">{path}</code></li>)}
+            </ul>
+            <p className="mt-1">Every artifact must exist at its declared path before independent review.</p>
+          </> : testCommand ? <>
+            <p className="mt-1">Project test command: <code className="break-all">{testCommand}</code></p>
+            <p className="mt-1">A failing check blocks delivery.</p>
+          </> : <p className="mt-1">No project test command configured. Machine verification will be recorded as skipped.</p>}
+        </section>
         <form className="flex flex-col gap-2" onSubmit={(event) => void save(event)}>
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">Milestone
+            <Select value={draft.milestoneId || 'unassigned'} disabled={saving || active} onValueChange={(value) => setDraft((current) => ({ ...current, milestoneId: value === 'unassigned' ? '' : value }))}>
+              <SelectTrigger aria-label="Task milestone" className="h-8"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="unassigned">Unassigned</SelectItem>
+                {state.milestones.filter((item) => item.projectId === task.projectId).sort((a, b) => a.order - b.order).map((item) => <SelectItem key={item.id} value={item.id}>{item.title}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </label>
           <label className="flex flex-col gap-1 text-xs text-muted-foreground">Title
             <input required value={draft.title} onChange={(event) => setDraft((value) => ({ ...value, title: event.target.value }))} className={orgInput} />
           </label>

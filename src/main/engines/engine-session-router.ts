@@ -332,9 +332,11 @@ export class EngineSessionRouter {
   /**
    * Create a session on the engine named by a catalog descriptor id. An
    * explicit cwd is the portable isolation seam used by organization task
-   * worktrees; interactive chat keeps the active workspace default.
+   * worktrees; interactive chat keeps the active workspace default. A title
+   * names the session after its real work on engines that keep durable
+   * titles; engines that own their own thread labels ignore it.
    */
-  async createSession(engineId: string, cwd?: string): Promise<{ sessionId: string; engineId: string }> {
+  async createSession(engineId: string, cwd?: string, title?: string): Promise<{ sessionId: string; engineId: string }> {
     this.assertKnownEngine(engineId)
     const direct = this.directEngines.get(engineId)
     if (direct) {
@@ -357,6 +359,7 @@ export class EngineSessionRouter {
       const sessionId = await this.harness.createSession()
       this.logicalEngineBySession.set(sessionId, engineId)
       this.workspaceRootBySession.set(sessionId, targetCwd)
+      await this.renameHarnessSession(sessionId, title)
       return { engineId, sessionId }
     }
     const result = await this.harness.gatewayRpc('session.create', { cwd: targetCwd })
@@ -365,7 +368,24 @@ export class EngineSessionRouter {
     if (typeof sessionId !== 'string' || !sessionId) throw new Error('Harness session.create returned no session id')
     this.logicalEngineBySession.set(sessionId, engineId)
     this.workspaceRootBySession.set(sessionId, targetCwd)
+    await this.renameHarnessSession(sessionId, title)
     return { engineId, sessionId }
+  }
+
+  /**
+   * Best-effort harness rename: the runtime's first-prompt fallback title
+   * ("You are Builder acting as…") hides the session's real work from the
+   * chat sidebar, so callers name org sessions directly. A failure must
+   * never fail the session the title decorates.
+   */
+  private async renameHarnessSession(sessionId: string, title?: string): Promise<void> {
+    const trimmed = title?.trim()
+    if (!trimmed) return
+    try {
+      await this.harness.renameSession(sessionId, trimmed)
+    } catch (cause) {
+      console.warn(`engine router: session rename failed for ${sessionId}:`, cause instanceof Error ? cause.message : String(cause))
+    }
   }
 
   /** Cancel exactly one engine session; unrelated organization workers continue. */

@@ -41,6 +41,8 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
   const activeRun = state?.runs.find((run) => run.status === 'running'
     && run.companyId === company?.id
     && (!project || run.projectId === project.id))
+  const activeRunLabel = state?.tasks.find((task) => task.id === activeRun?.taskId)?.title
+    ?? (activeRun?.kind === 'pm-plan' ? 'project planning' : activeRun?.kind ?? 'run')
   const agents = state?.agents
     .filter((agent) => agent.companyId === company?.id)
     .map((agent) => ({ id: agent.id, name: agent.name })) ?? []
@@ -70,10 +72,11 @@ export function OrganizationDashboard({ workspace, onOpenDeepSeek, onAskAgent, o
               type="button"
               className="h-7 rounded-md border border-destructive/30 bg-destructive/[0.06] px-2.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/[0.12] disabled:pointer-events-none disabled:opacity-50"
               disabled={cancelingRunId !== null}
-              title={`Cancel only this ${activeRun.kind} run; other workers continue.`}
+              aria-label={`Cancel ${activeRunLabel}`}
+              title={`Cancel ${activeRunLabel} (${activeRun.kind}, session ${activeRun.sessionId}); other workers continue.`}
               onClick={() => void cancelActiveRun()}
             >
-              {cancelingRunId === activeRun.id ? 'Canceling…' : 'Cancel run'}
+              <span className="block max-w-[190px] truncate">{cancelingRunId === activeRun.id ? 'Canceling…' : `Cancel ${activeRunLabel}`}</span>
             </button>
           ) : null}
           <div className="flex items-center rounded-md border border-border-strong bg-secondary p-0.5">

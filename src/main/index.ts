@@ -570,6 +570,9 @@ async function createWindow(cdpPort: number): Promise<void> {
     gatewayReady: (url) => {
       console.log(`ND-DSH gateway ready at ${new URL(url).origin}`)
       dshSurface.setTarget(url)
+      // Sessions created before ND began naming them still show the runtime's
+      // "You are…" first-prompt fallback; rename them once per runtime boot.
+      void organization.backfillSessionTitles()
     },
   })
   codexEngine.setEmitter(dispatchEngineFrame)

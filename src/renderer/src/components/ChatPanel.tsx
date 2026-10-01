@@ -1363,11 +1363,11 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, workspaceSelec
 
     return (
       <div key={session.sessionId}>
-        <div className="flex min-w-0 items-center gap-0.5" style={{ paddingLeft: Math.min(depth, 6) * 10 }}>
+        <div className="flex min-w-0 items-center gap-0.5" style={{ paddingLeft: Math.min(depth, 6) * 14 }}>
           {hasChildren ? (
             <button
               type="button"
-              className="flex size-5 shrink-0 items-center justify-center rounded text-faint transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-3"
+              className="flex size-5 shrink-0 items-center justify-center rounded-full text-faint transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-3"
               aria-label={collapsed ? 'Expand subagents' : 'Collapse subagents'}
               title={collapsed ? 'Expand subagents' : 'Collapse subagents'}
               onClick={() => setCollapsedSessionParents((current) => {
@@ -1386,7 +1386,7 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, workspaceSelec
               busy={busySessions.has(session.sessionId) || Boolean(session.running) || runningChildren > 0}
               title={sessionTitle(session)}
               time={summary}
-              engineChip={session.origin === 'subagent' ? 'subagent' : undefined}
+              leading={hasChildren ? 'none' : session.origin === 'subagent' ? 'subagent' : 'chat'}
               cardTitle={session.origin === 'subagent' ? 'Subagent session' : hasChildren ? 'Main agent session with subagents' : undefined}
               archived={session.archived === true}
               onToggleArchive={() => void setSessionArchived(session.sessionId, session.archived !== true)}
@@ -2321,8 +2321,11 @@ function countRunningSessionDescendants(node: SessionTreeNode, busySessions: Rea
  * Session thread card in the left sidebar. The card stays a plain select
  * button; Archive/Unarchive is a single-click action button that swaps in
  * for the timestamp on hover, so no interactive element nests inside another.
+ * `leading` picks the row glyph: a chat bubble for ordinary chats, a circular
+ * agent avatar for subagent rows, or none when the parent row's collapse
+ * chevron already leads the row.
  */
-function SessionCard({ active, busy, title, time, engineChip, cardTitle, archived = false, onToggleArchive, onClick }: {
+function SessionCard({ active, busy, title, time, engineChip, cardTitle, archived = false, leading = 'chat', onToggleArchive, onClick }: {
   active: boolean
   busy: boolean
   title: string
@@ -2330,6 +2333,7 @@ function SessionCard({ active, busy, title, time, engineChip, cardTitle, archive
   engineChip?: string | undefined
   cardTitle?: string | undefined
   archived?: boolean
+  leading?: 'chat' | 'subagent' | 'none'
   onToggleArchive(): void
   onClick(): void
 }) {
@@ -2348,7 +2352,13 @@ function SessionCard({ active, busy, title, time, engineChip, cardTitle, archive
       >
         <span className="flex min-w-0 items-center gap-1.5">
           <span className={cn('size-[5px] shrink-0 rounded-full', busy ? 'bg-primary' : 'bg-faint opacity-40')} />
-          <ChatIcon className="size-[13px] shrink-0 text-faint" />
+          {leading === 'chat' ? (
+            <ChatIcon className="size-[13px] shrink-0 text-faint" />
+          ) : leading === 'subagent' ? (
+            <span className={cn('grid size-[16px] shrink-0 place-items-center rounded-full', busy ? 'bg-primary text-background' : 'bg-faint/25 text-soft')}>
+              <SparkIcon className="size-[10px]" />
+            </span>
+          ) : null}
           <span className="truncate font-medium">{title}</span>
           {engineChip ? (
             <span className="shrink-0 rounded-md border border-border-soft px-1.5 py-px text-[9px] font-semibold uppercase tracking-[0.04em] text-soft">

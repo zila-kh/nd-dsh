@@ -23,6 +23,7 @@ import type {
   TaskStatus,
 } from '../../shared/organization.js'
 import { taskMetricsRecorder } from '../metrics/task-metrics.js'
+import { compareDeliveryTasks, taskInDeliveryScope } from '../../shared/organization-delivery.js'
 import { BUILTIN_SKILLS, defaultPolicies, defaultWorkflow } from './defaults.js'
 
 type DurableOrganizationSnapshot = OrganizationSnapshot & {
@@ -85,6 +86,7 @@ export class OrganizationStore {
       case 'skill.create': this.createSkill(mutation); break
       case 'workflow.create': this.createWorkflow(mutation); break
       case 'goal.create': this.createGoal(mutation); break
+      case 'milestone.create': this.createMilestone(mutation); break
       case 'task.create': this.createTask(mutation); break
       case 'task.update': this.updateTask(mutation.id, mutation.patch); break
       case 'collaboration.message.add': this.addCollaborationMessage(mutation); break
@@ -92,6 +94,7 @@ export class OrganizationStore {
       case 'decision.supersede': this.supersedeDecision(mutation); break
       case 'approval.request': this.createApprovalRequest(mutation); break
       case 'approval.resolve': this.resolveApproval(mutation); break
+      case 'task.reorder': this.reorderTasks(mutation); break
       case 'memory.add': this.addMemory({ ...mutation, source: 'human' }); break
       case 'policy.set': this.setPolicy(mutation); break
     }
@@ -106,10 +109,12 @@ export class OrganizationStore {
     const goalId = randomUUID()
     this.value.goals.push({ id: goalId, companyId, projectId, title: clean(plan.goal.title), description: clean(plan.goal.description), status: 'active', progress: 0, createdAt: Date.now() })
     const taskIdsByTitle = new Map<string, string>()
+    const firstPlan = !this.value.milestones.some((item) => item.projectId === projectId)
     for (const milestoneInput of plan.milestones) {
       const milestoneId = randomUUID()
       const order = this.value.milestones.filter((item) => item.projectId === projectId).length
       this.value.milestones.push({ id: milestoneId, companyId, projectId, goalId, title: clean(milestoneInput.title), description: clean(milestoneInput.description), status: 'pending', order })
+      if (firstPlan && !project.deliveryMilestoneId) project.deliveryMilestoneId = milestoneId
       for (const input of milestoneInput.tasks) {
         const id = randomUUID()
         taskIdsByTitle.set(input.title.trim().toLowerCase(), id)
@@ -491,9 +496,10 @@ export class OrganizationStore {
    */
   async readyTasks(projectId: string): Promise<OrganizationTask[]> {
     await this.load(); this.refreshProject(projectId)
+    const project = this.project(projectId)
     return this.value.tasks
-      .filter((item) => item.projectId === projectId && item.status === 'ready')
-      .sort((a, b) => priority(b.priority) - priority(a.priority) || a.createdAt - b.createdAt)
+      .filter((item) => item.status === 'ready' && taskInDeliveryScope(item, project))
+      .sort(compareDeliveryTasks)
       .map(clone)
   }
 
@@ -658,8 +664,16 @@ export class OrganizationStore {
   }
   private updateProject(id: string, patch: Extract<OrganizationMutation, { type: 'project.update' }>['patch']): void {
     const project = this.project(id)
+    const deliveryBefore = project.deliveryMilestoneId
+    if (patch.deliveryMilestoneId !== undefined && typeof patch.deliveryMilestoneId !== 'string') throw new Error('Delivery milestone must be a milestone ID or empty string')
+    if (patch.deliveryMilestoneId) this.assertMilestoneProject(patch.deliveryMilestoneId, id)
     const { workspacePath, ...rest } = patch
     Object.assign(project, rest)
+    if (patch.deliveryMilestoneId === '') delete project.deliveryMilestoneId
+    if (patch.deliveryMilestoneId !== undefined && deliveryBefore !== project.deliveryMilestoneId) {
+      const label = this.value.milestones.find((item) => item.id === project.deliveryMilestoneId)?.title ?? 'All work'
+      this.activity(project.companyId, id, 'delivery.scope', `Delivery scope set to “${label}”. Existing workers and reviews can finish.`)
+    }
     if (workspacePath !== undefined) {
       const normalized = normalizeWorkspacePath(workspacePath)
       if (normalized) project.workspacePath = normalized
@@ -714,9 +728,53 @@ export class OrganizationStore {
   private createSkill(input: Extract<OrganizationMutation, { type: 'skill.create' }>): void { const companyId = input.companyId; if (!companyId) throw new Error('Scoped skills require companyId'); this.company(companyId); if (input.projectId && this.project(input.projectId).companyId !== companyId) throw new Error('Project skill crosses company boundary'); if (input.teamId) this.assertTeamCompany(input.teamId, companyId); if (input.roleId) this.assertRoleCompany(input.roleId, companyId); if (input.agentId && !this.value.agents.some((item) => item.id === input.agentId && item.companyId === companyId)) throw new Error('Agent skill crosses company boundary'); this.value.skills.push({ id: randomUUID(), scope: input.scope, name: clean(input.name), description: clean(input.description), instructions: clean(input.instructions), companyId, ...(input.projectId ? { projectId: input.projectId } : {}), ...(input.teamId ? { teamId: input.teamId } : {}), ...(input.roleId ? { roleId: input.roleId } : {}), ...(input.agentId ? { agentId: input.agentId } : {}) }) }
   private createWorkflow(input: Extract<OrganizationMutation, { type: 'workflow.create' }>): void { this.company(input.companyId); if (input.projectId && this.project(input.projectId).companyId !== input.companyId) throw new Error('Workflow crosses company boundary'); if (!input.steps.length) throw new Error('Workflow must contain at least one step'); this.value.workflows.push({ id: randomUUID(), companyId: input.companyId, name: clean(input.name), scope: input.projectId ? 'project' : 'company', ...(input.projectId ? { projectId: input.projectId } : {}), steps: input.steps }) }
   private createGoal(input: Extract<OrganizationMutation, { type: 'goal.create' }>): void { if (this.project(input.projectId).companyId !== input.companyId) throw new Error('Goal crosses company boundary'); this.value.goals.push({ id: randomUUID(), companyId: input.companyId, projectId: input.projectId, title: clean(input.title), description: clean(input.description), status: 'active', progress: 0, createdAt: Date.now() }); this.refreshProject(input.projectId) }
+  private assertMilestoneProject(id: string, projectId: string) {
+    if (typeof id !== 'string') throw new Error('Milestone must be an ID')
+    const milestone = this.value.milestones.find((item) => item.id === id && item.projectId === projectId)
+    if (!milestone) throw new Error('Milestone does not belong to this project')
+    return milestone
+  }
+
+  private createMilestone(input: Extract<OrganizationMutation, { type: 'milestone.create' }>): void {
+    const project = this.project(input.projectId)
+    const title = clean(input.title)
+    const description = clean(input.description)
+    if (!title || !description) throw new Error('A milestone requires a title and verifiable outcome')
+    let goal = input.goalId
+      ? this.value.goals.find((item) => item.id === input.goalId && item.projectId === project.id)
+      : this.value.goals.filter((item) => item.projectId === project.id).at(-1)
+    if (input.goalId && !goal) throw new Error('Goal does not belong to this project')
+    if (!goal) {
+      goal = { id: randomUUID(), companyId: project.companyId, projectId: project.id, title: project.name, description: project.objective, status: 'active', progress: 0, createdAt: Date.now() }
+      this.value.goals.push(goal)
+    }
+    const milestones = this.value.milestones.filter((item) => item.projectId === project.id)
+    const milestone = { id: randomUUID(), companyId: project.companyId, projectId: project.id, goalId: goal.id, title, description, status: 'pending' as const, order: milestones.length }
+    this.value.milestones.push(milestone)
+    if (!milestones.length) project.deliveryMilestoneId = milestone.id
+    this.activity(project.companyId, project.id, 'milestone.created', `Created milestone “${title}”.`)
+    this.refreshProject(project.id)
+  }
+
+  private reorderTasks(input: Extract<OrganizationMutation, { type: 'task.reorder' }>): void {
+    const project = this.project(input.projectId)
+    if (input.milestoneId) this.assertMilestoneProject(input.milestoneId, input.projectId)
+    if (!Array.isArray(input.taskIds) || !input.taskIds.every((id) => typeof id === 'string')) throw new Error('Task order must contain task IDs')
+    const tasks = this.value.tasks.filter((task) => task.projectId === input.projectId && (task.milestoneId ?? '') === (input.milestoneId ?? ''))
+    const ids = new Set(input.taskIds)
+    if (ids.size !== input.taskIds.length || ids.size !== tasks.length || tasks.some((task) => !ids.has(task.id))) {
+      throw new Error('Task order must include every task in this milestone exactly once')
+    }
+    const positions = new Map(input.taskIds.map((id, index) => [id, index]))
+    for (const task of tasks) { task.queueOrder = positions.get(task.id)!; task.updatedAt = Date.now() }
+    this.activity(project.companyId, project.id, 'task.reordered', `Ordered ${tasks.length} task(s) in ${this.value.milestones.find((item) => item.id === input.milestoneId)?.title ?? 'Unassigned work'}.`)
+  }
   private createTask(input: Extract<OrganizationMutation, { type: 'task.create' }>): void {
     const project = this.project(input.projectId)
     if (project.companyId !== input.companyId) throw new Error('Project does not belong to company')
+    const milestone = input.milestoneId ? this.assertMilestoneProject(input.milestoneId, project.id) : undefined
+    if (input.goalId && !this.value.goals.some((goal) => goal.id === input.goalId && goal.projectId === project.id)) throw new Error('Goal does not belong to this project')
+    if (milestone && input.goalId && input.goalId !== milestone.goalId) throw new Error('Task goal does not match milestone')
     if (input.assignedAgentId && !this.value.agents.some((item) => item.id === input.assignedAgentId && item.companyId === input.companyId)) throw new Error('Assigned agent crosses company boundary')
     for (const dependency of input.dependsOn ?? []) if (!this.value.tasks.some((item) => item.id === dependency && item.projectId === input.projectId)) throw new Error('Task dependency crosses project boundary')
     for (const skillId of input.requestedSkillIds ?? []) {
@@ -732,11 +790,15 @@ export class OrganizationStore {
     const agent = input.assignedAgentId ? this.value.agents.find((item) => item.id === input.assignedAgentId) : this.pickAgent(input.companyId)
     if (agent?.teamId && !project.teamIds.includes(agent.teamId)) project.teamIds.push(agent.teamId)
     const now = Date.now()
-    this.value.tasks.push({ id: randomUUID(), companyId: input.companyId, projectId: input.projectId, title: clean(input.title), description: clean(input.description), acceptanceCriteria: input.acceptanceCriteria?.map(clean).filter(Boolean) ?? ['Requested outcome is implemented and verified.'], priority: input.priority ?? 'medium', status: 'backlog', dependsOn: input.dependsOn ?? [], ...(input.goalId ? { goalId: input.goalId } : {}), ...(input.milestoneId ? { milestoneId: input.milestoneId } : {}), ...(agent ? { assignedAgentId: agent.id } : {}), ...taskExecutionHints(input), ...(input.sourceScheduleId ? { sourceScheduleId: clean(input.sourceScheduleId) } : {}), ...(input.sourceTriggerId ? { sourceTriggerId: clean(input.sourceTriggerId) } : {}), ...(input.sourceActivityId ? { sourceActivityId: clean(input.sourceActivityId) } : {}), ...(input.requestedSkillIds?.length ? { requestedSkillIds: [...new Set(input.requestedSkillIds)] } : {}), createdAt: now, updatedAt: now })
+    this.value.tasks.push({ id: randomUUID(), companyId: input.companyId, projectId: input.projectId, title: clean(input.title), description: clean(input.description), acceptanceCriteria: input.acceptanceCriteria?.map(clean).filter(Boolean) ?? ['Requested outcome is implemented and verified.'], priority: input.priority ?? 'medium', status: 'backlog', dependsOn: input.dependsOn ?? [], ...((milestone?.goalId ?? input.goalId) ? { goalId: milestone?.goalId ?? input.goalId } : {}), ...(milestone ? { milestoneId: milestone.id } : {}), ...(agent ? { assignedAgentId: agent.id } : {}), ...taskExecutionHints(input), ...(input.sourceScheduleId ? { sourceScheduleId: clean(input.sourceScheduleId) } : {}), ...(input.sourceTriggerId ? { sourceTriggerId: clean(input.sourceTriggerId) } : {}), ...(input.sourceActivityId ? { sourceActivityId: clean(input.sourceActivityId) } : {}), ...(input.requestedSkillIds?.length ? { requestedSkillIds: [...new Set(input.requestedSkillIds)] } : {}), createdAt: now, updatedAt: now })
     this.refreshProject(input.projectId)
   }
   private updateTask(id: string, patch: Extract<OrganizationMutation, { type: 'task.update' }>['patch']): void {
     const task = this.task(id)
+    const milestoneBefore = task.milestoneId
+    if (patch.milestoneId !== undefined && typeof patch.milestoneId !== 'string') throw new Error('Task milestone must be a milestone ID or empty string')
+    const milestone = patch.milestoneId ? this.assertMilestoneProject(patch.milestoneId, task.projectId) : undefined
+    if (patch.milestoneId !== undefined && patch.milestoneId !== (task.milestoneId ?? '') && (task.status === 'in_progress' || task.status === 'review')) throw new Error('Cannot move a task to another milestone while it is in progress or review')
     if (patch.assignedAgentId && !this.value.agents.some((item) => item.id === patch.assignedAgentId && item.companyId === task.companyId)) throw new Error('Assigned agent crosses company boundary')
     if (patch.assignedAgentId && patch.assignedAgentId !== task.assignedAgentId && (task.status === 'in_progress' || task.status === 'review')) {
       throw new Error('Cannot reassign a task while it is in progress or review')
@@ -758,6 +820,12 @@ export class OrganizationStore {
     const effectiveArtifacts = nextPatch.artifactPaths ?? task.artifactPaths ?? []
     if (effectiveEvidence === 'artifact' && effectiveArtifacts.length === 0) throw new Error('Artifact tasks require at least one artifact path')
     Object.assign(task, nextPatch)
+    if (patch.milestoneId !== undefined && patch.milestoneId !== (milestoneBefore ?? '')) {
+      delete task.queueOrder
+      if (milestone) task.goalId = milestone.goalId
+      else delete task.milestoneId
+    }
+    if (patch.milestoneId === '') delete task.milestoneId
     if (task.status !== 'blocked') delete task.blockedReason
     task.updatedAt = Date.now()
     this.refreshProject(task.projectId)
@@ -1156,7 +1224,6 @@ function clean(value: string): string { const text = value.trim(); if (!text) th
 function must<T>(value: T | undefined, label: string): T { if (!value) throw new Error(`${label} not found`); return value }
 function clone<T>(value: T): T { return structuredClone(value) }
 function mergeBuiltins(skills: OrganizationSkill[]): OrganizationSkill[] { const custom = skills.filter((item) => item.scope !== 'builtin'); return [...clone(BUILTIN_SKILLS), ...custom] }
-function priority(value: OrganizationTask['priority']): number { return value === 'critical' ? 4 : value === 'high' ? 3 : value === 'medium' ? 2 : 1 }
 function taskExecutionHints(input: { workScopes?: string[]; evidenceKind?: OrganizationTask['evidenceKind']; artifactPaths?: string[] }): Partial<Pick<OrganizationTask, 'workScopes' | 'evidenceKind' | 'artifactPaths'>> {
   const workScopes = normalizeWorkScopes(input.workScopes ?? [])
   const artifactPaths = normalizeArtifactPaths(input.artifactPaths ?? [])

@@ -237,6 +237,20 @@ export class HarnessService {
     return sessionId
   }
 
+  /**
+   * Name a session after the work it performs. The runtime otherwise labels
+   * sessions with a first-prompt fallback ("You are Builder acting as…"),
+   * which hides the real task from the chat sidebar. The rename pins the
+   * title in the session log, so automatic title generation will not replace it.
+   */
+  async renameSession(sessionId: string, title: string): Promise<void> {
+    const trimmed = title.trim()
+    if (!trimmed) return
+    const gateway = await this.ensureStarted()
+    const { result } = await this.rpcWithRecovery(gateway, 'session.rename', { sessionId, title: trimmed })
+    if (!result.ok) throw new Error(rpcFailureMessage('session.rename', result))
+  }
+
   /** Whitelisted gateway call for read-oriented UI needs (sessions, models, presets…). */
   async gatewayRpc(method: string, payload?: unknown): Promise<GatewayRpcResult> {
     // A project without a linked/available folder must not restart the runtime
