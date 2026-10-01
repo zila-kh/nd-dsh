@@ -29,14 +29,14 @@ trial data into the repository.
 | --- | --- | --- |
 | Static verification | Pass | ND product, runtime, ND Pencil, and source-control boundaries. |
 | TypeScript type checking | Pass | Rechecked after release-test additions. |
-| App unit/integration suite | 1,112 passed; 9 skipped | Includes the runtime, terminal startup, approval, and release-test changes. Initial sandbox failures cleared under normal Windows test permissions. |
+| App unit/integration suite | 1,116 passed; 9 skipped | Includes the runtime, terminal startup, approval, and release-test changes. Initial sandbox failures cleared under normal Windows test permissions. |
 | Rust core gate | Pass | Formatting, Clippy, and ND protocol/runtime/core/agent tests, including cancellation and restart contracts. |
 | Browser native host gate | Pass | Formatting, Clippy, and the duplex-pipe contract. |
 | Browser platform focus | 26 passed | Lease, policy, history, token, and extension coverage. |
 | Production build | Pass | Rechecked after the approval-card fixes. |
 | Full desktop acceptance suite | 60 passed; 3 skipped; exit 0 | Includes real model delivery, journal restart, isolation, launcher, terminal, ND Home, and extension tests. The long soak and two opt-in ad-block probes were skipped. |
 | Explicit 3-company × 2-project matrix | Pass | Switching, forged ownership rejection, and full restart. |
-| Release-test regressions | 20 passed | Target/profile isolation, exact-package evidence, actual soak duration, and Windows process identity. |
+| Release-test regressions | 22 passed | Target/profile isolation, exact-package evidence, actual soak duration, and Windows process identity. |
 | Real-user production journey | Pass; 19 gates passed | Three companies, five projects, three model routes, peak five parallel runs, and restart during active work. Its separate existing-suite gate was not rerun inside this journey; the baseline desktop suite passed independently. Source target. |
 | Approval/question UI regressions | 3 passed; exit 0 | Includes raw JSON argument redaction, independent sessions, duplicate-submit prevention, and retry after transport failure. Source target; fourteen Windows descendants were observed and cleared on the latest run. |
 | Portable artifact selection | 3 passed | Old packages cannot satisfy current-version smoke tests; absent or ambiguous artifacts fail closed. |
@@ -49,6 +49,38 @@ The baseline desktop fixture did not enumerate descendants on Windows. Its
 `descendantsBefore=0` logs establish no Windows descendant-cleanup claim. The
 new fixture enumerates process ancestry and compares start-time identities;
 subsequent desktop checks exercise this stronger contract.
+
+## Latest packaged checkpoint
+
+The clean candidate at `25c5524` passed verification, type checking, all
+1,112 unit tests, Rust/browser gates, and the portable build in
+`e2e-results/beta-automated-2026-10-01T06-24-04-663Z/beta-automated-summary.json`.
+The portable smoke timed out; later acceptance stages did not run. A fresh
+launch of its exact extracted payload identified 24 missing upstream runtime
+peer packages. Bundled plain Node started correctly, but the required Harness
+agent-loop plugin could not import its peer contracts. That artifact is rejected.
+
+ND release staging now packs the missing upstream peers without changing
+upstream implementation and audits dependencies throughout the staged closure.
+A diagnostic unpacked build passes fresh-profile Harness gateway, Rust terminal,
+Git history, and cleanup checks:
+`benchmark-results/packaged-smoke/1790838904169/driver-result.json`.
+Twenty-seven owned descendants were observed and cleared. This diagnostic
+build is not an exact-portable release attestation.
+
+The bundled ND Pencil check also passes actual rectangle input, save/reopen,
+context isolation, sandbox settings, and graceful cleanup of twelve descendants.
+It is now included in `e2e/nd-pencil.spec.ts` for packaged acceptance, and
+`nd-pencil` is required in the three-layer release matrix. No failed trial
+assertion is treated as a product defect or passing evidence.
+
+A diagnostic build ran out of disk space after accumulated extraction copies.
+Those failed copies were removed after checking their ownership and process
+state. Release validation now checks disk headroom before packaging.
+
+The user will perform the Human candidate checks. Their agreement to test is
+not a Human PASS or release GO. Fresh exact-portable validation, repeated
+scenarios, the full 24-hour soak, and the Human decision are pending.
 
 ## Release-test hardening
 
@@ -102,8 +134,8 @@ The baseline portable smoke and a clean-environment extracted-app smoke failed.
 Both observed a terminal stalled at ConPTY's startup query; the latter also
 reported the incompatible Harness runtime fingerprint. An earlier extracted-app
 smoke passed its functional checks but failed workspace cleanup, so it is not a
-passing release receipt. Fresh packaging and acceptance tests of the fixes are
-pending. The final candidate
+passing release receipt. The dependency-closure diagnostic now passes; fresh exact-portable packaging
+and acceptance tests remain pending. The final candidate
 must be frozen and rechecked after any fixes. The [tester guide](../private-beta-tester-guide.md)
 documents prerequisites, recovery, rollback limitations, and current boundaries.
 

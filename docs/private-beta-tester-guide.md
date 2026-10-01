@@ -14,7 +14,9 @@ not establish a packaged release pass.
    Get-FileHash -Algorithm SHA256 -LiteralPath '.\ND-DSH-0.1.1-private-beta-x64.exe'
    ```
 
-2. Use a writable local folder. This is a portable executable; there is no
+2. Use a writable local folder and leave at least 8 GB free on the drive used
+   for Windows temporary files while testing. Portable startup extracts its
+   bundled runtimes before the app opens. This is a portable executable; there is no
    installer, automatic updater, or signed public distribution in this build.
 3. Install Git and make it available to ND for project history, task worktrees,
    and source control. The package bundles ND Core, the ND runtime, ND Pencil,
@@ -33,6 +35,15 @@ Clean-machine installation and the supported Windows-version matrix must be
 recorded against the release artifact. Development-machine success does not
 establish those results. macOS and Linux are outside this Windows artifact's
 release claim.
+
+## ND Pencil acceptance
+
+In a disposable project, open Design → ND Pencil, create a canvas, draw a
+rectangle, save it, close it, and reopen it. Confirm that the edited shape is
+preserved in the project's `.op` design document and that no separate design
+application or account setup is required. For Build into App, inspect the
+active project's real source diff and verification result before accepting
+the generated application. A saved `.op` document alone is design intent.
 
 ## Before replacing a build
 

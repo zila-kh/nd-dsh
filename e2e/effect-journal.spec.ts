@@ -63,7 +63,7 @@ test.beforeAll(async () => {
 })
 
 test.afterAll(async () => {
-  await closeApp(launched).catch(() => undefined)
+  await closeApp(launched)
 })
 
 async function state(): Promise<OrganizationSnapshot> {

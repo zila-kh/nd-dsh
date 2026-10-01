@@ -24,6 +24,7 @@ const requiredFeatureIds = [
   'native-extensions',
   'nd-home',
   'workspace-profiles',
+  'nd-pencil',
 ] as const
 
 afterEach(async () => {

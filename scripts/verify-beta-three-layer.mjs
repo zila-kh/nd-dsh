@@ -38,6 +38,7 @@ const REQUIRED_BETA_FEATURE_IDS = [
   'native-extensions',
   'nd-home',
   'workspace-profiles',
+  'nd-pencil',
 ]
 
 if (evidence.schemaVersion !== 1) errors.push('schemaVersion must be 1')

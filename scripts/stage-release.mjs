@@ -5,6 +5,7 @@ import { existsSync, promises as fs } from 'node:fs'
 import { dirname, join, relative, resolve, basename } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
+import { completeHarnessPeers, missingHarnessDependencies } from './harness-release-peers.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const harnessSource = join(root, 'vendor', 'deepseek-harness')
@@ -91,6 +92,8 @@ await deploy('@deepseek-ai/dsh', harnessOutput, false)
 // the packaged Electron runtime resolve the same graph as the source workspace.
 await deploy('@deepseek-ai/cordis-plugin-group', cordisGroupOutput, false)
 await deploy('@deepseek-ai/dsh-subagent-codex', codexOutput, true)
+const runtimePeers = await completeHarnessPeers(harnessSource, harnessOutput, run)
+console.log(`Included ${runtimePeers.length} upstream runtime peer package(s).`)
 await fs.copyFile(join(harnessSource, 'LICENSE'), join(harnessOutput, 'LICENSE'))
 await fs.copyFile(join(harnessSource, 'THIRD_PARTY_NOTICES.md'), join(harnessOutput, 'THIRD_PARTY_NOTICES.md'))
 
@@ -138,6 +141,8 @@ for (const path of required) await requireFile(path, 'Release runtime file')
 // here, where a gap names the package and the fix, instead of leaving it to a
 // packaged app that never becomes ready.
 console.log('\nVerifying the staged web-profile closure...')
+const missingRuntimeDependencies = await missingHarnessDependencies(harnessOutput)
+if (missingRuntimeDependencies.length) throw new Error(`Incomplete Harness runtime closure: ${missingRuntimeDependencies.join(', ')}`)
 const closure = await verifyWebProfileClosure()
 console.log(`Web profile closure resolves ${closure.dependencies} dependencies, including ${closure.clientPackages} client face(s).`)
 

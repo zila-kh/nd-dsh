@@ -31,6 +31,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from '@playwright/test'
 import { electronLaunchOptions, electronTargetIdentity } from '../scripts/e2e-electron-target.mjs'
+import { closeElectronApp } from '../scripts/e2e-electron-cleanup.mjs'
 
 // E2E credentials live in the gitignored .env.e2e; plain .env supplies the rest.
 // Load .env.e2e first so it wins.
@@ -180,6 +181,8 @@ function seedProfile(userDataDir) {
   return provider
 }
 
+let activeApp
+
 async function main() {
   mkdirSync(RUN_ROOT, { recursive: true })
   ensureGitWorkspace(TARGET_WS)
@@ -189,6 +192,7 @@ async function main() {
 
   const applicationTarget = electronTargetIdentity()
   const app = await electron.launch(electronLaunchOptions(userDataDir, REPO))
+  activeApp = app
   const mainOut = createWriteStream(join(RUN_ROOT, 'main-stdout.log'), { flags: 'a' })
   const mainErr = createWriteStream(join(RUN_ROOT, 'main-stderr.log'), { flags: 'a' })
   app.process().stdout.pipe(mainOut)
@@ -197,7 +201,8 @@ async function main() {
   const page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')
   if (applicationTarget.kind === 'packaged' && !(await app.evaluate(({ app }) => app.isPackaged))) {
-    await app.close()
+    await closeElectronApp(app)
+    activeApp = undefined
     throw new Error('The selected E2E executable did not launch a packaged application')
   }
   page.setDefaultTimeout(45_000)
@@ -431,10 +436,8 @@ async function main() {
     for (const line of rendererErrors.slice(0, 20)) log(`  ${line.slice(0, 300)}`)
   }
 
-  await new Promise((resolveClose) => {
-    const fallback = setTimeout(() => { void app.process().kill('SIGKILL'); resolveClose() }, 20_000)
-    void app.close().finally(() => { clearTimeout(fallback); resolveClose() })
-  })
+  await closeElectronApp(app)
+  activeApp = undefined
   log('app closed')
   logStream.end()
 
@@ -461,7 +464,8 @@ async function waitForState(label, predicate, timeoutMs, page) {
   throw new Error(`timed out waiting for: ${label}`)
 }
 
-main().catch((error) => {
+main().catch(async (error) => {
+  try { await closeElectronApp(activeApp) } catch (cleanupError) { log(`CLEANUP FAILED: ${cleanupError.message}`) }
   log(`FATAL: ${error.stack ?? error.message}`)
   logStream.end()
   process.exitCode = 1

@@ -107,6 +107,15 @@ try {
   await fs.writeFile(join(outputDir, 'application-target.json'), JSON.stringify(target, null, 2) + '\n')
   result = { status: 'pass', executable: basename(executable), target, outputDir, runtime, startup: startupRecord, launchDurationMs: Date.now() - startedAt, ownedProcessesObserved: owned.size }
 } catch (error) {
+  // This launch uses a disposable profile and a credential-free environment.
+  // Keep its startup diagnostics before removing the profile so an import or
+  // runtime failure can be investigated from the same packaged bytes.
+  const diagnosticDir = join(userData, 'dsh-home', 'logs')
+  for (const entry of await fs.readdir(diagnosticDir).catch(() => [])) {
+    if (/^startup-.*\.log$/.test(entry)) {
+      await fs.copyFile(join(diagnosticDir, entry), join(outputDir, entry))
+    }
+  }
   console.error(stdout.slice(-6000))
   console.error(stderr.slice(-6000))
   throw error

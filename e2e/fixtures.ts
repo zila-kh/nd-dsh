@@ -153,13 +153,17 @@ export async function launchApp(options: LaunchAppOptions = {}): Promise<Launche
   child.stderr?.setEncoding('utf8')
   child.stdout?.on('data', (chunk: string) => { diagnostics.stdout = tail(diagnostics.stdout + chunk) })
   child.stderr?.on('data', (chunk: string) => { diagnostics.stderr = tail(diagnostics.stderr + chunk) })
-  const page = await app.firstWindow()
-  await page.waitForLoadState('domcontentloaded')
-  if (target.kind === 'packaged' && !(await app.evaluate(({ app }) => app.isPackaged))) {
-    await closeApp({ app, page, userDataDir })
-    throw new Error('The selected E2E executable did not launch a packaged application')
+  try {
+    const page = await app.firstWindow()
+    await page.waitForLoadState('domcontentloaded')
+    if (target.kind === 'packaged' && !(await app.evaluate(({ app }) => app.isPackaged))) {
+      throw new Error('The selected E2E executable did not launch a packaged application')
+    }
+    return { app, page, userDataDir }
+  } catch (error) {
+    await closeApp({ app, userDataDir })
+    throw error
   }
-  return { app, page, userDataDir }
 }
 
 /**
@@ -182,7 +186,7 @@ export interface CloseAppOptions {
   removeUserData?: boolean
 }
 
-export async function closeApp(launched: LaunchedApp | undefined, options: CloseAppOptions = {}): Promise<void> {
+export async function closeApp(launched: Pick<LaunchedApp, 'app' | 'userDataDir'> | undefined, options: CloseAppOptions = {}): Promise<void> {
   if (!launched) return
   const { app, userDataDir } = launched
   const child = app.process()

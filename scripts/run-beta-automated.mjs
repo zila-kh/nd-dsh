@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, statfsSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
@@ -62,6 +63,15 @@ for (const item of stages) {
   let applicationTarget
   try {
     assertCleanCandidate()
+    if (item.script === 'dist:win:portable') {
+      // This check creates a built app, an exact-payload extraction, and NSIS
+      // temporary copies. A full disk can stall the portable before Electron
+      // starts and produces no application diagnostic.
+      for (const directory of [root, tmpdir()]) {
+        const disk = statfsSync(directory)
+        if (disk.bavail * disk.bsize < 8 * 1024 ** 3) throw new Error(`Release validation needs at least 8 GiB free at ${directory}. Remove disposable build copies before retrying.`)
+      }
+    }
     const env = { ...process.env }
     if (process.platform === 'win32' && !skipPackage && (item.script.startsWith('e2e')
       || item.script.startsWith('release:smoke'))) {

@@ -49,6 +49,7 @@ import { fileURLToPath } from 'node:url'
 import { config as loadDotenv } from 'dotenv'
 import { _electron as electron } from '@playwright/test'
 import { electronLaunchOptions, electronTargetIdentity } from '../scripts/e2e-electron-target.mjs'
+import { closeElectronApp } from '../scripts/e2e-electron-cleanup.mjs'
 import {
   buildRouteEvidence,
   computeConcurrency,
@@ -442,6 +443,8 @@ async function launchApp(profileDir) {
   seedProviders(dir)
   const target = electronTargetIdentity()
   const app = await electron.launch(electronLaunchOptions(dir, REPO))
+  currentApp = app
+  userDataDir = dir
   // Main-process narration is the only place IPC-level failures are logged;
   // keep a tail of it in evidence for every launch (fresh and relaunch).
   const stdoutLog = join(evidence.dir, 'main-stdout.log')
@@ -455,7 +458,8 @@ async function launchApp(profileDir) {
   const page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')
   if (target.kind === 'packaged' && !(await app.evaluate(({ app }) => app.isPackaged))) {
-    await app.close()
+    await closeElectronApp(app)
+    currentApp = null
     throw new Error('The selected E2E executable did not launch a packaged application')
   }
   evidence.writeJson('application-target.json', target)
@@ -469,44 +473,12 @@ async function launchApp(profileDir) {
   return { app, page, userDataDir: dir }
 }
 
-function waitForProcessExit(child, timeoutMs) {
-  if (child.exitCode !== null) return Promise.resolve(true)
-  return new Promise((resolve_) => {
-    const timer = setTimeout(() => resolve_(child.exitCode !== null), timeoutMs)
-    child.once('exit', () => {
-      clearTimeout(timer)
-      resolve_(true)
-    })
-  })
-}
-
 async function closeApp() {
   if (!currentApp) return
   approvalLoopToken += 1
-  const app = currentApp
-  const child = app.process()
-  try {
-    await Promise.race([
-      app.evaluate(({ app: electronApp }) => { setImmediate(() => electronApp.quit()) }).catch(() => undefined),
-      sleep(2_000),
-    ])
-  } catch {
-    // fall through to bounded exit wait / force kill
-  }
-  let exited = await waitForProcessExit(child, 8_000)
-  if (!exited) {
-    log(`[close] graceful quit timed out; force-killing pid=${child.pid ?? 'unknown'}`)
-    if (process.platform === 'win32') {
-      spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
-    } else {
-      try { process.kill(child.pid, 'SIGKILL') } catch { /* already gone */ }
-    }
-    exited = await waitForProcessExit(child, 5_000)
-  }
-  await Promise.race([app.close().catch(() => undefined), sleep(15_000)])
+  await closeElectronApp(currentApp)
   currentApp = null
   currentPage = null
-  log(`[close] exited=${exited}`)
 }
 
 // ── Organization state / API wrappers (every call is a scripted action) ─────
