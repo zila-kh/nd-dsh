@@ -52,4 +52,12 @@ describe('runtime request ownership', () => {
     cyclic.self = cyclic
     expect(runtimePromptAction(cyclic)).toBeUndefined()
   })
+
+  it('redacts fields in the raw JSON string emitted by the runtime', () => {
+    const preview = runtimePromptAction(JSON.stringify({ command: 'node --test', apiKey: 'dummy-opaque-credential', nested: { authorization: 'dummy-authorization' } }))!
+    expect(preview).toContain('node --test')
+    expect(preview).not.toContain('dummy-opaque-credential')
+    expect(preview).not.toContain('dummy-authorization')
+    expect(preview).toContain('[redacted]')
+  })
 })

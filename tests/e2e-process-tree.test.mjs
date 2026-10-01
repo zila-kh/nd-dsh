@@ -18,9 +18,22 @@ describe('release process cleanup evidence', () => {
     expect(matchingProcesses(original, [{ ...original[0], command: 'node.exe (started later)' }])).toEqual([])
   })
 
+  it('does not attribute a departed parents older child to a reused parent PID', () => {
+    const rows = [
+      { pid: 100, ppid: 1, command: 'test app', startedAt: 200 },
+      { pid: 101, ppid: 100, command: 'test worker', startedAt: 210 },
+      { pid: 102, ppid: 101, command: 'unrelated old compiler helper', startedAt: 100 },
+      { pid: 103, ppid: 101, command: 'owned child', startedAt: 220 },
+    ]
+    expect(processDescendants(100, rows).map((row) => row.pid)).toEqual([101, 103])
+  })
+
   it('reads the real OS inventory including the test process', () => {
     const current = readProcessRows().find((row) => row.pid === process.pid)
     expect(current?.command).toBeTruthy()
-    if (process.platform === 'win32') expect(current?.command).toContain('(started ')
+    if (process.platform === 'win32') {
+      expect(current?.command).toContain('(started ')
+      expect(current?.startedAt).toBeGreaterThan(0)
+    }
   })
 })

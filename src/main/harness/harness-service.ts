@@ -15,7 +15,7 @@ import type {
 } from '../../shared/contracts.js'
 import { restrictDeepSeekCatalog } from '../../shared/model-catalog.js'
 import { appendWorkspaceContext, stripWorkspaceContext, workspaceContextForPersona } from '../../shared/workspace-context.js'
-import { bundledResourceRoot, dshPatchPath, harnessCliBinPath, harnessRoot, presetSourceDir } from '../app-paths.js'
+import { bundledResourceRoot, dshPatchPath, harnessCliBinPath, harnessNodeBinPath, harnessRoot, presetSourceDir } from '../app-paths.js'
 import type { BrowserController } from '../browser/browser-controller.js'
 import { formatExternalElementContext, type ExternalElementStage } from '../capture/external-inspect.js'
 import { GatewayClient, pickFreePort } from '../dsh/gateway-client.js'
@@ -560,11 +560,11 @@ export class HarnessService {
       DSH_CWD: workspaceRoot,
       ND_DSH_WORKSPACE_CONTEXT: workspaceContextForPersona(this.workspace.state()),
       DSH_PERMISSION_MODE: process.env.ND_DSH_PERMISSION_MODE ?? 'workspace-write',
-      ...(app.isPackaged ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
     }
+    delete environment.ELECTRON_RUN_AS_NODE
 
     this.updateStatus('starting')
-    const child = spawn(process.env.ND_DSH_NODE_BIN?.trim() || (app.isPackaged ? process.execPath : 'node'), [
+    const child = spawn(harnessNodeBinPath(), [
       cliBin,
       '--profile', 'web',
       '--patch', patchPath,

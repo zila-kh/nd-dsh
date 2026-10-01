@@ -49,7 +49,7 @@ function approval(rpcId: string, sessionId: string): DshEventFrame {
 
 test('pending answers are single-shot while separate sessions remain independently answerable', async () => {
   const { page } = launched
-  await emit({ kind: 'session-event', sessionId: 'test-session-a', event: { type: 'tool/call', seq: 1, time: Date.now(), data: { callId: 'test-call', name: 'Release test tool', arguments: { command: 'node --test', apiKey: 'sk-test-placeholder' } } } })
+  await emit({ kind: 'session-event', sessionId: 'test-session-a', event: { type: 'tool/call', seq: 1, time: Date.now(), data: { callId: 'test-call', name: 'Release test tool', arguments: JSON.stringify({ command: 'node --test', apiKey: 'dummy-opaque-credential' }) } } })
   await emit(approval('test-approval-a', 'test-session-a'))
   await emit(approval('test-approval-b', 'test-session-b'))
   const a = page.getByRole('article').filter({ hasText: 'Session: test-session-a' })
@@ -58,7 +58,7 @@ test('pending answers are single-shot while separate sessions remain independent
   await expect(b).toBeVisible()
   await a.getByText('Requested tool arguments').click()
   await expect(a.getByText(/node --test/)).toBeVisible()
-  await expect(a.getByText(/sk-test-placeholder/)).toHaveCount(0)
+  await expect(a.getByText(/dummy-opaque-credential/)).toHaveCount(0)
   await expect(b.getByText('Requested tool arguments')).toHaveCount(0)
   await a.getByRole('button', { name: 'Allow once' }).evaluate((button) => { const element = button as HTMLButtonElement; element.click(); element.click() })
   await expect(a.getByRole('button', { name: 'Allow once' })).toBeDisabled()

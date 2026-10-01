@@ -2,7 +2,12 @@
 export function runtimePromptAction(argumentsValue: unknown): string | undefined {
   if (argumentsValue === undefined) return undefined
   try {
-    const serialized = JSON.stringify(argumentsValue, (key, value: unknown) => {
+    // Harness records raw tool-call JSON as a string; redact its field names too.
+    let argumentsPreview: unknown = argumentsValue
+    if (typeof argumentsValue === 'string') {
+      try { argumentsPreview = JSON.parse(argumentsValue) as unknown } catch { /* plain command text */ }
+    }
+    const serialized = JSON.stringify(argumentsPreview, (key, value: unknown) => {
       if (/(?:secret|password|token|api[_-]?key|authorization|private[_-]?key)/i.test(key)) return '[redacted]'
       if (typeof value !== 'string') return value
       return value

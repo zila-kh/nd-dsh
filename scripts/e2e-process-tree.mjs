@@ -11,6 +11,7 @@ export function readProcessRows() {
     return (Array.isArray(parsed) ? parsed : [parsed]).map((row) => ({
       pid: Number(row.ProcessId), ppid: Number(row.ParentProcessId),
       command: `${row.Name} (started ${row.CreationDate})`,
+      startedAt: Number(String(row.CreationDate).match(/\/Date\((\d+)/)?.[1]) || undefined,
     }))
   }
   const result = spawnSync('ps', ['-eo', 'pid=,ppid=,args='], { encoding: 'utf8', timeout: 10_000 })
@@ -27,8 +28,12 @@ export function processDescendants(rootPid, rows) {
   const queue = [rootPid]
   while (queue.length) {
     const parent = queue.shift()
+    const parentStartedAt = rows.find((row) => row.pid === parent)?.startedAt
     for (const row of rows) {
       if (row.ppid !== parent || visited.has(row.pid)) continue
+      // Windows retains a departed parent's PID. A later process can reuse it,
+      // but cannot own a child that was created before that later process.
+      if (parentStartedAt !== undefined && row.startedAt !== undefined && row.startedAt < parentStartedAt) continue
       visited.add(row.pid)
       descendants.push(row)
       queue.push(row.pid)

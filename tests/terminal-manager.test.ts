@@ -87,6 +87,20 @@ describe('TerminalManager', () => {
     await manager.shutdown()
   })
 
+  it('recovers a native startup query emitted before terminal.create attaches listeners', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nd-terminal-early-')); dirs.push(root)
+    const pty = new NativeTailPty(3100)
+    const manager = new TerminalManager({
+      storePath: join(root, 'terminals.json'), workspace: { state: () => ({ root, name: 'fixture' }) },
+      spawn: () => { pty.emit('\u001b[6n'); return pty },
+    })
+    await manager.create({ sessionId: 'chat-early' })
+    expect(pty.writes).toEqual(process.platform === 'win32' ? ['\u001b[1;1R'] : [])
+    pty.emit('\u001b[6n')
+    expect(pty.writes).toHaveLength(process.platform === 'win32' ? 1 : 0)
+    await manager.shutdown()
+  })
+
   it('leaves cursor queries after real output to the terminal emulator', async () => {
     const { manager, ptys } = await setup(); await manager.create({ sessionId: 'chat-a' })
     ptys[0]!.emit('\u001b[6n'); ptys[0]!.emit('prompt> '); ptys[0]!.emit('\u001b[6n')

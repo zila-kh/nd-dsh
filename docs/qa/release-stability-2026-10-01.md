@@ -13,11 +13,11 @@ The effective Harness checkout is `21638c56315a` (`0.1.7-rc.2`), matching
 Harness commit; this branch reconciles the gitlink with the effective checkout
 and metadata. No upstream runtime source was patched.
 
-The running consolidated receipt will be written to:
+The completed baseline consolidated receipt is:
 
 `e2e-results/beta-automated-2026-10-01T03-52-09-063Z/beta-automated-summary.json`
 
-This run started before the release-test additions below. Its recorded root
+The baseline finished FAIL at packaged smoke. This run started before the release-test additions below. Its recorded root
 commit identifies the starting source; it must not be presented as attestation
 of a later clean candidate commit. Raw local receipts and profiles are ignored
 by Git. This report records reviewed outcomes without copying credentials or
@@ -29,7 +29,7 @@ trial data into the repository.
 | --- | --- | --- |
 | Static verification | Pass | ND product, runtime, ND Pencil, and source-control boundaries. |
 | TypeScript type checking | Pass | Rechecked after release-test additions. |
-| App unit/integration suite | 1,108 passed; 9 skipped | Includes the stability changes. Initial sandbox failures cleared under normal Windows test permissions. |
+| App unit/integration suite | 1,112 passed; 9 skipped | Includes the runtime, terminal startup, approval, and release-test changes. Initial sandbox failures cleared under normal Windows test permissions. |
 | Rust core gate | Pass | Formatting, Clippy, and ND protocol/runtime/core/agent tests, including cancellation and restart contracts. |
 | Browser native host gate | Pass | Formatting, Clippy, and the duplex-pipe contract. |
 | Browser platform focus | 26 passed | Lease, policy, history, token, and extension coverage. |
@@ -38,8 +38,12 @@ trial data into the repository.
 | Explicit 3-company × 2-project matrix | Pass | Switching, forged ownership rejection, and full restart. |
 | Release-test regressions | 20 passed | Target/profile isolation, exact-package evidence, actual soak duration, and Windows process identity. |
 | Real-user production journey | Pass; 19 gates passed | Three companies, five projects, three model routes, peak five parallel runs, and restart during active work. Its separate existing-suite gate was not rerun inside this journey; the baseline desktop suite passed independently. Source target. |
-| Approval/question UI regressions | 3 passed; exit 0 | Deferred replies prevent duplicate submissions, permit independent sessions, allow retry after transport failure, and show only matching redacted tool arguments. Source target; nine Windows descendants were observed and cleared. |
+| Approval/question UI regressions | 3 passed; exit 0 | Includes raw JSON argument redaction, independent sessions, duplicate-submit prevention, and retry after transport failure. Source target; fourteen Windows descendants were observed and cleared on the latest run. |
 | Portable artifact selection | 3 passed | Old packages cannot satisfy current-version smoke tests; absent or ambiguous artifacts fail closed. |
+| Multi-model production stress | Completed; supervised | Seven tasks reached 100% in 46.1 minutes with three model routes and peak two concurrent runs. Two explicit driver interventions were required: retry one blocked task and resume after the MVP milestone. This is not unattended reliability evidence. Source target. |
+| Generated stress project | 27 tests passed; build passed | Independently checked the produced application's tests and production build. |
+| Browser/core/task benchmarks | Pass | Browser runtime proof, core contract, and committed task baseline. |
+| Baseline portable build | Pass | Packaging completed, but its smoke failed; this artifact is not an approved release. |
 
 The baseline desktop fixture did not enumerate descendants on Windows. Its
 `descendantsBefore=0` logs establish no Windows descendant-cleanup claim. The
@@ -70,17 +74,36 @@ subsequent desktop checks exercise this stronger contract.
 - Windows desktop teardown enumerates real descendants instead of treating an
   unsupported inventory as an empty process tree. Inventory errors fail closed;
   Windows command lines and environment values are not logged by this helper.
+- Teardown closes all of the verified-dead Electron child's transport pipes,
+  including Playwright's extra descriptors. Process start chronology prevents
+  stale parent PIDs from misattributing unrelated compiler helpers.
 - Approval and question replies remain disabled while their response is pending.
   Failed responses remain retryable. Cards resolve context from their own session
   rather than the currently selected company/project and can show correlated tool
   arguments with common credential forms redacted.
+- Raw JSON tool-argument strings are parsed before field-name redaction.
+- Clean-profile packaged testing exposed Harness's rejection of Electron
+  43.4.0's run-as-node fingerprint. Release staging now bundles the plain Node
+  executable used to validate the Harness closure, its redistribution license,
+  and its version/hash provenance. Packaged tests strip developer runtime
+  overrides, and packaged smoke requires a responding Harness gateway.
+- ConPTY can emit its startup cursor query before terminal creation returns.
+  The terminal manager now recovers that query from the native retained tail;
+  a regression exercises output emitted before listener attachment.
+- Packaged smoke uses fresh per-run receipt paths, explicit disposable profiles,
+  bounded extraction/startup and directory-lock retries, observed process
+  identities, and a final driver receipt only after successful cleanup.
 - The autonomous model driver uses a fresh disposable Git workspace by default
   and refuses to seed a nonempty non-Git directory.
 
 ## Remaining release evidence
 
-The autonomous multi-model stress run, benchmarks, fresh portable build,
-and packaged smoke results are still running or pending. The final candidate
+The baseline portable smoke and a clean-environment extracted-app smoke failed.
+Both observed a terminal stalled at ConPTY's startup query; the latter also
+reported the incompatible Harness runtime fingerprint. An earlier extracted-app
+smoke passed its functional checks but failed workspace cleanup, so it is not a
+passing release receipt. Fresh packaging and acceptance tests of the fixes are
+pending. The final candidate
 must be frozen and rechecked after any fixes. The [tester guide](../private-beta-tester-guide.md)
 documents prerequisites, recovery, rollback limitations, and current boundaries.
 

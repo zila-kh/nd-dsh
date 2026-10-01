@@ -225,6 +225,13 @@ export async function closeApp(launched: LaunchedApp | undefined, options: Close
     console.log(`[e2e-close] path=${path} pid=${child.pid ?? 'unknown'} quitRequestSettled=${quitRequestSettled} exited=${exited} descendantsBefore=${initialTree.length}`)
     if (!exited) throw new Error('Electron process did not exit after bounded e2e shutdown cleanup.')
 
+    // Playwright allocates stdio[3] and [4] even for Electron's WebSocket
+    // transport. Node's ChildProcess "close" waits for every pipe, so leaving
+    // those open prevents Playwright's app-close event after the OS exit.
+    // All actual descendants have been verified gone before closing any pipe.
+    for (const stream of child.stdio) stream?.destroy()
+    child.unref()
+
     // The worker keeps Playwright's own Electron child handle and its CDP
     // sockets alive until the ElectronApplication is disposed, which makes it
     // miss the 120 s teardown window even though every spec passed (task 0010).
@@ -238,10 +245,11 @@ export async function closeApp(launched: LaunchedApp | undefined, options: Close
     // A dispose can also stall indefinitely rather than merely run long (seen
     // once in a 61-spec worker). An abandoned dispose leaves the driver
     // transport half-closed, which the 120 s teardown watchdog then punishes,
-    // so one bounded retry resumes the handshake before giving up; both calls
-    // are bounded and a rejected second close is swallowed.
+    // so one bounded retry resumes the handshake before giving up. Keep the
+    // retry shorter: two 60 s waits exceed the worker's 120 s cleanup budget.
+    if (process.env.ND_E2E_TEARDOWN_DIAG) logActiveHandles()
     if (!(await settlesWithin(app.close().catch(() => undefined), 60_000))) {
-      await settlesWithin(app.close().catch(() => undefined), 60_000)
+      await settlesWithin(app.close().catch(() => undefined), 15_000)
     }
     // Even a settled dispose can leave the transport's ref'd pipe and CDP
     // sockets behind, and the worker then always hits the 120 s teardown
@@ -253,6 +261,13 @@ export async function closeApp(launched: LaunchedApp | undefined, options: Close
     sweepDeadTransportHandles()
     if (process.env.ND_E2E_TEARDOWN_DIAG) logActiveHandles()
   } finally {
+    if (exited) {
+      // A survivor assertion can throw before driver disposal. Release the
+      // verified-dead child's pipes on that failure path as well.
+      for (const stream of child.stdio) stream?.destroy()
+      child.unref()
+      sweepDeadTransportHandles()
+    }
     appDiagnostics.delete(app)
     if (options.removeUserData !== false) {
       await rm(userDataDir, { recursive: true, force: true }).catch(() => undefined)
@@ -278,6 +293,9 @@ function logActiveHandles(): void {
     const bits: string[] = []
     if (typeof record.pid === 'number') bits.push(`pid=${record.pid}`)
     if (typeof record.fd === 'number') bits.push(`fd=${record.fd}`)
+    const nativeHandle = record._handle as { constructor?: { name?: string } } | undefined
+    if (nativeHandle?.constructor?.name) bits.push(`native=${nativeHandle.constructor.name}`)
+    if (typeof record.destroyed === 'boolean') bits.push(`destroyed=${record.destroyed}`)
     if (typeof record.remoteAddress === 'string' && record.remoteAddress) {
       bits.push(`peer=${record.remoteAddress}:${String(record.remotePort ?? '')}`)
     }

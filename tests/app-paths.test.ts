@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { bundledResourceRoot, claudeBinPath, dshPatchPath, harnessRoot, managedEngineBinRoot, piBinPath, presetSourceDir, projectRoot } from '../src/main/app-paths.js'
+import { bundledResourceRoot, claudeBinPath, dshPatchPath, harnessNodeBinPath, harnessRoot, managedEngineBinRoot, piBinPath, presetSourceDir, projectRoot } from '../src/main/app-paths.js'
 
 /**
  * electron-builder splits a packaged ND install in two: the application code
@@ -29,7 +29,7 @@ vi.mock('electron', () => ({
 
 const RESOURCES = 'resources'
 const ARCHIVE = 'app.asar'
-const overrides = ['ND_DSH_PROJECT_ROOT', 'ND_DSH_HARNESS_ROOT', 'ND_DSH_PATCH', 'ND_DSH_PRESET_DIR', 'ND_DSH_MANAGED_RUNTIME_ROOT', 'ND_DSH_ENGINE_BIN_ROOT', 'APPDATA'] as const
+const overrides = ['ND_DSH_NODE_BIN', 'ND_DSH_PROJECT_ROOT', 'ND_DSH_HARNESS_ROOT', 'ND_DSH_PATCH', 'ND_DSH_PRESET_DIR', 'ND_DSH_MANAGED_RUNTIME_ROOT', 'ND_DSH_ENGINE_BIN_ROOT', 'APPDATA'] as const
 
 let root = ''
 const savedEnvironment = new Map<string, string | undefined>()
@@ -70,6 +70,15 @@ function packaged(packagedState: boolean): void {
 }
 
 describe('bundled runtime payload roots', () => {
+  it('requires bundled plain Node in a packaged app and never falls back to host PATH', () => {
+    packaged(true)
+    expect(() => harnessNodeBinPath()).toThrow(/missing/)
+    const node = join(root, RESOURCES, 'node', process.platform === 'win32' ? 'node.exe' : 'node')
+    mkdirSync(join(root, RESOURCES, 'node'), { recursive: true }); writeFileSync(node, 'fixture')
+    expect(harnessNodeBinPath()).toBe(node)
+    packaged(false)
+    expect(harnessNodeBinPath()).toBe('node')
+  })
   it('resolves packaged payloads against the resources directory, not app.asar', () => {
     packaged(true)
 
