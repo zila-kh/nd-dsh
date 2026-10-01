@@ -7,6 +7,9 @@ directories:
 
 asar: true
 npmRebuild: false
+# Direct portable extraction avoids NSIS's slow second copy of the runtime.
+# Store the payload to keep the NSIS compiler within its bounded build deadline.
+compression: store
 files:
   - out/**
   - package.json
@@ -63,3 +66,5 @@ win:
 
 portable:
   artifactName: ND-DSH-${version}-private-beta-${arch}.${ext}
+  useZip: true
+  unpackDirName: true

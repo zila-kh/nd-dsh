@@ -11,6 +11,18 @@ afterEach(async () => {
 })
 
 describe('Electron release target', () => {
+  it('hashes artifacts spanning several chunks without changing their byte identity', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nd-e2e-large-target-'))
+    roots.push(root)
+    const executable = join(root, 'large.exe')
+    const bytes = Buffer.alloc(2 * 1024 * 1024 + 17, 42)
+    bytes[1024 * 1024] = 7
+    bytes[bytes.length - 1] = 99
+    await writeFile(executable, bytes)
+    expect(electronTargetIdentity({ ND_DSH_E2E_EXECUTABLE: executable }).sha256)
+      .toBe(createHash('sha256').update(bytes).digest('hex'))
+  })
+
   it('overrides an inherited real profile with the disposable test profile', () => {
     const options = electronLaunchOptions('test-profile', 'checkout', { ND_DSH_USER_DATA_DIR: 'real-profile' })
     expect(options.args).toEqual(['.', '--user-data-dir=test-profile'])

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { closeSync, openSync, readFileSync, readSync, readdirSync, statSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
 export function payloadFiles(root) {
@@ -17,7 +17,17 @@ export function payloadFiles(root) {
   return files
 }
 
-function digest(path) { return createHash('sha256').update(readFileSync(path)).digest('hex') }
+// Hashing is synchronous, so all file digests safely share one bounded buffer.
+const digestChunk = Buffer.allocUnsafe(1024 * 1024)
+function digest(path) {
+  const descriptor = openSync(path, 'r')
+  try {
+    const hash = createHash('sha256')
+    let size
+    while ((size = readSync(descriptor, digestChunk, 0, digestChunk.length, null)) !== 0) hash.update(digestChunk.subarray(0, size))
+    return hash.digest('hex')
+  } finally { closeSync(descriptor) }
+}
 
 /** A packaged target is explicit; never fall back to the source on a bad path. */
 export function electronTargetIdentity(env = process.env) {

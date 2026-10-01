@@ -29,14 +29,14 @@ trial data into the repository.
 | --- | --- | --- |
 | Static verification | Pass | ND product, runtime, ND Pencil, and source-control boundaries. |
 | TypeScript type checking | Pass | Rechecked after release-test additions. |
-| App unit/integration suite | 1,116 passed; 9 skipped | Includes the runtime, terminal startup, approval, and release-test changes. Initial sandbox failures cleared under normal Windows test permissions. |
+| App unit/integration suite | 1,122 passed; 9 skipped | Includes runtime, terminal startup, approval, bounded artifact hashing, and safe portable staging. Initial sandbox failures cleared under normal Windows test permissions. |
 | Rust core gate | Pass | Formatting, Clippy, and ND protocol/runtime/core/agent tests, including cancellation and restart contracts. |
 | Browser native host gate | Pass | Formatting, Clippy, and the duplex-pipe contract. |
 | Browser platform focus | 26 passed | Lease, policy, history, token, and extension coverage. |
 | Production build | Pass | Rechecked after the approval-card fixes. |
 | Full desktop acceptance suite | 60 passed; 3 skipped; exit 0 | Includes real model delivery, journal restart, isolation, launcher, terminal, ND Home, and extension tests. The long soak and two opt-in ad-block probes were skipped. |
 | Explicit 3-company × 2-project matrix | Pass | Switching, forged ownership rejection, and full restart. |
-| Release-test regressions | 22 passed | Target/profile isolation, exact-package evidence, actual soak duration, and Windows process identity. |
+| Release-test regressions | 28 passed | Runtime peers, target/profile isolation, exact-package evidence, actual soak duration, and safe portable staging. |
 | Real-user production journey | Pass; 19 gates passed | Three companies, five projects, three model routes, peak five parallel runs, and restart during active work. Its separate existing-suite gate was not rerun inside this journey; the baseline desktop suite passed independently. Source target. |
 | Approval/question UI regressions | 3 passed; exit 0 | Includes raw JSON argument redaction, independent sessions, duplicate-submit prevention, and retry after transport failure. Source target; fourteen Windows descendants were observed and cleared on the latest run. |
 | Portable artifact selection | 3 passed | Old packages cannot satisfy current-version smoke tests; absent or ambiguous artifacts fail closed. |
@@ -90,6 +90,22 @@ processes. The suite now caps workers at four to limit resource contention;
 assertions, product concurrency coverage, and test deadlines are unchanged.
 The failed receipt is retained at
 `e2e-results/beta-automated-2026-10-01T07-46-33-835Z/beta-automated-summary.json`.
+
+The default portable built at `e297a2d` also hit the 240-second startup deadline
+before Electron opened. Its launcher was still making a second copy of the
+27,654-file payload despite sufficient disk space. A direct NSIS extraction
+diagnostic passed in 165 seconds, including bundled Harness readiness, the
+Rust terminal marker, Git history, and cleanup of 25 observed owned processes:
+`benchmark-results/packaged-smoke/1790843960607/driver-result.json`.
+This diagnostic used a temporary short build path and stored payload; its
+1.6 GB executable is not yet the final clean-candidate attestation.
+
+The portable build command now uses the supported direct-file option and a
+short `.release/app` staging directory, restores the original unpacked layout
+after compilation, and refuses to overwrite existing staging or competing
+builds. Exact NSIS extraction uses full 7-Zip on the release machine. Artifact
+hashes are read in bounded chunks to avoid loading the large executable into
+memory on every acceptance launch. The startup deadline remains 240 seconds.
 
 ## Release-test hardening
 
