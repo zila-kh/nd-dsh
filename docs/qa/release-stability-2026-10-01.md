@@ -82,6 +82,15 @@ The user will perform the Human candidate checks. Their agreement to test is
 not a Human PASS or release GO. Fresh exact-portable validation, repeated
 scenarios, the full 24-hour soak, and the Human decision are pending.
 
+The next consolidated attempt at `3a7f1b6` stopped on two real-Git test
+timeouts before packaging. Both files passed together (eight tests), and the
+full suite passed with four workers (1,116 passed; nine skipped). Vitest's
+default used up to fifteen workers on this host, each able to spawn additional
+processes. The suite now caps workers at four to limit resource contention;
+assertions, product concurrency coverage, and test deadlines are unchanged.
+The failed receipt is retained at
+`e2e-results/beta-automated-2026-10-01T07-46-33-835Z/beta-automated-summary.json`.
+
 ## Release-test hardening
 
 - Launchers accept `ND_DSH_E2E_EXECUTABLE` for a packaged target, reject an invalid
