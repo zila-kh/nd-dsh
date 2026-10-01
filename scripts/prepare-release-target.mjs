@@ -14,19 +14,17 @@ export async function prepareReleaseTarget(root, outputDir, configured) {
   const require = createRequire(import.meta.url)
   const builderRequire = createRequire(require.resolve('electron-builder/package.json'))
   const { getPath7za } = builderRequire('app-builder-lib/out/toolsets/7zip.js')
-  // The full 7z binary decodes direct NSIS File records; the bundled 7za only
-  // decodes the older embedded 7z archive. This is a release-machine tool.
+  // The ND launcher embeds one 7z archive without outer NSIS compression;
+  // the builder's bundled extractor reads it directly from the executable.
   const configuredExtractor = process.env.ND_DSH_RELEASE_7ZIP?.trim()
-  const fullExtractor = configuredExtractor || [process.env.ProgramW6432, process.env.ProgramFiles]
-    .filter(Boolean).map((directory) => join(directory, '7-Zip', '7z.exe')).find((path) => existsSync(path))
   if (configuredExtractor && !existsSync(configuredExtractor)) throw new Error('Configured release 7-Zip executable does not exist.')
-  const extractor = fullExtractor || await getPath7za()
+  const extractor = configuredExtractor || await getPath7za()
   await mkdir(outputDir, { recursive: true })
   const payloadRoot = await mkdtemp(join(outputDir, 'portable-payload-'))
   const extraction = spawnSync(extractor, ['x', '-y', '-bd', '-bso0', '-bsp0', `-o${payloadRoot}`, portable.executable], {
     encoding: 'utf8', windowsHide: true, timeout: 180_000, maxBuffer: 1024 * 1024,
   })
-  if (extraction.status !== 0) throw new Error('Could not extract the exact portable artifact. Direct NSIS packages require full 7-Zip (7z.exe) on the release machine, or ND_DSH_RELEASE_7ZIP. ' + (extraction.stderr || extraction.error?.message || extraction.status))
+  if (extraction.status !== 0) throw new Error('Could not extract the exact portable archive. ' + (extraction.stderr || extraction.error?.message || extraction.status))
   const executable = join(payloadRoot, 'ND-DSH.exe')
   const files = payloadFiles(payloadRoot)
   const receipt = join(outputDir, 'portable-extraction.json')

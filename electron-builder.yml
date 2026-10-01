@@ -7,9 +7,8 @@ directories:
 
 asar: true
 npmRebuild: false
-# Direct portable extraction avoids NSIS's slow second copy of the runtime.
-# Store the payload to keep the NSIS compiler within its bounded build deadline.
-compression: store
+# The ND launcher extracts the compressed archive once into a unique directory.
+compression: normal
 files:
   - out/**
   - package.json
@@ -61,10 +60,11 @@ extraResources:
 
 win:
   target:
-    - portable
+    - nsis
   artifactName: ND-DSH-${version}-${os}-${arch}.${ext}
 
-portable:
+nsis:
   artifactName: ND-DSH-${version}-private-beta-${arch}.${ext}
-  useZip: true
-  unpackDirName: true
+  script: scripts/nd-portable-launcher.nsi
+  differentialPackage: false
+  perMachine: false

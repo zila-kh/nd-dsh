@@ -18,9 +18,8 @@ not establish a packaged release pass.
    for Windows temporary files while testing. Portable startup extracts its
    bundled runtimes before the app opens. This is a portable executable; there is no
    installer, automatic updater, or signed public distribution in this build.
-   The direct-extraction candidate is approximately 1.6 GB because its payload
-   is stored without compression; this avoids a second runtime copy and a long
-   compression build. Allow extraction to finish before judging startup.
+   The ND launcher extracts one bundled compressed archive into a fresh
+   temporary directory. Allow extraction to finish before judging startup.
 3. Install Git and make it available to ND for project history, task worktrees,
    and source control. The package bundles ND Core, the ND runtime, ND Pencil,
    and browser tooling. Users do not install ND Pencil separately.

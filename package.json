@@ -34,7 +34,7 @@
     "release:verify": "node scripts/verify-release.mjs",
     "notices:generate": "node scripts/gen-third-party-notices.mjs",
     "dist:win:dir": "corepack pnpm release:stage && corepack pnpm build && corepack pnpm release:verify && electron-builder --win --dir",
-    "dist:win:portable": "corepack pnpm release:stage && corepack pnpm build && corepack pnpm release:verify && node scripts/build-windows-portable.mjs",
+    "dist:win:portable": "corepack pnpm release:stage && corepack pnpm build && corepack pnpm release:verify && electron-builder --win nsis --x64 --publish never",
     "dsh:build": "node scripts/build-harness.mjs",
     "dsh:update": "node scripts/update-harness.mjs",
     "nd-pencil:build": "node scripts/build-nd-pencil.mjs",

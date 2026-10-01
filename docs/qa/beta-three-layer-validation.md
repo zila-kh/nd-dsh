@@ -115,11 +115,10 @@ Never commit `.env.e2e`.
 
 On the Windows RC machine:
 
-Install full [7-Zip](https://www.7-zip.org/) for exact NSIS payload extraction.
-The runner discovers its standard Windows installation, or accepts
-`ND_DSH_RELEASE_7ZIP` pointing to `7z.exe`. The standalone `7za.exe` does not
-decode the direct NSIS payload used by this release. This tool is needed on the
-release validation machine; the portable application needs no external extractor.
+Exact portable payload extraction uses the builder's bundled 7-Zip. The ND
+launcher embeds one archive without an outer compression layer so validation
+can inspect the same application bytes. Neither the release validation machine
+nor the portable application requires a separate extractor installation.
 
 ```powershell
 corepack pnpm beta:automated

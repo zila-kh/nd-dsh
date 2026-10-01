@@ -29,14 +29,14 @@ trial data into the repository.
 | --- | --- | --- |
 | Static verification | Pass | ND product, runtime, ND Pencil, and source-control boundaries. |
 | TypeScript type checking | Pass | Rechecked after release-test additions. |
-| App unit/integration suite | 1,122 passed; 9 skipped | Includes runtime, terminal startup, approval, bounded artifact hashing, and safe portable staging. Initial sandbox failures cleared under normal Windows test permissions. |
+| App unit/integration suite | 1,117 passed; 9 skipped | Includes runtime, terminal startup, approval, and bounded artifact hashing. Five temporary build-staging tests were removed with that obsolete helper. Initial sandbox failures cleared under normal Windows test permissions. |
 | Rust core gate | Pass | Formatting, Clippy, and ND protocol/runtime/core/agent tests, including cancellation and restart contracts. |
 | Browser native host gate | Pass | Formatting, Clippy, and the duplex-pipe contract. |
 | Browser platform focus | 26 passed | Lease, policy, history, token, and extension coverage. |
 | Production build | Pass | Rechecked after the approval-card fixes. |
 | Full desktop acceptance suite | 60 passed; 3 skipped; exit 0 | Includes real model delivery, journal restart, isolation, launcher, terminal, ND Home, and extension tests. The long soak and two opt-in ad-block probes were skipped. |
 | Explicit 3-company × 2-project matrix | Pass | Switching, forged ownership rejection, and full restart. |
-| Release-test regressions | 28 passed | Runtime peers, target/profile isolation, exact-package evidence, actual soak duration, and safe portable staging. |
+| Release-test regressions | 23 passed | Runtime peers, target/profile isolation, exact-package evidence, and actual soak duration. |
 | Real-user production journey | Pass; 19 gates passed | Three companies, five projects, three model routes, peak five parallel runs, and restart during active work. Its separate existing-suite gate was not rerun inside this journey; the baseline desktop suite passed independently. Source target. |
 | Approval/question UI regressions | 3 passed; exit 0 | Includes raw JSON argument redaction, independent sessions, duplicate-submit prevention, and retry after transport failure. Source target; fourteen Windows descendants were observed and cleared on the latest run. |
 | Portable artifact selection | 3 passed | Old packages cannot satisfy current-version smoke tests; absent or ambiguous artifacts fail closed. |
@@ -100,12 +100,25 @@ Rust terminal marker, Git history, and cleanup of 25 observed owned processes:
 This diagnostic used a temporary short build path and stored payload; its
 1.6 GB executable is not yet the final clean-candidate attestation.
 
-The portable build command now uses the supported direct-file option and a
-short `.release/app` staging directory, restores the original unpacked layout
-after compilation, and refuses to overwrite existing staging or competing
-builds. Exact NSIS extraction uses full 7-Zip on the release machine. Artifact
-hashes are read in bounded chunks to avoid loading the large executable into
-memory on every acceptance launch. The startup deadline remains 240 seconds.
+The consolidated run at `2a40102` passed all local checks but failed portable
+packaging; later stages did not run. Its receipt is retained at
+`e2e-results/beta-automated-2026-10-01T09-07-26-418Z/beta-automated-summary.json`.
+A separate direct-file retry failed a Windows directory rename. The compressed
+upstream portable with a shorter extraction directory also timed out while
+making its second runtime copy. Neither trial establishes release readiness.
+
+ND now uses electron-builder's supported custom NSIS script for a portable
+launcher. It extracts one embedded archive directly into the launch's unique
+plugin directory, forwards arguments, waits for ND, preserves its exit code,
+and cleans that directory after exit. It creates no installation registry
+entries or shortcuts. This avoids both the duplicate runtime copy and the
+temporary build-directory move. The stored-archive diagnostic passed in 199
+seconds with a ready Harness gateway, the Rust terminal marker, Git history,
+and cleanup of all 28 observed owned processes:
+`benchmark-results/packaged-smoke/1790847993538/driver-result.json`.
+The final configuration compresses the archive and requires a fresh clean
+candidate run. The builder's bundled 7-Zip inspects the exact embedded payload.
+Artifact hashing uses bounded chunks; the startup deadline remains 240 seconds.
 
 ## Release-test hardening
 
