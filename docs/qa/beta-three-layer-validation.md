@@ -82,6 +82,7 @@ Use these rows when filling the committed evidence template. Unit/E2E references
 | `native-extensions` | `tests/nd-extension-package.test.ts`, `tests/nd-extension-lifecycle.test.ts`, `tests/nd-invocation-broker.test.ts`, `tests/wallpaper-native.test.ts`, `pnpm ext:validate --builtins`, `e2e/nd-home-extensions.spec.ts` | user-authored package install/activate/rollback, deny-wins org policy, grant/revocation, real Windows wallpaper change. The **agent-side native-host bridge is deliberately deferred**: no coding engine can invoke ND native host methods yet, so do not record that acceptance bullet as demonstrable |
 | `nd-home` | `tests/nd-extension-lifecycle.test.ts` (Home notes/captures/chats, managed folder, corrupt-record quarantine), `tests/harness-session-scope.test.ts`, `e2e/nd-home-extensions.spec.ts` | ND Home usable before any company exists; personal notes/captures/chats persist and stay out of active-workspace listings |
 | `workspace-profiles` | `tests/workspace-profile.test.ts`, `e2e/smoke.spec.ts` (General ↔ Coding shell) | switching General/Coding is understandable and correctly scoped; unsupported actions refuse with clear wording |
+| `nd-pencil` | ND Pencil controller/readiness/runtime tests, static product boundary verification, packaged `e2e/nd-pencil.spec.ts` | sketch, save and reopen an edited design; Build into App produces a real project source diff and passing verification |
 
 The evidence file intentionally uses exactly these IDs. `tests/verify-beta-three-layer.test.ts` now checks that the template and final gate cannot drift apart.
 
@@ -113,6 +114,11 @@ Never commit `.env.e2e`.
 ## 1. Run the automated Unit + E2E + artifact gate
 
 On the Windows RC machine:
+
+Exact portable payload extraction uses the builder's bundled 7-Zip. The ND
+launcher embeds one archive without an outer compression layer so validation
+can inspect the same application bytes. Neither the release validation machine
+nor the portable application requires a separate extractor installation.
 
 ```powershell
 corepack pnpm beta:automated

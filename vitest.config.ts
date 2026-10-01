@@ -17,6 +17,10 @@ export default defineConfig({
     // `mjs` specs cover the benchmark tooling (result kinds and aggregation),
     // which is plain ESM shared with the benchmark scripts themselves.
     include: ['tests/**/*.test.{ts,tsx,mjs}', 'src/**/*.test.{ts,tsx}'],
+    // Integration files spawn real Git repositories and process trees. Avoid
+    // saturating Windows disk/process startup on machines with many CPU cores;
+    // the product's parallel-worktree assertions and deadlines stay unchanged.
+    maxWorkers: 4,
     testTimeout: 15_000,
   },
 })

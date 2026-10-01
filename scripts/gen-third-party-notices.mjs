@@ -71,6 +71,7 @@ lines.push(`| agent-browser | ${agentBrowserManifest.version} | ${declaredLicens
 lines.push(`| ND Pencil (upstream OpenPencil, pinned) | ${pencilPin.release ?? 'unstaged'} @ ${shortCommit(pencilPin.commit)} | MIT | \`nd-pencil/LICENSE.openpencil\` (upstream notice preserved) |`)
 lines.push(`| Source Control panel (derived from microsoft/vscode \`extensions/git\`) | @ ${shortCommit(vscodeGitPin.commit)} | ${vscodeGitPin.license} | \`vendor/vscode-git.LICENSE\` |`)
 lines.push(`| Electron | ${electronManifest.version} | ${declaredLicense(electronManifest)} | \`LICENSE.electron.txt\` beside the application |`)
+lines.push(`| Node.js (Harness runtime) | ${process.versions.node} | MIT and bundled third-party licenses | \`node/LICENSE\` |`)
 lines.push(`| Chromium (bundled by Electron) | ${electronManifest.version} | BSD-3-Clause and others | \`LICENSES.chromium.html\` beside the application |`)
 lines.push('')
 lines.push('## Desktop runtime npm dependencies')

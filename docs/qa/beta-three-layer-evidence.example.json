@@ -330,6 +330,26 @@
         "recordedAt": "",
         "evidence": []
       }
+    },
+    {
+      "id": "nd-pencil",
+      "name": "Bundled ND Pencil design editing and persistence",
+      "severity": "P1",
+      "betaExposed": true,
+      "unit": {
+        "status": "pending",
+        "evidence": []
+      },
+      "e2e": {
+        "status": "pending",
+        "evidence": []
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
     }
   ],
   "scenarioRuns": {

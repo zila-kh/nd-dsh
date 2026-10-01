@@ -702,6 +702,7 @@ async function createWindow(cdpPort: number): Promise<void> {
         core,
         terminal: terminalManager,
         git,
+        harness,
       })
       console.log('Packaged runtime smoke passed.')
       setTimeout(() => app.quit(), 25)

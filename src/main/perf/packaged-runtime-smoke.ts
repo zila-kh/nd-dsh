@@ -3,6 +3,7 @@ import { dirname } from 'node:path'
 import type { CoreClient } from '../core/core-client.js'
 import type { GitService } from '../git/git-service.js'
 import type { TerminalManager } from '../terminal/terminal-manager.js'
+import type { HarnessService } from '../harness/harness-service.js'
 
 interface PackagedRuntimeSmokeOptions {
   outputPath: string
@@ -10,6 +11,7 @@ interface PackagedRuntimeSmokeOptions {
   core: CoreClient
   terminal: TerminalManager
   git: GitService
+  harness: Pick<HarnessService, 'gatewayRpc' | 'status'>
 }
 
 export async function runPackagedRuntimeSmoke(options: PackagedRuntimeSmokeOptions): Promise<void> {
@@ -30,6 +32,10 @@ export async function runPackagedRuntimeSmoke(options: PackagedRuntimeSmokeOptio
     const health = options.core.health
     if (!health || health.protocolVersion !== 1) throw new Error('Bundled ND Core is not healthy at packaged smoke start.')
     receipt.core = health
+    const sessions = await options.harness.gatewayRpc('session.list')
+    const harness = options.harness.status()
+    if (!sessions.ok || (harness.state !== 'ready' && harness.state !== 'running')) throw new Error('Bundled ND agent runtime is not ready.')
+    receipt.harness = { state: harness.state, runtimeVersion: harness.runtimeVersion, gatewayResponded: true }
 
     const session = await options.terminal.create({
       sessionId,

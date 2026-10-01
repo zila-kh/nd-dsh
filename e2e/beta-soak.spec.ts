@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import type { OrganizationDesktopApi, OrganizationSnapshot } from '../src/shared/organization.js'
 import { closeApp, createWorkspaceDir, launchApp, type LaunchedApp } from './fixtures.js'
+import { electronTargetIdentity } from '../scripts/e2e-electron-target.mjs'
 
 type OrganizationWindow = typeof globalThis & {
   ndDshOrganization: OrganizationDesktopApi
@@ -24,6 +25,7 @@ const MATRIX = [
 ] as const
 
 let launched: LaunchedApp
+let appClosed = false
 const workspaceDirs: string[] = []
 
 async function state(): Promise<OrganizationSnapshot> {
@@ -39,14 +41,17 @@ async function mutate(input: Parameters<OrganizationDesktopApi['mutate']>[0]): P
 }
 
 test.afterAll(async () => {
-  await closeApp(launched).catch(() => undefined)
+  if (!appClosed) await closeApp(launched)
   await Promise.all(workspaceDirs.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
 })
 
 test('beta soak keeps one Electron lifetime stable while switching a 3x2 portfolio', async () => {
   test.skip(!RUN_SOAK, 'Run through corepack pnpm e2e:beta:soak; normal E2E must not start the long soak.')
   test.setTimeout(SOAK_MS + 180_000)
+  const target = electronTargetIdentity()
   launched = await launchApp()
+  const runtime = await launched.app.evaluate(({ app }) => ({ isPackaged: app.isPackaged, version: app.getVersion() }))
+  if (target.kind === 'packaged') expect(runtime.isPackaged).toBe(true)
 
   const created: Array<{ companyId: string; projectId: string; project: string }> = []
   for (const row of MATRIX) {
@@ -136,12 +141,26 @@ test('beta soak keeps one Electron lifetime stable while switching a 3x2 portfol
   const suspiciousGrowth = growthMb > MAX_GROWTH_MB
 
   const finalState = await state()
+  const companies = finalState.companies.filter((item) => MATRIX.some((row) => row.company === item.name)).length
+  const projects = finalState.projects.filter((item) => created.some((candidate) => candidate.projectId === item.id)).length
+  const tasks = finalState.tasks.filter((item) => created.some((candidate) => candidate.projectId === item.projectId)).length
+  const finishedAt = new Date().toISOString()
+  // A PASS receipt is written only after every assertion and owned-app cleanup succeeds.
+  expect(suspiciousGrowth, `working set grew ${growthMb}MB; limit is ${MAX_GROWTH_MB}MB`).toBe(false)
+  expect(maxProcessCount).toBeLessThanOrEqual(baseline.processCount + 4)
+  expect(companies).toBe(3)
+  expect(projects).toBe(6)
+  expect(tasks).toBe(6)
+  await closeApp(launched)
+  appClosed = true
   const report = {
     schemaVersion: 1,
     kind: 'nd-beta-soak',
-    status: suspiciousGrowth ? 'fail' : 'pass',
+    status: 'pass',
+    target,
+    runtime,
     startedAt: new Date(started).toISOString(),
-    finishedAt: new Date().toISOString(),
+    finishedAt,
     requestedMinutes: SOAK_MINUTES,
     sampleSeconds: SAMPLE_SECONDS,
     samples: samples.length,
@@ -152,9 +171,9 @@ test('beta soak keeps one Electron lifetime stable while switching a 3x2 portfol
     maxAllowedGrowthMb: MAX_GROWTH_MB,
     baselineProcessCount: baseline.processCount,
     maxProcessCount,
-    companies: finalState.companies.filter((item) => MATRIX.some((row) => row.company === item.name)).length,
-    projects: finalState.projects.filter((item) => created.some((candidate) => candidate.projectId === item.id)).length,
-    tasks: finalState.tasks.filter((item) => created.some((candidate) => candidate.projectId === item.projectId)).length,
+    companies,
+    projects,
+    tasks,
     samplesDetail: samples,
   }
   const outputDir = join(process.cwd(), 'e2e-results', 'beta-soak')
@@ -164,11 +183,6 @@ test('beta soak keeps one Electron lifetime stable while switching a 3x2 portfol
   console.log(`[beta-soak] receipt: ${outputPath}`)
   console.log(`[beta-soak] working-set baseline=${baseline.totalWorkingSetMb}MB final=${final.totalWorkingSetMb}MB peak=${peak}MB growth=${growthMb}MB`)
 
-  expect(suspiciousGrowth, `working set grew ${growthMb}MB; limit is ${MAX_GROWTH_MB}MB`).toBe(false)
-  expect(maxProcessCount).toBeLessThanOrEqual(baseline.processCount + 4)
-  expect(report.companies).toBe(3)
-  expect(report.projects).toBe(6)
-  expect(report.tasks).toBe(6)
 })
 
 function boundedNumber(raw: string | undefined, fallback: number, minimum: number, maximum: number): number {

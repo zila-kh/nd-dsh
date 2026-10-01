@@ -7,6 +7,8 @@ directories:
 
 asar: true
 npmRebuild: false
+# The ND launcher extracts the compressed archive once into a unique directory.
+compression: normal
 files:
   - out/**
   - package.json
@@ -14,6 +16,8 @@ files:
   - '!node_modules/.cache/**'
 
 extraResources:
+  - from: .release/node
+    to: node
   - from: .release/release-manifest.json
     to: release-manifest.json
   - from: .release/THIRD_PARTY_NOTICES.nd-dsh.md
@@ -56,8 +60,11 @@ extraResources:
 
 win:
   target:
-    - portable
+    - nsis
   artifactName: ND-DSH-${version}-${os}-${arch}.${ext}
 
-portable:
+nsis:
   artifactName: ND-DSH-${version}-private-beta-${arch}.${ext}
+  script: scripts/nd-portable-launcher.nsi
+  differentialPackage: false
+  perMachine: false

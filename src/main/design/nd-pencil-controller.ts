@@ -902,6 +902,14 @@ iframe{position:absolute;left:0;top:-${UPSTREAM_TOP_BAR_HEIGHT}px;display:block;
 
 function childFramePreferencesScript(theme: 'dark' | 'light'): string {
   return `(function() {
+    document.title = 'ND Pencil';
+    function brandEditor() {
+      document.querySelectorAll('[role="application"][aria-label="OpenPencil editor"]').forEach(function(node) {
+        node.setAttribute('aria-label', 'ND Pencil editor');
+      });
+    }
+    brandEditor();
+    new MutationObserver(brandEditor).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-label'] });
     try {
       var key = 'openpencil-rust-web-settings::anon';
       var raw = localStorage.getItem(key);

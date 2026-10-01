@@ -30,6 +30,8 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from '@playwright/test'
+import { electronLaunchOptions, electronTargetIdentity } from '../scripts/e2e-electron-target.mjs'
+import { closeElectronApp } from '../scripts/e2e-electron-cleanup.mjs'
 
 // E2E credentials live in the gitignored .env.e2e; plain .env supplies the rest.
 // Load .env.e2e first so it wins.
@@ -71,7 +73,7 @@ const AGENT_MODELS = {
   Researcher: COMBO_IDS[0],
 }
 // Fresh Git repository: per-task worktrees (real parallel execution) require one.
-const TARGET_WS = process.env.BETA_TARGET_WS ?? 'C:\\Users\\dila\\Documents\\GitHub\\nd-dsh-beta-teams'
+const TARGET_WS = process.env.BETA_TARGET_WS?.trim() || mkdtempSync(join(tmpdir(), 'nd-dsh-beta-workspace-'))
 const COMPANY = {
   name: 'Polyglot Systems',
   mission: 'Ship verified software with a multi-model AI workforce: planning on a reasoning route, parallel implementation on two coding routes, and independent review on a third.',
@@ -126,6 +128,7 @@ function git(cwd, args) {
 function ensureGitWorkspace(root) {
   if (spawnSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: root, encoding: 'utf8', windowsHide: true }).status === 0) return
   mkdirSync(root, { recursive: true })
+  if (readdirSync(root).length > 0) throw new Error('Beta stress workspace must be an empty folder or an explicitly selected Git test repository.')
   git(root, ['init', '--initial-branch=main'])
   writeFileSync(join(root, 'README.md'), '# ND-DSH beta workspace\n\nSeeded by e2e/beta-multimodel.mjs.\n', 'utf8')
   git(root, ['add', '.'])
@@ -178,6 +181,8 @@ function seedProfile(userDataDir) {
   return provider
 }
 
+let activeApp
+
 async function main() {
   mkdirSync(RUN_ROOT, { recursive: true })
   ensureGitWorkspace(TARGET_WS)
@@ -185,7 +190,9 @@ async function main() {
   const userDataDir = mkdtempSync(join(RUN_ROOT, 'userdata-'))
   const provider = seedProfile(userDataDir)
 
-  const app = await electron.launch({ args: ['.', `--user-data-dir=${userDataDir}`], cwd: REPO })
+  const applicationTarget = electronTargetIdentity()
+  const app = await electron.launch(electronLaunchOptions(userDataDir, REPO))
+  activeApp = app
   const mainOut = createWriteStream(join(RUN_ROOT, 'main-stdout.log'), { flags: 'a' })
   const mainErr = createWriteStream(join(RUN_ROOT, 'main-stderr.log'), { flags: 'a' })
   app.process().stdout.pipe(mainOut)
@@ -193,6 +200,11 @@ async function main() {
 
   const page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')
+  if (applicationTarget.kind === 'packaged' && !(await app.evaluate(({ app }) => app.isPackaged))) {
+    await closeElectronApp(app)
+    activeApp = undefined
+    throw new Error('The selected E2E executable did not launch a packaged application')
+  }
   page.setDefaultTimeout(45_000)
 
   const rendererErrors = []
@@ -397,6 +409,7 @@ async function main() {
   }
   const dumpPath = join(RUN_ROOT, 'final-state.json')
   writeFileSync(dumpPath, JSON.stringify({
+    applicationTarget,
     terminal,
     elapsedMinutes: Number(((Date.now() - startedAt) / 60_000).toFixed(1)),
     maxParallelTaskRuns: maxParallel,
@@ -423,10 +436,8 @@ async function main() {
     for (const line of rendererErrors.slice(0, 20)) log(`  ${line.slice(0, 300)}`)
   }
 
-  await new Promise((resolveClose) => {
-    const fallback = setTimeout(() => { void app.process().kill('SIGKILL'); resolveClose() }, 20_000)
-    void app.close().finally(() => { clearTimeout(fallback); resolveClose() })
-  })
+  await closeElectronApp(app)
+  activeApp = undefined
   log('app closed')
   logStream.end()
 
@@ -453,7 +464,8 @@ async function waitForState(label, predicate, timeoutMs, page) {
   throw new Error(`timed out waiting for: ${label}`)
 }
 
-main().catch((error) => {
+main().catch(async (error) => {
+  try { await closeElectronApp(activeApp) } catch (cleanupError) { log(`CLEANUP FAILED: ${cleanupError.message}`) }
   log(`FATAL: ${error.stack ?? error.message}`)
   logStream.end()
   process.exitCode = 1

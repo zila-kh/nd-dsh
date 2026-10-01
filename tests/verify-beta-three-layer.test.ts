@@ -24,6 +24,7 @@ const requiredFeatureIds = [
   'native-extensions',
   'nd-home',
   'workspace-profiles',
+  'nd-pencil',
 ] as const
 
 afterEach(async () => {
@@ -101,6 +102,21 @@ describe('verify-beta-three-layer', () => {
     expect(result.stderr).toContain('packagedCleanMachine.artifact must match release.artifact')
   })
 
+  it.each([
+    ['short actual duration', { finishedAt: '2026-09-27T13:00:00Z' }, 'actual elapsed time'],
+    ['missing actual duration', { startedAt: undefined }, 'actual elapsed time'],
+    ['source checkout', { target: { kind: 'source' }, runtime: { isPackaged: false } }, 'packaged application'],
+    ['different package', { target: { kind: 'packaged', artifact: 'another.exe' } }, 'artifact must match'],
+  ])('rejects a nominal 24-hour soak with %s', async (_label, patch, error) => {
+    const evidence = makeEvidence()
+    const evidencePath = await writeEvidence(evidence)
+    const receipt = JSON.parse(await readFile(evidence.releaseChecks.soak24h.summaryPath, 'utf8'))
+    await writeFile(evidence.releaseChecks.soak24h.summaryPath, JSON.stringify({ ...receipt, ...patch }))
+    const result = spawnSync(process.execPath, [scriptPath, evidencePath], { encoding: 'utf8' })
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain(error)
+  })
+
   it('fails if automated evidence names another packaged artifact', async () => {
     const evidence = makeEvidence()
     const evidencePath = await writeEvidence(evidence)
@@ -175,6 +191,10 @@ async function writeEvidence(
     kind: 'nd-beta-soak',
     status: 'pass',
     requestedMinutes: options.soakMinutes ?? 1440,
+    startedAt: '2026-09-27T12:00:00Z',
+    finishedAt: '2026-09-28T12:00:00Z',
+    target: { kind: 'packaged', artifact: evidence.release.artifact },
+    runtime: { isPackaged: true },
   }), 'utf8')
   evidence.releaseChecks.automated.summaryPath = automated
   evidence.releaseChecks.soak24h.summaryPath = soak
