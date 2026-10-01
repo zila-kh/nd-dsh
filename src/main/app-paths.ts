@@ -38,6 +38,16 @@ export function bundledResourceRoot(): string {
   return app.isPackaged ? process.resourcesPath : projectRoot()
 }
 
+/** Harness native loaders require plain Node, independent of Electron's ABI. */
+export function harnessNodeBinPath(): string {
+  const override = process.env.ND_DSH_NODE_BIN?.trim()
+  if (override) return resolve(override)
+  if (!app.isPackaged) return 'node'
+  const binary = join(process.resourcesPath, 'node', process.platform === 'win32' ? 'node.exe' : 'node')
+  if (!existsSync(binary)) throw new Error('Bundled ND runtime Node executable is missing.')
+  return binary
+}
+
 /** ND-owned Rust agent. The override is for source development only. */
 export function ndAgentBinPath(): string {
   if (process.env.ND_AGENT_BINARY?.trim()) return resolve(process.env.ND_AGENT_BINARY)

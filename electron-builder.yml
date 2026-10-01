@@ -7,6 +7,9 @@ directories:
 
 asar: true
 npmRebuild: false
+compression: normal
+afterPack: scripts/check-release-payload.cjs
+afterAllArtifactBuild: scripts/check-release-size.cjs
 files:
   - out/**
   - package.json
@@ -14,6 +17,8 @@ files:
   - '!node_modules/.cache/**'
 
 extraResources:
+  - from: .release/node
+    to: node
   - from: .release/release-manifest.json
     to: release-manifest.json
   - from: .release/THIRD_PARTY_NOTICES.nd-dsh.md
@@ -47,6 +52,10 @@ extraResources:
       - register-browser-native-host.mjs
   - from: node_modules/agent-browser
     to: node_modules/agent-browser
+    filter:
+      - '**/*'
+      - '!bin/agent-browser-linux*'
+      - '!bin/agent-browser-darwin*'
   - from: resources/browser-extensions
     to: browser-extensions
   - from: resources/nd-pencil
@@ -61,3 +70,6 @@ win:
 
 portable:
   artifactName: ND-DSH-${version}-private-beta-${arch}.${ext}
+  # Embed a 7z archive; direct NSIS File /r fails on long runtime dependency paths.
+  useZip: false
+  unpackDirName: true

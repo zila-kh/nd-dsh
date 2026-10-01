@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { dirname, extname, join, resolve } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
+import { assertNoOfficeEngines } from './release-runtime-policy.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const configOnly = process.argv.includes('--config-only')
@@ -18,6 +20,8 @@ if (packageJson.devDependencies?.['electron-builder'] !== '26.15.3') {
 }
 for (const marker of [
   'appId: com.nddsh.desktop',
+  'from: .release/node',
+  'to: node',
   'from: .release/harness',
   'to: vendor/deepseek-harness',
   'from: .release/harness/node_modules',
@@ -54,8 +58,11 @@ if (/\n\s*- from: package\.json\b/.test(extraResourcesConfig)) {
 verifyProductionRendererIsolation()
 
 if (!configOnly) {
+  await assertNoOfficeEngines(join(root, '.release', 'harness'))
   const requiredFiles = [
     '.release/release-manifest.json',
+    `.release/node/${process.platform === 'win32' ? 'node.exe' : 'node'}`,
+    '.release/node/LICENSE',
     `.release/nd-core/${process.platform === 'win32' ? 'nd-core.exe' : 'nd-core'}`,
     `.release/nd-agent/${process.platform === 'win32' ? 'nd-agent.exe' : 'nd-agent'}`,
     `.release/nd-browser-host/${process.platform === 'win32' ? 'nd-browser-host.exe' : 'nd-browser-host'}`,
@@ -95,7 +102,8 @@ if (!configOnly) {
   if (manifest.schemaVersion !== 1 || manifest.platform !== process.platform || manifest.arch !== process.arch) {
     throw new Error('Release manifest does not match the current build platform')
   }
-  if (manifest.nodeRuntime?.mode !== 'electron-run-as-node') throw new Error('Packaged Node runtime mode is not declared')
+  const nodeHash = createHash('sha256').update(readFileSync(join(root, '.release/node', process.platform === 'win32' ? 'node.exe' : 'node'))).digest('hex')
+  if (manifest.nodeRuntime?.mode !== 'bundled-node' || !/^\d+\.\d+\.\d+$/.test(manifest.nodeRuntime.version ?? '') || Number(manifest.nodeRuntime.version.split('.')[0]) < 24 || manifest.nodeRuntime.sha256 !== nodeHash) throw new Error('Packaged Node runtime provenance is invalid')
   if (manifest.ndCore?.protocolVersion !== 1 || typeof manifest.ndCore?.sha256 !== 'string' || manifest.ndCore.sha256.length !== 64) {
     throw new Error('Packaged ND Core provenance is missing or invalid')
   }
@@ -108,6 +116,17 @@ if (!configOnly) {
     throw new Error('Packaged Browser Companion provenance is missing or invalid')
   }
   verifyThirdPartyNotices()
+}
+
+const overlay = readFileSync(join(root, 'configs', 'dsh', 'nd-dsh.patch.yml'), 'utf8')
+if (!/- id: office-to-pdf\s+disabled: true/.test(overlay)) {
+  throw new Error('ND must disable Office-to-PDF when native Office engines are excluded')
+}
+if (!builderConfig.includes('compression: normal') || !builderConfig.includes('afterAllArtifactBuild: scripts/check-release-size.cjs')) {
+  throw new Error('The release must use compression and enforce the 400 MB download budget')
+}
+if (!builderConfig.includes('useZip: false')) {
+  throw new Error('The Windows portable must embed a 7z archive to support long runtime dependency paths')
 }
 
 console.log(configOnly ? 'Release packaging configuration verified.' : 'Release runtime inputs verified.')
@@ -125,7 +144,7 @@ function verifyThirdPartyNotices() {
       throw new Error(`Third-party notices do not name the runtime dependency ${name}`)
     }
   }
-  for (const component of ['DeepSeek Harness', 'agent-browser', 'ND Pencil', 'Electron', 'Chromium']) {
+  for (const component of ['DeepSeek Harness', 'agent-browser', 'ND Pencil', 'Electron', 'Chromium', 'Node.js']) {
     if (!notices.includes(component)) {
       throw new Error(`Third-party notices do not include the bundled component ${component}`)
     }

@@ -5,10 +5,13 @@ import { existsSync, promises as fs } from 'node:fs'
 import { dirname, join, relative, resolve, basename } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
+import { removeOfficeEngines, assertNoOfficeEngines } from './release-runtime-policy.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const harnessSource = join(root, 'vendor', 'deepseek-harness')
 const stageRoot = join(root, '.release')
+const nodeOutput = join(stageRoot, 'node')
+const nodeBinaryName = process.platform === 'win32' ? 'node.exe' : 'node'
 const harnessOutput = join(stageRoot, 'harness')
 const coreOutput = join(stageRoot, 'nd-core')
 const agentOutput = join(stageRoot, 'nd-agent')
@@ -32,6 +35,13 @@ const cargo = process.platform === 'win32' ? 'cargo.exe' : 'cargo'
 const harnessEnv = { ...process.env, CI: 'true' }
 
 assertInsideRoot(stageRoot)
+if (process.versions.electron || Number(process.versions.node.split('.')[0]) < 24) throw new Error('Release staging requires plain Node.js 24 or newer.')
+const nodeLicense = join(dirname(process.execPath), 'LICENSE')
+await requireFile(nodeLicense, 'Node.js redistribution license')
+await fs.mkdir(nodeOutput, { recursive: true })
+await fs.copyFile(process.execPath, join(nodeOutput, nodeBinaryName))
+await fs.copyFile(nodeLicense, join(nodeOutput, 'LICENSE'))
+if (process.platform !== 'win32') await fs.chmod(join(nodeOutput, nodeBinaryName), 0o755)
 await requireFile(join(harnessSource, 'package.json'), 'Harness source manifest')
 await requireFile(join(harnessSource, 'pnpm-lock.yaml'), 'Harness lockfile')
 
@@ -80,6 +90,11 @@ await deploy('@deepseek-ai/dsh', harnessOutput, false)
 // the packaged Electron runtime resolve the same graph as the source workspace.
 await deploy('@deepseek-ai/cordis-plugin-group', cordisGroupOutput, false)
 await deploy('@deepseek-ai/dsh-subagent-codex', codexOutput, true)
+// ND disables the upstream Office-to-PDF provider through its normal overlay.
+// Keep its small JS API metadata but omit all native engines from the artifact.
+const removedOfficeEngines = await removeOfficeEngines(harnessOutput)
+await assertNoOfficeEngines(harnessOutput)
+console.log(`Removed ${removedOfficeEngines} native Office engine package(s) from the release closure.`)
 await fs.copyFile(join(harnessSource, 'LICENSE'), join(harnessOutput, 'LICENSE'))
 await fs.copyFile(join(harnessSource, 'THIRD_PARTY_NOTICES.md'), join(harnessOutput, 'THIRD_PARTY_NOTICES.md'))
 
@@ -161,7 +176,7 @@ const manifest = {
   appVersion: rootManifest.version,
   platform: process.platform,
   arch: process.arch,
-  nodeRuntime: { mode: 'electron-run-as-node', electronVersion: rootManifest.devDependencies?.electron },
+  nodeRuntime: { mode: 'bundled-node', version: process.versions.node, sha256: await sha256(join(nodeOutput, nodeBinaryName)) },
   ndCore: { version: rootManifest.version, protocolVersion: 1, sha256: await sha256(coreStagedBinary) },
   ndAgent: { version: rootManifest.version, protocolVersion: 1, sha256: await sha256(agentStagedBinary) },
   browserCompanion: {

@@ -1,10 +1,11 @@
 import { dialog } from 'electron'
 import { promises as fs } from 'node:fs'
-import { basename, join, relative, resolve } from 'node:path'
+import { basename, extname, join, relative, resolve } from 'node:path'
 import type { WorkspaceEntry, WorkspaceFile, WorkspaceState, WorkspaceSuggestion } from '../../shared/contracts.js'
 import { CORE_WORKSPACE_LIST_HARD_MAX, type WorkspaceFileSystem } from '../core/core-workspace.js'
 import { resolveInside } from './path-utils.js'
 import { collectSuggestionIndex, rankFileSuggestions, SUGGEST_INDEX_MAX_ENTRIES, SUGGEST_SKIPPED_NAMES } from './suggest.js'
+import { MAX_DOCX_BYTES, previewDocx } from './docx-preview.js'
 
 const MAX_FILE_BYTES = 1024 * 1024
 const MAX_DIRECTORY_ENTRIES = 500
@@ -135,6 +136,28 @@ export class WorkspaceService {
 
   async read(relativePath: string): Promise<WorkspaceFile> {
     this.assertWorkspaceAvailable()
+    if (extname(relativePath).toLowerCase() === '.docx') {
+      let buffer: Buffer
+      if (this.files) {
+        if (!this.files.readBinary) throw new Error('Update ND Core to enable DOCX previews.')
+        const file = await this.files.readBinary(this.root, relativePath, MAX_DOCX_BYTES)
+        if (file.truncated) throw new Error('DOCX preview supports files up to 2 MiB.')
+        buffer = Buffer.from(file.data)
+      } else {
+        const absolute = await this.resolveExisting(relativePath)
+        const handle = await fs.open(absolute, 'r')
+        try {
+          if (!(await handle.stat()).isFile()) throw new Error('The selected path is not a file')
+          buffer = Buffer.alloc(MAX_DOCX_BYTES + 1)
+          const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
+          buffer = buffer.subarray(0, bytesRead)
+        } finally { await handle.close() }
+      }
+      return { relativePath, truncated: false, ...await previewDocx(buffer) }
+    }
+    if (['.doc', '.ppt', '.pptx'].includes(extname(relativePath).toLowerCase())) {
+      throw new Error('Export this document to PDF or HTML to preview it in ND. The app does not bundle an Office conversion engine.')
+    }
     if (this.files) {
       const file = await this.files.read(this.root, relativePath, MAX_FILE_BYTES)
       return { relativePath, content: file.data, truncated: file.truncated }

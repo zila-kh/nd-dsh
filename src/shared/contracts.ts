@@ -167,6 +167,8 @@ export interface WorkspaceFile {
   relativePath: string
   content: string
   truncated: boolean
+  /** Sanitized, inert DOCX preview produced by the trusted workspace reader. */
+  previewHtml?: string
 }
 
 export interface WorkspaceSuggestion {

@@ -43,6 +43,7 @@ export interface CoreWorkspaceIndex {
 export interface WorkspaceFileSystem {
   list(root: string, relativePath: string, maxEntries?: number): Promise<CoreWorkspaceListing>
   read(root: string, relativePath: string, maxBytes?: number): Promise<CoreWorkspaceFile>
+  readBinary?(root: string, relativePath: string, maxBytes: number): Promise<{ data: number[]; truncated: boolean }>
   index(root: string, maxEntries: number, skipNames: readonly string[]): Promise<CoreWorkspaceIndex>
 }
 
@@ -57,6 +58,11 @@ export function createCoreWorkspaceFileSystem(
   core: Pick<CoreClient, 'request'>,
 ): WorkspaceFileSystem {
   return {
+    async readBinary(root, relativePath, maxBytes) {
+      return await core.request<{ data: number[]; truncated: boolean }>(
+        'workspace.read-binary', { root, path: relativePath, maxBytes }, 15_000,
+      )
+    },
     async list(root, relativePath, maxEntries) {
       const listing = await core.request<CoreWorkspaceListing>(
         'workspace.list',

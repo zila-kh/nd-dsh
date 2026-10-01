@@ -500,6 +500,11 @@ fn dispatch(
             state.metrics.observe_workspace(&params.root);
             to_value(workspace::read(params)?)
         }
+        "workspace.read-binary" => {
+            let params = from_params::<ReadParams>(params)?;
+            state.metrics.observe_workspace(&params.root);
+            to_value(workspace::read_binary(params)?)
+        }
         "workspace.write" => {
             let params = from_params::<WorkspaceWriteParams>(params)?;
             state.metrics.observe_workspace(&params.root);

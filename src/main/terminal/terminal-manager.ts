@@ -318,6 +318,9 @@ export class TerminalManager {
         terminal.shell = attempt.file; terminal.status = 'running'; terminal.pid = pty.pid; terminal.updatedAt = Date.now()
         if (recovered) terminal.recovered = true; else delete terminal.recovered
         const runtime: Runtime = { process: pty, data: { dispose() {} }, exit: { dispose() {} }, handshake: { answered: false, payloadSeen: false } }
+        let group = this.runtimes.get(terminal.sessionId)
+        if (!group) { group = new Map(); this.runtimes.set(terminal.sessionId, group) }
+        group.set(terminal.id, runtime)
         runtime.data = pty.onData((data) => {
           if (this.runtime(terminal.sessionId, terminal.id) !== runtime) return
           answerStartupCursorQuery(pty, runtime.handshake, data)
@@ -329,12 +332,16 @@ export class TerminalManager {
         runtime.exit = pty.onExit((event) => {
           void this.handleRuntimeExit(terminal, runtime, event)
         })
-        let group = this.runtimes.get(terminal.sessionId)
-        if (!group) { group = new Map(); this.runtimes.set(terminal.sessionId, group) }
-        group.set(terminal.id, runtime)
         // nd-core owns hot scrollback; this field is only a persistence/recovery
         // slot for native PTYs. Test/fallback PTYs keep the legacy JS buffer.
-        if (pty.tailState) terminal.buffer = ''
+        if (pty.tailState) {
+          const seededBuffer = terminal.buffer
+          terminal.buffer = ''
+          const tail = await pty.tailState().catch(() => undefined)
+          if (tail && this.runtime(terminal.sessionId, terminal.id) === runtime) {
+            answerStartupCursorQuery(pty, runtime.handshake, tail.buffer.startsWith(seededBuffer) ? tail.buffer.slice(seededBuffer.length) : tail.buffer)
+          }
+        }
         return
       } catch (error) { lastError = error }
     }
