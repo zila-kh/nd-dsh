@@ -24,9 +24,23 @@ function harness(options: { autonomy: number; gate?: 'ready' | 'held'; openTask?
     },
     store: {
       state: async () => ({ companies: [{ id: 'c1', autonomyLevel: options.autonomy }], projects: [{ id: 'p1', companyId: 'c1' }], tasks }) as unknown as OrganizationSnapshot,
-      mutate: async (mutation) => { if (mutation.type === 'task.create') created.push(mutation); return {} as OrganizationSnapshot },
+      mutate: async (mutation) => {
+        if (mutation.type === 'task.create') {
+          created.push(mutation)
+          tasks.push({
+            id: 'generated-task', companyId: mutation.companyId, projectId: mutation.projectId,
+            title: mutation.title, description: mutation.description, acceptanceCriteria: [], priority: mutation.priority ?? 'medium',
+            status: 'ready', dependsOn: mutation.dependsOn ?? [],
+            ...(mutation.sourceScheduleId ? { sourceScheduleId: mutation.sourceScheduleId } : {}),
+            ...(mutation.assignedAgentId ? { assignedAgentId: mutation.assignedAgentId } : {}),
+            ...(mutation.requestedSkillIds ? { requestedSkillIds: mutation.requestedSkillIds } : {}),
+            createdAt: 1, updatedAt: 1,
+          })
+        }
+        return { companies: [{ id: 'c1', autonomyLevel: options.autonomy }], projects: [{ id: 'p1', companyId: 'c1' }], tasks } as unknown as OrganizationSnapshot
+      },
     },
-    orchestrator: { runNext: async () => { events.push('runNext'); return { runId: 'r1', kind: 'task-execution' } as never } },
+    orchestrator: { runTask: async (taskId) => { events.push(`runTask:${taskId}`); return { runId: 'r1', kind: 'task-execution' } as never } },
     now: () => Date.UTC(2026, 8, 29),
   }
   return { deps, events, created }
@@ -39,7 +53,7 @@ describe('runDueSchedules', () => {
     expect(created).toHaveLength(1)
     expect(created[0]).toMatchObject({ title: 'Weekly sprint review · 2026-09-29', sourceScheduleId: 'sched-1', projectId: 'p1' })
     expect(created[0]!.description).toContain('every 1 week(s)')
-    expect(events).not.toContain('runNext')
+    expect(events.some((item) => item.startsWith('runTask:'))).toBe(false)
     expect(events.at(-1)).toMatch(/^finish:success:.*waiting on the board/)
   })
 
@@ -47,7 +61,7 @@ describe('runDueSchedules', () => {
     const { deps, events, created } = harness({ autonomy: 3 })
     await runDueSchedules(deps)
     expect(created).toHaveLength(1)
-    expect(events).toContain('runNext')
+    expect(events).toContain('runTask:generated-task')
     expect(events.at(-1)).toMatch(/Dispatched task-execution run r1/)
   })
 
@@ -56,6 +70,19 @@ describe('runDueSchedules', () => {
     await runDueSchedules(deps)
     expect(created).toHaveLength(0)
     expect(events.at(-1)).toMatch(/still open/)
+  })
+
+  it('does not auto-restart blocked or in-flight scheduled work', async () => {
+    for (const status of ['blocked', 'in_progress', 'review'] as const) {
+      const { deps, events, created } = harness({
+        autonomy: 3,
+        openTask: { sourceScheduleId: 'sched-1', title: 'Existing scheduled work', status },
+      })
+      await runDueSchedules(deps)
+      expect(created).toHaveLength(0)
+      expect(events.some((item) => item.startsWith('runTask:'))).toBe(false)
+      expect(events.at(-1)).toContain(`is ${status}; ND will not auto-restart`)
+    }
   })
 
   it('hands the run back for a soon retry when a gate holds it', async () => {

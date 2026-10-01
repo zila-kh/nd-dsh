@@ -622,6 +622,10 @@ export class HarnessService {
       gateway = await GatewayClient.authenticate(authenticatedUrl)
       return gateway
     })
+    // Approval and question asks arrive without a session id on the remote
+    // face; attribute them to the session this service is running so the
+    // renderer can render an answerable card (and only that).
+    gateway.setWaterfallSessionResolver(() => this.activeSessionId)
     gateway.openEvents((frame) => this.handleEvent(frame))
     this.gateway = gateway
     this.baseUrl = baseUrl

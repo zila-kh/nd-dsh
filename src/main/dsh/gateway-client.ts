@@ -49,6 +49,11 @@ const GATEWAY_AUTH_TIMEOUT_MS = 10_000
  *   envelopes (see remoteRequest), plus the /api/remote.mux WebSocket that
  *   carries both the forwarded host-event stream ($events) and per-session
  *   `session/follow` journal streams (see followSession).
+ * - Remote-face answerables: the runtime delivers approvals and user
+ *   questions as `waterfall` items on the $events stream (`approval/request`,
+ *   `user-questions/request`). Each carries an `eventId` and MUST be answered
+ *   through the `$events/result` RPC with the opening `ready` frame's
+ *   `clientId` — an unanswered waterfall blocks the agent's turn forever.
  */
 export class GatewayClient {
   private readonly sockets = new Set<WebSocket>()
@@ -59,11 +64,26 @@ export class GatewayClient {
   private readonly followByStream = new Map<string, FollowEntry>()
   private followReconnect: NodeJS.Timeout | undefined
   private followSeq = 0
+  /** The opening $events frame's client identity; required for every waterfall reply. */
+  private remoteClientId: string | undefined
+  /** Answerable $events waterfalls keyed by the rpcId ND minted for them. */
+  private readonly waterfallPending = new Map<string, WaterfallPending>()
+  private waterfallSession: (() => string | undefined) | undefined
 
   constructor(
     private readonly baseUrl: string,
     private readonly cookie?: string,
   ) {}
+
+  /**
+   * Attribute incoming waterfall asks to a session. The runtime's approval and
+   * question payloads do not carry a session id, so the caller (HarnessService)
+   * supplies its active/running session; without it the renderer cannot render
+   * an answerable card.
+   */
+  setWaterfallSessionResolver(resolve: (() => string | undefined) | undefined): void {
+    this.waterfallSession = resolve
+  }
 
   /** Exchange DSH's one-time launch URL for the authority-bound session cookie. */
   static async authenticate(authenticatedUrl: string): Promise<GatewayClient> {
@@ -168,7 +188,19 @@ export class GatewayClient {
     return { ok: false, error: normalizeError(frame.result.error) }
   }
 
+  /**
+   * Answer a pending askable frame. Remote-face waterfalls answer through
+   * `$events/result` with the stream's clientId; legacy runtimes keep the
+   * /api/respond pass-through.
+   */
   async respond(rpcId: string, value: unknown, timeoutMs = GATEWAY_RPC_TIMEOUT_MS): Promise<void> {
+    const pending = this.waterfallPending.get(rpcId)
+    if (pending) {
+      this.waterfallPending.delete(rpcId)
+      const outcome = waterfallOutcome(pending.kind, value)
+      await this.postEventResult(pending.clientId, pending.eventId, { kind: 'result', value: outcome }, timeoutMs)
+      return
+    }
     let response: Response
     try {
       response = await fetch(`${this.baseUrl}/api/respond`, {
@@ -184,6 +216,19 @@ export class GatewayClient {
     const receipt = (await response.json()) as { accepted?: boolean; reason?: string }
     if (receipt?.accepted !== true) {
       throw new Error(`gateway respond rejected: ${receipt?.reason ?? 'unknown reason'}`)
+    }
+  }
+
+  /** Post one $events result outcome for a delivered waterfall. */
+  private async postEventResult(
+    clientId: string,
+    eventId: string,
+    outcome: EventResultOutcome,
+    timeoutMs: number,
+  ): Promise<void> {
+    const result = await this.rpc('$events/result', { clientId, eventId, outcome }, timeoutMs)
+    if (!result.ok) {
+      throw new Error(`gateway $events/result: ${result.error?.message ?? 'result delivery failed'}`)
     }
   }
 
@@ -203,6 +248,8 @@ export class GatewayClient {
       this.followReconnect = undefined
     }
     this.closeFollowSocket()
+    this.waterfallPending.clear()
+    this.remoteClientId = undefined
     for (const entry of [...this.followEntries.values()]) this.failFollowEntry(entry, 'Runtime event stream was closed')
     this.followEntries.clear()
     for (const socket of this.sockets) {
@@ -257,8 +304,23 @@ export class GatewayClient {
           onFrame({ kind: 'stream-error', message: message.error?.message ?? 'Runtime event stream failed' })
           return
         }
-        if (message.type !== 'item' || message.value?.type !== 'emit') return
-        const { event, args } = message.value
+        if (message.type !== 'item') return
+        const value = message.value
+        if (!value || typeof value !== 'object') return
+        if (value.type === 'ready' && typeof value.clientId === 'string') {
+          this.remoteClientId = value.clientId
+          return
+        }
+        if (value.type === 'waterfall') {
+          this.deliverWaterfall(value, onFrame)
+          return
+        }
+        if (value.type === 'cancel' && typeof value.eventId === 'string') {
+          this.withdrawWaterfall(value.eventId, onFrame)
+          return
+        }
+        if (value.type !== 'emit') return
+        const { event, args } = value
         if (!Array.isArray(args)) return
         const sessionId = asString(args[0])
         if (event === 'api-session/status' && sessionId) onFrame({ kind: 'session-status', sessionId, running: args[1] === true })
@@ -271,7 +333,64 @@ export class GatewayClient {
     })
     socket.on('close', () => {
       this.sockets.delete(socket)
+      // The Host rejects still-pending waterfalls when their source ends; drop
+      // ND's mirror so replies can never target a dead generation's clientId.
+      this.waterfallPending.clear()
+      this.remoteClientId = undefined
       if (!this.closed) setTimeout(() => this.openRemoteEvents(onFrame), 1_000)
+    })
+  }
+
+  /**
+   * Translate one answerable $events waterfall into the renderer frame
+   * vocabulary and remember how to reply. The runtime's payloads carry no
+   * session id, so attribution comes from the caller-provided resolver.
+   */
+  private deliverWaterfall(
+    value: { event?: unknown; eventId?: unknown; request?: unknown },
+    onFrame: (frame: DshEventFrame) => void,
+  ): void {
+    const eventId = typeof value.eventId === 'string' ? value.eventId : undefined
+    const event = typeof value.event === 'string' ? value.event : undefined
+    const request = (value.request ?? {}) as Record<string, unknown>
+    if (!eventId || !event || this.remoteClientId === undefined) return
+    const sessionId = this.waterfallSession?.()
+    const rpcId = `wf-${eventId}`
+    if (event === 'approval/request') {
+      this.waterfallPending.set(rpcId, { clientId: this.remoteClientId, eventId, kind: 'approval', sessionId })
+      onFrame({
+        kind: 'approval-requested',
+        ...(sessionId === undefined ? {} : { sessionId }),
+        approvalId: rpcId,
+        rpcId,
+        ...(typeof request.toolName === 'string' ? { toolName: request.toolName } : {}),
+        ...(typeof request.callId === 'string' ? { callId: request.callId } : {}),
+        ...(typeof request.reason === 'string' ? { reason: request.reason } : {}),
+      })
+      return
+    }
+    if (event === 'user-questions/request') {
+      this.waterfallPending.set(rpcId, { clientId: this.remoteClientId, eventId, kind: 'question', sessionId })
+      onFrame({
+        kind: 'question-requested',
+        ...(sessionId === undefined ? {} : { sessionId }),
+        questions: request.questions,
+        rpcId,
+      })
+    }
+  }
+
+  /** Drop a withdrawn waterfall and tell the renderer its card is gone. */
+  private withdrawWaterfall(eventId: string, onFrame: (frame: DshEventFrame) => void): void {
+    const rpcId = `wf-${eventId}`
+    const pending = this.waterfallPending.get(rpcId)
+    if (!pending) return
+    this.waterfallPending.delete(rpcId)
+    onFrame({
+      kind: pending.kind === 'approval' ? 'approval-resolved' : 'question-resolved',
+      ...(pending.sessionId === undefined ? {} : { sessionId: pending.sessionId }),
+      outcome: 'cancelled',
+      rpcId,
     })
   }
 
@@ -470,6 +589,31 @@ interface FollowEntry {
   streamId: string | undefined
 }
 
+interface WaterfallPending {
+  readonly clientId: string
+  readonly eventId: string
+  readonly kind: 'approval' | 'question'
+  readonly sessionId: string | undefined
+}
+
+/** The subset of RemoteEventResult outcomes ND sends back for one waterfall. */
+type EventResultOutcome =
+  | { readonly kind: 'result'; readonly value?: unknown }
+  | { readonly kind: 'rejected'; readonly error: { readonly name: string; readonly message: string } }
+
+/**
+ * Map a renderer answer onto the runtime's waterfall result value. The
+ * runtime's approval vocabulary is closed (`allowed-once | rejected |
+ * cancelled | unavailable`), so an unrecognized outcome fails closed.
+ */
+function waterfallOutcome(kind: 'approval' | 'question', value: unknown): unknown {
+  const payload = (value ?? {}) as Record<string, unknown>
+  if (kind === 'approval') {
+    return payload.outcome === 'allowed-once' ? 'allowed-once' : 'rejected'
+  }
+  return payload.answer ?? { answers: [] }
+}
+
 /** Leniently normalize one mux stream item into a session stream frame. */
 function asStreamFrame(value: unknown): SessionStreamFrame | undefined {
   if (!value || typeof value !== 'object') return undefined
@@ -577,6 +721,9 @@ const REMOTE_ARGS: Record<string, (payload: unknown) => unknown> = {
   'session.models': () => ({}),
   'agentPresets.list': () => ({}),
   'settings.update': (payload) => payload,
+  // The result endpoint takes the fully-shaped result as its args, not a
+  // request wrapper.
+  '$events/result': (payload) => payload,
 }
 
 function remoteRequest(method: string, payload: unknown): { method: string; payload: unknown } {

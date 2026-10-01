@@ -69,6 +69,8 @@ import { flushStartupBenchmark, markStartup } from './perf/startup-metrics.js'
 import { QaService } from './qa/qa-service.js'
 import { SessionArchiveStore } from './sessions/session-archive-store.js'
 import { LogFile, logFilePathFor } from './logging/log-file.js'
+import { LocalRuntimeService, type LocalRuntimeAppPort } from './local-runtime/local-runtime-service.js'
+import { registerLocalRuntimeIpc } from './local-runtime/ipc.js'
 import { UsageLedger } from './usage/usage-ledger.js'
 import { ThemeService } from './theme.js'
 import { registerTerminalIpc } from './terminal/ipc.js'
@@ -107,6 +109,7 @@ let activeNdPencil: NdPencilController | undefined
 let activeTerminalManager: TerminalManager | undefined
 let activeCore: CoreClient | undefined
 let activeExecutionCoordinator: ExecutionCoordinator | undefined
+let localRuntime: LocalRuntimeService | undefined
 let shutdownStarted = false
 const closingServices = new Set<Promise<void>>()
 
@@ -138,6 +141,7 @@ function showMainWindowAndOpenLauncher(): void {
   if (!window || window.isDestroyed()) return
   if (window.isMinimized()) window.restore()
   window.show()
+  localRuntime?.setBackground(false)
   window.setAlwaysOnTop(true)
   window.focus()
   window.setAlwaysOnTop(false)
@@ -155,10 +159,12 @@ function showQuickLauncher(): void {
   if (behavior.kind === 'toggle-window') {
     if (window.isVisible() && window.isFocused() && !window.isMinimized()) {
       window.hide()
+      localRuntime?.setBackground(true)
       return
     }
     if (window.isMinimized()) window.restore()
     window.show()
+    localRuntime?.setBackground(false)
     window.setAlwaysOnTop(true)
     window.focus()
     window.setAlwaysOnTop(false)
@@ -173,6 +179,14 @@ app.on('second-instance', () => {
 
 async function createWindow(cdpPort: number): Promise<void> {
   const preload = join(currentDirectory, '../preload/index.cjs')
+  if (!localRuntime) {
+    localRuntime = new LocalRuntimeService(
+      join(app.getPath('userData'), 'local-runtime.json'),
+      app as unknown as LocalRuntimeAppPort,
+      process.platform,
+    )
+    await localRuntime.initialize()
+  }
   const ndPencilPreload = join(currentDirectory, '../preload/nd-pencil.cjs')
   const workspace = new WorkspaceService(process.env.ND_DSH_WORKSPACE?.trim() || process.cwd())
   const providers = new ProviderStore()
@@ -439,7 +453,8 @@ async function createWindow(cdpPort: number): Promise<void> {
   })
   const disposeTerminalIpc = registerTerminalIpc(window, terminalManager)
   const disposeDesignIpc = registerDesignIpc(window, design, ndPencil)
-  const disposeOrganizationIpc = registerOrganizationIpc(window, organizationStore, organization, projectWorkspace, projectRuntime, executionCoordinator, () => launcherPopup.window())
+  const disposeOrganizationIpc = registerOrganizationIpc(window, organizationStore, organization, projectWorkspace, projectRuntime, executionCoordinator, () => launcherPopup.window(), localRuntime)
+  const disposeLocalRuntimeIpc = registerLocalRuntimeIpc(window, localRuntime)
   mainWindow = window
   activeHarness = harness
   activeNdPencil = ndPencil
@@ -607,9 +622,16 @@ async function createWindow(cdpPort: number): Promise<void> {
     }
   })
 
+  const launchInBackground = localRuntime.shouldLaunchInBackground(process.argv)
   window.once('ready-to-show', () => {
+    if (launchInBackground) {
+      window.hide()
+      localRuntime?.setBackground(true)
+      return
+    }
     window.show()
     window.focus()
+    localRuntime?.setBackground(false)
   })
   if (rendererUrl) await window.loadURL(rendererUrl)
   else await window.loadFile(rendererFile)
@@ -713,7 +735,7 @@ async function createWindow(cdpPort: number): Promise<void> {
     setTimeout(() => app.quit(), 25)
   }
   if (theme.surface() === 'dsh') harness.warmup()
-  if (!window.isVisible()) {
+  if (!launchInBackground && !window.isVisible()) {
     window.show()
     window.focus()
   }
@@ -721,7 +743,33 @@ async function createWindow(cdpPort: number): Promise<void> {
   let closeAfterFreeformSave = false
   let savingFreeformForClose = false
   window.on('close', (event) => {
-    if (shutdownStarted || closeAfterFreeformSave || !ndPencil.state().dirty) return
+    if (shutdownStarted) return
+    if (localRuntime?.isAlwaysOn()) {
+      event.preventDefault()
+      const hide = (): void => {
+        if (!window.isDestroyed()) {
+          window.hide()
+          localRuntime?.setBackground(true)
+        }
+      }
+      if (!ndPencil.state().dirty) {
+        hide()
+        return
+      }
+      if (savingFreeformForClose) return
+      savingFreeformForClose = true
+      void ndPencil.close()
+        .then(() => {
+          savingFreeformForClose = false
+          hide()
+        })
+        .catch((error) => {
+          savingFreeformForClose = false
+          console.error('Refusing to background ND with an unsaved Freeform document:', error)
+        })
+      return
+    }
+    if (closeAfterFreeformSave || !ndPencil.state().dirty) return
     event.preventDefault()
     if (savingFreeformForClose) return
     savingFreeformForClose = true
@@ -742,6 +790,7 @@ async function createWindow(cdpPort: number): Promise<void> {
     workspace.setStateListener(undefined)
     ndPencil.setStateListener(undefined)
     disposeOrganizationIpc()
+    disposeLocalRuntimeIpc()
     disposeBrowserPlatformIpc()
     browserPlatform.setListener(undefined)
     disposeBrowserCompanionIpc()
@@ -956,6 +1005,7 @@ app.on('before-quit', (event) => {
 })
 
 app.on('window-all-closed', () => {
+  if (localRuntime?.isAlwaysOn()) return
   if (process.platform !== 'darwin') app.quit()
 })
 

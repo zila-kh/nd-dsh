@@ -1,0 +1,445 @@
+{
+  "schemaVersion": 1,
+  "release": {
+    "version": "0.1.1-rc.1",
+    "commit": "d519791",
+    "branch": "rc/0.1.1",
+    "tag": "rc-0.1.1-candidate-1",
+    "artifact": "REPLACE_WITH_EXACT_FILE#sha256:REPLACE_WITH_64_HEX_SHA256",
+    "recordedAt": "2026-09-30T15:11:20+07:00",
+    "runtime": "DeepSeek Harness 0.1.7-rc.2 @ 21638c5 (upstream-tracking)"
+  },
+  "summary": {
+    "p0Open": 0,
+    "p1CoreOpen": 0
+  },
+  "features": [
+    {
+      "id": "core-agent-flow",
+      "name": "Core agent delivery flow",
+      "severity": "P0",
+      "betaExposed": true,
+      "unit": {
+        "status": "pass",
+        "evidence": [
+          "corepack pnpm test: 1070 passed / 0 failed / 9 skipped (2026-09-30, tree b999126)",
+          "tests/organization-orchestrator + harness-startup-lifecycle; approval waterfall regression tests/gateway-remote-waterfall.test.ts"
+        ]
+      },
+      "e2e": {
+        "status": "pass",
+        "evidence": [
+          "e2e-results/real-user-prod-2026-09-30T07-21-12-497Z (journey PASS 19/20)",
+          "journey gates 1,9,10 (single-agent flow, workflow L3, autopilot L4); two live approval round-trips journaled"
+        ]
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "company-project-isolation",
+      "name": "Multi-company and multi-project isolation",
+      "severity": "P0",
+      "betaExposed": true,
+      "unit": {
+        "status": "pass",
+        "evidence": [
+          "corepack pnpm test: 1070 passed / 0 failed / 9 skipped (2026-09-30, tree b999126)",
+          "tests/organization-store + organization-portfolio harness"
+        ]
+      },
+      "e2e": {
+        "status": "pass",
+        "evidence": [
+          "e2e-results/real-user-prod-2026-09-30T07-21-12-497Z (journey PASS 19/20)",
+          "journey gates 2,3,7,8; e2e:beta:matrix (A9) verified 2026-09-29"
+        ]
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "parallel-agent-worktree",
+      "name": "Parallel agents and isolated task worktrees",
+      "severity": "P0",
+      "betaExposed": true,
+      "unit": {
+        "status": "pass",
+        "evidence": [
+          "corepack pnpm test: 1070 passed / 0 failed / 9 skipped (2026-09-30, tree b999126)",
+          "tests/task-worktree + worktree-evidence + organization-orchestrator"
+        ]
+      },
+      "e2e": {
+        "status": "pass",
+        "evidence": [
+          "e2e-results/real-user-prod-2026-09-30T07-21-12-497Z (journey PASS 19/20)",
+          "journey gates 5,6,13,14 (parallel exec, dual-worker same project, integration contents, per-project tests)"
+        ]
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "git-worktree-secret-safety",
+      "name": "Git push, worktree and committed-secret safety",
+      "severity": "P0",
+      "betaExposed": true,
+      "unit": {
+        "status": "pass",
+        "evidence": [
+          "corepack pnpm test: 1070 passed / 0 failed / 9 skipped (2026-09-30, tree b999126)",
+          "pre-push secret scan boundary tests (GitService)"
+        ]
+      },
+      "e2e": {
+        "status": "pass",
+        "evidence": [
+          "e2e-results/real-user-prod-2026-09-30T07-21-12-497Z (journey PASS 19/20)",
+          "journey gate 18: no API credential logged or persisted"
+        ]
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "credential-security-boundaries",
+      "name": "Credential, policy, redaction and trusted-process boundaries",
+      "severity": "P0",
+      "betaExposed": true,
+      "unit": {
+        "status": "pass",
+        "evidence": [
+          "corepack pnpm test: 1070 passed / 0 failed / 9 skipped (2026-09-30, tree b999126)",
+          "tests/harness-credential-boundary + write-only renderer credential surface"
+        ]
+      },
+      "e2e": {
+        "status": "pending",
+        "evidence": []
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "persistence-recovery",
+      "name": "Persistence, restart, crash recovery and task reconciliation",
+      "severity": "P0",
+      "betaExposed": true,
+      "unit": {
+        "status": "pass",
+        "evidence": [
+          "corepack pnpm test: 1070 passed / 0 failed / 9 skipped (2026-09-30, tree b999126)",
+          "tests/organization-recovery + core-client-restart-policy"
+        ]
+      },
+      "e2e": {
+        "status": "pass",
+        "evidence": [
+          "e2e-results/real-user-prod-2026-09-30T07-21-12-497Z (journey PASS 19/20)",
+          "journey gates 15,16 (restart during active work -> interruption recovery -> retried task completes)"
+        ]
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "provider-failure-handling",
+      "name": "Provider/model retry, rate-limit, auth and outage handling",
+      "severity": "P1",
+      "betaExposed": true,
+      "unit": {
+        "status": "pass",
+        "evidence": [
+          "corepack pnpm test: 1070 passed / 0 failed / 9 skipped (2026-09-30, tree b999126)",
+          "rate-limit/transport transient classification tests"
+        ]
+      },
+      "e2e": {
+        "status": "pass",
+        "evidence": [
+          "e2e-results/real-user-prod-2026-09-30T07-21-12-497Z (journey PASS 19/20)",
+          "run e2e-results/real-user-prod-2026-09-30T07-13-09-888Z (provider outage fast-fail): typed agent-error + turn/end within ~4s, no indefinite running; run #2 gate 4: all 3 models observed"
+        ]
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "browser-platform",
+      "name": "Built-in browser and Browser Companion safety/recovery",
+      "severity": "P1",
+      "betaExposed": true,
+      "unit": {
+        "status": "pending",
+        "evidence": []
+      },
+      "e2e": {
+        "status": "pending",
+        "evidence": []
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "mcp-skills-failure-containment",
+      "name": "MCP/skills failure containment",
+      "severity": "P1",
+      "betaExposed": true,
+      "unit": {
+        "status": "pending",
+        "evidence": []
+      },
+      "e2e": {
+        "status": "pending",
+        "evidence": []
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "budget-entitlement",
+      "name": "Compute budget and entitlement correctness",
+      "severity": "P1",
+      "betaExposed": true,
+      "unit": {
+        "status": "pending",
+        "evidence": []
+      },
+      "e2e": {
+        "status": "pending",
+        "evidence": []
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "terminal-filesystem",
+      "name": "Terminal, filesystem and path-containment behavior",
+      "severity": "P1",
+      "betaExposed": true,
+      "unit": {
+        "status": "pending",
+        "evidence": []
+      },
+      "e2e": {
+        "status": "pending",
+        "evidence": []
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "diagnostics-observability",
+      "name": "Diagnostics and observability",
+      "severity": "P1",
+      "betaExposed": true,
+      "unit": {
+        "status": "pending",
+        "evidence": []
+      },
+      "e2e": {
+        "status": "pending",
+        "evidence": []
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "quick-launcher",
+      "name": "Quick Launcher, global popup and external capture",
+      "severity": "P1",
+      "betaExposed": true,
+      "unit": {
+        "status": "pending",
+        "evidence": []
+      },
+      "e2e": {
+        "status": "pending",
+        "evidence": []
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "native-extensions",
+      "name": "ND Extensions packages and governed native host",
+      "severity": "P1",
+      "betaExposed": true,
+      "unit": {
+        "status": "pending",
+        "evidence": []
+      },
+      "e2e": {
+        "status": "pending",
+        "evidence": []
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "nd-home",
+      "name": "ND Home personal notes, captures and chats",
+      "severity": "P1",
+      "betaExposed": true,
+      "unit": {
+        "status": "pending",
+        "evidence": []
+      },
+      "e2e": {
+        "status": "pending",
+        "evidence": []
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "workspace-profiles",
+      "name": "General and Coding workspace profiles",
+      "severity": "P1",
+      "betaExposed": true,
+      "unit": {
+        "status": "pending",
+        "evidence": []
+      },
+      "e2e": {
+        "status": "pending",
+        "evidence": []
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    },
+    {
+      "id": "builtin-browser-extensions",
+      "name": "Built-in browser extensions (PR #60)",
+      "severity": "P1",
+      "betaExposed": true,
+      "unit": {
+        "status": "pending",
+        "evidence": []
+      },
+      "e2e": {
+        "status": "pending",
+        "evidence": [
+          "e2e/agent-capabilities*.spec.ts + nd-home-extensions.spec.ts updated 2026-09-29 (A8 60 passed); RC re-run pending"
+        ]
+      },
+      "human": {
+        "status": "pending",
+        "tester": "",
+        "recordedAt": "",
+        "evidence": []
+      }
+    }
+  ],
+  "scenarioRuns": {
+    "passed": 0,
+    "total": 0,
+    "targetPassRate": 0.99,
+    "minimumRuns": 100
+  },
+  "humanDecision": {
+    "status": "no-go",
+    "owner": "",
+    "recordedAt": "",
+    "notes": "Target 99% repeated-scenario pass rate for the RC. Human GO only after reviewing Unit + E2E + Human evidence and the clean-machine/soak results."
+  },
+  "releaseChecks": {
+    "automated": {
+      "status": "pending",
+      "evidence": [],
+      "summaryPath": "e2e-results/beta-automated-<timestamp>/beta-automated-summary.json"
+    },
+    "packagedCleanMachine": {
+      "status": "pending",
+      "tester": "",
+      "recordedAt": "",
+      "evidence": [],
+      "artifact": "REPLACE_WITH_EXACT_FILE#sha256:REPLACE_WITH_64_HEX_SHA256"
+    },
+    "browserCompanionChrome": {
+      "status": "pending",
+      "tester": "",
+      "recordedAt": "",
+      "evidence": []
+    },
+    "soak24h": {
+      "status": "pending",
+      "durationMinutes": 0,
+      "tester": "",
+      "recordedAt": "",
+      "evidence": [],
+      "summaryPath": "e2e-results/beta-soak/beta-soak-<timestamp>.json"
+    },
+    "failureDrills": {
+      "status": "pending",
+      "tester": "",
+      "recordedAt": "",
+      "evidence": []
+    }
+  }
+}

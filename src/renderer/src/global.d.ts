@@ -5,6 +5,7 @@ import type { NdGatewayDesktopApi } from '../../shared/gateway'
 import type { OrganizationControlDesktopApi } from '../../shared/organization-control'
 import type { OrganizationDesktopApi } from '../../shared/organization'
 import type { OrganizationStrategyDesktopApi } from '../../shared/organization-strategy'
+import type { LocalRuntimeDesktopApi } from '../../shared/local-runtime'
 import type { TerminalDesktopApi } from '../../shared/terminal'
 import type { TokenSaverDesktopApi } from '../../shared/token-saver'
 import type { ToolRoutingDesktopApi } from '../../shared/tool-routing'
@@ -19,6 +20,7 @@ declare global {
     ndDshOrganization: OrganizationDesktopApi
     ndDshControl: OrganizationControlDesktopApi
     ndDshStrategy: OrganizationStrategyDesktopApi
+    ndDshLocalRuntime: LocalRuntimeDesktopApi
     ndDshTerminal: TerminalDesktopApi
     ndDshTokenSaver: TokenSaverDesktopApi
     ndDshToolRouting: ToolRoutingDesktopApi

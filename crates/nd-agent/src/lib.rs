@@ -405,11 +405,9 @@ impl AgentServer {
                 return Err(error);
             }
         };
-        if approval_required {
-            if let Err(error) = self.wait_for_approval(&session_id, &call, flag) {
-                self.record_tool_result(session, &call, format!("Tool denied: {error}"))?;
-                return Err(error);
-            }
+        if approval_required && let Err(error) = self.wait_for_approval(&session_id, &call, flag) {
+            self.record_tool_result(session, &call, format!("Tool denied: {error}"))?;
+            return Err(error);
         }
         let result = self.host_request(
             "host.tool",

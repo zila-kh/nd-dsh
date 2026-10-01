@@ -1,10 +1,12 @@
 # Beta release readiness — execution plan
 
-> **Current pass/fail record: [release-0.0.1-checklist.md](release-0.0.1-checklist.md) (2026-09-29).** This file remains the ordered plan. Its "local validation pending" note is older than that checklist.
+> **Current pass/fail record: [release-0.0.1-checklist.md](release-0.0.1-checklist.md) (2026-09-29, updated 2026-09-30).** This file remains the ordered plan. Its "local validation pending" note is older than that checklist.
 >
-> Updated: 2026-09-28  
+> Updated: 2026-09-28 · **Freeze update: 2026-09-30**  
 > Basis: current `main` plus beta-hardening changes on `feat/beta-release-stability-plan-2026-09-27` (synced with `main` at `1cc7939`). Last fully attested baseline is 2026-09-26; the new hardening changes remain **local-PC validation pending**.  
 > Goal: get ND-DSH to a **Beta Stable** release candidate without requiring every planned feature to be finished. Beta-exposed features must be predictable, recoverable, scoped correctly, and diagnosable.
+>
+> **2026-09-30 — RC scope frozen (Phase 0 executed).** Operator direction: no new features; lock for stable. `rc/0.1.1` branch + tag `rc-0.1.1-candidate-1` cut at `d519791` (includes `b999126`, the A10 waterfall fix; live journey 19/20 on source). Evidence skeleton: [beta-three-layer-evidence-rc-0.1.1.json](../qa/beta-three-layer-evidence-rc-0.1.1.json). From here: P0/P1 fixes and release-test changes only. Current automated standing on the frozen base: typecheck + `verify` clean, **1,070 unit tests passed / 0 failed / 9 skipped**, production build green, full real-user journey pass.
 
 ## Release labels
 
@@ -51,16 +53,18 @@ The three-layer evidence workflow is defined in [beta-three-layer-validation.md]
 
 ### Phase 0 — Freeze the RC scope
 
-**Goal:** stop adding risk while validation runs.
+**Goal:** stop adding risk while validation runs. **Executed 2026-09-30.**
 
-- [ ] Create one RC branch/tag candidate from current `main`.
-- [ ] No new feature work on the RC; only P0/P1 fixes and release-test changes.
-- [ ] List beta-exposed features and explicitly disable unfinished/experimental surfaces.
-- [ ] Record exact app version, commit SHA, Windows version, Node/pnpm/Rust versions, and test machine.
+- [x] Create one RC branch/tag candidate from current `main`. → branch `rc/0.1.1`, tag `rc-0.1.1-candidate-1` @ `d519791`.
+- [x] No new feature work on the RC; only P0/P1 fixes and release-test changes. → operator directive 2026-09-30; feature branches stay parked until after GO.
+- [x] List beta-exposed features and explicitly disable unfinished/experimental surfaces. → 17-row evidence skeleton [beta-three-layer-evidence-rc-0.1.1.json](../qa/beta-three-layer-evidence-rc-0.1.1.json); workflow-template UI is internal-only and stays unadvertised (checklist row 4).
+- [x] Record exact app version, commit SHA, Windows version, Node/pnpm/Rust versions, and test machine. → app `0.1.1`, commit `d519791`, machine/Node/pnpm/Rust in the [checklist header](release-0.0.1-checklist.md) and the tag message.
 
-**Exit:** everyone tests the same immutable RC candidate.
+**Exit:** everyone tests the same immutable RC candidate. → `rc-0.1.1-candidate-1` is that candidate; the packaged artifact is still to be built from this tag (P-fixes may move the tag to candidate-2 before artifact build).
 
 ### Phase 0.5 — Create the three-layer evidence matrix
+
+**Status 2026-09-30:** skeleton created — [beta-three-layer-evidence-rc-0.1.1.json](../qa/beta-three-layer-evidence-rc-0.1.1.json) (17 beta-exposed rows incl. built-in browser extensions; unit/e2e pre-filled only where directly evidenced; Human pending throughout).
 
 - [ ] Copy `docs/qa/beta-three-layer-evidence.example.json` to an RC-specific evidence file.
 - [ ] List every beta-exposed feature as its own row.
