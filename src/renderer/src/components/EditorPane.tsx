@@ -71,6 +71,18 @@ export function EditorPane({ file, onAgentPrompt, onOpenLink, onError }: EditorP
     )
   }
 
+  if (file.previewHtml !== undefined) {
+    return (
+      <section className="flex h-full min-h-0 flex-col" aria-label={`Document ${file.relativePath}`}>
+        <div className="border-b border-border-soft px-3 py-2 text-xs text-soft">
+          {file.relativePath} · Content preview (page layout and images omitted)
+        </div>
+        <iframe title={`DOCX preview ${file.relativePath}`} sandbox="" referrerPolicy="no-referrer"
+          srcDoc={file.previewHtml} className="min-h-0 w-full flex-1 border-0 bg-white" />
+      </section>
+    )
+  }
+
   const lineCount = file.content.split('\n').length
   const lineNumbers = Array.from({ length: lineCount }, (_, index) => index + 1).join('\n')
 

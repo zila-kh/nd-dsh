@@ -14,6 +14,8 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const target = releaseArtifact(root, process.argv[2] || process.env.ND_DSH_E2E_EXECUTABLE)
 const executable = target.executable
 const startedAt = Date.now()
+// A compressed portable extracts the complete native/runtime payload first.
+const timeoutMs = 600_000
 const outputDir = join(resolve(process.env.ND_DSH_PACKAGED_SMOKE_DIR || join(root, 'benchmark-results', 'packaged-smoke')), String(startedAt))
 const workspace = await fs.mkdtemp(join(tmpdir(), 'nd-dsh-packaged-smoke-'))
 const userData = await fs.mkdtemp(join(tmpdir(), 'nd-dsh-packaged-user-data-'))
@@ -77,8 +79,8 @@ try {
           try { process.kill(row.pid, 'SIGKILL') } catch { /* already gone */ }
         }
       } catch (error) { inventoryError = error }
-      reject(new Error('Packaged runtime smoke timed out after 240 seconds (including portable extraction).'))
-    }, 240_000)
+      reject(new Error(`Packaged runtime smoke timed out after ${timeoutMs / 1000} seconds (including portable extraction).`))
+    }, timeoutMs)
     child.once('error', (error) => { clearTimeout(timer); reject(error) })
     child.once('exit', (code) => { clearTimeout(timer); resolvePromise(code) })
   })

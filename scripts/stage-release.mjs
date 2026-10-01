@@ -6,6 +6,7 @@ import { dirname, join, relative, resolve, basename } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { completeHarnessPeers, missingHarnessDependencies } from './harness-release-peers.mjs'
+import { removeOfficeEngines, assertNoOfficeEngines } from './release-runtime-policy.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const harnessSource = join(root, 'vendor', 'deepseek-harness')
@@ -94,6 +95,11 @@ await deploy('@deepseek-ai/cordis-plugin-group', cordisGroupOutput, false)
 await deploy('@deepseek-ai/dsh-subagent-codex', codexOutput, true)
 const runtimePeers = await completeHarnessPeers(harnessSource, harnessOutput, run)
 console.log(`Included ${runtimePeers.length} upstream runtime peer package(s).`)
+// ND disables the upstream Office-to-PDF provider through its normal overlay.
+// Keep its small JS API metadata but omit all native engines from the artifact.
+const removedOfficeEngines = await removeOfficeEngines(harnessOutput)
+await assertNoOfficeEngines(harnessOutput)
+console.log(`Removed ${removedOfficeEngines} native Office engine package(s) from the release closure.`)
 await fs.copyFile(join(harnessSource, 'LICENSE'), join(harnessOutput, 'LICENSE'))
 await fs.copyFile(join(harnessSource, 'THIRD_PARTY_NOTICES.md'), join(harnessOutput, 'THIRD_PARTY_NOTICES.md'))
 

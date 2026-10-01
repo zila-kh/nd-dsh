@@ -9,6 +9,8 @@ asar: true
 npmRebuild: false
 # The ND launcher extracts the compressed archive once into a unique directory.
 compression: normal
+afterPack: scripts/check-release-payload.cjs
+afterAllArtifactBuild: scripts/check-release-size.cjs
 files:
   - out/**
   - package.json
@@ -51,6 +53,10 @@ extraResources:
       - register-browser-native-host.mjs
   - from: node_modules/agent-browser
     to: node_modules/agent-browser
+    filter:
+      - '**/*'
+      - '!bin/agent-browser-linux*'
+      - '!bin/agent-browser-darwin*'
   - from: resources/browser-extensions
     to: browser-extensions
   - from: resources/nd-pencil

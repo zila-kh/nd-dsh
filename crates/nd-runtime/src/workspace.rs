@@ -11,7 +11,7 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 /// Default bound for a single file read. Matches the product's existing workspace
@@ -94,6 +94,35 @@ pub struct ReadResult {
     pub truncated: bool,
     pub max_bytes: usize,
     pub byte_size: u64,
+}
+
+/// Binary document input uses the same workspace authorization and read bounds.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BinaryReadResult {
+    pub data: Vec<u8>,
+    pub truncated: bool,
+}
+
+pub fn read_binary(params: ReadParams) -> Result<BinaryReadResult> {
+    let root = canonical_root(&params.root)?;
+    let target = resolve_existing_from_root(&root, &params.path)?;
+    let mut file = fs::File::open(target)?;
+    if !file.metadata()?.is_file() {
+        bail!("workspace read target is not a file");
+    }
+    // JSON-shaped byte arrays can expand to two MessagePack bytes per byte.
+    let max_bytes = params
+        .max_bytes
+        .unwrap_or(DEFAULT_MAX_READ)
+        .clamp(1, HARD_MAX_READ / 2);
+    let mut data = Vec::new();
+    Read::by_ref(&mut file)
+        .take((max_bytes + 1) as u64)
+        .read_to_end(&mut data)?;
+    let truncated = data.len() > max_bytes;
+    data.truncate(max_bytes);
+    Ok(BinaryReadResult { data, truncated })
 }
 
 #[derive(Debug, Serialize)]
@@ -581,6 +610,25 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         assert!(result.is_err());
         assert!(format!("{:#}", result.unwrap_err()).contains("escapes the root"));
+    }
+
+    #[test]
+    fn binary_document_reads_preserve_bytes_and_enforce_bounds_and_scope() {
+        let root = temp_root("binary-document");
+        fs::write(root.join("document.docx"), [0, 255, 128, 65]).unwrap();
+        let params = |path: &str, bound| ReadParams {
+            root: root_of(&root),
+            path: path.into(),
+            max_bytes: Some(bound),
+        };
+        let whole = read_binary(params("document.docx", 10)).unwrap();
+        assert_eq!(whole.data, [0, 255, 128, 65]);
+        assert!(!whole.truncated);
+        let capped = read_binary(params("document.docx", 2)).unwrap();
+        assert_eq!(capped.data, [0, 255]);
+        assert!(capped.truncated);
+        assert!(read_binary(params("../document.docx", 10)).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

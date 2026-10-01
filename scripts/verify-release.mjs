@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import { dirname, extname, join, resolve } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
+import { assertNoOfficeEngines } from './release-runtime-policy.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const configOnly = process.argv.includes('--config-only')
@@ -57,6 +58,7 @@ if (/\n\s*- from: package\.json\b/.test(extraResourcesConfig)) {
 verifyProductionRendererIsolation()
 
 if (!configOnly) {
+  await assertNoOfficeEngines(join(root, '.release', 'harness'))
   const requiredFiles = [
     '.release/release-manifest.json',
     `.release/node/${process.platform === 'win32' ? 'node.exe' : 'node'}`,
@@ -114,6 +116,20 @@ if (!configOnly) {
     throw new Error('Packaged Browser Companion provenance is missing or invalid')
   }
   verifyThirdPartyNotices()
+}
+
+const overlay = readFileSync(join(root, 'configs', 'dsh', 'nd-dsh.patch.yml'), 'utf8')
+if (!/- id: office-to-pdf\s+disabled: true/.test(overlay)) {
+  throw new Error('ND must disable Office-to-PDF when native Office engines are excluded')
+}
+if (!builderConfig.includes('compression: normal')
+  || !builderConfig.includes('afterPack: scripts/check-release-payload.cjs')
+  || !builderConfig.includes('afterAllArtifactBuild: scripts/check-release-size.cjs')) {
+  throw new Error('The release must use compression, enforce the payload policy, and enforce the 400 MB download budget')
+}
+if (!builderConfig.includes('script: scripts/nd-portable-launcher.nsi')
+  || !builderConfig.includes('differentialPackage: false')) {
+  throw new Error('The Windows portable must use ND\'s reviewed one-shot NSIS extraction launcher')
 }
 
 console.log(configOnly ? 'Release packaging configuration verified.' : 'Release runtime inputs verified.')
