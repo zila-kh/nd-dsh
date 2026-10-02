@@ -20,6 +20,9 @@ import {
 } from './chatgpt-project-binding.js'
 
 const CHATGPT_HOME_URL = 'https://chatgpt.com/'
+// Project landing pages now use ProseMirror without the old prompt ID or
+// Lexical attribute. Keep readiness, insertion, and sending on one selector.
+const CHATGPT_COMPOSER_SELECTOR = '[data-testid="prompt-textarea"], #prompt-textarea, [contenteditable="true"][data-lexical-editor="true"], form .ProseMirror[contenteditable="true"], form .ProseMirror[contenteditable="plaintext-only"]'
 const TRANSCRIPT_EVENT_TYPES = new Set(['user/message', 'assistant/message', 'agent/reasoning'])
 const MAX_TRANSCRIPT_EVENTS = 500
 const MAX_PROMPT_CHARS = 100_000
@@ -543,7 +546,7 @@ export class ChatGptWebEngine {
     assertTurnActive(signal)
     const source = JSON.stringify(prompt)
     const result = await cdp.evaluate<{ ok: boolean; reason?: string }>(`(async () => {
-      const composerSelector = '[data-testid="prompt-textarea"], #prompt-textarea, [contenteditable="true"][data-lexical-editor="true"]';
+      const composerSelector = ${JSON.stringify(CHATGPT_COMPOSER_SELECTOR)};
       const composer = document.querySelector(composerSelector);
       if (!(composer instanceof HTMLElement)) return { ok: false, reason: 'composer-missing' };
       const text = ${source};
@@ -569,7 +572,7 @@ export class ChatGptWebEngine {
     for (let index = 0; index < 50; index += 1) {
       assertTurnActive(signal)
       const sent = await cdp.evaluate<boolean>(`(() => {
-        const composer = document.querySelector('[data-testid="prompt-textarea"], #prompt-textarea, [contenteditable="true"][data-lexical-editor="true"]');
+        const composer = document.querySelector(${JSON.stringify(CHATGPT_COMPOSER_SELECTOR)});
         const form = composer?.closest('form');
         const button = form?.querySelector('button[data-testid="send-button"], button[aria-label*="Send"], button[type="submit"]')
           ?? document.querySelector('button[data-testid="send-button"], button[aria-label*="Send"]');
@@ -623,13 +626,35 @@ export class ChatGptWebEngine {
 
   private async captureSnapshot(cdp: VisibleCdpConnection): Promise<ChatGptDomSnapshot> {
     return cdp.evaluate<ChatGptDomSnapshot>(`(() => {
-      const composerSelector = '[data-testid="prompt-textarea"], #prompt-textarea, [contenteditable="true"][data-lexical-editor="true"]';
-      const nodes = Array.from(document.querySelectorAll('[data-testid^="conversation-turn-"]'));
+      const composerSelector = ${JSON.stringify(CHATGPT_COMPOSER_SELECTOR)};
+      let nodes = Array.from(document.querySelectorAll('[data-testid^="conversation-turn-"]'));
+      const headingRoles = new Map();
+      if (!nodes.length) {
+        nodes = Array.from(document.querySelectorAll('[data-message-author-role="user"], [data-message-author-role="assistant"]'));
+      }
+      if (!nodes.length) {
+        // The current Web UI uses accessible turn headings instead of the
+        // former conversation-turn test IDs and message-author attributes.
+        const headings = Array.from(document.querySelectorAll('main h1, main h2, main h3, main h4, main h5, main h6, main [role="heading"]'));
+        const roleHeadings = headings.filter(el => /^(You said|ChatGPT said):?$/.test(el.textContent?.trim() || ''));
+        for (const heading of roleHeadings) {
+          let root = heading.parentElement;
+          while (root && roleHeadings.filter(el => root.contains(el)).length === 1) {
+            const text = root.innerText?.trim() || '';
+            if (text && text !== heading.textContent?.trim()) {
+              nodes.push(root);
+              headingRoles.set(root, heading.textContent.trim().startsWith('You said') ? 'user' : 'assistant');
+              break;
+            }
+            root = root.parentElement;
+          }
+        }
+      }
       const turns = [];
       for (const node of nodes) {
         const declared = node.getAttribute('data-turn') || node.getAttribute('data-message-author-role');
         const owned = node.querySelector('[data-message-author-role]');
-        const role = declared || owned?.getAttribute('data-message-author-role');
+        const role = headingRoles.get(node) || declared || owned?.getAttribute('data-message-author-role');
         if (role !== 'user' && role !== 'assistant') continue;
         const root = owned instanceof HTMLElement ? owned : node;
         const text = root instanceof HTMLElement ? root.innerText.trim() : '';
@@ -638,15 +663,15 @@ export class ChatGptWebEngine {
       const assistants = nodes.filter(node => {
         const declared = node.getAttribute('data-turn') || node.getAttribute('data-message-author-role');
         const owned = node.querySelector('[data-message-author-role="assistant"]');
-        return declared === 'assistant' || owned !== null;
+        return headingRoles.get(node) === 'assistant' || declared === 'assistant' || owned !== null;
       });
       const lastAssistant = assistants.at(-1);
       return {
         url: location.href,
         title: document.title,
         composer: document.querySelector(composerSelector) !== null,
-        busy: document.querySelector('button[data-testid="stop-button"]') !== null,
-        complete: lastAssistant?.querySelector('button[data-testid="copy-turn-action-button"]') !== null,
+        busy: document.querySelector('button[data-testid="stop-button"], main form button[aria-label="Stop generating"], main form button[aria-label="Stop streaming"], main form button[aria-label="Stop"]') !== null,
+        complete: Boolean(lastAssistant?.querySelector('button[data-testid="copy-turn-action-button"], button[aria-label="Copy"]')),
         turns,
       };
     })()`)

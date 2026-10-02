@@ -1,4 +1,4 @@
-import { Fragment, useState, type ReactNode } from 'react'
+import { Fragment, useRef, useState, type ReactNode } from 'react'
 import {
   Building2,
   Camera,
@@ -34,6 +34,8 @@ import {
 interface Props {
   open: boolean
   onOpenChange(open: boolean): void
+  /** The popup owns dismissal after validation or successful execution. */
+  closeBeforeRun?: boolean
   organization: OrganizationSnapshot | null
   currentUrl?: string | undefined
   /** Explicit context selector; the popup defaults to Personal, the in-app launcher to the current context. */
@@ -79,6 +81,7 @@ function launcherIcon(command: LauncherCommandItem): ReactNode {
 export function QuickLauncher({
   open,
   onOpenChange,
+  closeBeforeRun = true,
   organization,
   currentUrl,
   contexts = [],
@@ -100,6 +103,7 @@ export function QuickLauncher({
   onCaptureUrl,
 }: Props) {
   const [query, setQuery] = useState('')
+  const running = useRef(false)
   const companies = organization?.companies ?? []
   const projects = organization?.projects ?? []
   const activeCompany = companies.find((item) => item.id === organization?.activeCompanyId) ?? companies[0]
@@ -133,6 +137,12 @@ export function QuickLauncher({
   const closeAndRun = (command: LauncherCommandItem): void => {
     if (command.closeOnRun === false) {
       void Promise.resolve(command.run())
+      return
+    }
+    if (!closeBeforeRun) {
+      if (running.current) return
+      running.current = true
+      void Promise.resolve().then(() => command.run()).finally(() => { running.current = false })
       return
     }
     setQuery('')
