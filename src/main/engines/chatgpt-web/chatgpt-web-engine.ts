@@ -10,6 +10,7 @@ import type {
 } from '../../../shared/contracts.js'
 import { CHATGPT_WEB_ENGINE_ID } from '../../../shared/coding-engines.js'
 import type { BrowserController } from '../../browser/browser-controller.js'
+import { CHATGPT_DOM_TURNS_SCRIPT } from '../../browser/chatgpt-dom-turns.js'
 import type { GitService } from '../../git/git-service.js'
 import type { WorkspaceService } from '../../workspace/workspace-service.js'
 import {
@@ -623,30 +624,22 @@ export class ChatGptWebEngine {
 
   private async captureSnapshot(cdp: VisibleCdpConnection): Promise<ChatGptDomSnapshot> {
     return cdp.evaluate<ChatGptDomSnapshot>(`(() => {
+      ${CHATGPT_DOM_TURNS_SCRIPT}
       const composerSelector = '[data-testid="prompt-textarea"], #prompt-textarea, [contenteditable="true"][data-lexical-editor="true"]';
-      const nodes = Array.from(document.querySelectorAll('[data-testid^="conversation-turn-"]'));
+      const domTurns = readChatGptDomTurns();
       const turns = [];
-      for (const node of nodes) {
-        const declared = node.getAttribute('data-turn') || node.getAttribute('data-message-author-role');
-        const owned = node.querySelector('[data-message-author-role]');
-        const role = declared || owned?.getAttribute('data-message-author-role');
-        if (role !== 'user' && role !== 'assistant') continue;
-        const root = owned instanceof HTMLElement ? owned : node;
+      for (const { root, role } of domTurns) {
         const text = root instanceof HTMLElement ? root.innerText.trim() : '';
         if (text) turns.push({ role, text });
       }
-      const assistants = nodes.filter(node => {
-        const declared = node.getAttribute('data-turn') || node.getAttribute('data-message-author-role');
-        const owned = node.querySelector('[data-message-author-role="assistant"]');
-        return declared === 'assistant' || owned !== null;
-      });
+      const assistants = domTurns.filter(turn => turn.role === 'assistant');
       const lastAssistant = assistants.at(-1);
       return {
         url: location.href,
         title: document.title,
         composer: document.querySelector(composerSelector) !== null,
         busy: document.querySelector('button[data-testid="stop-button"]') !== null,
-        complete: lastAssistant?.querySelector('button[data-testid="copy-turn-action-button"]') !== null,
+        complete: lastAssistant?.complete === true,
         turns,
       };
     })()`)

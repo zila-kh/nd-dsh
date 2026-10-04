@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { OrganizationStore } from '../src/main/organization/store.js'
 import { WorkflowPluginStore } from '../src/main/workflows/workflow-plugin-store.js'
 import { WorkflowService } from '../src/main/workflows/workflow-service.js'
@@ -9,6 +9,8 @@ import type { WorkflowPluginManifest } from '../src/shared/workflow-plugins.js'
 import { parseWorkflowPluginManifest } from '../src/shared/workflow-plugins.js'
 
 const tempDirs: string[] = []
+
+vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => process.cwd() } }))
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))

@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -54,6 +54,21 @@ describe('desktop wallpaper adapter', () => {
       const items = await listWallpapersInFolder(dir)
       expect(items.map((item) => item.filename)).toEqual(['wall-1.png', 'wall-2.jpg', 'wall-10.webp'])
       expect(items[0]?.size).toBeGreaterThan(0)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('scans direct subfolders when the root folder has no direct images', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'nd-wp-sub-'))
+    try {
+      const sub = join(dir, 'Wallpapers_4K')
+      await mkdir(sub)
+      await writeFile(join(sub, '01_nature.jpg'), 'fake-1')
+      await writeFile(join(sub, '02_mountain.png'), 'fake-2')
+      const items = await listWallpapersInFolder(dir)
+      expect(items.map((i) => i.filename)).toEqual(['01_nature.jpg', '02_mountain.png'])
+      expect(items[0]?.path).toBe(join(sub, '01_nature.jpg'))
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

@@ -290,6 +290,15 @@ export class OrganizationStore {
     await this.save()
   }
 
+  /** Main-process gate metadata. Deliberately absent from renderer mutations. */
+  async recordRunVerification(runId: string, evidence: NonNullable<OrganizationRun['verification']>): Promise<void> {
+    await this.load()
+    const run = must(this.value.runs.find((item) => item.id === runId), 'Organization run')
+    if (run.kind !== 'task-execution' || run.status !== 'running') throw new Error('Verification requires an active task execution')
+    run.verification = clone(evidence)
+    await this.save()
+  }
+
   /**
    * A desktop restart means no in-memory Harness turn can still be running.
    * Convert persisted running receipts into explicit failed/interrupted work so

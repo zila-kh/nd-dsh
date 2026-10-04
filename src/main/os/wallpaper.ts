@@ -150,6 +150,34 @@ export async function listWallpapersInFolder(folderPath?: string): Promise<Wallp
         // Skip unreadable files
       }
     }
+    if (results.length === 0) {
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue
+        const subFolder = join(targetFolder, entry.name)
+        try {
+          const subEntries = await readdir(subFolder, { withFileTypes: true })
+          for (const sub of subEntries) {
+            if (!sub.isFile()) continue
+            const ext = extname(sub.name).toLowerCase()
+            if (!SUPPORTED_WALLPAPER_EXTENSIONS.has(ext)) continue
+            const fullPath = join(subFolder, sub.name)
+            try {
+              const fileStat = await stat(fullPath)
+              results.push({
+                filename: sub.name,
+                path: fullPath,
+                size: fileStat.size,
+                modifiedAt: fileStat.mtimeMs,
+              })
+            } catch {
+              // Skip unreadable files
+            }
+          }
+        } catch {
+          // Skip inaccessible subfolders
+        }
+      }
+    }
     return results.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true, sensitivity: 'base' }))
   } catch {
     return []
@@ -158,7 +186,7 @@ export async function listWallpapersInFolder(folderPath?: string): Promise<Wallp
 
 export async function cycleWallpaper(options: {
   folder?: string | undefined
-  mode?: 'next' | 'random' | undefined
+  mode?: 'next' | 'random' | 'previous' | undefined
   platform?: NodeJS.Platform | undefined
 }): Promise<{ changed: boolean; name?: string; path?: string }> {
   const items = await listWallpapersInFolder(options.folder)
@@ -176,6 +204,13 @@ export async function cycleWallpaper(options: {
         .filter(({ item }) => item.path !== activeWallpaperPath)
       const pick = candidates[Math.floor(Math.random() * (candidates.length || 1))] ?? candidates[0]!
       targetIndex = pick.idx
+    }
+  } else if (mode === 'previous') {
+    if (activeWallpaperPath) {
+      const currentIdx = items.findIndex((item) => item.path === activeWallpaperPath)
+      targetIndex = currentIdx > 0 ? currentIdx - 1 : items.length - 1
+    } else {
+      targetIndex = items.length - 1
     }
   } else {
     if (activeWallpaperPath) {
@@ -198,12 +233,32 @@ export async function applyWallpaperFromFolder(
   platform?: NodeJS.Platform | undefined,
 ): Promise<{ changed: boolean; name: string; path: string }> {
   const targetFolder = folder && folder.trim() ? folder.trim() : resolveDefaultWallpaperFolder()
-  const safeName = basename(filename)
-  const targetPath = join(targetFolder, safeName)
-  await access(targetPath)
+  let targetPath = filename
+  let exists = false
+  try {
+    await access(filename)
+    exists = true
+    targetPath = filename
+  } catch {
+    // not directly accessible as filename
+  }
+  if (!exists) {
+    try {
+      const candidate = join(targetFolder, filename)
+      await access(candidate)
+      exists = true
+      targetPath = candidate
+    } catch {
+      // try basename
+    }
+  }
+  if (!exists) {
+    targetPath = join(targetFolder, basename(filename))
+    await access(targetPath)
+  }
   await setDesktopWallpaper(targetPath, platform)
   setActiveWallpaperState(targetPath, targetFolder)
-  return { changed: true, name: safeName, path: targetPath }
+  return { changed: true, name: basename(targetPath), path: targetPath }
 }
 
 function message(error: unknown): string {

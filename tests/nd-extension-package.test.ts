@@ -72,6 +72,16 @@ describe('extension package manifests', () => {
         contexts: ['personal'],
       }),
       expect.objectContaining({
+        id: 'set-wallpaper-folder',
+        host: 'os.wallpaper.setFolder',
+        contexts: ['personal'],
+      }),
+      expect.objectContaining({
+        id: 'previous-wallpaper',
+        host: 'os.wallpaper.previous',
+        contexts: ['personal'],
+      }),
+      expect.objectContaining({
         id: 'next-wallpaper',
         host: 'os.wallpaper.next',
         contexts: ['personal'],
@@ -94,6 +104,15 @@ describe('extension package manifests', () => {
         kind: 'detail',
         host: 'os.wallpaper.status',
         contexts: ['personal'],
+        actions: expect.arrayContaining([
+          expect.objectContaining({ id: 'apply', host: 'os.wallpaper.applySelected' }),
+          expect.objectContaining({ id: 'prev', host: 'os.wallpaper.previous' }),
+          expect.objectContaining({ id: 'next', host: 'os.wallpaper.next' }),
+          expect.objectContaining({ id: 'random', host: 'os.wallpaper.random' }),
+          expect.objectContaining({ id: 'choose', host: 'os.wallpaper.chooseAndSet' }),
+          expect.objectContaining({ id: 'set-folder', host: 'os.wallpaper.setFolder' }),
+          expect.objectContaining({ id: 'preview', host: 'os.wallpaper.preview' }),
+        ]),
       }),
     ])
   })

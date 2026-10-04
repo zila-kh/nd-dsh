@@ -156,3 +156,44 @@ node scripts/validate-nd-extension.mjs --builtins
 is installed only when selected, then activated for Personal separately. Its
 command uses `openViewId` to open the process view from either launcher, and its
 view uses `refreshIntervalMs` to refresh while open.
+
+`ND Translate` is another optional ND-bundled package under
+`extensions/translate`. Install it from Settings → Extensions → Available,
+activate the context where it will be used, then run ND Translate in the
+launcher. It contributes manifest data to the native ND translator view;
+packages cannot inject their own React or browser scripts. The translator UI
+loads as a separate chunk and adds no third-party runtime dependency.
+
+Its `browser.translate` host requires `browser.navigate` and accepts
+`{ text, sourceLanguage, targetLanguage, provider }`. Providers are `google`
+(default), `chatgpt`, and `gemini`; text is limited to 5,000 characters and the
+target cannot be `auto`. Calls return `idle`, `translated`, `login-required`,
+`challenge`, `error`, or `busy`. Only `translated` contains successful output.
+Provider pages run in ND's sandboxed embedded browser. The extension requires
+no API key; provider websites may require sign-in, verification, or consent.
+Signed-out AI availability depends on device and region and must not be sold
+as an unconditional promise.
+
+Validate the package with `node scripts/validate-nd-extension.mjs
+extensions/translate`. Desktop regression coverage is in
+`e2e/nd-translate.spec.ts`; opt into external service smoke with
+`ND_TRANSLATE_LIVE=1` and `ND_TRANSLATE_AI_LIVE=1`.
+
+For the real model-backed coding autopilot scenario, build first and configure
+the gitignored `.env.e2e`. In PowerShell, run:
+
+```powershell
+$env:ND_PM_SCENARIO = 'nd-translate'
+node e2e/pm-fullstack.mjs
+```
+
+This creates a disposable ND Team
+company with mission “Build ND super apps.” It asks the PM/workers to generate
+an installable package from a host contract, checks overlapping execution and
+real child sessions, then installs and translates with the generated package.
+Before enabling Autopilot, the scenario selects **Deliver now → All work** in
+the visible UI; the default first-milestone focus deliberately requires human
+selection to advance. Code tasks pass the project's test command in isolated
+worktrees, so tests that import another task's output depend on its integration.
+There are no retry nudges or synthetic plans. A source-app scenario does not
+establish packaged public-release readiness.

@@ -19,6 +19,7 @@ import {
   cycleWallpaper,
   getActiveWallpaperState,
   listWallpapersInFolder,
+  resolveDefaultWallpaperFolder,
   setDesktopWallpaper,
 } from '../os/wallpaper.js'
 import { ProcessInventory } from '../os/process-inventory.js'
@@ -29,6 +30,8 @@ import type { ExtensionPackageStore } from './package-store.js'
 import type { InvocationBroker, NdOrganizationPort } from './invocation-broker.js'
 import type { InvocationStateStore } from './invocation-state.js'
 import type { NativeHostRegistry } from './native-host.js'
+import { NdTranslateService, type TranslateBrowserPort } from './translate-service.js'
+import { ND_TRANSLATE_ID } from '../../shared/nd-translate.js'
 
 export interface NdOrganizationPortFull extends NdOrganizationPort {
   mutate(mutation: OrganizationMutation): Promise<unknown>
@@ -45,7 +48,7 @@ export interface NdIpcDependencies {
   broker: InvocationBroker
   host: NativeHostRegistry
   organization: NdOrganizationPortFull
-  browser: Pick<BrowserController, 'navigate'>
+  browser: Pick<BrowserController, 'navigate'> & TranslateBrowserPort
   workflow: Pick<WorkflowService, 'projectView' | 'refresh'>
   /** Notified after ND Home records change, so other services can re-derive views. */
   onHomeChanged?: () => void
@@ -59,6 +62,12 @@ function quitProcessPackagePath(): string {
   return app.isPackaged
     ? join(process.resourcesPath, 'nd-extensions', 'quit-process')
     : join(app.getAppPath(), 'extensions', 'quit-process')
+}
+
+function translatePackagePath(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'nd-extensions', 'translate')
+    : join(app.getAppPath(), 'extensions', 'translate')
 }
 
 /**
@@ -130,7 +139,7 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
 
   const stateView = async (): Promise<NdExtensionsStateView> => {
     const state = await deps.broker.stateView()
-    return { ...state, available: [await quitProcessCatalogView(state)] }
+    return { ...state, available: await Promise.all([quitProcessCatalogView(state), translateCatalogView(state)]) }
   }
   const emitState = async (): Promise<void> => {
     if (deps.window.isDestroyed()) return
@@ -142,7 +151,7 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
     deps.window.webContents.send(ND_HOME_IPC.changedEvent, await homeView())
   }
 
-  registerNativeHostHandlers(deps)
+  const disposeNativeHost = registerNativeHostHandlers(deps)
 
   deps.broker.setOnApprovalRequested(() => { void emitState() })
   deps.home.setOnChanged(() => { void emitHome(); deps.onHomeChanged?.() })
@@ -170,10 +179,10 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
   })
 
   handle(ND_EXTENSIONS_IPC.installAvailable, async (_event, extensionId) => {
-    if (extensionId !== QUIT_PROCESS_ID) throw new Error('Unknown available ND extension')
-    const packagePath = quitProcessPackagePath()
-    if (!existsSync(join(packagePath, 'nd-extension.json'))) throw new Error('Quit Processes is missing from this ND build')
-    await deps.packages.installFromDirectory(packagePath, { expectId: QUIT_PROCESS_ID })
+    if (extensionId !== QUIT_PROCESS_ID && extensionId !== ND_TRANSLATE_ID) throw new Error('Unknown available ND extension')
+    const packagePath = extensionId === ND_TRANSLATE_ID ? translatePackagePath() : quitProcessPackagePath()
+    if (!existsSync(join(packagePath, 'nd-extension.json'))) throw new Error('This extension is missing from this ND build')
+    await deps.packages.installFromDirectory(packagePath, { expectId: extensionId })
     await emitState()
     return stateView()
   })
@@ -336,6 +345,7 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
   void ensureSeeded().catch((error) => console.warn('ND built-in extension packages failed to seed:', error))
 
   return () => {
+    disposeNativeHost()
     if (wallpaperTimer) clearInterval(wallpaperTimer)
     for (const channel of channels) ipcMain.removeHandler(channel)
     deps.broker.setOnApprovalRequested(undefined)
@@ -348,9 +358,11 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
  * bridge between extension contributions and trusted services: no arbitrary
  * IPC, shell strings, or renderer code ever crosses this boundary.
  */
-export function registerNativeHostHandlers(deps: NdIpcDependencies): void {
+export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void {
   const { host } = deps
   const organization = deps.organization
+  const translator = new NdTranslateService(deps.browser)
+  host.register('browser.translate', async (input) => translator.translate(input))
   const processes = new ProcessInventory(undefined, () => [
     process.pid,
     ...app.getAppMetrics().map((metric) => metric.pid),
@@ -554,6 +566,12 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): void {
     return { changed: result.changed, name: result.name, path: result.path }
   })
 
+  host.register('os.wallpaper.previous', async (_input, context) => {
+    const folder = typeof context.settings?.folder === 'string' && context.settings.folder ? context.settings.folder : undefined
+    const result = await cycleWallpaper({ folder, mode: 'previous' })
+    return { changed: result.changed, name: result.name, path: result.path }
+  })
+
   host.register('os.wallpaper.random', async (_input, context) => {
     const folder = typeof context.settings?.folder === 'string' && context.settings.folder ? context.settings.folder : undefined
     const result = await cycleWallpaper({ folder, mode: 'random' })
@@ -561,8 +579,12 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): void {
   })
 
   host.register('os.wallpaper.setFolder', async (_input, context) => {
+    const defaultPath = typeof context.settings?.folder === 'string' && context.settings.folder.trim()
+      ? context.settings.folder.trim()
+      : resolveDefaultWallpaperFolder()
     const result = await dialog.showOpenDialog(deps.window, {
       title: 'Choose wallpaper folder',
+      defaultPath,
       properties: ['openDirectory'],
     })
     if (result.canceled || result.filePaths.length !== 1) return { changed: false }
@@ -573,23 +595,94 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): void {
   })
 
   host.register('os.wallpaper.applySelected', async (input, context) => {
-    const filename = requiredText(input.id ?? input.filename, 'Wallpaper file', 260)
-    const folder = typeof context.settings?.folder === 'string' && context.settings.folder ? context.settings.folder : undefined
+    const filename = requiredText(input.id ?? input.filename ?? input.path, 'Wallpaper file', 4096)
+    const folder = typeof input?.folder === 'string' && input.folder.trim()
+      ? input.folder.trim()
+      : (typeof context.settings?.folder === 'string' && context.settings.folder ? context.settings.folder : undefined)
     const result = await applyWallpaperFromFolder(folder, filename)
     return { changed: result.changed, name: result.name, path: result.path }
   })
 
-  host.register('os.wallpaper.status', async (_input, context) => {
-    const folder = typeof context.settings?.folder === 'string' && context.settings.folder ? context.settings.folder : undefined
+  host.register('os.wallpaper.preview', async (input, context) => {
+    const filename = requiredText(input.id ?? input.filename ?? input.path, 'Wallpaper file', 4096)
+    const folder = typeof input?.folder === 'string' && input.folder.trim()
+      ? input.folder.trim()
+      : (typeof context.settings?.folder === 'string' && context.settings.folder ? context.settings.folder : undefined)
+    const targetFolder = folder && folder.trim() ? folder.trim() : resolveDefaultWallpaperFolder()
+    let targetPath = filename
+    let exists = false
+    try {
+      await fs.access(filename)
+      exists = true
+      targetPath = filename
+    } catch {
+      // not direct/absolute
+    }
+    if (!exists) {
+      try {
+        const candidate = join(targetFolder, filename)
+        await fs.access(candidate)
+        exists = true
+        targetPath = candidate
+      } catch {
+        // try basename
+      }
+    }
+    if (!exists) {
+      targetPath = join(targetFolder, basename(filename))
+      await fs.access(targetPath)
+    }
+    const safeName = basename(targetPath)
+    const img = nativeImage.createFromPath(targetPath)
+    if (img.isEmpty()) throw new Error('Could not read image file')
+    const originalSize = img.getSize()
+    const previewImg = (originalSize.width > 1920 || originalSize.height > 1080)
+      ? img.resize({ width: Math.min(1920, originalSize.width), height: Math.min(1080, Math.round(originalSize.height * (1920 / Math.max(1, originalSize.width)))) })
+      : img
+    const dataUrl = previewImg.toDataURL()
+    const thumbnail = img.resize({ width: 240, quality: 'good' }).toDataURL()
+    const fileStat = await fs.stat(targetPath)
+    return {
+      id: safeName,
+      filename: safeName,
+      path: targetPath,
+      dataUrl,
+      thumbnail,
+      width: originalSize.width,
+      height: originalSize.height,
+      size: fileStat.size,
+      modifiedAt: fileStat.mtimeMs,
+    }
+  })
+
+  host.register('os.wallpaper.status', async (input, context) => {
+    const inputFolder = typeof input?.folder === 'string' && input.folder.trim() ? input.folder.trim() : undefined
+    const settingFolder = typeof context.settings?.folder === 'string' && context.settings.folder ? context.settings.folder : undefined
+    const folder = inputFolder ?? settingFolder
     const items = await listWallpapersInFolder(folder)
     const active = getActiveWallpaperState()
-    return items.map((item) => {
+    return items.map((item, index) => {
       const isActive = active.path === item.path || (active.path !== null && active.path.endsWith(item.filename))
+      let thumbnail: string | undefined
+      if (index < 60) {
+        try {
+          const img = nativeImage.createFromPath(item.path)
+          if (!img.isEmpty()) {
+            thumbnail = img.resize({ width: 240, quality: 'good' }).toDataURL()
+          }
+        } catch {
+          // fallback to undefined
+        }
+      }
       return {
         id: item.filename,
         title: item.filename,
         detail: `${Math.round(item.size / 1024)} KB · ${item.path}`,
         status: isActive ? 'Active' : undefined,
+        thumbnail,
+        path: item.path,
+        size: item.size,
+        modifiedAt: item.modifiedAt,
         sortValues: { size: item.size, date: item.modifiedAt },
       }
     })
@@ -635,23 +728,34 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): void {
     await deps.workflow.refresh(context.context.companyId, context.context.projectId)
     return workflowView(deps, context.context)
   })
+  return () => translator.dispose()
+}
+
+async function translateCatalogView(state: NdExtensionsStateView): Promise<NdAvailablePackageView> {
+  return packageCatalogView(state, ND_TRANSLATE_ID, translatePackagePath(), {
+    name: 'ND Translate', description: 'Translate text with Google Translate, ChatGPT, or Gemini in the ND browser.', permissions: ['browser.navigate'],
+  })
 }
 
 async function quitProcessCatalogView(state: NdExtensionsStateView): Promise<NdAvailablePackageView> {
-  const path = join(quitProcessPackagePath(), 'nd-extension.json')
+  return packageCatalogView(state, QUIT_PROCESS_ID, quitProcessPackagePath(), {
+    name: 'Quit Processes', description: 'Inspect running processes and quit a selected process from ND.', permissions: ['process.read', 'process.quit'],
+  })
+}
+
+async function packageCatalogView(state: NdExtensionsStateView, id: string, packagePath: string, metadata: Pick<NdAvailablePackageView, 'name' | 'description' | 'permissions'>): Promise<NdAvailablePackageView> {
+  const path = join(packagePath, 'nd-extension.json')
   const fallback: NdAvailablePackageView = {
-    id: QUIT_PROCESS_ID,
-    name: 'Quit Processes',
-    description: 'Inspect running processes and quit a selected process from ND.',
+    id,
+    ...metadata,
     version: '1.0.0',
-    permissions: ['process.read', 'process.quit'],
-    installed: state.packages.some((item) => item.id === QUIT_PROCESS_ID),
+    installed: state.packages.some((item) => item.id === id),
     available: false,
   }
   try {
     const parsed: unknown = JSON.parse(await fs.readFile(path, 'utf8'))
     const validated = validateNdExtensionManifest(parsed)
-    if (!validated.ok || validated.manifest.id !== QUIT_PROCESS_ID || manifestPermissionIssues(validated.manifest).length > 0) return fallback
+    if (!validated.ok || validated.manifest.id !== id || manifestPermissionIssues(validated.manifest).length > 0) return fallback
     return {
       id: validated.manifest.id,
       name: validated.manifest.name,

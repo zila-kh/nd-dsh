@@ -12,7 +12,8 @@ import { ORGANIZATION_IPC, type OrganizationSnapshot } from '../shared/organizat
 import { throttleLatest } from './latest-value-throttle.js'
 import { TERMINAL_IPC } from '../shared/terminal.js'
 import { resolveShortcutBehavior } from '../shared/quick-launcher.js'
-import { bundledResourceRoot, projectRoot } from './app-paths.js'
+import { bundledResourceRoot, codexBinPath, presetSourceDir, projectRoot } from './app-paths.js'
+
 import { BrowserController } from './browser/browser-controller.js'
 import { BrowserCompanionService } from './browser-companion/browser-companion-service.js'
 import { registerBrowserCompanionIpc } from './browser-companion/ipc.js'
@@ -318,10 +319,11 @@ async function createWindow(cdpPort: number): Promise<void> {
         console.error('ND Core restarted, but organization reconciliation failed; dispatch remains blocked:', error)
       })
   })
-  const engineSpawn = createCoreSpawn(core, executionCoordinator)
+  const backgroundPolicyPath = join(bundledResourceRoot(), 'scripts', 'nd-background-process.cjs')
+  const engineSpawn = createCoreSpawn(core, executionCoordinator, backgroundPolicyPath)
   // Project dev servers and machine verification are ND-owned system work,
   // not engine children: keep them Rust-owned without inheriting a worker permit.
-  const unscopedCoreSpawn = createCoreSpawn(core)
+  const unscopedCoreSpawn = createCoreSpawn(core, undefined, backgroundPolicyPath)
   const git = new GitService(workspace, { core })
   const harnessJournal = new CoreSessionJournalStore(core)
   const directEngineJournal = new CoreSessionJournalStore(core, {
@@ -340,7 +342,12 @@ async function createWindow(cdpPort: number): Promise<void> {
   activeAntigravityEngine = antigravityEngine
   const zcodeEngine = new ZcodeCliEngine({ log: (line) => console.log(line), spawnProcess: engineSpawn })
   activeZcodeEngine = zcodeEngine
-  const piEngine = new PiCodingEngine({ log: (line) => console.log(line), spawnProcess: engineSpawn })
+  const piEngine = new PiCodingEngine({
+    log: (line) => console.log(line),
+    spawnProcess: engineSpawn,
+    providers: () => providers,
+    skillsDir: () => presetSourceDir(),
+  })
   activePiEngine = piEngine
   const cursorEngine = new CursorCliEngine({ log: (line) => console.log(line), spawnProcess: engineSpawn })
   activeCursorEngine = cursorEngine
@@ -703,6 +710,9 @@ async function createWindow(cdpPort: number): Promise<void> {
         terminal: terminalManager,
         git,
         harness,
+        browser,
+        spawnProcess: unscopedCoreSpawn,
+        codingCliPath: codexBinPath(),
       })
       console.log('Packaged runtime smoke passed.')
       setTimeout(() => app.quit(), 25)

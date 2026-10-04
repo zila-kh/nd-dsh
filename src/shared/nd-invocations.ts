@@ -72,6 +72,8 @@ export interface NdViewRow {
   title: string
   body?: string
   meta?: string
+  thumbnail?: string
+  path?: string
   actionsDisabled?: boolean
   sortValues?: Record<string, number>
 }

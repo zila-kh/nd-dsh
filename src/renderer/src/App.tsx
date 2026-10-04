@@ -1007,9 +1007,13 @@ export default function App() {
         return
       case 'os.wallpaper.chooseAndSet':
       case 'os.wallpaper.next':
+      case 'os.wallpaper.previous':
       case 'os.wallpaper.random':
       case 'os.wallpaper.applySelected':
         if (result.changed) notify(typeof result.name === 'string' ? `Wallpaper changed to ${result.name}.` : 'Desktop wallpaper updated.')
+        return
+      case 'os.wallpaper.setFolder':
+        if (result.changed) notify(typeof result.folder === 'string' ? `Wallpaper folder set to ${String(result.folder)}.` : 'Wallpaper folder updated.')
         return
       case 'browser.openExternal':
         notify('Opened in your system browser.')
@@ -1818,6 +1822,12 @@ export default function App() {
                       contexts={extensionContextOptions}
                       requestedView={extensionViewRequest}
                       onRequestedViewHandled={() => setExtensionViewRequest(null)}
+                      onOpenBrowser={async (tabId) => {
+                        await window.ndDsh.browserPlatform.activateTab('builtin', tabId)
+                        await window.ndDsh.browserPlatform.select({ mode: 'tab', targetId: 'builtin', tabId })
+                        switchToWorkbench('agent')
+                        setAgentPane('browser')
+                      }}
                       onError={notify}
                       onChanged={async () => {
                         setNdExtensions(await window.ndDsh.ndExtensions.state())

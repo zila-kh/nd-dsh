@@ -708,7 +708,7 @@ export interface DesktopApi {
     state(): Promise<WorkspaceState>
     pick(): Promise<WorkspaceState>
     /** Native folder picker for form fields; returns the chosen path or null on cancel without touching the active workspace. */
-    pickPath(): Promise<string | null>
+    pickPath(options?: { title?: string | undefined; defaultPath?: string | undefined }): Promise<string | null>
     setRoot(path: string): Promise<WorkspaceState>
     list(relativePath?: string): Promise<WorkspaceEntry[]>
     read(relativePath: string): Promise<WorkspaceFile>

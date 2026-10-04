@@ -622,11 +622,12 @@ export function registerIpc(deps: IpcDependencies): () => void {
     await deps.workspaces.openRoot(state.root)
     return state
   })
-  handle(IPC.workspacePickPath, async () => {
+  handle(IPC.workspacePickPath, async (_event, value) => {
     // Form-field helper: choose a folder without switching or pinning the active workspace.
+    const options = value && typeof value === 'object' ? value as { title?: string; defaultPath?: string } : undefined
     const result = await dialog.showOpenDialog({
-      title: 'Choose workspace folder',
-      defaultPath: deps.projectWorkspace.state().root,
+      title: typeof options?.title === 'string' && options.title.trim() ? options.title.trim() : 'Choose workspace folder',
+      defaultPath: typeof options?.defaultPath === 'string' && options.defaultPath.trim() ? options.defaultPath.trim() : deps.projectWorkspace.state().root,
       properties: ['openDirectory', 'createDirectory'],
     })
     const selected = result.filePaths[0]

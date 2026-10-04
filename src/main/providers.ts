@@ -278,6 +278,11 @@ export class ProviderStore {
     return cloneProviders(this.providers).find((provider) => provider.enabled)
   }
 
+  /** Trusted main-process list of all enabled providers with decrypted credentials. */
+  allEnabled(): ModelProvider[] {
+    return cloneProviders(this.providers).filter((provider) => provider.enabled)
+  }
+
   nativeAgentRoute(providerId?: string, modelId?: string): NativeAgentModelRoute {
     const selected = providerId?.trim()
     const provider = this.providers.find((item) => item.enabled && (item.id === selected || (selected === DIRECT_DEEPSEEK_ROUTE && item.id === 'deepseek')))

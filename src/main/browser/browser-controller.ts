@@ -26,6 +26,7 @@ import { BrowserPermissionStore } from './browser-permission-store.js'
 import { DEFAULT_BROWSER_URL, isAllowedBrowserUrl, normalizeBrowserUrl, sanitizeBrowserUserAgent } from './browser-url.js'
 import { UiAnnotator, type UiAnnotationImage } from './ui-annotator.js'
 import { UiInspector } from './ui-inspector.js'
+import { translatePageReadScript } from './translate-page-reader.js'
 
 export const BUILTIN_BROWSER_TARGET_ID = 'builtin'
 export const BUILTIN_BROWSER_PROFILE_ID = 'builtin:default'
@@ -540,6 +541,12 @@ export class BrowserController {
     const contents = this.requireTab(tabId).view.webContents
     await this.ensureSemanticDriver(contents)
     return contents.executeJavaScript('window.__ND_BROWSER_BUILTIN_DRIVER__.snapshot()', true)
+  }
+
+  /** Fixed provider DOM reads for ND Translate. No renderer-supplied JavaScript. */
+  async readTranslatePage(tabId: string, provider: import('../../shared/nd-translate.js').NdTranslateProvider): Promise<import('../../shared/nd-translate.js').NdTranslatePage> {
+    const contents = this.requireTab(tabId).view.webContents
+    return contents.executeJavaScript(translatePageReadScript(provider), true) as Promise<import('../../shared/nd-translate.js').NdTranslatePage>
   }
 
   async click(tabId: string, ref: string, revision: number): Promise<unknown> {
@@ -1183,7 +1190,8 @@ const SEMANTIC_DRIVER_SCRIPT = `(() => {
           type,
           disabled: 'disabled' in element ? Boolean(element.disabled) : undefined,
           href: element instanceof HTMLAnchorElement ? element.href : undefined,
-          sensitive: type === 'password' ? true : undefined
+          sensitive: type === 'password' ? true : undefined,
+          editable: element instanceof HTMLElement && element.isContentEditable ? true : undefined
         };
       });
       return {

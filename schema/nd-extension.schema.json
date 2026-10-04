@@ -196,6 +196,7 @@
         "clipboard.read",
         "clipboard.write",
         "browser.openUrl",
+        "browser.translate",
         "browser.search",
         "browser.openExternal",
         "os.openTarget",

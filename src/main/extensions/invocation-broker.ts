@@ -547,6 +547,8 @@ function toRows(value: unknown, view: NdViewContribution): NdViewRow[] {
       title: title.trim().slice(0, 512),
       ...(typeof body === 'string' && body.trim() ? { body: body.trim().slice(0, 4_000) } : {}),
       ...(typeof record.status === 'string' ? { meta: record.status.slice(0, 64) } : {}),
+      ...(typeof record.thumbnail === 'string' ? { thumbnail: record.thumbnail } : {}),
+      ...(typeof record.path === 'string' ? { path: record.path } : {}),
       ...(record.actionsDisabled === true ? { actionsDisabled: true } : {}),
       ...(record.sortValues && typeof record.sortValues === 'object' && !Array.isArray(record.sortValues)
         ? { sortValues: Object.fromEntries(Object.entries(record.sortValues).filter((entry): entry is [string, number] => typeof entry[1] === 'number' && Number.isFinite(entry[1]))) }

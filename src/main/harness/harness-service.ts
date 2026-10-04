@@ -1,5 +1,6 @@
 import { app } from 'electron'
 import { spawn, type ChildProcess } from 'node:child_process'
+import { backgroundProcessEnvironment } from '../core/background-process-environment.js'
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync, promises as fs } from 'node:fs'
 import { join } from 'node:path'
@@ -53,7 +54,10 @@ export class HarnessService {
   private activeSessionId: string | undefined
   private statusValue: HarnessStatus
   private startPromise: Promise<GatewayClient> | undefined
+  private startPromiseGeneration: number | undefined
   private stopping = false
+  private runtimeGeneration = 0
+  private readonly expectedChildExits = new WeakSet<ChildProcess>()
   private canceledSessions = new Set<string>()
   private readonly runningSessions = new Set<string>()
   private providerRevisionAtStart = -1
@@ -416,13 +420,20 @@ export class HarnessService {
   /** Tear down the runtime subprocess (app shutdown / workspace change / provider refresh). */
   async close(): Promise<void> {
     this.stopping = true
+    this.runtimeGeneration += 1
     this.eventHub.detach()
     const child = this.child
+    if (child) this.expectedChildExits.add(child)
     const gateway = this.gateway
     this.child = undefined
     this.gateway = undefined
     this.baseUrl = undefined
+    // Retire only the generation captured above. A new launch can publish a
+    // replacement while this method waits for the old process to exit.
+    this.activeSessionId = undefined
+    this.runningSessions.clear()
     gateway?.close()
+    this.updateStatus('stopped')
     if (child && child.exitCode === null && child.signalCode === null) {
       await new Promise<void>((resolve) => {
         const timer = setTimeout(() => {
@@ -447,9 +458,6 @@ export class HarnessService {
         }
       })
     }
-    this.activeSessionId = undefined
-    this.runningSessions.clear()
-    this.updateStatus('stopped')
   }
 
   private async ensureStarted(refreshLaunchPolicy = false): Promise<GatewayClient> {
@@ -465,21 +473,39 @@ export class HarnessService {
       await this.close()
     }
     if (this.gateway) return this.gateway
-    if (this.startPromise) return this.startPromise
+    if (this.startPromise) {
+      const pending = this.startPromise
+      if (this.startPromiseGeneration === this.runtimeGeneration) return pending
+      const requestedGeneration = this.runtimeGeneration
+      // A request made after close belongs to the new workspace generation.
+      // Wait only for the canceled launch to settle, then admit one fresh boot;
+      // ordinary same-generation startup errors are never blindly retried.
+      await pending.catch(() => undefined)
+      if (this.runtimeGeneration !== requestedGeneration) throw new Error('ND runtime startup was canceled')
+      return this.ensureStarted(refreshLaunchPolicy)
+    }
+    const startGeneration = this.runtimeGeneration
+    this.startPromiseGeneration = startGeneration
     this.startPromise = this.start()
       .catch(async (cause: unknown) => {
-        const stoppedExternally = this.stopping
+        const stoppedExternally = this.stopping || this.runtimeGeneration !== startGeneration
         const error = cause instanceof Error ? cause : new Error(String(cause))
 
         // A child can be alive without ever exposing a usable HTTP/RPC
         // gateway. Tear that partial launch down before clearing startPromise
         // so a later retry cannot inherit the failed process or its port.
-        await this.close()
-        if (!stoppedExternally) this.updateStatus('error', error.message)
+        // A close that invalidated this launch already retired its generation.
+        // Its late rejection must not close a newer workspace or bump that
+        // workspace's generation again.
+        if (this.runtimeGeneration === startGeneration) {
+          await this.close()
+          if (!stoppedExternally) this.updateStatus('error', error.message)
+        }
         throw error
       })
       .finally(() => {
         this.startPromise = undefined
+        this.startPromiseGeneration = undefined
       })
     return this.startPromise
   }
@@ -513,15 +539,26 @@ export class HarnessService {
 
   private async start(attempt = 0): Promise<GatewayClient> {
     this.workspace.assertUsable()
+    const generation = this.runtimeGeneration
+    const assertCurrentLaunch = (child?: ChildProcess, gateway?: GatewayClient): void => {
+      if (this.runtimeGeneration !== generation || this.stopping || (child && this.child !== child)) {
+        // Authentication can create a local client after close has already
+        // retired this launch, before that client was published to the service.
+        if (gateway && this.gateway !== gateway) gateway.close()
+        throw new Error('ND runtime startup was canceled')
+      }
+    }
     // close() marks the current child as expected-to-stop; a fresh child must
     // return to normal unexpected-exit detection.
     this.stopping = false
     await this.browser.ensureAgentReady()
+    assertCurrentLaunch()
 
     // The MCP server reads AGENT_BROWSER_CONFIG at startup; the file must
     // exist before the child spawns or the server starts with no pinned
     // session and the agent sees "No active sessions yet" on its first call.
     await this.browser.assertAgentConfigReady()
+    assertCurrentLaunch()
 
     const cliBin = harnessCliBinPath()
     const patchPath = dshPatchPath()
@@ -534,11 +571,13 @@ export class HarnessService {
     const workspaceRoot = this.workspace.state().root
     const dshHome = join(app.getPath('userData'), 'dsh-home')
     await fs.mkdir(join(dshHome, '.agent-presets'), { recursive: true })
+    assertCurrentLaunch()
     // Upstream heals the flat module fallback only for its own dependency
     // closure; ND-inserted entries need their links staged before boot.
     ensureProfilePluginLinks(dshHome, harnessRoot())
     // The nd-dsh preset ships with the desktop; a fresh copy keeps it current.
     await fs.cp(presetsDir, join(dshHome, '.agent-presets'), { recursive: true, force: true })
+    assertCurrentLaunch()
 
     const providerRevision = this.providers.revision()
     const tokenSaverEnabled = this.tokenSaverEnabled()
@@ -546,6 +585,7 @@ export class HarnessService {
     const deepseekProvider = this.providers.list().find((item) => item.id === 'deepseek')
     const deepseekEnabled = deepseekProvider?.enabled === true
     const port = await pickFreePort()
+    assertCurrentLaunch()
     const environment: NodeJS.ProcessEnv = {
       ...process.env,
       ...providerRuntime.environment,
@@ -564,6 +604,7 @@ export class HarnessService {
     delete environment.ELECTRON_RUN_AS_NODE
 
     this.updateStatus('starting')
+    assertCurrentLaunch()
     const child = spawn(harnessNodeBinPath(), [
       cliBin,
       '--profile', 'web',
@@ -572,7 +613,8 @@ export class HarnessService {
       '--port', String(port),
     ], {
       cwd: harnessRoot(),
-      env: environment,
+      env: backgroundProcessEnvironment(environment, join(bundledResourceRoot(), 'scripts', 'nd-background-process.cjs')),
+      windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe'],
     })
     this.child = child
@@ -596,24 +638,19 @@ export class HarnessService {
       childError = `${childError}${chunk}`.slice(-16_384)
     })
     child.once('exit', (code, signal) => {
-      const wasExpected = this.stopping
-      const gateway = this.gateway
-      this.child = undefined
-      this.gateway = undefined
-      this.baseUrl = undefined
-      gateway?.close()
-      const reason = wasExpected ? undefined : `Runtime exited (${signal ?? String(code ?? 'unknown')}): ${childError.split(/\r?\n/).at(-1) ?? ''}`.trim()
-      console.log(`ND-DSH runtime child exited: ${new Date().toISOString()} code=${String(code)} signal=${String(signal)} expectedStop=${String(wasExpected)}`)
-      this.updateStatus(wasExpected ? 'stopped' : 'error', wasExpected ? undefined : reason)
+      this.handleChildExit(child, code, signal, childError)
     })
 
     const rootStatus = await this.waitUntilReady(child, baseUrl, () => childError, () => childOutput)
+    assertCurrentLaunch(child)
     let authenticatedUrl = rootStatus === 401
       ? await this.waitForAuthenticatedUrl(child, baseUrl, () => childOutput, () => childError)
       : undefined
+    assertCurrentLaunch(child)
     let gateway = authenticatedUrl
       ? await GatewayClient.authenticate(authenticatedUrl)
       : new GatewayClient(baseUrl)
+    assertCurrentLaunch(child, gateway)
     // The static frontend becomes reachable before the /api route tree has
     // finished mounting. Do not mistake that short-lived HTTP 404 for a port
     // collision and kill the healthy child before it can accept session RPCs.
@@ -622,20 +659,61 @@ export class HarnessService {
       gateway = await GatewayClient.authenticate(authenticatedUrl)
       return gateway
     })
+    assertCurrentLaunch(child, gateway)
     // Approval and question asks arrive without a session id on the remote
     // face; attribute them to the session this service is running so the
     // renderer can render an answerable card (and only that).
     gateway.setWaterfallSessionResolver(() => this.activeSessionId)
-    gateway.openEvents((frame) => this.handleEvent(frame))
     this.gateway = gateway
     this.baseUrl = baseUrl
+    gateway.openEvents((frame) => this.handleGatewayEvent(child, gateway, frame))
     this.eventHub.attach(gateway)
     this.providerRevisionAtStart = providerRevision
     this.tokenSaverEnabledAtStart = tokenSaverEnabled
     await this.syncGatewayWorkspaceLabel(gateway, workspaceRoot)
+    assertCurrentLaunch(child, gateway)
     this.updateStatus('ready')
     this.onGatewayReady?.(authenticatedUrl ?? baseUrl)
     return gateway
+  }
+
+  /** An old child's delayed exit must never tear down its replacement. */
+  private handleChildExit(child: ChildProcess, code: number | null, signal: NodeJS.Signals | null, childError: string): void {
+    if (this.child !== child) return
+    const wasExpected = this.expectedChildExits.has(child)
+    const interruptedSessionIds = wasExpected ? [] : [...this.runningSessions]
+    const gateway = this.gateway
+    const reason = `Runtime exited (${signal ?? String(code ?? 'unknown')}): ${childError.split(/\r?\n/).at(-1) ?? ''}`.trim()
+    // Retire this generation before external listeners can trigger recovery.
+    // Cancellation intent remains available to the organization finalizer.
+    this.child = undefined
+    this.gateway = undefined
+    this.baseUrl = undefined
+    this.activeSessionId = undefined
+    this.runningSessions.clear()
+    this.eventHub.detach()
+    gateway?.close()
+    console.log(`ND-DSH runtime child exited: ${new Date().toISOString()} code=${String(code)} signal=${String(signal)} expectedStop=${String(wasExpected)}`)
+    this.updateStatus(wasExpected ? 'stopped' : 'error', wasExpected ? undefined : reason)
+    for (const sessionId of interruptedSessionIds) {
+      try {
+        // This adapter notification is live control-plane evidence, not an
+        // invented entry in the upstream session journal or a completed turn.
+        this.onEvent?.({
+          kind: 'session-event',
+          sessionId,
+          event: { type: 'turn/end', seq: 0, time: Date.now(), data: { reason: { kind: 'interrupted', message: reason } } },
+          meta: { source: 'nd-harness-adapter' },
+        })
+      } catch (cause) {
+        console.error(`ND runtime interruption notification failed for ${sessionId}:`, cause)
+      }
+    }
+  }
+
+  private handleGatewayEvent(child: ChildProcess, gateway: GatewayClient, frame: DshEventFrame): void {
+    if (this.child !== child || this.gateway !== gateway) return
+    this.handleEvent(frame)
   }
 
   private async syncGatewayWorkspaceLabel(gateway: GatewayClient, workspaceRoot: string): Promise<void> {

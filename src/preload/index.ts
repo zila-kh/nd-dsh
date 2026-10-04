@@ -302,7 +302,7 @@ const api: DesktopApi = {
   workspace: {
     state: () => ipcRenderer.invoke(IPC.workspaceState),
     pick: () => ipcRenderer.invoke(IPC.workspacePick),
-    pickPath: () => ipcRenderer.invoke(IPC.workspacePickPath),
+    pickPath: (options) => ipcRenderer.invoke(IPC.workspacePickPath, options),
     setRoot: (path) => ipcRenderer.invoke(IPC.workspaceSetRoot, path),
     list: (relativePath) => ipcRenderer.invoke(IPC.workspaceList, relativePath),
     read: (relativePath) => ipcRenderer.invoke(IPC.workspaceRead, relativePath),

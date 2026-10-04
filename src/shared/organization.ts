@@ -328,6 +328,17 @@ export interface OrganizationApprovalVerdict {
   createdAt: number
 }
 
+/** Recorded only by ND's trusted machine-verification gate, never worker text. */
+export interface OrganizationRunVerification {
+  status: 'passed' | 'failed' | 'skipped'
+  command?: string
+  cwd?: string
+  checkpointCommit?: string
+  exitCode?: number
+  reason?: string
+  completedAt: number
+}
+
 export interface OrganizationRun {
   id: string
   companyId: string
@@ -344,6 +355,7 @@ export interface OrganizationRun {
   workspaceBranch?: string
   baselineCommit?: string
   checkpointCommit?: string
+  verification?: OrganizationRunVerification
   runtimePermitId?: string
   output?: string
   error?: string
