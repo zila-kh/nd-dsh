@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { Check, ChevronLeft, ChevronRight, Download, ExternalLink, Eye, FolderOpen, Image, Package, Puzzle, RefreshCw, Search, Settings2, ShieldCheck, Shuffle, SkipBack, SkipForward, Undo2 } from 'lucide-react'
 import { cn } from '../lib/utils'
 import type { NdContext } from '../../../shared/nd-context'
@@ -246,7 +246,7 @@ export function ExtensionPackagesCard({ state, organization, contexts, requested
                   busy={busy}
                   isActive={isActive}
                   run={run}
-                  onOpenView={(viewId) => setView({ extensionId: item.id, viewId, context: manageContext })}
+                  onOpenView={(viewId, targetCtx) => setView({ extensionId: item.id, viewId, context: targetCtx ?? manageContext })}
                 />
               ))}
             </div>
@@ -358,17 +358,20 @@ function WallpaperSettingsPreview({
   const [previewLoading, setPreviewLoading] = useState(false)
   const [applying, setApplying] = useState(false)
 
+  const cleanFolder = folder.trim().replace(/^["']|["']$/g, '').trim()
+
   const loadWallpapers = async (): Promise<void> => {
     setLoading(true)
     setError(null)
     try {
+      const targetCtx = context.kind === 'personal' ? context : { kind: 'personal' as const }
       const res = await window.ndDsh.ndExtensions.invoke({
         extensionId: 'nd.wallpaper-manager',
         contributionId: 'wallpaper-studio',
         contributionKind: 'view',
-        context,
+        context: targetCtx,
         caller: 'user',
-        input: folder.trim() ? { folder: folder.trim() } : {},
+        input: cleanFolder ? { folder: cleanFolder } : {},
       })
       if (res.ok && Array.isArray(res.value)) {
         const rows: NdViewRow[] = (res.value as Record<string, unknown>[]).map((rec, idx) => ({
@@ -384,6 +387,9 @@ function WallpaperSettingsPreview({
         setSelectedIndex(activeIdx >= 0 ? activeIdx : 0)
       } else {
         setItems([])
+        if (!res.ok && res.error) {
+          setError(res.error.message)
+        }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -413,11 +419,12 @@ function WallpaperSettingsPreview({
       ...(selectedItem.thumbnail ? { thumbnail: selectedItem.thumbnail } : {}),
     })
 
+    const targetCtx = context.kind === 'personal' ? context : { kind: 'personal' as const }
     void window.ndDsh.ndExtensions.invoke({
       extensionId: 'nd.wallpaper-manager',
       contributionId: 'wallpaper-studio',
       contributionKind: 'view',
-      context,
+      context: targetCtx,
       caller: 'user',
       input: { action: 'preview', id: selectedItem.id, ...(selectedItem.path ? { path: selectedItem.path } : {}) },
     }).then((res) => {
@@ -434,25 +441,41 @@ function WallpaperSettingsPreview({
     return () => { active = false }
   }, [selectedItem?.id, selectedItem?.path, context])
 
-  const handlePrev = (): void => {
+  const handlePrev = useCallback((): void => {
     if (items.length <= 1) return
     setSelectedIndex((prev) => (prev <= 0 ? items.length - 1 : prev - 1))
-  }
+  }, [items.length])
 
-  const handleNext = (): void => {
+  const handleNext = useCallback((): void => {
     if (items.length <= 1) return
     setSelectedIndex((prev) => (prev >= items.length - 1 ? 0 : prev + 1))
-  }
+  }, [items.length])
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent): void => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        handlePrev()
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault()
+        handleNext()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [handlePrev, handleNext])
 
   const handleSetWallpaper = async (): Promise<void> => {
     if (!selectedItem) return
     setApplying(true)
     try {
+      const targetCtx = context.kind === 'personal' ? context : { kind: 'personal' as const }
       const res = await window.ndDsh.ndExtensions.invoke({
         extensionId: 'nd.wallpaper-manager',
         contributionId: 'wallpaper-studio',
         contributionKind: 'view',
-        context,
+        context: targetCtx,
         caller: 'user',
         input: { action: 'apply', id: selectedItem.id, ...(selectedItem.path ? { path: selectedItem.path } : {}) },
       })
@@ -470,7 +493,7 @@ function WallpaperSettingsPreview({
   }
 
   return (
-    <div className="space-y-3 rounded-xl border border-border-soft bg-surface-0/60 p-3.5">
+    <div className="space-y-3 rounded-xl border border-border-soft bg-surface-0/60 p-3.5 w-full min-w-0 max-w-full overflow-x-hidden">
       <div className="flex items-center justify-between gap-2 border-b border-border-soft/60 pb-2.5">
         <div className="flex items-center gap-2">
           <Image className="size-4 text-primary" />
@@ -501,24 +524,36 @@ function WallpaperSettingsPreview({
       ) : items.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-6 text-center text-faint">
           <Image className="mb-2 size-8 opacity-40" />
-          <p className="text-xs font-medium text-foreground">No images found in this folder</p>
-          <p className="mt-0.5 text-[11px] text-faint">
-            Use the “Browse…” button above to select a folder containing images (.jpg, .png, .webp).
+          <p className="text-xs font-medium text-foreground">
+            {error ? 'Could not load wallpapers' : cleanFolder ? `No images found in “${cleanFolder}”` : 'No images found in this folder'}
           </p>
+          <p className="mt-0.5 text-[11px] text-faint">
+            {error || 'Use the “Browse…” button above to select a folder containing images (.jpg, .png, .webp).'}
+          </p>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="mt-2.5 h-7 text-xs"
+            onClick={() => void loadWallpapers()}
+          >
+            <RefreshCw className="mr-1.5 size-3" /> Retry scan
+          </Button>
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-3 min-w-0 w-full max-w-full">
           {selectedItem ? (
-            <div className="relative group/feat flex flex-col overflow-hidden rounded-lg border border-border-soft bg-surface-2/40">
-              <div className="relative flex h-52 w-full items-center justify-center overflow-hidden bg-black/70 p-2">
+            <div className="relative group/feat flex flex-col overflow-hidden rounded-xl border border-border-soft bg-surface-2/40 w-full min-w-0 max-w-full shadow-sm">
+              <div className="relative flex aspect-video max-h-[380px] w-full min-w-0 items-center justify-center overflow-hidden bg-black/90 p-2">
                 {items.length > 1 ? (
                   <button
                     type="button"
                     aria-label="Previous picture"
                     onClick={handlePrev}
-                    className="absolute left-2 top-1/2 -translate-y-1/2 z-10 flex size-7 items-center justify-center rounded-full bg-black/60 text-white shadow backdrop-blur-sm transition-all hover:bg-black/90 hover:scale-110 active:scale-95"
+                    className="absolute left-3 top-1/2 -translate-y-1/2 z-20 flex size-9 items-center justify-center rounded-full bg-black/70 text-white shadow-lg backdrop-blur-sm transition-all hover:bg-black/95 hover:scale-110 active:scale-95"
+                    title="Previous wallpaper (Left arrow)"
                   >
-                    <ChevronLeft className="size-4" />
+                    <ChevronLeft className="size-5" />
                   </button>
                 ) : null}
 
@@ -527,9 +562,10 @@ function WallpaperSettingsPreview({
                     type="button"
                     aria-label="Next picture"
                     onClick={handleNext}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 z-10 flex size-7 items-center justify-center rounded-full bg-black/60 text-white shadow backdrop-blur-sm transition-all hover:bg-black/90 hover:scale-110 active:scale-95"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 z-20 flex size-9 items-center justify-center rounded-full bg-black/70 text-white shadow-lg backdrop-blur-sm transition-all hover:bg-black/95 hover:scale-110 active:scale-95"
+                    title="Next wallpaper (Right arrow)"
                   >
-                    <ChevronRight className="size-4" />
+                    <ChevronRight className="size-5" />
                   </button>
                 ) : null}
 
@@ -537,7 +573,7 @@ function WallpaperSettingsPreview({
                   <img
                     src={previewDetail?.dataUrl || previewDetail?.thumbnail || selectedItem.thumbnail}
                     alt={selectedItem.title}
-                    className="size-full object-contain shadow-md"
+                    className="size-full object-contain select-none shadow-md"
                   />
                 ) : (
                   <div className="flex flex-col items-center justify-center text-faint">
@@ -547,30 +583,30 @@ function WallpaperSettingsPreview({
                 )}
 
                 {previewLoading ? (
-                  <div className="absolute top-2 right-2 flex items-center gap-1 rounded bg-black/70 px-2 py-0.5 text-[10px] text-white">
+                  <div className="absolute top-2.5 right-2.5 z-20 flex items-center gap-1 rounded bg-black/75 px-2 py-0.5 text-[10px] text-white backdrop-blur-sm shadow">
                     <RefreshCw className="size-2.5 animate-spin" /> High-res
                   </div>
                 ) : null}
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border-soft/60 bg-surface-1/90 px-3 py-2 text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border-soft/60 bg-surface-1/95 px-3 py-2 text-xs min-w-0 w-full">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5 truncate">
                     <span className="font-semibold text-foreground truncate" title={selectedItem.title}>
                       {selectedItem.title}
                     </span>
                     {previewDetail?.width && previewDetail?.height ? (
-                      <Badge variant="outline" className="text-[9px] font-mono px-1 py-0">
+                      <Badge variant="outline" className="text-[9px] font-mono px-1 py-0 shrink-0">
                         {previewDetail.width} × {previewDetail.height}
                       </Badge>
                     ) : null}
                     {typeof previewDetail?.size === 'number' && previewDetail.size > 0 ? (
-                      <Badge variant="outline" className="text-[9px] font-mono px-1 py-0">
+                      <Badge variant="outline" className="text-[9px] font-mono px-1 py-0 shrink-0">
                         {formatFileSize(previewDetail.size)}
                       </Badge>
                     ) : null}
                     {isSelectedActive ? (
-                      <Badge variant="default" className="text-[9px] px-1 py-0">
+                      <Badge variant="default" className="text-[9px] px-1 py-0 shrink-0">
                         Active
                       </Badge>
                     ) : null}
@@ -584,7 +620,7 @@ function WallpaperSettingsPreview({
                     className="h-6 px-2 text-[11px]"
                     disabled={items.length <= 1}
                     onClick={handlePrev}
-                    title="Previous wallpaper"
+                    title="Previous wallpaper (Left arrow)"
                   >
                     <ChevronLeft className="mr-0.5 size-3" /> Prev
                   </Button>
@@ -594,7 +630,7 @@ function WallpaperSettingsPreview({
                     className="h-6 px-2 text-[11px]"
                     disabled={items.length <= 1}
                     onClick={handleNext}
-                    title="Next wallpaper"
+                    title="Next wallpaper (Right arrow)"
                   >
                     Next <ChevronRight className="ml-0.5 size-3" />
                   </Button>
@@ -616,14 +652,14 @@ function WallpaperSettingsPreview({
             </div>
           ) : null}
 
-          <div className="space-y-1.5">
+          <div className="space-y-1.5 min-w-0 w-full max-w-full">
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-medium text-faint">
                 Wallpapers in this folder ({selectedIndex + 1} of {items.length}):
               </span>
-              <span className="text-[10px] text-faint">Click any image to preview</span>
+              <span className="text-[10px] text-faint">Click thumbnail to preview</span>
             </div>
-            <div className="flex gap-2 overflow-x-auto pb-1 pt-0.5 max-w-full">
+            <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-8 gap-1.5 max-h-36 overflow-y-auto overflow-x-hidden p-1 rounded-md border border-border-soft/50 bg-surface-1/40">
               {items.map((item, idx) => {
                 const isSelected = idx === selectedIndex
                 const isActive = item.meta === 'Active'
@@ -635,7 +671,7 @@ function WallpaperSettingsPreview({
                     tabIndex={0}
                     onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedIndex(idx) } }}
                     className={cn(
-                      "group/thumb relative h-16 w-24 shrink-0 cursor-pointer overflow-hidden rounded-md border transition-all",
+                      "group/thumb relative aspect-video cursor-pointer overflow-hidden rounded-md border transition-all",
                       isSelected
                         ? "border-primary ring-2 ring-primary/40 shadow-sm"
                         : isActive
@@ -689,13 +725,15 @@ function PackageRow({
   busy: boolean
   isActive(extensionId: string, context: NdContext): boolean
   run(action: () => Promise<unknown>): Promise<void>
-  onOpenView(viewId: string): void
+  onOpenView(viewId: string, context?: NdContext): void
 }): React.ReactNode {
   const [settingsDraft, setSettingsDraft] = useState<Record<string, string>>({})
   const [settingsOpen, setSettingsOpen] = useState(false)
   const supported = contexts.filter((option) => item.contexts.includes(option.context.kind))
-  const manageKey = contextKey(manageContext)
-  const activation = state.activations.find((record) => record.extensionId === item.id && record.contextKey === manageKey)
+  const isManageSupported = supported.some((option) => contextKey(option.context) === contextKey(manageContext))
+  const effectiveContext = isManageSupported ? manageContext : (supported[0]?.context ?? manageContext)
+  const effectiveKey = contextKey(effectiveContext)
+  const activation = state.activations.find((record) => record.extensionId === item.id && record.contextKey === effectiveKey)
   const primaryView = item.views[0]
 
   return (
@@ -751,7 +789,7 @@ function PackageRow({
 
           <div className="mt-3 flex flex-wrap items-center gap-2">
             {item.views.length > 0 ? (
-              <Button size="sm" disabled={busy || !activation?.enabled} onClick={() => onOpenView(primaryView!.id)}>
+              <Button size="sm" disabled={busy || !activation?.enabled} onClick={() => onOpenView(primaryView!.id, effectiveContext)}>
                 <Image className="size-3.5" /> Open{item.views.length === 1 ? '' : ` ${primaryView!.title}`}
               </Button>
             ) : null}
@@ -770,7 +808,7 @@ function PackageRow({
           {item.views.length > 1 ? (
             <div className="mt-2 flex flex-wrap gap-1.5">
               {item.views.slice(1).map((view) => (
-                <Button key={view.id} size="sm" variant="ghost" className="h-7 px-2 text-[10px]" disabled={busy || !activation?.enabled} onClick={() => onOpenView(view.id)}>
+                <Button key={view.id} size="sm" variant="ghost" className="h-7 px-2 text-[10px]" disabled={busy || !activation?.enabled} onClick={() => onOpenView(view.id, effectiveContext)}>
                   Open {view.title}
                 </Button>
               ))}
@@ -780,19 +818,19 @@ function PackageRow({
       </article>
 
       <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
-        <DialogContent className={cn("max-h-[85vh] overflow-y-auto border-border-strong bg-surface-1", item.id === 'nd.wallpaper-manager' ? "sm:max-w-2xl md:max-w-3xl" : "sm:max-w-xl")}>
+        <DialogContent className={cn("max-h-[88vh] overflow-y-auto overflow-x-hidden border-border-strong bg-surface-1 min-w-0 w-full", item.id === 'nd.wallpaper-manager' ? "sm:max-w-3xl md:max-w-4xl" : "sm:max-w-xl")}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2"><Settings2 className="size-4 text-primary" /> {item.name} settings</DialogTitle>
-            <DialogDescription>Settings apply to {contexts.find((option) => contextKey(option.context) === manageKey)?.label ?? 'this context'}.</DialogDescription>
+            <DialogDescription>Settings apply to {contexts.find((option) => contextKey(option.context) === effectiveKey)?.label ?? 'this context'}.</DialogDescription>
           </DialogHeader>
           {item.settings.length > 0 ? (
-            <div className="space-y-4 py-1">
+            <div className="space-y-4 py-1 min-w-0 w-full max-w-full overflow-x-hidden">
               {item.settings.map((field) => {
                 const current = activation?.settings[field.key] ?? field.default
-                const draftKey = `${item.id}:${manageKey}:${field.key}`
+                const draftKey = `${item.id}:${effectiveKey}:${field.key}`
                 const draft = settingsDraft[draftKey] ?? String(current ?? '')
                 return (
-                  <div key={field.key} className="space-y-1.5">
+                  <div key={field.key} className="space-y-1.5 min-w-0 w-full max-w-full">
                     <label className="block text-xs font-medium text-foreground" htmlFor={`${item.id}-${field.key}`}>{field.title}</label>
                     {field.description ? <p className="m-0 text-[10px] leading-4 text-faint">{field.description}</p> : null}
                     {field.type === 'boolean' ? (
@@ -807,7 +845,7 @@ function PackageRow({
                         {draft === 'true' ? 'On' : 'Off'}
                       </label>
                     ) : (field.key === 'folder' || field.key.toLowerCase().includes('folder') || field.title.toLowerCase().includes('folder')) ? (
-                      <div className="space-y-2">
+                      <div className="space-y-2 min-w-0 w-full max-w-full">
                         <div className="flex items-center gap-2">
                           <Input
                             id={`${item.id}-${field.key}`}
@@ -831,7 +869,7 @@ function PackageRow({
                                     extensionId: item.id,
                                     contributionId: 'wallpaper-studio',
                                     contributionKind: 'view',
-                                    context: manageContext,
+                                    context: effectiveContext,
                                     caller: 'user',
                                     input: { action: 'set-folder' },
                                   })
@@ -852,7 +890,7 @@ function PackageRow({
                               })
                               if (picked) {
                                 setSettingsDraft((prev) => ({ ...prev, [draftKey]: picked }))
-                                await run(() => window.ndDsh.ndExtensions.setSetting(item.id, manageContext, field.key, picked))
+                                await run(() => window.ndDsh.ndExtensions.setSetting(item.id, effectiveContext, field.key, picked))
                               }
                             }}
                           >
@@ -862,10 +900,10 @@ function PackageRow({
                         {item.id === 'nd.wallpaper-manager' && field.key === 'folder' ? (
                           <WallpaperSettingsPreview
                             folder={draft}
-                            context={manageContext}
+                            context={effectiveContext}
                             onOpenStudio={() => {
                               setSettingsOpen(false)
-                              onOpenView('wallpaper-studio')
+                              onOpenView('wallpaper-studio', effectiveContext)
                             }}
                             onWallpaperChanged={() => void run(() => Promise.resolve())}
                           />
@@ -888,7 +926,7 @@ function PackageRow({
                         disabled={busy}
                         onClick={() => void run(() => window.ndDsh.ndExtensions.setSetting(
                           item.id,
-                          manageContext,
+                          effectiveContext,
                           field.key,
                           field.type === 'number' ? Number(draft) : field.type === 'boolean' ? draft === 'true' : draft,
                         ))}

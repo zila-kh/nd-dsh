@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { access, readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, extname, join, win32 } from 'node:path'
+import { basename, dirname, extname, join, win32 } from 'node:path'
 import process from 'node:process'
 import { promisify } from 'node:util'
 
@@ -127,9 +127,23 @@ export function resolveDefaultWallpaperFolder(): string {
   return join(home, 'Pictures')
 }
 
+export function normalizeWallpaperPath(raw?: string): string {
+  if (!raw) return ''
+  let cleaned = raw.trim()
+  while ((cleaned.startsWith('"') && cleaned.endsWith('"')) || (cleaned.startsWith("'") && cleaned.endsWith("'"))) {
+    cleaned = cleaned.slice(1, -1).trim()
+  }
+  return cleaned
+}
+
 export async function listWallpapersInFolder(folderPath?: string): Promise<WallpaperEntry[]> {
-  const targetFolder = folderPath && folderPath.trim() ? folderPath.trim() : resolveDefaultWallpaperFolder()
+  const normalized = normalizeWallpaperPath(folderPath)
+  let targetFolder = normalized || resolveDefaultWallpaperFolder()
   try {
+    const s = await stat(targetFolder).catch(() => null)
+    if (s && !s.isDirectory()) {
+      targetFolder = dirname(targetFolder)
+    }
     await access(targetFolder)
     const entries = await readdir(targetFolder, { withFileTypes: true })
     const results: WallpaperEntry[] = []
@@ -232,7 +246,7 @@ export async function applyWallpaperFromFolder(
   filename: string,
   platform?: NodeJS.Platform | undefined,
 ): Promise<{ changed: boolean; name: string; path: string }> {
-  const targetFolder = folder && folder.trim() ? folder.trim() : resolveDefaultWallpaperFolder()
+  const targetFolder = normalizeWallpaperPath(folder) || resolveDefaultWallpaperFolder()
   let targetPath = filename
   let exists = false
   try {

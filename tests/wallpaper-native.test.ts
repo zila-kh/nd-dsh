@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import {
   getActiveWallpaperState,
   listWallpapersInFolder,
+  normalizeWallpaperPath,
   setActiveWallpaperState,
   wallpaperCommands,
 } from '../src/main/os/wallpaper.js'
@@ -69,6 +70,23 @@ describe('desktop wallpaper adapter', () => {
       const items = await listWallpapersInFolder(dir)
       expect(items.map((i) => i.filename)).toEqual(['01_nature.jpg', '02_mountain.png'])
       expect(items[0]?.path).toBe(join(sub, '01_nature.jpg'))
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('normalizes quoted and messy folder paths correctly', async () => {
+    expect(normalizeWallpaperPath('"C:\\Users\\Pictures"')).toBe('C:\\Users\\Pictures')
+    expect(normalizeWallpaperPath("'C:\\Users\\Pictures'")).toBe('C:\\Users\\Pictures')
+    expect(normalizeWallpaperPath('  "D:\\wallpapers"  ')).toBe('D:\\wallpapers')
+    expect(normalizeWallpaperPath(undefined)).toBe('')
+
+    const dir = await mkdtemp(join(tmpdir(), 'nd-wp-quoted-'))
+    try {
+      await writeFile(join(dir, 'photo.jpg'), 'fake')
+      const items = await listWallpapersInFolder(`"${dir}"`)
+      expect(items).toHaveLength(1)
+      expect(items[0]?.filename).toBe('photo.jpg')
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

@@ -19,6 +19,7 @@ import {
   cycleWallpaper,
   getActiveWallpaperState,
   listWallpapersInFolder,
+  normalizeWallpaperPath,
   resolveDefaultWallpaperFolder,
   setDesktopWallpaper,
 } from '../os/wallpaper.js'
@@ -596,19 +597,19 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void 
 
   host.register('os.wallpaper.applySelected', async (input, context) => {
     const filename = requiredText(input.id ?? input.filename ?? input.path, 'Wallpaper file', 4096)
-    const folder = typeof input?.folder === 'string' && input.folder.trim()
-      ? input.folder.trim()
-      : (typeof context.settings?.folder === 'string' && context.settings.folder ? context.settings.folder : undefined)
+    const folder = normalizeWallpaperPath(typeof input?.folder === 'string' ? input.folder : undefined)
+      || normalizeWallpaperPath(typeof context.settings?.folder === 'string' ? context.settings.folder : undefined)
+      || undefined
     const result = await applyWallpaperFromFolder(folder, filename)
     return { changed: result.changed, name: result.name, path: result.path }
   })
 
   host.register('os.wallpaper.preview', async (input, context) => {
     const filename = requiredText(input.id ?? input.filename ?? input.path, 'Wallpaper file', 4096)
-    const folder = typeof input?.folder === 'string' && input.folder.trim()
-      ? input.folder.trim()
-      : (typeof context.settings?.folder === 'string' && context.settings.folder ? context.settings.folder : undefined)
-    const targetFolder = folder && folder.trim() ? folder.trim() : resolveDefaultWallpaperFolder()
+    const folder = normalizeWallpaperPath(typeof input?.folder === 'string' ? input.folder : undefined)
+      || normalizeWallpaperPath(typeof context.settings?.folder === 'string' ? context.settings.folder : undefined)
+      || undefined
+    const targetFolder = folder || resolveDefaultWallpaperFolder()
     let targetPath = filename
     let exists = false
     try {
@@ -656,9 +657,9 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void 
   })
 
   host.register('os.wallpaper.status', async (input, context) => {
-    const inputFolder = typeof input?.folder === 'string' && input.folder.trim() ? input.folder.trim() : undefined
-    const settingFolder = typeof context.settings?.folder === 'string' && context.settings.folder ? context.settings.folder : undefined
-    const folder = inputFolder ?? settingFolder
+    const inputFolder = normalizeWallpaperPath(typeof input?.folder === 'string' ? input.folder : undefined)
+    const settingFolder = normalizeWallpaperPath(typeof context.settings?.folder === 'string' ? context.settings.folder : undefined)
+    const folder = inputFolder || settingFolder || undefined
     const items = await listWallpapersInFolder(folder)
     const active = getActiveWallpaperState()
     return items.map((item, index) => {
