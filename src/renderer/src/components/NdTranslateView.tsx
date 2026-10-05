@@ -23,7 +23,8 @@ const PROVIDERS: Array<{ id: NdBrowserTranslateProvider; label: string }> = [
   { id: 'gemini', label: 'Gemini' },
 ]
 const SELECT_CLASS = 'h-8 rounded-md border border-border-soft bg-surface-0 px-2 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring'
-const TEXT_CLASS = 'min-h-48 w-full resize-none bg-transparent p-4 text-sm leading-relaxed text-foreground outline-none placeholder:text-faint focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:min-h-60'
+const TEXT_CLASS = 'min-h-48 w-full resize-none bg-transparent p-4 text-sm leading-relaxed text-foreground outline-none placeholder:text-faint sm:min-h-60'
+const TEXT_FOCUS_CLASS = 'focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring'
 // Keep retry text only in this renderer's memory, scoped to the authorized context.
 const browserDrafts = new Map<string, NdTranslateRequest>()
 const manuallySelectedTargets = new Set<string>()
@@ -515,7 +516,7 @@ export default function NdTranslateView({ context, onOpenBrowser }: {
       <div className="grid overflow-hidden rounded-lg border border-border-soft bg-surface-0/50 sm:grid-cols-2">
         <div className="border-b border-border-soft sm:border-b-0 sm:border-r">
           <label htmlFor={`${id}-text`} className="block px-4 pt-3 text-xs font-medium text-soft">Original text</label>
-          <textarea id={`${id}-text`} className={TEXT_CLASS} disabled={openingBrowser} placeholder="Type or paste text to translate…" value={text} maxLength={ND_TRANSLATE_MAX_TEXT} onChange={(event) => { if (opening.current) return; invalidate(); setText(event.target.value) }} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); void translate() } }} />
+          <textarea id={`${id}-text`} className={cn(TEXT_CLASS, TEXT_FOCUS_CLASS)} disabled={openingBrowser} placeholder="Type or paste text to translate…" value={text} maxLength={ND_TRANSLATE_MAX_TEXT} onChange={(event) => { if (opening.current) return; invalidate(); setText(event.target.value) }} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); void translate() } }} />
           <div className="flex items-center justify-between px-4 pb-3 text-[11px] text-faint"><span>{text.length.toLocaleString()} / {ND_TRANSLATE_MAX_TEXT.toLocaleString()}</span><Button type="button" size="xs" variant="ghost" disabled={!text || busy || openingBrowser} onClick={() => { if (opening.current) return; invalidate(); setText('') }}>Clear</Button></div>
         </div>
         <div aria-busy={busy}>
