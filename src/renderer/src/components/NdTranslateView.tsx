@@ -24,7 +24,7 @@ const PROVIDERS: Array<{ id: NdBrowserTranslateProvider; label: string }> = [
 ]
 const SELECT_CLASS = 'h-8 rounded-md border border-border-soft bg-surface-0 px-2 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring'
 const TEXT_CLASS = 'min-h-48 w-full resize-none bg-transparent p-4 text-sm leading-relaxed text-foreground outline-none placeholder:text-faint sm:min-h-60'
-const TEXT_FOCUS_CLASS = 'focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring'
+const TEXT_FOCUS_CLASS = 'focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-border-strong'
 // Keep retry text only in this renderer's memory, scoped to the authorized context.
 const browserDrafts = new Map<string, NdTranslateRequest>()
 const manuallySelectedTargets = new Set<string>()
