@@ -33,7 +33,7 @@ export const SETTINGS_SEARCH_ENTRIES: SettingsSearchEntry[] = [
   { id: 'capabilities-context', title: 'Context providers', section: 'Capabilities · Context', tab: 'capabilities', capabilitySubTab: 'context', keywords: ['context'] },
   { id: 'capabilities-lifecycle', title: 'Lifecycle providers', section: 'Capabilities · Lifecycle', tab: 'capabilities', capabilitySubTab: 'lifecycle', keywords: ['lifecycle', 'approved setup'] },
   { id: 'extensions-packages', title: 'ND extension packages', section: 'Extensions', tab: 'extensions', keywords: ['extension', 'package', 'activation', 'grant', 'context', 'install'] },
-  { id: 'plugins-manager', title: 'Agent plugins (MCP, skills, commands, hooks)', section: 'Plugins', tab: 'plugins', keywords: ['plugin', 'mcp', 'skill', 'command', 'hook', 'subagent'] },
+  { id: 'plugins-manager', title: 'Agent plugins (MCP, skills, commands, hooks, routing)', section: 'Plugins', tab: 'plugins', keywords: ['plugin', 'mcp', 'skill', 'command', 'hook', 'subagent', 'routing', 'engine route', 'provider scope', 'adapter'] },
   { id: 'engines', title: 'Coding engines', section: 'Coding engines · Engines', tab: 'engines', enginesSubTab: 'engines', keywords: ['engine', 'codex', 'agy', 'antigravity', 'harness', 'default chat'] },
   { id: 'engines-gateway', title: 'ND Gateway', section: 'Coding engines · Gateway', tab: 'engines', enginesSubTab: 'gateway', keywords: ['gateway', 'codex', 'chatgpt', 'external apps'] },
   { id: 'engines-tokens', title: 'Token efficiency (saver & tool optimization)', section: 'Coding engines · Token efficiency', tab: 'engines', enginesSubTab: 'tokens', keywords: ['token', 'saver', 'optimization', 'tool call', 'context budget'] },
