@@ -165,13 +165,10 @@ function TranslateHistory({ context, onLoad }: {
         </Button>
       </div>
       {message ? <div role="alert" className="rounded-md border border-border-soft bg-surface-0/60 p-3 text-xs text-soft">{message}</div> : null}
-      {entries && entries.length === 0 ? (
-        <div className="rounded-md border border-border-soft px-3 py-8 text-center text-xs text-faint">
-          No translations yet. Translate text to see it here.
-        </div>
-      ) : null}
-      <div className="max-h-[46vh] space-y-2 overflow-y-auto pr-1">
-        {entries?.map((entry) => (
+      <div className="h-[26rem] space-y-2 overflow-y-auto pr-1">
+        {loading ? (
+          <div className="flex h-full items-center justify-center text-xs text-faint"><LoaderCircle className="mr-1.5 inline size-3.5 animate-spin" />Loading…</div>
+        ) : entries?.length ? entries.map((entry) => (
           <div key={entry.id} className="rounded-lg border border-border-soft bg-surface-0/50">
             <button type="button" className="block w-full px-3 pb-1.5 pt-2.5 text-left" title="Load this translation" onClick={() => onLoad(entry)}>
               <div className="flex items-center justify-between gap-2 text-[11px] text-soft">
@@ -194,7 +191,11 @@ function TranslateHistory({ context, onLoad }: {
               </Button>
             </div>
           </div>
-        ))}
+        )) : (
+          <div className="flex h-full items-center justify-center rounded-md border border-border-soft px-3 text-center text-xs text-faint">
+            No translations yet. Translate text to see it here.
+          </div>
+        )}
       </div>
     </div>
   )
@@ -366,17 +367,15 @@ export default function NdTranslateView({ context, onOpenBrowser }: {
     setMode('translate')
   }
 
-  const modeButtonClass = (active: boolean): string =>
-    active ? 'font-semibold text-foreground' : 'text-faint hover:text-foreground'
+  const tabClass = (active: boolean): string =>
+    `inline-flex h-[calc(100%-1px)] items-center gap-1.5 rounded-md px-2.5 text-xs font-medium whitespace-nowrap transition-all ${active ? 'bg-background text-foreground shadow-sm' : 'text-foreground/60 hover:text-foreground'}`
 
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-xs text-soft">
-          <Languages className="size-4 text-primary" />
-          <button type="button" aria-pressed={mode === 'translate'} className={modeButtonClass(mode === 'translate')} onClick={() => setMode('translate')}>Translate</button>
-          <span className="text-border">·</span>
-          <button type="button" aria-pressed={mode === 'history'} className={modeButtonClass(mode === 'history')} onClick={() => setMode('history')}><History className="mr-1 inline size-3" />History</button>
+        <div role="tablist" aria-label="Translate or history" className="inline-flex h-8 items-center rounded-lg bg-muted p-[3px] text-muted-foreground">
+          <button type="button" role="tab" aria-selected={mode === 'translate'} className={tabClass(mode === 'translate')} onClick={() => setMode('translate')}><Languages className="size-3.5" />Translate</button>
+          <button type="button" role="tab" aria-selected={mode === 'history'} className={tabClass(mode === 'history')} onClick={() => setMode('history')}><History className="size-3.5" />History</button>
         </div>
         {mode === 'translate' ? (
           <label className="flex items-center gap-2 text-xs text-faint" htmlFor={`${id}-provider`}>
