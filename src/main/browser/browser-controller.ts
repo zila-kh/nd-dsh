@@ -105,6 +105,7 @@ export class BrowserController {
   private lastBoundTarget: string | undefined
   private destroyPromise: Promise<void> | undefined
   private destroying = false
+  private readonly backgroundAttached = new Set<string>()
 
   constructor(
     private readonly window: BrowserWindow,
@@ -376,6 +377,7 @@ export class BrowserController {
     }
     if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close()
     this.tabs.delete(tabId)
+    this.backgroundAttached.delete(tabId)
     this.onTabClosed?.(tabId)
 
     if (this.tabs.size === 0) {
@@ -425,7 +427,12 @@ export class BrowserController {
       width: Math.max(0, Math.round(bounds.width)),
       height: Math.max(0, Math.round(bounds.height)),
     }
-    this.activeTab().view.setBounds(this.bounds)
+    const active = this.activeTab()
+    if (!this.backgroundAttached.has(active.id)) active.view.setBounds(this.bounds)
+    for (const id of this.backgroundAttached) {
+      const tab = this.tabs.get(id)
+      if (tab) tab.view.setBounds(this.visible ? this.bounds : this.backgroundRenderBounds())
+    }
     this.syncExtensionPopupBounds()
   }
 
@@ -547,6 +554,34 @@ export class BrowserController {
   async readTranslatePage(tabId: string, provider: import('../../shared/nd-translate.js').NdTranslateProvider): Promise<import('../../shared/nd-translate.js').NdTranslatePage> {
     const contents = this.requireTab(tabId).view.webContents
     return contents.executeJavaScript(translatePageReadScript(provider), true) as Promise<import('../../shared/nd-translate.js').NdTranslatePage>
+  }
+
+  /**
+   * Attach a tab offscreen so provider pages keep rendering while the app UI
+   * covers the browser surface. Hidden views report a zero viewport and a
+   * hidden visibility state, which defers provider rendering (Google Translate
+   * never inserts its result span) even though its translation API completes.
+   * Returns a restore callback that reapplies the normal visibility sync.
+   */
+  attachTabForBackgroundRendering(tabId: string): () => void {
+    const tab = this.requireTab(tabId)
+    this.backgroundAttached.add(tabId)
+    tab.view.setVisible(true)
+    tab.view.setBounds(this.backgroundRenderBounds())
+    let restored = false
+    return () => {
+      if (restored) return
+      restored = true
+      this.backgroundAttached.delete(tabId)
+      this.syncViewVisibility()
+    }
+  }
+
+  /** Offscreen but overlapping the surface by one pixel: fully offscreen views
+   * are occluded by Chromium, hiding the page and zeroing its viewport, which
+   * makes provider pages defer rendering. */
+  private backgroundRenderBounds(): Rectangle {
+    return { x: Math.max(0, this.bounds.width - 1), y: Math.max(0, this.bounds.height - 1), width: 1280, height: 900 }
   }
 
   async click(tabId: string, ref: string, revision: number): Promise<unknown> {
@@ -951,6 +986,13 @@ export class BrowserController {
 
   private syncViewVisibility(): void {
     for (const tab of this.tabs.values()) {
+      if (this.backgroundAttached.has(tab.id)) {
+        // Attached tabs render offscreen while the surface is hidden and fill
+        // the pane when the user opens the browser during a translation.
+        tab.view.setBounds(this.visible ? this.bounds : this.backgroundRenderBounds())
+        tab.view.setVisible(true)
+        continue
+      }
       const active = tab.id === this.activeTabIdValue
       tab.view.setBounds(this.bounds)
       tab.view.setVisible(active && this.visible)

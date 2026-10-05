@@ -2,10 +2,12 @@ import { ND_TRANSLATE_LANGUAGES, ND_TRANSLATE_MAX_TEXT, type NdTranslatePage, ty
 
 export interface TranslateBrowserPort {
   createTab(url: string, activate: boolean): Promise<{ id: string }>
+  navigate(url: string, tabId: string): Promise<unknown>
   semanticSnapshot(tabId: string): Promise<unknown>
   fill(tabId: string, ref: string, revision: number, text: string): Promise<unknown>
   click(tabId: string, ref: string, revision: number): Promise<unknown>
   readTranslatePage(tabId: string, provider: NdTranslateProvider): Promise<NdTranslatePage>
+  attachTabForBackgroundRendering(tabId: string): () => void
 }
 
 const PROVIDER_URLS = { google: 'https://translate.google.com/', chatgpt: 'https://chatgpt.com/', gemini: 'https://gemini.google.com/app' } as const
@@ -72,6 +74,7 @@ export class NdTranslateService {
     this.running = true
     let cancelled = false
     let tabId: string | undefined
+    let restoreTab: (() => void) | undefined
     let timer: ReturnType<typeof setTimeout> | undefined
     let wake: (() => void) | undefined
     const check = (): void => { if (cancelled || this.disposed) throw new Error('Translation stopped. Check the provider in the ND browser and try again.') }
@@ -97,8 +100,13 @@ export class NdTranslateService {
     }
     const work = async (): Promise<NdTranslateResult> => {
       check()
-      const tab = await this.browser.createTab(translationUrl(request), true)
+      const tab = await this.browser.createTab('about:blank', true)
       tabId = tab.id
+      check()
+      // Provider pages defer rendering while their view is hidden, so attach the
+      // owned tab offscreen before navigating; it then loads like a visible page.
+      restoreTab = this.browser.attachTabForBackgroundRendering(tabId)
+      await this.browser.navigate(translationUrl(request), tabId)
       check()
       if (request.provider !== 'google') {
         let filled = false
@@ -165,6 +173,7 @@ export class NdTranslateService {
       return { ...request, status: error instanceof TranslateState ? error.status : 'error', message: error instanceof Error ? error.message : 'Translation failed. Check the ND browser and try again.', ...(tabId ? { browserTabId: tabId } : {}), url: translationUrl(request) }
     } finally {
       stop()
+      restoreTab?.()
       if (timer) clearTimeout(timer)
       this.cancelCurrent = undefined
       this.running = false

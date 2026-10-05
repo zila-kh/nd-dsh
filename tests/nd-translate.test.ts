@@ -10,6 +10,7 @@ function browser() {
   let sent = false
   const port: TranslateBrowserPort = {
     createTab: vi.fn(async (target) => { url = target; return { id: 'translation-tab' } }),
+    navigate: vi.fn(async (target) => { url = target; return undefined }),
     semanticSnapshot: vi.fn(async () => ({ url, revision: 1, elements: [
       { ref: '@input', tag: 'textarea', role: 'textbox' },
       { ref: '@send', role: 'button', name: 'Send message' },
@@ -17,6 +18,7 @@ function browser() {
     fill: vi.fn(async () => ({ ok: true })),
     click: vi.fn(async () => { sent = true; return { ok: true } }),
     readTranslatePage: vi.fn(async () => ({ url, text: url.includes('translate.google.com') || sent ? 'សួស្តី' : '', complete: sent })),
+    attachTabForBackgroundRendering: vi.fn(() => () => undefined),
   }
   return port
 }
@@ -67,8 +69,22 @@ describe('ND Translate canonical browser workflow', () => {
     const pending = new NdTranslateService(port, 100, 1).translate({ ...input, text: ' Hello\n' })
     await vi.advanceTimersByTimeAsync(10)
     expect(await pending).toMatchObject({ status: 'translated', text: ' Hello\n', translatedText: 'សួស្តី', browserTabId: 'translation-tab' })
-    expect(port.createTab).toHaveBeenCalledWith(expect.stringContaining('translate.google.com'), true)
+    expect(port.createTab).toHaveBeenCalledWith('about:blank', true)
+    expect(port.navigate).toHaveBeenCalledWith(expect.stringContaining('translate.google.com'), 'translation-tab')
     expect(port.fill).not.toHaveBeenCalled()
+  })
+
+  it('keeps the owned tab attached for background rendering and restores it when finished', async () => {
+    vi.useFakeTimers()
+    const port = browser()
+    const restore = vi.fn()
+    vi.mocked(port.attachTabForBackgroundRendering).mockReturnValue(restore)
+    const pending = new NdTranslateService(port, 100, 1).translate(input)
+    await vi.advanceTimersByTimeAsync(10)
+    expect(await pending).toMatchObject({ status: 'translated' })
+    expect(port.attachTabForBackgroundRendering).toHaveBeenCalledWith('translation-tab')
+    expect(port.attachTabForBackgroundRendering).toHaveBeenCalledTimes(1)
+    expect(restore).toHaveBeenCalledTimes(1)
   })
 
   it.each(['chatgpt', 'gemini'])('submits %s through semantic fill and click, then waits for a completed response', async (provider) => {
