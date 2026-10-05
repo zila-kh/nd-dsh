@@ -429,3 +429,82 @@ describe('ND Translate form', () => {
     expect(field('provider').props.value).toBe('google')
   })
 })
+
+function translateButton(): TestElement {
+  const item = elements(render()).find((element) => element.props.type === 'submit')
+  if (!item) throw new Error('Missing translate submit button')
+  return item
+}
+
+const PASTED_URL = 'data:image/png;base64,QUJD'
+class FakeFileReader {
+  result: string | null = null
+  onload: (() => void) | null = null
+  onerror: (() => void) | null = null
+  readAsDataURL(): void {
+    this.result = PASTED_URL
+    queueMicrotask(() => { if (this.onload) this.onload() })
+  }
+}
+
+function pasteImages(count: number): void {
+  const files = Array.from({ length: count }, (): File => ({ type: 'image/png', size: 100 }) as unknown as File)
+  const event = {
+    clipboardData: { items: files.map((file) => ({ kind: 'file', type: 'image/png', getAsFile: () => file })) },
+    preventDefault: vi.fn(),
+  }
+  ;(field('text').props.onPaste as (event: unknown) => void)(event)
+}
+async function flush(): Promise<void> {
+  await Promise.resolve()
+  await Promise.resolve()
+  await Promise.resolve()
+  await Promise.resolve()
+}
+function pastedImages(): string[] {
+  return elements(render()).filter((element) => element.type === 'img').map((element) => String(element.props.src))
+}
+
+describe('ND Translate image paste', () => {
+  beforeEach(() => {
+    vi.stubGlobal('FileReader', FakeFileReader)
+  })
+
+  it('shows pasted images as removable thumbnails and sends them with the request', async () => {
+    invoke.mockResolvedValue({ ok: true, value: { status: 'translated', translatedText: 'សួស្តី' } })
+    pasteImages(2)
+    await flush()
+    expect(pastedImages()).toEqual([PASTED_URL, PASTED_URL])
+    expect(field('text').props.value).toBe('')
+    expect(translateButton().props.disabled).toBe(false)
+
+    const remove = elements(render()).find((element) => element.props['aria-label'] === 'Remove image 1')
+    ;(remove!.props.onClick as () => void)()
+    expect(pastedImages()).toEqual([PASTED_URL])
+
+    change('text', 'Hello')
+    await submit()
+    expect(invoke).toHaveBeenCalledWith({
+      extensionId: 'nd.translate', contributionId: 'translator', contributionKind: 'view', caller: 'user', context: { kind: 'personal' },
+      input: { text: 'Hello', sourceLanguage: 'auto', targetLanguage: 'km', provider: 'google', images: [PASTED_URL] },
+    })
+  })
+
+  it('clears pasted images together with the text', async () => {
+    pasteImages(1)
+    await flush()
+    change('text', 'Hello')
+    const clear = elements(render()).find((element) => element.props.children === 'Clear')
+    ;(clear!.props.onClick as () => void)()
+    expect(field('text').props.value).toBe('')
+    expect(pastedImages()).toEqual([])
+  })
+
+  it('surfaces the provider error when images reach a browser provider', async () => {
+    invoke.mockResolvedValue({ ok: true, value: { status: 'error', message: 'Image translation works with LLM providers from Settings → Models. Pick one in the provider menu.' } })
+    pasteImages(1)
+    await flush()
+    await submit()
+    expect(message()).toContain('LLM providers')
+  })
+})

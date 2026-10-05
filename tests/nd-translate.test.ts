@@ -59,6 +59,20 @@ describe('ND Translate input and extension boundary', () => {
     })
   })
 
+  it('validates pasted image data URLs and rejects them in the browser workflow', async () => {
+    const image = 'data:image/png;base64,QUJD'
+    expect(translateRequest({ ...input, images: [image] }).images).toEqual([image])
+    for (const images of [ ['https://example.com/a.png'], [image, image, image, image], ['data:image/png;base64,QUJD'.repeat(1_000_000)] ]) {
+      expect(() => translateRequest({ ...input, images })).toThrow()
+    }
+    await expect(new NdTranslateService(browser()).translate({ ...input, images: [image] })).resolves.toMatchObject({
+      status: 'error', message: expect.stringContaining('LLM providers'),
+    })
+    expect(await new NdTranslateService(browser()).translate({ ...input, text: '', images: [image] })).toMatchObject({
+      status: 'error', message: expect.stringContaining('LLM providers'),
+    })
+  })
+
   it('encodes submitted content as URL data and keeps an allowlisted HTTPS origin', () => {
     const request = translateRequest({ ...input, text: "a&tl=ru#<script>💙\n ' quote" })
     const url = new URL(translationUrl(request))

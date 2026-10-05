@@ -1,5 +1,19 @@
 export const ND_TRANSLATE_ID = 'nd.translate'
 export const ND_TRANSLATE_MAX_TEXT = 5_000
+export const ND_TRANSLATE_MAX_IMAGES = 3
+/** Pasted-image byte cap (~6 MB); the data-URL length cap below is its base64 inflation. */
+export const ND_TRANSLATE_MAX_IMAGE_BYTES = 6_000_000
+export const ND_TRANSLATE_MAX_IMAGE_LENGTH = ND_TRANSLATE_MAX_IMAGE_BYTES * 4 / 3
+const IMAGE_DATA_URL = /^data:image\/(png|jpe?g|gif|webp);base64,[A-Za-z0-9+/]+={0,2}$/
+
+export function isImageDataUrl(value: string): boolean {
+  return typeof value === 'string' && value.length <= ND_TRANSLATE_MAX_IMAGE_LENGTH && IMAGE_DATA_URL.test(value)
+}
+
+export function imageMediaType(value: string): string | undefined {
+  const match = /^data:(image\/[a-z0-9.+-]+);base64,/.exec(value)
+  return match?.[1]
+}
 export type NdBrowserTranslateProvider = 'google' | 'chatgpt' | 'gemini'
 /** A Settings → Models LLM provider, referenced as `llm:<providerId>`. */
 export type NdTranslateLlmProvider = `llm:${string}`
@@ -37,6 +51,8 @@ export interface NdTranslateRequest {
   provider: NdTranslateProvider
   /** LLM provider model override; defaults to the provider's first model. */
   model?: string
+  /** Pasted images as data URLs; LLM providers only, never persisted to history. */
+  images?: string[]
 }
 
 export interface NdTranslateResult extends NdTranslateRequest {

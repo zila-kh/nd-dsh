@@ -1,12 +1,15 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { ArrowLeftRight, Check, Copy, ExternalLink, History, Languages, LoaderCircle, Trash2 } from 'lucide-react'
+import { ArrowLeftRight, Check, Copy, ExternalLink, History, Languages, LoaderCircle, Trash2, X } from 'lucide-react'
 import type { NdContext } from '../../../shared/nd-context'
 import { contextKey } from '../../../shared/nd-context'
 import type { ModelProvider } from '../../../shared/contracts'
 import {
+  isImageDataUrl,
   isLlmProvider,
   llmProviderId,
   ND_TRANSLATE_LANGUAGES,
+  ND_TRANSLATE_MAX_IMAGE_BYTES,
+  ND_TRANSLATE_MAX_IMAGES,
   ND_TRANSLATE_MAX_TEXT,
   type NdBrowserTranslateProvider,
   type NdTranslateHistoryEntry,
@@ -254,6 +257,7 @@ export default function NdTranslateView({ context, onOpenBrowser }: {
   const id = useId()
   const [initial] = useState(() => restoreBrowserDraft(context))
   const [text, setText] = useState(initial?.text ?? '')
+  const [images, setImages] = useState<string[]>([])
   const [sourceLanguage, setSourceLanguage] = useState(initial?.sourceLanguage ?? 'auto')
   const [targetLanguage, setTargetLanguage] = useState(initial?.targetLanguage ?? 'km')
   const [provider, setProvider] = useState<NdTranslateProvider>(initial?.provider ?? 'google')
@@ -314,6 +318,43 @@ export default function NdTranslateView({ context, onOpenBrowser }: {
     browserDrafts.delete(contextKey(context))
   }
 
+  const addPastedImages = (files: File[]): void => {
+    if (opening.current) return
+    const candidates = files
+      .filter((file) => file.type.startsWith('image/'))
+      .slice(0, ND_TRANSLATE_MAX_IMAGES)
+    if (candidates.length === 0) return
+    const oversized = candidates.some((file) => file.size > ND_TRANSLATE_MAX_IMAGE_BYTES)
+    void Promise.all(candidates.map((file) => new Promise<string | null>((resolve) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null)
+      reader.onerror = () => resolve(null)
+      reader.readAsDataURL(file)
+    }))).then((results) => {
+      const valid = results.filter((url): url is string => url !== null && isImageDataUrl(url))
+      if (!mounted.current) return
+      if (oversized) setMessage(`Images must be under ${Math.floor(ND_TRANSLATE_MAX_IMAGE_BYTES / 1024 / 1024)} MB each.`)
+      if (valid.length > 0) {
+        invalidate()
+        setImages((prev) => [...prev, ...valid].slice(0, ND_TRANSLATE_MAX_IMAGES))
+      }
+    })
+  }
+
+  const removeImage = (index: number): void => {
+    if (opening.current) return
+    invalidate()
+    setImages((prev) => prev.filter((_, item) => item !== index))
+  }
+
+  const onPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>): void => {
+    if (opening.current) return
+    const items = Array.from(event.clipboardData.items)
+    if (!items.some((item) => item.kind === 'file' && item.type.startsWith('image/'))) return
+    event.preventDefault()
+    addPastedImages(items.map((item) => item.getAsFile()).filter((file): file is File => file !== null))
+  }
+
   const openBrowser = async (): Promise<void> => {
     const tabId = result?.browserTabId
     if (!onOpenBrowser || typeof tabId !== 'string' || !tabId.trim() || opening.current) return
@@ -340,8 +381,8 @@ export default function NdTranslateView({ context, onOpenBrowser }: {
   }
 
   const translate = async (): Promise<void> => {
-    if (pending.current || opening.current || !text.trim() || text.length > ND_TRANSLATE_MAX_TEXT) return
-    const request: NdTranslateRequest = { text, sourceLanguage, targetLanguage, provider, ...(resolvedModel ? { model: resolvedModel } : {}) }
+    if (pending.current || opening.current || (!text.trim() && images.length === 0) || text.length > ND_TRANSLATE_MAX_TEXT) return
+    const request: NdTranslateRequest = { text, sourceLanguage, targetLanguage, provider, ...(resolvedModel ? { model: resolvedModel } : {}), ...(images.length > 0 ? { images } : {}) }
     const submittedRevision = revision.current
     pending.current = true
     setBusy(true)
@@ -438,6 +479,7 @@ export default function NdTranslateView({ context, onOpenBrowser }: {
       ? entry.model : ''
     invalidate()
     setText(entry.text.slice(0, ND_TRANSLATE_MAX_TEXT))
+    setImages([])
     setSourceLanguage(source)
     setTargetLanguage(target)
     setProvider(entryProvider)
@@ -516,8 +558,20 @@ export default function NdTranslateView({ context, onOpenBrowser }: {
       <div className="grid overflow-hidden rounded-lg border border-border-soft bg-surface-0/50 sm:grid-cols-2">
         <div className="border-b border-border-soft sm:border-b-0 sm:border-r">
           <label htmlFor={`${id}-text`} className="block px-4 pt-3 text-xs font-medium text-soft">Original text</label>
-          <textarea id={`${id}-text`} className={cn(TEXT_CLASS, TEXT_FOCUS_CLASS)} disabled={openingBrowser} placeholder="Type or paste text to translate…" value={text} maxLength={ND_TRANSLATE_MAX_TEXT} onChange={(event) => { if (opening.current) return; invalidate(); setText(event.target.value) }} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); void translate() } }} />
-          <div className="flex items-center justify-between px-4 pb-3 text-[11px] text-faint"><span>{text.length.toLocaleString()} / {ND_TRANSLATE_MAX_TEXT.toLocaleString()}</span><Button type="button" size="xs" variant="ghost" disabled={!text || busy || openingBrowser} onClick={() => { if (opening.current) return; invalidate(); setText('') }}>Clear</Button></div>
+          <textarea id={`${id}-text`} className={cn(TEXT_CLASS, TEXT_FOCUS_CLASS)} disabled={openingBrowser} placeholder="Type or paste text to translate…" value={text} maxLength={ND_TRANSLATE_MAX_TEXT} onChange={(event) => { if (opening.current) return; invalidate(); setText(event.target.value) }} onPaste={onPaste} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); void translate() } }} />
+          {images.length > 0 ? (
+            <div className="flex flex-wrap gap-2 px-4 pb-2">
+              {images.map((url, index) => (
+                <div key={index} className="relative">
+                  <img src={url} alt={`Pasted image ${index + 1}`} className="h-14 w-14 rounded-md border border-border-soft object-cover" />
+                  <button type="button" aria-label={`Remove image ${index + 1}`} className="absolute -right-1.5 -top-1.5 flex size-4 items-center justify-center rounded-full border border-border-soft bg-surface-3 text-faint hover:text-strong" onClick={() => removeImage(index)}>
+                    <X className="size-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          <div className="flex items-center justify-between px-4 pb-3 text-[11px] text-faint"><span>{text.length.toLocaleString()} / {ND_TRANSLATE_MAX_TEXT.toLocaleString()}</span><Button type="button" size="xs" variant="ghost" disabled={(!text && images.length === 0) || busy || openingBrowser} onClick={() => { if (opening.current) return; invalidate(); setText(''); setImages([]) }}>Clear</Button></div>
         </div>
         <div aria-busy={busy}>
           <label htmlFor={`${id}-result`} className="block px-4 pt-3 text-xs font-medium text-soft">Translation</label>
@@ -537,8 +591,8 @@ export default function NdTranslateView({ context, onOpenBrowser }: {
           ? 'Google Translate usually works without signing in.'
           : isLlmProvider(provider)
             ? `Uses the ${providerLabel(provider)} API key stored in Settings → Models.`
-            : `${providerLabel(provider)} may require sign-in or verification in the ND browser.`} Text is sent to the selected provider when you translate.</p>
-        <Button type="submit" size="sm" disabled={busy || openingBrowser || !text.trim() || text.length > ND_TRANSLATE_MAX_TEXT}>{busy ? <LoaderCircle className="size-3.5 animate-spin" /> : <Languages className="size-3.5" />}{busy ? 'Translating…' : 'Translate'}</Button>
+            : `${providerLabel(provider)} may require sign-in or verification in the ND browser.`} Text and pasted images are sent to the selected provider when you translate.</p>
+        <Button type="submit" size="sm" disabled={busy || openingBrowser || (!text.trim() && images.length === 0) || text.length > ND_TRANSLATE_MAX_TEXT}>{busy ? <LoaderCircle className="size-3.5 animate-spin" /> : <Languages className="size-3.5" />}{busy ? 'Translating…' : 'Translate'}</Button>
       </div>
       <p className="text-[10px] text-faint">Ctrl / ⌘ + Enter to translate</p>
       </form>

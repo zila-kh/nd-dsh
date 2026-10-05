@@ -108,4 +108,45 @@ describe('ND Translate LLM provider path', () => {
     expect(await translateWithLlm(store([provider()]), { ...input, text: '   ' })).toMatchObject({ status: 'idle' })
     expect(fetchMock).not.toHaveBeenCalled()
   })
+
+  it('sends pasted images as OpenAI chat content parts with an image-aware prompt', async () => {
+    const image = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: 'សួស្តី' } }] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await translateWithLlm(store([provider()]), { ...input, text: '', images: [image] })
+    expect(result).toMatchObject({ status: 'translated', translatedText: 'សួស្តី', images: [image] })
+    const [, init] = fetchMock.mock.calls[0]!
+    const body = JSON.parse(String(init?.body))
+    expect(body.messages[0].content).toEqual([
+      { type: 'text', text: expect.stringContaining('image(s)') },
+      { type: 'image_url', image_url: { url: image } },
+    ])
+  })
+
+  it('encodes Anthropic images as base64 sources and Responses images as input_image parts', async () => {
+    const image = 'data:image/webp;base64,QUJD'
+    vi.stubGlobal('fetch', fetchMock)
+    const anthropic = provider({ id: 'claude', name: 'Claude', baseUrl: 'https://api.anthropic.com', apiFormat: 'Anthropic Messages (/v1/messages)', models: [{ id: 'claude-sonnet', context: '200K' }] })
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ content: [{ type: 'text', text: 'bonjour' }] }), { status: 200 }))
+    const first = await translateWithLlm(store([anthropic]), { ...input, provider: 'llm:claude', targetLanguage: 'fr', text: '', images: [image] })
+    expect(first).toMatchObject({ status: 'translated' })
+    const anthropicBody = JSON.parse(String(fetchMock.mock.calls[0]![1]?.body))
+    expect(anthropicBody.messages[0].content[0]).toEqual({ type: 'image', source: { type: 'base64', media_type: 'image/webp', data: 'QUJD' } })
+    expect(anthropicBody.messages[0].content[1]).toMatchObject({ type: 'text', text: expect.stringContaining('image(s)') })
+
+    const responses = provider({ id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com', apiFormat: 'Responses (/responses)', models: [{ id: 'gpt-mini', context: '128K' }] })
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ output_text: 'hola' }), { status: 200 }))
+    const second = await translateWithLlm(store([responses]), { ...input, provider: 'llm:openai', targetLanguage: 'es', text: '', images: [image] })
+    expect(second).toMatchObject({ status: 'translated' })
+    const responsesBody = JSON.parse(String(fetchMock.mock.calls[1]![1]?.body))
+    expect(responsesBody.input).toEqual([{ role: 'user', content: [{ type: 'input_text', text: expect.stringContaining('image(s)') }, { type: 'input_image', image_url: image }] }])
+  })
+
+  it('rejects malformed or excess images before contacting a provider', async () => {
+    vi.stubGlobal('fetch', fetchMock)
+    const image = 'data:image/png;base64,QUJD'
+    await expect(translateWithLlm(store([provider()]), { ...input, images: ['https://example.com/a.png'] })).rejects.toThrow('screenshots or photos')
+    await expect(translateWithLlm(store([provider()]), { ...input, images: [image, image, image, image] })).rejects.toThrow('at most 3')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
 })

@@ -1,4 +1,4 @@
-import { isBrowserTranslateProvider, isLlmProvider, ND_TRANSLATE_LANGUAGES, ND_TRANSLATE_MAX_TEXT, type NdTranslatePage, type NdTranslateProvider, type NdTranslateRequest, type NdTranslateResult } from '../../shared/nd-translate.js'
+import { isBrowserTranslateProvider, isImageDataUrl, isLlmProvider, ND_TRANSLATE_LANGUAGES, ND_TRANSLATE_MAX_IMAGE_BYTES, ND_TRANSLATE_MAX_IMAGES, ND_TRANSLATE_MAX_TEXT, type NdTranslatePage, type NdTranslateProvider, type NdTranslateRequest, type NdTranslateResult } from '../../shared/nd-translate.js'
 
 export interface TranslateBrowserPort {
   createTab(url: string, activate: boolean): Promise<{ id: string }>
@@ -27,7 +27,18 @@ export function translateRequest(input: Record<string, unknown>): NdTranslateReq
   if (typeof targetLanguage !== 'string' || targetLanguage === 'auto' || !LANGUAGE_CODES.has(targetLanguage)) throw new Error('Choose a supported target language')
   const model = typeof input.model === 'string' && input.model.trim() ? input.model.trim() : undefined
   if (model && model.length > 128) throw new Error('Model id is too long')
-  return { text, provider, sourceLanguage, targetLanguage, ...(model ? { model } : {}) }
+  const images = input.images === undefined ? undefined : parseImages(input.images)
+  return { text, provider, sourceLanguage, targetLanguage, ...(model ? { model } : {}), ...(images ? { images } : {}) }
+}
+
+function parseImages(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > ND_TRANSLATE_MAX_IMAGES) {
+    throw new Error(`Attach at most ${ND_TRANSLATE_MAX_IMAGES} images`)
+  }
+  if (!value.every((item) => typeof item === 'string' && isImageDataUrl(item))) {
+    throw new Error(`Images must be pasted screenshots or photos under ${Math.floor(ND_TRANSLATE_MAX_IMAGE_BYTES / 1024 / 1024)} MB each`)
+  }
+  return value as string[]
 }
 
 export function translationUrl(request: NdTranslateRequest): string {
@@ -75,8 +86,9 @@ export class NdTranslateService {
 
   async translate(input: Record<string, unknown>): Promise<NdTranslateResult> {
     const request = translateRequest(input)
-    if (!request.text.trim()) return { ...request, status: 'idle' }
     if (isLlmProvider(request.provider)) return { ...request, status: 'error', message: 'This provider runs through ND Settings, not the ND browser.' }
+    if (request.images?.length) return { ...request, status: 'error', message: 'Image translation works with LLM providers from Settings → Models. Pick one in the provider menu.' }
+    if (!request.text.trim()) return { ...request, status: 'idle' }
     if (this.disposed) return { ...request, status: 'error', message: 'ND Translate is shutting down' }
     if (this.running) return { ...request, status: 'busy', message: 'A translation is already running. Wait for it to finish, then try again.' }
     this.running = true

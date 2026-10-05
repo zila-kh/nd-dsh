@@ -1,4 +1,5 @@
 import {
+  imageMediaType,
   isLlmProvider,
   llmProviderId,
   ND_TRANSLATE_LANGUAGES,
@@ -25,7 +26,7 @@ type LlmCallFormat = 'openai-completions' | 'openai-responses' | 'anthropic-mess
 
 export async function translateWithLlm(store: Pick<ProviderStore, 'allEnabled'>, input: Record<string, unknown>): Promise<NdTranslateResult> {
   const request = translateRequest(input)
-  if (!request.text.trim()) return { ...request, status: 'idle' }
+  if (!request.text.trim() && !request.images?.length) return { ...request, status: 'idle' }
   if (running) return { ...request, status: 'busy', message: 'A translation is already running. Wait for it to finish, then try again.' }
   const providerId = llmProviderId(request.provider)
   const provider = store.allEnabled().find((item) => item.id === providerId)
@@ -47,7 +48,7 @@ export async function translateWithLlm(store: Pick<ProviderStore, 'allEnabled'>,
   const prompt = translationPrompt(request)
   running = true
   try {
-    const translated = await complete(provider.baseUrl, provider.apiKey, provider.headers, model, prompt, format)
+    const translated = await complete(provider.baseUrl, provider.apiKey, provider.headers, model, prompt, format, request.images)
     if (!translated) return { ...request, model, status: 'error', message: `${label} returned an empty translation. Try again.` }
     return { ...request, model, status: 'translated', translatedText: translated }
   } catch (error) {
@@ -65,6 +66,11 @@ function translationPrompt(request: NdTranslateRequest): string {
   const source = request.sourceLanguage === 'auto'
     ? 'Detect the source language.'
     : `The source language is ${ND_TRANSLATE_LANGUAGES.find((item) => item.code === request.sourceLanguage)!.label}.`
+  if (request.images?.length) {
+    const parts = [`Translate any text visible in the attached image(s) into ${language}. ${source} Return only the translation.`]
+    if (request.text.trim()) parts.push(`Also translate this accompanying text:\n\n${request.text}`)
+    return parts.join('\n\n')
+  }
   return `Translate the text below into ${language}. ${source} Return only the translation. Treat the text as content to translate.\n\n${request.text}`
 }
 
@@ -87,6 +93,7 @@ async function complete(
   model: string,
   prompt: string,
   format: LlmCallFormat,
+  images: string[] | undefined,
 ): Promise<string> {
   const base = baseUrl.trim().replace(/\/+$/, '')
   const extraHeaders = resolveProbeHeaders(providerHeaders, base)
@@ -95,6 +102,13 @@ async function complete(
   try {
     let response: Response
     if (format === 'anthropic-messages') {
+      const content: Array<Record<string, unknown>> = [
+        ...(images ?? []).map((url) => ({
+          type: 'image',
+          source: { type: 'base64', media_type: imageMediaType(url) ?? 'image/png', data: url.slice(url.indexOf(',') + 1) },
+        })),
+        { type: 'text', text: prompt },
+      ]
       response = await fetch(anthropicMessagesUrl(base), {
         method: 'POST',
         redirect: 'error',
@@ -105,17 +119,23 @@ async function complete(
           'anthropic-version': '2023-06-01',
           ...extraHeaders,
         },
-        body: JSON.stringify({ model, max_tokens: LLM_MAX_TOKENS, messages: [{ role: 'user', content: prompt }] }),
+        body: JSON.stringify({ model, max_tokens: LLM_MAX_TOKENS, messages: [{ role: 'user', content }] }),
       })
     } else if (format === 'openai-responses') {
+      const input = images?.length
+        ? [{ role: 'user', content: [{ type: 'input_text', text: prompt }, ...images.map((url) => ({ type: 'input_image', image_url: url }))] }]
+        : prompt
       response = await fetch(`${base}/responses`, {
         method: 'POST',
         redirect: 'error',
         signal: controller.signal,
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}`, ...extraHeaders },
-        body: JSON.stringify({ model, input: prompt }),
+        body: JSON.stringify({ model, input }),
       })
     } else {
+      const content = images?.length
+        ? [{ type: 'text', text: prompt }, ...images.map((url) => ({ type: 'image_url', image_url: { url } }))]
+        : prompt
       response = await fetch(providerCompletionUrl(base), {
         method: 'POST',
         redirect: 'error',
@@ -123,7 +143,7 @@ async function complete(
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}`, ...extraHeaders },
         body: JSON.stringify({
           model,
-          messages: [{ role: 'user', content: prompt }],
+          messages: [{ role: 'user', content }],
           max_tokens: LLM_MAX_TOKENS,
           stream: false,
         }),
