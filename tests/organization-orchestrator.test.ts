@@ -1,7 +1,8 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
+import type { CoreClient } from '../src/main/core/core-client.js'
 import { OrganizationOrchestrator } from '../src/main/organization/orchestrator.js'
 import { OrganizationStore } from '../src/main/organization/store.js'
 import { TaskWorktreeManager } from '../src/main/organization/task-worktree.js'
@@ -48,7 +49,7 @@ class FakeWorkspace {
   async setRoot(path: string): Promise<{ root: string; name: string }> { this.root = path; return { root: path, name: path.split('/').at(-1) ?? path } }
 }
 
-async function fixture(autonomyLevel: 0 | 1 | 2 | 3 | 4 = 3) {
+async function fixture(autonomyLevel: 0 | 1 | 2 | 3 | 4 = 3, core?: Pick<CoreClient, 'request'>) {
   const dir = await mkdtemp(join(tmpdir(), 'nd-dsh-orchestrator-'))
   const store = new OrganizationStore(join(dir, 'organization.json'))
   let state = await store.mutate({ type: 'company.create', name: 'Autonomous Co', mission: 'Ship excellent software' })
@@ -58,7 +59,7 @@ async function fixture(autonomyLevel: 0 | 1 | 2 | 3 | 4 = 3) {
   const project = state.projects[0]!
   const harness = new FakeHarness()
   const workspace = new FakeWorkspace()
-  const orchestrator = new OrganizationOrchestrator(store, harness as never, workspace as never)
+  const orchestrator = new OrganizationOrchestrator(store, harness as never, workspace as never, undefined, undefined, undefined, undefined, undefined, undefined, core)
   return { store, company, project, harness, workspace, orchestrator }
 }
 
@@ -430,7 +431,21 @@ describe('OrganizationOrchestrator', () => {
   })
 
   it('gives workers and reviewers the exact artifact contract used by the delivery gate', async () => {
-    const { store, company, project, harness, orchestrator } = await fixture(2)
+    const { store, company, project, harness, orchestrator } = await fixture(2, {
+      // nd-core `workspace.fingerprint-artifacts` is the production fingerprinter;
+      // this fake only distinguishes present from missing, which is the part of
+      // the delivery gate this test exercises (digest layout is pinned in Rust).
+      request: async <T>(method: string, params: unknown): Promise<T> => {
+        if (method === 'effectJournal.append') return {} as T
+        if (method !== 'workspace.fingerprint-artifacts') throw new Error(`Unexpected core method: ${method}`)
+        const { root, paths } = params as { root: string; paths: string[] }
+        const artifacts = await Promise.all(paths.map(async (path) => {
+          const stat = await lstat(join(root, path))
+          return { path, kind: stat.isDirectory() ? 'directory' : 'file', size: stat.size, sha256: '0'.repeat(64) }
+        }))
+        return { artifacts } as T
+      },
+    })
     const root = await mkdtemp(join(tmpdir(), 'nd-artifact-contract-'))
     await writeFile(join(root, 'README.md'), '# Non-Git research workspace\n')
     await store.mutate({ type: 'project.update', id: project.id, patch: { workspacePath: root, testCommand: 'node --test' } })

@@ -37,6 +37,7 @@ import { InvocationBroker } from './extensions/invocation-broker.js'
 import { registerNdExtensionIpc } from './extensions/nd-ipc.js'
 import { HomeStore } from './home/home-store.js'
 import type { GitService } from './git/git-service.js'
+import type { GitExecRunner } from './git/git-cli.js'
 import type { HarnessService } from './harness/harness-service.js'
 import type { ProviderStore } from './providers.js'
 import type { QaService } from './qa/qa-service.js'
@@ -68,6 +69,8 @@ interface IpcDependencies {
   externalElements: ExternalElementStage
   recentPicks: RecentPickStore
   git: GitService
+  /** nd-core-backed Git for the workflow-plugin and extension-package pipelines. */
+  coreGit?: GitExecRunner
   qa: QaService
   sessionArchive: SessionArchiveStore
   /** ND's durable token accounting, captured from the runtime event stream. */
@@ -211,7 +214,11 @@ export function registerIpc(deps: IpcDependencies): () => void {
   // explicitly to a company/project, and mirror repository board state. ND
   // owns identity and authorization; plugins only report read-only state.
   const workflowPluginStore = new WorkflowPluginStore(join(app.getPath('userData'), 'agent-workflow-plugins.json'))
-  const workflowService = new WorkflowService({ store: workflowPluginStore, organization: deps.organizationStore })
+  const workflowService = new WorkflowService({
+    store: workflowPluginStore,
+    organization: deps.organizationStore,
+    ...(deps.coreGit ? { git: deps.coreGit } : {}),
+  })
   const disposeWorkflowIpc = registerWorkflowIpc(deps.window, workflowService)
   workflowPluginStore.setOnChanged((state) => {
     if (!deps.window.isDestroyed()) deps.window.webContents.send(WORKFLOW_PLUGINS_IPC.changedEvent, state)
@@ -223,7 +230,7 @@ export function registerIpc(deps: IpcDependencies): () => void {
   // between surfaces.
   const userDataRoot = app.getPath('userData')
   const homeStore = new HomeStore(join(userDataRoot, 'nd-home'))
-  const packageStore = new ExtensionPackageStore(join(userDataRoot, 'nd-extensions'))
+  const packageStore = new ExtensionPackageStore(join(userDataRoot, 'nd-extensions'), deps.coreGit)
   const invocationState = new InvocationStateStore(userDataRoot)
   const nativeHost = new NativeHostRegistry()
   const invocationBroker = new InvocationBroker({

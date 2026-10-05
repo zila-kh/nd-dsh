@@ -1,9 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { execFile } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import process from 'node:process'
-import { promisify } from 'node:util'
 import {
   ND_EXTENSION_MANIFEST_FILENAME,
   compareVersions,
@@ -17,8 +15,7 @@ import type {
   NdPackageSourceView,
 } from '../../shared/nd-invocations.js'
 import { quarantineFile } from '../logging/log-file.js'
-
-const execFileAsync = promisify(execFile)
+import { rawGitExecRunner, type GitExecRunner } from '../git/git-cli.js'
 
 interface NdPackageRecord {
   manifest: NdExtensionManifest
@@ -51,7 +48,7 @@ export class ExtensionPackageStore {
   private saveChain: Promise<void> = Promise.resolve()
   private value: PackageIndexSnapshot = { version: 1, packages: [] }
 
-  constructor(private readonly rootDir: string) {}
+  constructor(private readonly rootDir: string, private readonly git: GitExecRunner = rawGitExecRunner) {}
 
   async list(): Promise<NdInstalledPackageView[]> {
     await this.load()
@@ -159,7 +156,7 @@ export class ExtensionPackageStore {
     }
     await assertContainedPackage(sourceDir)
 
-    const revision = await gitRevision(sourceDir)
+    const revision = await gitRevision(sourceDir, this.git)
     const source: NdPackageSourceView = {
       kind: sourceDir.includes(`${sep}.git${sep}`) || revision ? 'git' : 'local',
       location: sourceDir,
@@ -323,7 +320,16 @@ export class ExtensionPackageStore {
       permissions: [...record.manifest.permissions],
       settings: structuredClone(record.manifest.settings),
       contributions: counts,
-      views: record.manifest.contributions.views.map((view) => ({ id: view.id, title: view.title })),
+      views: record.manifest.contributions.views.map((view) => ({
+        id: view.id,
+        title: view.title,
+        ...(view.description ? { description: view.description } : {}),
+      })),
+      commands: record.manifest.contributions.commands.map((command) => ({
+        id: command.id,
+        title: command.title,
+        ...(command.description ? { description: command.description } : {}),
+      })),
       hasExecutable: record.manifest.executable !== undefined,
       ...(record.previousVersion ? { previousVersion: record.previousVersion } : {}),
     }
@@ -356,12 +362,9 @@ async function assertContainedPackage(root: string): Promise<void> {
   await walk(root)
 }
 
-async function gitRevision(directory: string): Promise<string | undefined> {
+async function gitRevision(directory: string, runGit: GitExecRunner): Promise<string | undefined> {
   try {
-    const { stdout } = await execFileAsync('git', ['-C', directory, 'rev-parse', 'HEAD'], {
-      timeout: GIT_REVISION_TIMEOUT_MS,
-      windowsHide: true,
-    })
+    const { stdout } = await runGit(directory, ['rev-parse', 'HEAD'], { timeoutMs: GIT_REVISION_TIMEOUT_MS })
     const revision = stdout.trim()
     return /^[0-9a-f]{7,64}$/.test(revision) ? revision : undefined
   } catch {

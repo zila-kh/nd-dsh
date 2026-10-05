@@ -49,6 +49,7 @@ import { NdNativeToolBroker } from './engines/nd-native/nd-native-tool-broker.js
 import { PiCodingEngine } from './engines/pi/pi-coding-engine.js'
 import { ZcodeCliEngine } from './engines/zcode/zcode-cli-engine.js'
 import { GitService } from './git/git-service.js'
+import { GitCli } from './git/git-cli.js'
 import { HarnessService } from './harness/harness-service.js'
 import { registerIpc } from './ipc.js'
 import { createLauncherPopup } from './launcher-popup.js'
@@ -445,7 +446,8 @@ async function createWindow(cdpPort: number): Promise<void> {
   const qa = new QaService({ spawnProcess: unscopedCoreSpawn, stopProcess: stopCoreManagedChildProcess })
   activeQa = qa
   qa.setProjectRoot(workspace.state().root)
-  const disposeIpc = registerIpc({ window, preloadPath: preload, launcherPopup, browser, dshSurface, engines, engineRouter, nativeToolBroker: nativeBroker, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, qa, sessionArchive, usageLedger, capabilities, organizationStore })
+  const coreGit = new GitCli({ core })
+  const disposeIpc = registerIpc({ window, preloadPath: preload, launcherPopup, browser, dshSurface, engines, engineRouter, nativeToolBroker: nativeBroker, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, coreGit: coreGit.exec.bind(coreGit), qa, sessionArchive, usageLedger, capabilities, organizationStore })
   if (nativeAgent.ready()) void nativeAgent.start().catch((error) => {
     console.warn('ND Agent private runtime could not initialize:', error instanceof Error ? error.message : String(error))
   })

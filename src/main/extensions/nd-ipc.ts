@@ -779,6 +779,7 @@ async function packageCatalogView(state: NdExtensionsStateView, id: string, pack
     id,
     ...metadata,
     version: '1.0.0',
+    commands: [],
     installed: state.packages.some((item) => item.id === id),
     available: false,
   }
@@ -792,6 +793,11 @@ async function packageCatalogView(state: NdExtensionsStateView, id: string, pack
       description: validated.manifest.description,
       version: validated.manifest.version,
       permissions: validated.manifest.permissions,
+      commands: validated.manifest.contributions.commands.map((command) => ({
+        id: command.id,
+        title: command.title,
+        ...(command.description ? { description: command.description } : {}),
+      })),
       installed: fallback.installed,
       available: true,
     }

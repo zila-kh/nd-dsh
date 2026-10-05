@@ -3,6 +3,7 @@
 //! Product/company semantics stay outside this crate. The composition binary
 //! wires these services to the Rust-owned nd-protocol contract.
 
+pub mod artifacts;
 pub mod cache;
 pub mod deadline;
 pub mod decision;

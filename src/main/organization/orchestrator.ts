@@ -8,11 +8,12 @@ import type { EngineSessionRouter } from '../engines/engine-session-router.js'
 import type { HarnessService } from '../harness/harness-service.js'
 import type { WorkspaceService } from '../workspace/workspace-service.js'
 import type { CoreClient } from '../core/core-client.js'
+import { createCoreArtifactFingerprint } from '../core/core-workspace.js'
 import { taskMetricsRecorder } from '../metrics/task-metrics.js'
 import { isRetryableExecutionFailure, MAX_EXECUTION_ATTEMPTS, retryBackoffMs, stallTimeoutMs } from './execution-reliability.js'
 import type { OrganizationStore } from './store.js'
 import { TaskIntegrationConflictError, TaskWorktreeManager, type TaskWorktree } from './task-worktree.js'
-import { formatVerificationEvidence, runArtifactVerification, runVerification, type VerificationProcessRuntime } from './verification-evidence.js'
+import { formatVerificationEvidence, runArtifactVerification, runVerification, type ArtifactFingerprintRunner, type VerificationProcessRuntime } from './verification-evidence.js'
 import { createCoreEvidenceCapturer, unavailableEvidenceCapturer, type WorkspaceEvidenceCapture, type WorkspaceEvidenceCapturer } from './worktree-evidence.js'
 import { RuntimeCapacityError, type ExecutionCoordinator, type RuntimeAvailability } from './execution-coordinator.js'
 import { normalizeProjectPlan } from './plan-normalizer.js'
@@ -101,6 +102,7 @@ export class OrganizationOrchestrator {
   private readonly decisionSupportReceipts = new Map<string, DecisionSupportReceipt>()
   private readonly taskWorktrees: TaskWorktreeManager
   private readonly captureEvidence: WorkspaceEvidenceCapturer
+  private readonly fingerprintArtifacts: ArtifactFingerprintRunner | undefined
 
   constructor(
     private readonly store: OrganizationStore,
@@ -122,6 +124,7 @@ export class OrganizationOrchestrator {
   ) {
     this.taskWorktrees = taskWorktrees ?? new TaskWorktreeManager()
     this.captureEvidence = core ? createCoreEvidenceCapturer(core) : unavailableEvidenceCapturer
+    this.fingerprintArtifacts = core ? createCoreArtifactFingerprint(core) : undefined
   }
 
   /**
@@ -396,7 +399,7 @@ export class OrganizationOrchestrator {
         })
       }
       const verification = context.task.evidenceKind === 'artifact'
-        ? await runArtifactVerification(context.task.artifactPaths, workspaceRoot)
+        ? await runArtifactVerification(context.task.artifactPaths, workspaceRoot, this.fingerprintArtifacts)
         : await runVerification(context.project.testCommand, workspaceRoot, this.verificationRuntime)
       await this.store.recordRunVerification(run.id, reviewVerificationMetadata(verification, checkpointHead))
       taskMetricsRecorder()?.noteVerification(sessionId, verification.status, verification.durationMs)
@@ -829,7 +832,7 @@ export class OrganizationOrchestrator {
           })
         }
         const verification = context.task.evidenceKind === 'artifact'
-          ? await runArtifactVerification(context.task.artifactPaths, worktree?.root ?? context.project.workspacePath)
+          ? await runArtifactVerification(context.task.artifactPaths, worktree?.root ?? context.project.workspacePath, this.fingerprintArtifacts)
           : await runVerification(context.project.testCommand, worktree?.root ?? context.project.workspacePath, this.verificationRuntime)
         await this.store.recordRunVerification(run.id, reviewVerificationMetadata(verification, checkpointHead))
         taskMetricsRecorder()?.noteVerification(sessionId, verification.status, verification.durationMs)

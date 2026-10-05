@@ -14,6 +14,7 @@ import {
 import type { OrganizationSnapshot } from '../../../shared/organization'
 import type { NdCommandView } from '../../../shared/nd-invocations'
 import type { ContextOption } from '../lib/nd-context-model'
+import { cn } from '@renderer/lib/utils'
 import {
   DEFAULT_LAUNCHER_COMMAND_REGISTRY,
   launcherCommandGroups,
@@ -145,22 +146,35 @@ export function QuickLauncher({
     onOpenChange(next)
   }
 
+  // The Raycast popup window is only 540px tall; centering the card at 42%
+  // lets a full command list push the card above the window edge, clipping
+  // the header. Anchor the popup card to the top instead.
+  const popupSurface = window.location.hash.replace(/^#\/?/, '').split(/[/?]/)[0] === 'launcher'
+
   return (
     <CommandDialog
       open={open}
       onOpenChange={handleOpenChange}
       title="ND Quick Launcher"
       description="Search one registry of ND, company, project, and extension commands."
-      className="top-[42%] max-w-[680px] rounded-xl border-border-strong bg-surface-1/98 shadow-[0_28px_90px_rgba(0,0,0,0.58)] backdrop-blur-xl"
+      className={cn(
+        'max-w-[680px] rounded-xl border-border-strong bg-surface-1/98 shadow-[0_28px_90px_rgba(0,0,0,0.58)] backdrop-blur-xl',
+        popupSurface ? 'top-3 translate-y-0' : 'top-[42%]',
+      )}
       showCloseButton={false}
     >
+      <div className="flex items-center gap-2 border-b border-border-soft px-3 pb-2.5 pt-3">
+        <span className="grid size-6 shrink-0 place-items-center rounded-[7px] border border-primary/30 bg-primary/10 text-sm font-extrabold tracking-[0.08em] text-primary">ND</span>
+        <span className="truncate text-sm font-semibold tracking-tight text-strong">Quick Launcher</span>
+      </div>
       <CommandInput
         autoFocus
+        wrapperClassName="border-b-0"
         value={query}
         onValueChange={setQuery}
         placeholder="Search ND or type something to capture…"
       />
-      <CommandList className="max-h-[430px]">
+      <CommandList className="max-h-[384px]">
         <CommandEmpty>No matching ND command.</CommandEmpty>
 
         {groups.map((group, index) => (

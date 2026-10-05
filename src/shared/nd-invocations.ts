@@ -122,7 +122,9 @@ export interface NdInstalledPackageView {
   settings: NdPackageSettingField[]
   contributions: NdContributionCounts
   /** Typed views this package offers, in manifest order. */
-  views: Array<{ id: string; title: string }>
+  views: Array<{ id: string; title: string; description?: string }>
+  /** Command contributions with display metadata, in manifest order. */
+  commands: Array<{ id: string; title: string; description?: string }>
   hasExecutable: boolean
   previousVersion?: string
 }
@@ -179,6 +181,7 @@ export interface NdAvailablePackageView {
   description: string
   version: string
   permissions: NdExtensionPermission[]
+  commands: Array<{ id: string; title: string; description?: string }>
   installed: boolean
   available: boolean
 }

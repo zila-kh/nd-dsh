@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use nd_protocol::errors::{self, CODE_INVALID_PARAMS, CODE_METHOD_FAILED, CODE_RUNTIME_BUSY};
 use nd_protocol::{PROTOCOL_VERSION, ProtocolWriter, read_request};
+use nd_runtime::artifacts;
 use nd_runtime::cache::{self, ResponseCache};
 use nd_runtime::deadline::{Deadline, Interrupt, InterruptGuard, InterruptRegistry};
 use nd_runtime::decision::{self, DecisionEvaluateParams};
@@ -192,6 +193,7 @@ fn dispatch(
                     "decision-kernel",
                     "git",
                     "evidence",
+                    "artifacts",
                     "workspace",
                     "search",
                     "revision",
@@ -534,6 +536,11 @@ fn dispatch(
             let params = from_params::<EvidenceParams>(params)?;
             state.metrics.observe_workspace(&params.root);
             to_value(evidence::capture(params, interrupt)?)
+        }
+        "workspace.fingerprint-artifacts" => {
+            let params = from_params::<artifacts::ArtifactFingerprintParams>(params)?;
+            state.metrics.observe_workspace(&params.root);
+            to_value(artifacts::fingerprint(params, interrupt)?)
         }
         "workspace.snapshot" => {
             let params = from_params::<snapshot::SnapshotParams>(params)?;

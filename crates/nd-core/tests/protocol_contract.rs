@@ -9,6 +9,7 @@
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{BufReader, Read, Write};
@@ -1151,6 +1152,65 @@ fn workspace_snapshot_composes_reads_search_and_git_and_detects_stale_revisions(
         )
         .expect_err("oversized snapshot request must fail predictably");
     assert_eq!(oversized.code, "invalid_params");
+    let _ = fs::remove_dir_all(&fixture);
+}
+
+#[test]
+fn workspace_fingerprint_artifacts_pins_the_recorded_layout() {
+    let fixture = temp_dir("fingerprint");
+    fs::write(fixture.join("research.md"), "hello").expect("write research");
+    fs::create_dir_all(fixture.join("design").join("sub")).expect("create design");
+    fs::write(fixture.join("design").join("a.txt"), "A").expect("write a");
+    fs::write(fixture.join("design").join("sub").join("b.txt"), "B").expect("write b");
+    let mut core = Core::launch();
+    let root = fixture.to_string_lossy().to_string();
+
+    let complete: Value = core
+        .call(
+            "workspace.fingerprint-artifacts",
+            json!({ "root": root, "paths": ["research.md", "design"] }),
+        )
+        .expect("workspace.fingerprint-artifacts");
+    let artifacts = complete["artifacts"].as_array().expect("artifacts");
+    assert_eq!(artifacts.len(), 2);
+    assert_eq!(artifacts[0]["path"], json!("research.md"));
+    assert_eq!(artifacts[0]["kind"], json!("file"));
+    assert_eq!(artifacts[0]["size"], json!(5));
+    assert_eq!(
+        artifacts[0]["sha256"],
+        json!("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
+    );
+    assert_eq!(artifacts[1]["path"], json!("design"));
+    assert_eq!(artifacts[1]["kind"], json!("directory"));
+    assert_eq!(artifacts[1]["size"], json!(2));
+    let mut expected = Sha256::new();
+    expected.update(b"design/a.txt\0");
+    expected.update(b"A");
+    expected.update(b"design/sub\0");
+    expected.update(b"design/sub/b.txt\0");
+    expected.update(b"B");
+    let expected: String = expected
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert_eq!(artifacts[1]["sha256"], json!(expected));
+
+    let escaped = core
+        .call::<Value>(
+            "workspace.fingerprint-artifacts",
+            json!({ "root": root, "paths": ["../outside.md"] }),
+        )
+        .expect_err("an escaping path must be refused");
+    assert_eq!(escaped.code, "method_failed");
+    assert!(escaped.message.contains("escapes the root"), "{escaped:?}");
+    let empty = core
+        .call::<Value>(
+            "workspace.fingerprint-artifacts",
+            json!({ "root": root, "paths": [] }),
+        )
+        .expect_err("an empty path list must be refused");
+    assert_eq!(empty.code, "invalid_params");
     let _ = fs::remove_dir_all(&fixture);
 }
 

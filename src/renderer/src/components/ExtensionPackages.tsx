@@ -1,9 +1,11 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
-import { Check, ChevronLeft, ChevronRight, Download, ExternalLink, Eye, FolderOpen, Image, Package, Puzzle, RefreshCw, Search, Settings2, ShieldCheck, Shuffle, SkipBack, SkipForward, Undo2 } from 'lucide-react'
+import { Check, ChevronLeft, ChevronRight, Download, ExternalLink, Eye, FolderOpen, Image, Languages, Layers, ListChecks, Package, PanelsTopLeft, Power, Puzzle, RefreshCw, Search, Settings2, ShieldCheck, Shuffle, SkipBack, SkipForward, Sparkles, SquareTerminal, Undo2, Workflow } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import { cn } from '../lib/utils'
 import type { NdContext } from '../../../shared/nd-context'
 import { contextKey } from '../../../shared/nd-context'
 import type {
+  NdAvailablePackageView,
   NdExtensionsStateView,
   NdInstalledPackageView,
   NdViewData,
@@ -44,6 +46,37 @@ export async function openExtensionProviderTab(
   onClose()
 }
 
+const EXTENSION_ACCENTS: Record<string, { icon: LucideIcon; tileClassName: string }> = {
+  'nd.daily-essentials': { icon: Sparkles, tileClassName: 'border-amber-500/25 bg-amber-500/15 text-amber-500' },
+  'nd.wallpaper-manager': { icon: Image, tileClassName: 'border-violet-500/25 bg-violet-500/15 text-violet-500' },
+  'nd.project-workflow': { icon: ListChecks, tileClassName: 'border-sky-500/25 bg-sky-500/15 text-sky-500' },
+  'nd.translate': { icon: Languages, tileClassName: 'border-emerald-500/25 bg-emerald-500/15 text-emerald-500' },
+  'nd.quit-process': { icon: Power, tileClassName: 'border-rose-500/25 bg-rose-500/15 text-rose-500' },
+}
+
+function ExtensionIconTile({ id, large = false }: { id: string; large?: boolean }): React.ReactNode {
+  const accent = EXTENSION_ACCENTS[id]
+  const Icon = accent?.icon ?? Package
+  return (
+    <span className={cn(
+      'grid shrink-0 place-items-center rounded-2xl border border-border-soft bg-surface-1 text-primary',
+      large ? 'size-12 rounded-[14px]' : 'size-11',
+      accent?.tileClassName,
+    )}>
+      <Icon className={large ? 'size-6' : 'size-5'} aria-hidden="true" />
+    </span>
+  )
+}
+
+type ExtensionDetailTarget =
+  | { kind: 'installed'; item: NdInstalledPackageView }
+  | { kind: 'available'; item: NdAvailablePackageView }
+
+/** Cards open their detail on click; inner controls keep their own behavior. */
+function interactiveTarget(event: React.MouseEvent<HTMLElement>): boolean {
+  return Boolean((event.target as HTMLElement).closest('button, a, input, select, textarea, label, [role="button"]'))
+}
+
 interface Props {
   state: NdExtensionsStateView
   organization: OrganizationSnapshot | null
@@ -65,9 +98,11 @@ export function ExtensionPackagesCard({ state, organization, contexts, requested
   const [manageContextId, setManageContextId] = useState('personal')
   const manageContext = contexts.find((option) => option.id === manageContextId)?.context ?? { kind: 'personal' as const }
   const [view, setView] = useState<{ extensionId: string; viewId: string; context: NdContext } | null>(null)
+  const [detailTarget, setDetailTarget] = useState<ExtensionDetailTarget | null>(null)
   const [busy, setBusy] = useState(false)
-  const [catalogTab, setCatalogTab] = useState<'discover' | 'installed'>('discover')
+  const [catalogTab, setCatalogTab] = useState<'discover' | 'installed'>('installed')
   const [query, setQuery] = useState('')
+  const searchRef = useRef<HTMLInputElement>(null)
 
   const normalizedQuery = query.trim().toLowerCase()
   const available = (state.available ?? []).filter((item) =>
@@ -81,6 +116,18 @@ export function ExtensionPackagesCard({ state, organization, contexts, requested
     setView(requestedView)
     onRequestedViewHandled?.()
   }, [requestedView])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey || event.key.toLowerCase() !== 'k') return
+      if (document.querySelector('[role="dialog"]')) return
+      event.preventDefault()
+      searchRef.current?.focus()
+      searchRef.current?.select()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
 
   const run = async (action: () => Promise<unknown>): Promise<void> => {
     setBusy(true)
@@ -100,7 +147,7 @@ export function ExtensionPackagesCard({ state, organization, contexts, requested
 
   return (
     <div className="mx-auto w-full max-w-[1120px] space-y-7 pb-8">
-      <header className="flex flex-wrap items-end justify-between gap-4 border-b border-border-soft pb-5">
+      <header className="border-b border-border-soft pb-5">
         <div className="max-w-[620px]">
           <div className="mb-2 flex items-center gap-2 text-xs font-medium text-primary">
             <Puzzle className="size-4" aria-hidden="true" /> Extension directory
@@ -110,28 +157,13 @@ export function ExtensionPackagesCard({ state, organization, contexts, requested
             Add tools and workflows to ND. Installations are shared across your profile; activation and access stay under your control for each context.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <label className="relative block">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-faint" aria-hidden="true" />
-            <Input
-              aria-label="Search extensions"
-              placeholder="Search extensions"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              className="h-9 w-[210px] pl-8 text-xs"
-            />
-          </label>
-          <Button size="sm" variant="outline" disabled={busy} onClick={() => void run(() => window.ndDsh.ndExtensions.installLocal())}>
-            <FolderOpen className="size-3.5" /> Install from folder
-          </Button>
-        </div>
       </header>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <nav aria-label="Extension views" className="flex items-center gap-1 rounded-lg border border-border-soft bg-surface-0/60 p-1">
+        <nav aria-label="Extension views" className="flex items-center gap-1 rounded-full border border-border-soft bg-surface-0/60 p-1">
           {([
-            ['discover', 'Discover', state.available?.length ?? 0],
             ['installed', 'Installed', state.packages.length],
+            ['discover', 'Discover', state.available?.length ?? 0],
           ] as const).map(([id, label, count]) => (
             <button
               key={id}
@@ -139,25 +171,31 @@ export function ExtensionPackagesCard({ state, organization, contexts, requested
               aria-pressed={catalogTab === id}
               onClick={() => setCatalogTab(id)}
               className={cn(
-                'inline-flex h-8 items-center gap-2 rounded-md px-3 text-xs font-medium transition-colors',
-                catalogTab === id ? 'bg-primary/10 text-primary' : 'text-faint hover:bg-accent hover:text-foreground',
+                'inline-flex h-8 items-center gap-2 rounded-full px-3.5 text-xs font-medium transition-colors',
+                catalogTab === id ? 'bg-primary/15 text-primary shadow-sm' : 'text-faint hover:bg-accent hover:text-foreground',
               )}
             >
               {label}<span className="text-[10px] opacity-75">{count}</span>
             </button>
           ))}
         </nav>
-        <label className="flex items-center gap-2 text-[11px] text-faint">
-          Manage context
-          <select
-            className="h-8 rounded-md border border-border-soft bg-surface-0/60 px-2 text-xs text-foreground"
-            value={manageContextId}
-            onChange={(event) => setManageContextId(event.target.value)}
-            aria-label="Context for extension settings and grants"
-          >
-            {contexts.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
-          </select>
-        </label>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="relative block">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-faint" aria-hidden="true" />
+            <Input
+              ref={searchRef}
+              aria-label="Search extensions"
+              placeholder="Search extensions"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              className="h-9 w-[230px] pl-8 pr-14 text-xs"
+            />
+            <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-border-soft bg-surface-1 px-1.5 py-0.5 text-[9px] font-medium text-faint">Ctrl K</span>
+          </label>
+          <Button size="sm" variant="outline" disabled={busy} onClick={() => void run(() => window.ndDsh.ndExtensions.installLocal())}>
+            <FolderOpen className="size-3.5" /> Install from folder
+          </Button>
+        </div>
       </div>
 
       {state.pendingApprovals.length > 0 ? (
@@ -182,79 +220,102 @@ export function ExtensionPackagesCard({ state, organization, contexts, requested
         </section>
       ) : null}
 
-      {catalogTab === 'discover' ? (
-        <section aria-label="Discover extensions">
-          <div className="mb-3 flex items-end justify-between gap-3">
-            <div>
-              <h3 className="m-0 text-sm font-semibold text-foreground">Discover extensions</h3>
-              <p className="mt-1 text-[11px] text-faint">Explore ND-maintained extensions and add the ones you need.</p>
-            </div>
-            <span className="text-[10px] text-faint">{available.length} {available.length === 1 ? 'extension' : 'extensions'}</span>
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h3 className="m-0 text-sm font-semibold text-foreground">{catalogTab === 'discover' ? 'Discover extensions' : 'Installed extensions'}</h3>
+            <p className="mt-1 text-[11px] text-faint">{catalogTab === 'discover' ? 'Explore ND-maintained extensions and add the ones you need.' : 'Choose where each extension is active and review its available controls.'}</p>
           </div>
-          {available.length > 0 ? (
-            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3">
-              {available.map((item) => {
-            const installed = state.packages.find((pack) => pack.id === item.id)
-            const updateAvailable = installed && installed.version !== item.version
-            return (
-              <article key={item.id} className="flex min-h-[190px] flex-col rounded-xl border border-border-soft bg-surface-0/40 p-4 transition-colors hover:border-border-strong hover:bg-surface-1">
-                <div className="flex items-start gap-3">
-                  <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-border-soft bg-surface-1 text-primary">
-                    <Package className="size-[18px]" aria-hidden="true" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <h4 className="m-0 truncate text-sm font-semibold text-foreground">{item.name}</h4>
-                    <p className="mt-0.5 text-[10px] text-faint">ND-maintained · v{item.version}</p>
-                  </div>
-                </div>
-                <p className="mt-3 line-clamp-2 min-h-9 text-[11px] leading-[1.45] text-soft">{item.description}</p>
-                <div className="mt-auto border-t border-border-soft pt-3">
-                  <p className="mb-3 flex gap-1.5 text-[10px] leading-4 text-faint">
-                    <ShieldCheck className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
-                    <span><strong className="font-medium text-soft">Access:</strong> {describePermissions(item.permissions) || 'No special access'}</span>
-                  </p>
-                  <Button className="w-full" size="sm" variant={installed && !updateAvailable ? 'outline' : 'default'} disabled={busy || !item.available || Boolean(installed && !updateAvailable)} onClick={() => void run(() => window.ndDsh.ndExtensions.installAvailable(item.id))}>
-                    {installed && !updateAvailable ? <><Check className="size-3.5" /> Installed</> : updateAvailable ? <><RefreshCw className="size-3.5" /> Update to v{item.version}</> : item.available ? <><Download className="size-3.5" /> Install extension</> : 'Unavailable'}
-                  </Button>
-                </div>
-              </article>
-            )
-              })}
-            </div>
-          ) : (
-            <EmptyExtensions title={normalizedQuery ? 'No extensions found' : 'No extensions to discover'} detail={normalizedQuery ? 'Try a different search.' : 'ND-maintained extensions will appear here when available.'} />
-          )}
-        </section>
-      ) : (
-        <section aria-label="Installed extensions">
-          <div className="mb-3 flex items-end justify-between gap-3">
-            <div>
-              <h3 className="m-0 text-sm font-semibold text-foreground">Installed extensions</h3>
-              <p className="mt-1 text-[11px] text-faint">Choose where each extension is active and review its available controls.</p>
-            </div>
-            <span className="text-[10px] text-faint">{installed.length} {installed.length === 1 ? 'extension' : 'extensions'}</span>
+          <div className="flex items-center gap-3">
+            <span className="text-[10px] text-faint">
+              {catalogTab === 'discover'
+                ? `${available.length} ${available.length === 1 ? 'extension' : 'extensions'}`
+                : `${installed.length} ${installed.length === 1 ? 'extension' : 'extensions'}`}
+            </span>
+            <label className="flex items-center gap-2 text-[11px] text-faint">
+              Manage context
+              <select
+                className="h-8 rounded-md border border-border-soft bg-surface-0/60 px-2 text-xs text-foreground"
+                value={manageContextId}
+                onChange={(event) => setManageContextId(event.target.value)}
+                aria-label="Context for extension settings and grants"
+              >
+                {contexts.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+              </select>
+            </label>
           </div>
-          {installed.length > 0 ? (
-            <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-              {installed.map((item) => (
-                <PackageRow
-                  key={item.id}
-                  item={item}
-                  state={state}
-                  contexts={contexts}
-                  manageContext={manageContext}
-                  busy={busy}
-                  isActive={isActive}
-                  run={run}
-                  onOpenView={(viewId, targetCtx) => setView({ extensionId: item.id, viewId, context: targetCtx ?? manageContext })}
-                />
-              ))}
-            </div>
-          ) : (
-            <EmptyExtensions title={normalizedQuery ? 'No installed extensions found' : 'Your extensions will show up here'} detail={normalizedQuery ? 'Try a different search.' : 'Browse the directory to add an extension, or install one from a local folder.'} />
-          )}
-        </section>
-      )}
+        </div>
+
+        {catalogTab === 'discover' ? (
+          <section aria-label="Discover extensions">
+            {available.length > 0 ? (
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                {available.map((item) => {
+                  const installed = state.packages.find((pack) => pack.id === item.id)
+                  const updateAvailable = installed && installed.version !== item.version
+                  return (
+                    <article
+                      key={item.id}
+                      onClick={(event) => { if (!interactiveTarget(event)) setDetailTarget({ kind: 'available', item }) }}
+                      className="flex min-h-[172px] cursor-pointer flex-col rounded-2xl border border-border-soft bg-surface-0/40 p-4 transition-colors hover:border-border-strong hover:bg-surface-1"
+                    >
+                      <div className="flex items-start gap-3">
+                        <ExtensionIconTile id={item.id} />
+                        <div className="min-w-0 flex-1">
+                          <h4 className="m-0 truncate text-sm font-semibold text-foreground">{item.name}</h4>
+                          <p className="mt-0.5 truncate text-[10px] text-faint">ND-maintained · v{item.version}</p>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant={installed && !updateAvailable ? 'outline' : 'default'}
+                          className="shrink-0"
+                          title={updateAvailable ? `Update to v${item.version}` : undefined}
+                          disabled={busy || !item.available || Boolean(installed && !updateAvailable)}
+                          onClick={() => void run(() => window.ndDsh.ndExtensions.installAvailable(item.id))}
+                        >
+                          {installed && !updateAvailable ? <><Check className="size-3.5" /> Installed</> : updateAvailable ? <><RefreshCw className="size-3.5" /> Update</> : item.available ? <><Download className="size-3.5" /> Install</> : 'Unavailable'}
+                        </Button>
+                      </div>
+                      <p className="mt-3 line-clamp-2 min-h-9 text-[11px] leading-[1.45] text-soft">{item.description}</p>
+                      <div className="mt-auto border-t border-border-soft pt-3">
+                        <p className="flex min-w-0 gap-1.5 text-[10px] leading-4 text-faint" title={`Access: ${describePermissions(item.permissions) || 'No special access'}`}>
+                          <ShieldCheck className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
+                          <span className="truncate"><strong className="font-medium text-soft">Access:</strong> {describePermissions(item.permissions) || 'No special access'}</span>
+                        </p>
+                      </div>
+                    </article>
+                  )
+                })}
+              </div>
+            ) : (
+              <EmptyExtensions title={normalizedQuery ? 'No extensions found' : 'No extensions to discover'} detail={normalizedQuery ? 'Try a different search.' : 'ND-maintained extensions will appear here when available.'} />
+            )}
+          </section>
+        ) : (
+          <section aria-label="Installed extensions">
+            {installed.length > 0 ? (
+              <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+                {installed.map((item) => (
+                  <PackageRow
+                    key={item.id}
+                    item={item}
+                    state={state}
+                    contexts={contexts}
+                    manageContext={manageContext}
+                    busy={busy}
+                    isActive={isActive}
+                    run={run}
+                    onOpenDetail={() => setDetailTarget({ kind: 'installed', item })}
+                    onOpenView={(viewId, targetCtx) => setView({ extensionId: item.id, viewId, context: targetCtx ?? manageContext })}
+                  />
+                ))}
+              </div>
+            ) : (
+              <EmptyExtensions title={normalizedQuery ? 'No installed extensions found' : 'Your extensions will show up here'} detail={normalizedQuery ? 'Try a different search.' : 'Browse the directory to add an extension, or install one from a local folder.'} />
+            )}
+          </section>
+        )}
+      </div>
 
       <details className="group rounded-xl border border-border-soft bg-surface-0/30">
         <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-xs font-semibold text-foreground [&::-webkit-details-marker]:hidden">
@@ -306,6 +367,21 @@ export function ExtensionPackagesCard({ state, organization, contexts, requested
         </div>
         </div>
       </details>
+
+      <ExtensionDetailDialog
+        target={detailTarget}
+        state={state}
+        contexts={contexts}
+        manageContext={manageContext}
+        busy={busy}
+        isActive={isActive}
+        run={run}
+        onOpenView={(extensionId, viewId, context) => {
+          setDetailTarget(null)
+          setView({ extensionId, viewId, context })
+        }}
+        onClose={() => setDetailTarget(null)}
+      />
 
       <ExtensionViewDialog
         target={view}
@@ -717,6 +793,7 @@ function PackageRow({
   isActive,
   run,
   onOpenView,
+  onOpenDetail,
 }: {
   item: NdInstalledPackageView
   state: NdExtensionsStateView
@@ -726,6 +803,7 @@ function PackageRow({
   isActive(extensionId: string, context: NdContext): boolean
   run(action: () => Promise<unknown>): Promise<void>
   onOpenView(viewId: string, context?: NdContext): void
+  onOpenDetail(): void
 }): React.ReactNode {
   const [settingsDraft, setSettingsDraft] = useState<Record<string, string>>({})
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -738,11 +816,12 @@ function PackageRow({
 
   return (
     <>
-      <article className="flex min-h-[230px] min-w-0 flex-col rounded-xl border border-border-soft bg-surface-0/40 p-4 transition-colors hover:border-border-strong hover:bg-surface-1">
+      <article
+        onClick={(event) => { if (!interactiveTarget(event)) onOpenDetail() }}
+        className="flex min-h-[230px] min-w-0 cursor-pointer flex-col rounded-2xl border border-border-soft bg-surface-0/40 p-4 transition-colors hover:border-border-strong hover:bg-surface-1"
+      >
         <div className="flex items-start gap-3">
-          <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-border-soft bg-surface-1 text-primary">
-            <Package className="size-[18px]" aria-hidden="true" />
-          </span>
+          <ExtensionIconTile id={item.id} />
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-1.5">
               <h4 className="m-0 text-sm font-semibold text-foreground">{item.name}</h4>
@@ -780,12 +859,17 @@ function PackageRow({
             }) : <span className="text-[10px] text-faint">No compatible context available.</span>}
           </div>
 
-          <p
-            className="mt-2 truncate text-[9px] text-fainter"
+          <div
+            className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-faint"
             title={`${item.source.location}${item.source.revision ? ` @ ${item.source.revision.slice(0, 10)}` : ''}`}
           >
-            {describeSource(item.source.kind)} · {item.contributions.commands} commands · {item.contributions.views} views · {item.contributions.workflows} workflows
-          </p>
+            <span className="inline-flex items-center gap-1"><Layers className="size-3 opacity-70" aria-hidden="true" /> {describeSource(item.source.kind)}</span>
+            <span className="inline-flex items-center gap-1"><SquareTerminal className="size-3 opacity-70" aria-hidden="true" /> {item.contributions.commands} commands</span>
+            <span className="inline-flex items-center gap-1"><PanelsTopLeft className="size-3 opacity-70" aria-hidden="true" /> {item.contributions.views} views</span>
+            {item.contributions.workflows > 0 ? (
+              <span className="inline-flex items-center gap-1"><Workflow className="size-3 opacity-70" aria-hidden="true" /> {item.contributions.workflows} workflows</span>
+            ) : null}
+          </div>
 
           <div className="mt-3 flex flex-wrap items-center gap-2">
             {item.views.length > 0 ? (
@@ -954,6 +1038,228 @@ function PackageRow({
         </DialogContent>
       </Dialog>
     </>
+  )
+}
+
+function ExtensionDetailDialog({
+  target,
+  state,
+  contexts,
+  manageContext,
+  busy,
+  isActive,
+  run,
+  onOpenView,
+  onClose,
+}: {
+  target: ExtensionDetailTarget | null
+  state: NdExtensionsStateView
+  contexts: ContextOption[]
+  manageContext: NdContext
+  busy: boolean
+  isActive(extensionId: string, context: NdContext): boolean
+  run(action: () => Promise<unknown>): Promise<void>
+  onOpenView(extensionId: string, viewId: string, context: NdContext): void
+  onClose(): void
+}): React.ReactNode {
+  const item = target?.item ?? null
+  const installedRecord = item ? state.packages.find((pack) => pack.id === item.id) ?? null : null
+  const catalogRecord = item ? state.available?.find((pack) => pack.id === item.id) ?? null : null
+  const updateAvailable = Boolean(catalogRecord && installedRecord && catalogRecord.version !== installedRecord.version)
+
+  const supported = installedRecord ? contexts.filter((option) => installedRecord.contexts.includes(option.context.kind)) : []
+  const isManageSupported = supported.some((option) => contextKey(option.context) === contextKey(manageContext))
+  const effectiveContext = isManageSupported ? manageContext : (supported[0]?.context ?? manageContext)
+  const activation = installedRecord
+    ? state.activations.find((record) => record.extensionId === installedRecord.id && record.contextKey === contextKey(effectiveContext))
+    : null
+
+  const commands = installedRecord?.commands ?? item?.commands ?? []
+  const views = installedRecord?.views ?? []
+  const permissions = installedRecord?.permissions ?? item?.permissions ?? []
+  const primaryView = views[0]
+
+  return (
+    <Dialog open={target !== null} onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogContent className="max-h-[86vh] gap-3 overflow-y-auto overflow-x-hidden border-border-strong bg-surface-1 sm:max-w-2xl">
+        {item ? (
+          <>
+            <DialogHeader>
+              <div className="flex items-start gap-3">
+                <ExtensionIconTile id={item.id} large />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <DialogTitle className="text-lg">{item.name}</DialogTitle>
+                    <Badge variant="secondary">v{installedRecord?.version ?? item.version}</Badge>
+                    {installedRecord?.hasExecutable ? <Badge variant="outline">executable</Badge> : null}
+                  </div>
+                  <DialogDescription className="mt-0.5 text-[11px]">
+                    {installedRecord
+                      ? `${describeSource(installedRecord.source.kind)} · v${installedRecord.version}`
+                      : `ND-maintained · v${item.version}`}
+                  </DialogDescription>
+                </div>
+                <div className="shrink-0 pr-8">
+                  {installedRecord ? (
+                    primaryView ? (
+                      <Button size="sm" disabled={busy || !activation?.enabled} onClick={() => onOpenView(installedRecord.id, primaryView.id, effectiveContext)}>
+                        <PanelsTopLeft className="size-3.5" /> Open{views.length === 1 ? '' : ` ${primaryView.title}`}
+                      </Button>
+                    ) : null
+                  ) : catalogRecord ? (
+                    <Button
+                      size="sm"
+                      variant={catalogRecord.installed ? 'outline' : 'default'}
+                      disabled={busy || !catalogRecord.available || catalogRecord.installed}
+                      onClick={() => void run(() => window.ndDsh.ndExtensions.installAvailable(catalogRecord.id))}
+                    >
+                      {catalogRecord.installed ? <><Check className="size-3.5" /> Installed</> : catalogRecord.available ? <><Download className="size-3.5" /> Install</> : 'Unavailable'}
+                    </Button>
+                  ) : (
+                    <Button size="sm" variant="outline" disabled>Unavailable</Button>
+                  )}
+                </div>
+              </div>
+            </DialogHeader>
+
+            <p className="line-clamp-2 text-[11px] leading-4 text-soft" title={item.description}>{item.description}</p>
+
+            <section>
+              <h4 className="m-0 flex items-center gap-1.5 text-[11px] font-semibold text-faint">
+                <SquareTerminal className="size-3.5" aria-hidden="true" /> Commands
+                <span className="font-normal opacity-70">{commands.length}</span>
+              </h4>
+              {commands.length > 0 ? (
+                <div className="mt-1.5 grid grid-cols-1 gap-1 sm:grid-cols-2">
+                  {commands.map((command) => (
+                    <div key={command.id} className="flex items-baseline gap-2 rounded-md border border-border-soft bg-surface-0/40 px-2.5 py-1">
+                      <span className="shrink-0 text-xs font-medium text-foreground">{command.title}</span>
+                      {command.description ? <span className="min-w-0 truncate text-[11px] text-faint" title={command.description}>{command.description}</span> : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-1.5 text-[11px] text-faint">This extension registers no commands.</p>
+              )}
+            </section>
+
+            {views.length > 0 ? (
+              <section>
+                <h4 className="m-0 flex items-center gap-1.5 text-[11px] font-semibold text-faint">
+                  <PanelsTopLeft className="size-3.5" aria-hidden="true" /> Views
+                  <span className="font-normal opacity-70">{views.length}</span>
+                </h4>
+                <div className="mt-1.5 divide-y divide-border-soft rounded-lg border border-border-soft bg-surface-0/40">
+                  {views.map((view) => (
+                    <div key={view.id} className="flex items-center gap-3 px-2.5 py-1.5">
+                      <span className="shrink-0 text-xs font-medium text-foreground">{view.title}</span>
+                      {view.description ? <span className="min-w-0 flex-1 truncate text-[11px] text-faint" title={view.description}>{view.description}</span> : <span className="flex-1" />}
+                      {installedRecord ? (
+                        <Button size="sm" variant="outline" className="h-6 shrink-0 px-2 text-[11px]" disabled={busy || !activation?.enabled} onClick={() => onOpenView(installedRecord.id, view.id, effectiveContext)}>
+                          Open
+                        </Button>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ) : null}
+
+            <section>
+              <h4 className="m-0 flex items-center gap-1.5 text-[11px] font-semibold text-faint">
+                <ShieldCheck className="size-3.5" aria-hidden="true" /> Access
+              </h4>
+              {permissions.length > 0 ? (
+                <div className="mt-1.5 grid grid-cols-1 gap-1 sm:grid-cols-2">
+                  {Array.from(new Set(permissions)).map((permission) => (
+                    <div key={permission} className="flex items-center justify-between gap-2 rounded-md border border-border-soft bg-surface-0/40 px-2.5 py-1">
+                      <span className="truncate text-[11px] text-soft">{PERMISSION_LABELS[permission] ?? permission}</span>
+                      {PERMISSION_LABELS[permission] ? <code className="shrink-0 text-[10px] text-faint">{permission}</code> : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-1.5 text-[11px] text-faint">No special access.</p>
+              )}
+            </section>
+
+            {installedRecord ? (
+              <section>
+                <h4 className="m-0 text-[11px] font-semibold text-faint">Active in</h4>
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                  {supported.length > 0 ? supported.map((option) => {
+                    const active = isActive(installedRecord.id, option.context)
+                    return (
+                      <button
+                        key={option.id}
+                        type="button"
+                        disabled={busy}
+                        aria-pressed={active}
+                        className={cn('rounded-full border px-2.5 py-1 text-[10px] font-medium transition-colors disabled:opacity-50', active ? 'border-primary/50 bg-primary/10 text-primary' : 'border-border-soft text-faint hover:bg-accent hover:text-foreground')}
+                        onClick={() => void run(() => window.ndDsh.ndExtensions.setActivation(installedRecord.id, option.context, !active))}
+                      >
+                        {option.label}{active ? ' ✓' : ''}
+                      </button>
+                    )
+                  }) : <span className="text-[10px] text-faint">No compatible context available.</span>}
+                </div>
+              </section>
+            ) : null}
+
+            <section>
+              <h4 className="m-0 text-[11px] font-semibold text-faint">Details</h4>
+              <dl className="mt-1.5 grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-2">
+                <MetaItem label="Identifier" title={item.id}><code className="font-mono text-[10px]">{item.id}</code></MetaItem>
+                <MetaItem label="Version">v{installedRecord?.version ?? item.version}</MetaItem>
+                {installedRecord ? (
+                  <>
+                    <MetaItem label="Source">{describeSource(installedRecord.source.kind)}</MetaItem>
+                    <MetaItem label="Location" title={installedRecord.source.location}>{installedRecord.source.location}</MetaItem>
+                    <MetaItem label="Protocol">{installedRecord.protocol} · API v{installedRecord.apiVersion}</MetaItem>
+                    <MetaItem label="Contexts">{installedRecord.contexts.map((kind) => kind.charAt(0).toUpperCase() + kind.slice(1)).join(', ')}</MetaItem>
+                    <MetaItem label="Installed">{new Date(installedRecord.installedAt).toLocaleDateString()}</MetaItem>
+                    <MetaItem label="Updated">{new Date(installedRecord.updatedAt).toLocaleDateString()}</MetaItem>
+                  </>
+                ) : (
+                  <MetaItem label="Status">{catalogRecord?.available ? 'Available to install' : 'Unavailable'}</MetaItem>
+                )}
+              </dl>
+              {installedRecord?.source.revision ? (
+                <p className="mt-1.5 truncate text-[10px] text-faint" title={installedRecord.source.revision}>Revision {installedRecord.source.revision.slice(0, 12)}</p>
+              ) : null}
+            </section>
+
+            {installedRecord ? (
+              <div className="flex flex-wrap items-center gap-2 border-t border-border-soft pt-2.5">
+                <Button size="sm" variant="outline" disabled={busy} onClick={() => void run(() => window.ndDsh.ndExtensions.update(installedRecord.id))}>
+                  <RefreshCw className="size-3.5" /> Update
+                </Button>
+                {installedRecord.previousVersion ? (
+                  <Button size="sm" variant="outline" disabled={busy} onClick={() => void run(() => window.ndDsh.ndExtensions.rollback(installedRecord.id))}>
+                    <Undo2 className="size-3.5" /> Roll back to v{installedRecord.previousVersion}
+                  </Button>
+                ) : null}
+                {updateAvailable && catalogRecord ? <span className="text-[10px] text-faint">v{catalogRecord.version} is available</span> : null}
+                {installedRecord.source.kind !== 'builtin' ? (
+                  <Button size="sm" variant="ghost" className="ml-auto text-destructive" disabled={busy} onClick={() => void run(() => window.ndDsh.ndExtensions.uninstall(installedRecord.id))}>
+                    Uninstall
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
+          </>
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function MetaItem({ label, title, children }: { label: string; title?: string; children: React.ReactNode }): React.ReactNode {
+  return (
+    <div className="flex min-w-0 items-baseline justify-between gap-3">
+      <dt className="m-0 shrink-0 text-[10px] text-faint">{label}</dt>
+      <dd className="m-0 min-w-0 truncate text-[11px] text-soft" title={title}>{children}</dd>
+    </div>
   )
 }
 

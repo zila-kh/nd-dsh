@@ -1,9 +1,10 @@
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { DAILY_ESSENTIALS_MANIFEST } from '../src/shared/builtin-extension-packages.js'
+import type { GitExecRunner } from '../src/main/git/git-cli.js'
 import { ExtensionPackageStore } from '../src/main/extensions/package-store.js'
 import { HomeStore } from '../src/main/home/home-store.js'
 
@@ -64,6 +65,19 @@ describe('ExtensionPackageStore lifecycle', () => {
     const snapshot = await readFile(join(root, 'packages', 'nd.sample', '1.0.0', 'runtime', 'server.mjs'), 'utf8')
     expect(snapshot).toContain('value = 1')
     expect(await store.activeManifest('nd.sample')).toMatchObject({ id: 'nd.sample', version: '1.0.0' })
+  })
+
+  it('reads the package revision through the injected ND Core git runner', async () => {
+    await writePackage(sourceRoot, SAMPLE)
+    const calls: Array<{ cwd: string; args: string[] }> = []
+    const runner: GitExecRunner = async (cwd, args) => {
+      calls.push({ cwd, args })
+      return { exitCode: 0, stdout: `${'b'.repeat(40)}\n`, stderr: '' }
+    }
+    const store = new ExtensionPackageStore(root, runner)
+    const view = await store.installFromDirectory(sourceRoot)
+    expect(view.source).toMatchObject({ kind: 'git', revision: 'b'.repeat(40) })
+    expect(calls).toEqual([{ cwd: resolve(sourceRoot), args: ['rev-parse', 'HEAD'] }])
   })
 
   it('rejects an invalid manifest and never writes a snapshot', async () => {
