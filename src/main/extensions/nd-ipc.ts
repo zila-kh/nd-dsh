@@ -32,7 +32,8 @@ import type { InvocationBroker, NdOrganizationPort } from './invocation-broker.j
 import type { InvocationStateStore } from './invocation-state.js'
 import type { NativeHostRegistry } from './native-host.js'
 import { NdTranslateService, type TranslateBrowserPort } from './translate-service.js'
-import { ND_TRANSLATE_ID } from '../../shared/nd-translate.js'
+import { TranslateHistoryStore } from './translate-history-store.js'
+import { ND_TRANSLATE_ID, ND_TRANSLATE_MAX_TEXT } from '../../shared/nd-translate.js'
 
 export interface NdOrganizationPortFull extends NdOrganizationPort {
   mutate(mutation: OrganizationMutation): Promise<unknown>
@@ -105,7 +106,8 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
   }
 
   const ensureSeeded = (): Promise<void> => {
-    seeded ??= seedBuiltinPackages(deps).then(() => {
+    seeded ??= seedBuiltinPackages(deps).then(async () => {
+      await refreshAvailablePackages(deps)
       void syncWallpaperRotation()
     })
     return seeded
@@ -363,7 +365,26 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void 
   const { host } = deps
   const organization = deps.organization
   const translator = new NdTranslateService(deps.browser)
-  host.register('browser.translate', async (input) => translator.translate(input))
+  const history = new TranslateHistoryStore(join(app.getPath('userData'), 'nd-translate-history.json'))
+  void history.initialize().catch((error) => console.warn('ND Translate history failed to load:', error))
+  host.register('browser.translate', async (input, context) => {
+    const result = await translator.translate(input)
+    if (result.status === 'translated' && result.translatedText?.trim()) {
+      void history.add(contextKey(context.context), {
+        text: result.text.slice(0, ND_TRANSLATE_MAX_TEXT),
+        translatedText: result.translatedText.slice(0, ND_TRANSLATE_MAX_TEXT),
+        sourceLanguage: result.sourceLanguage,
+        targetLanguage: result.targetLanguage,
+        provider: result.provider,
+      }).catch((error) => console.warn('ND Translate history write failed:', error))
+    }
+    return result
+  })
+  host.register('browser.translate.history', async (_input, context) => history.list(contextKey(context.context)))
+  host.register('browser.translate.history.clear', async (input, context) => {
+    const id = typeof input.id === 'string' ? input.id.slice(0, 160) : undefined
+    return { removed: await history.remove(contextKey(context.context), id) }
+  })
   const processes = new ProcessInventory(undefined, () => [
     process.pid,
     ...app.getAppMetrics().map((metric) => metric.pid),
@@ -734,7 +755,7 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void 
 
 async function translateCatalogView(state: NdExtensionsStateView): Promise<NdAvailablePackageView> {
   return packageCatalogView(state, ND_TRANSLATE_ID, translatePackagePath(), {
-    name: 'ND Translate', description: 'Translate text with Google Translate, ChatGPT, or Gemini in the ND browser.', permissions: ['browser.navigate'],
+    name: 'ND Translate', description: 'Translate text with Google Translate, ChatGPT, or Gemini in the ND browser.', permissions: ['browser.navigate', 'translate.history'],
   })
 }
 
@@ -798,6 +819,27 @@ async function seedBuiltinPackages(deps: NdIpcDependencies): Promise<void> {
       const existing = await deps.state.activation(manifest.id, context)
       if (!existing) await deps.state.setActivation(manifest.id, context, true)
     }
+  }
+}
+
+/** Re-snapshot installed ND-bundled on-demand packages when their bundled manifest changed. */
+async function refreshAvailablePackages(deps: NdIpcDependencies): Promise<void> {
+  for (const [id, packagePath] of [
+    [ND_TRANSLATE_ID, translatePackagePath()],
+    [QUIT_PROCESS_ID, quitProcessPackagePath()],
+  ] as const) {
+    const installed = await deps.packages.record(id)
+    if (!installed) continue
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(await fs.readFile(join(packagePath, 'nd-extension.json'), 'utf8'))
+    } catch {
+      continue
+    }
+    const validated = validateNdExtensionManifest(parsed)
+    if (!validated.ok || validated.manifest.id !== id || manifestPermissionIssues(validated.manifest).length > 0) continue
+    if (JSON.stringify(validated.manifest) === JSON.stringify(installed.manifest)) continue
+    await deps.packages.installFromDirectory(packagePath, { expectId: id })
   }
 }
 

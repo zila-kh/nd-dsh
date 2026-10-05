@@ -6,7 +6,7 @@
   "version": "1.0.0",
   "apiVersion": 1,
   "contexts": ["personal", "company", "project"],
-  "permissions": ["browser.navigate"],
+  "permissions": ["browser.navigate", "translate.history"],
   "settings": [],
   "contributions": {
     "commands": [{
@@ -22,7 +22,11 @@
       "kind": "detail",
       "host": "browser.translate",
       "itemTitleKey": "text",
-      "itemBodyKey": "translatedText"
+      "itemBodyKey": "translatedText",
+      "actions": [
+        { "id": "history", "title": "Translation history", "host": "browser.translate.history" },
+        { "id": "clear-history", "title": "Clear translation history", "host": "browser.translate.history.clear" }
+      ]
     }]
   }
 }

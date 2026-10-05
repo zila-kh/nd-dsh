@@ -30,6 +30,16 @@ export interface NdTranslateResult extends NdTranslateRequest {
   url?: string
 }
 
+export interface NdTranslateHistoryEntry {
+  id: string
+  text: string
+  translatedText: string
+  sourceLanguage: string
+  targetLanguage: string
+  provider: NdTranslateProvider
+  createdAt: number
+}
+
 /** Trusted, provider-specific DOM observation; never a generic renderer script. */
 export interface NdTranslatePage {
   url: string

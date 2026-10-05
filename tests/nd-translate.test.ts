@@ -27,15 +27,19 @@ const input = { text: 'Hello', sourceLanguage: 'auto', targetLanguage: 'km', pro
 afterEach(() => vi.useRealTimers())
 
 describe('ND Translate input and extension boundary', () => {
-  it('installs on demand with only the browser permission and no executable runtime', () => {
+  it('installs on demand with only browser and history permissions and no executable runtime', () => {
     const raw = JSON.parse(readFileSync(new URL('../extensions/translate/nd-extension.json', import.meta.url), 'utf8'))
     const validated = validateNdExtensionManifest(raw)
     expect(validated.ok).toBe(true)
     if (!validated.ok) throw new Error('Invalid translation manifest')
     expect(manifestPermissionIssues(validated.manifest)).toEqual([])
-    expect(validated.manifest.permissions).toEqual(['browser.navigate'])
+    expect(validated.manifest.permissions).toEqual(['browser.navigate', 'translate.history'])
     expect(validated.manifest.executable).toBeUndefined()
     expect(validated.manifest.contributions.commands[0]).toMatchObject({ id: 'translate', host: 'browser.translate', openViewId: 'translator' })
+    expect(validated.manifest.contributions.views[0]?.actions).toEqual([
+      { id: 'history', title: 'Translation history', host: 'browser.translate.history' },
+      { id: 'clear-history', title: 'Clear translation history', host: 'browser.translate.history.clear' },
+    ])
     expect(BUILTIN_EXTENSION_PACKAGES.some((item) => item.id === 'nd.translate')).toBe(false)
   })
 

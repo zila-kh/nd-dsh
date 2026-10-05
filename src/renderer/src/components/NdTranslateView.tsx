@@ -1,10 +1,11 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { ArrowLeftRight, Check, Copy, ExternalLink, Languages, LoaderCircle } from 'lucide-react'
+import { ArrowLeftRight, Check, Copy, ExternalLink, History, Languages, LoaderCircle, Trash2 } from 'lucide-react'
 import type { NdContext } from '../../../shared/nd-context'
 import { contextKey } from '../../../shared/nd-context'
 import {
   ND_TRANSLATE_LANGUAGES,
   ND_TRANSLATE_MAX_TEXT,
+  type NdTranslateHistoryEntry,
   type NdTranslateProvider,
   type NdTranslateRequest,
   type NdTranslateResult,
@@ -38,6 +39,167 @@ function restoreBrowserDraft(context: NdContext): NdTranslateRequest | undefined
   return migrated
 }
 
+async function invokeHistoryAction(context: NdContext, input: Record<string, unknown>): Promise<unknown> {
+  const response = await window.ndDsh.ndExtensions.invoke({
+    extensionId: 'nd.translate',
+    contributionKind: 'view',
+    contributionId: 'translator',
+    caller: 'user',
+    context,
+    input,
+  })
+  if (!response.ok) throw new Error(response.error?.message ?? 'Translation history is unavailable.')
+  return response.value
+}
+
+function asHistoryEntry(value: unknown): value is NdTranslateHistoryEntry {
+  if (!value || typeof value !== 'object') return false
+  const entry = value as Partial<NdTranslateHistoryEntry>
+  return typeof entry.id === 'string' && typeof entry.text === 'string'
+    && typeof entry.translatedText === 'string'
+    && typeof entry.sourceLanguage === 'string' && typeof entry.targetLanguage === 'string'
+    && typeof entry.provider === 'string' && typeof entry.createdAt === 'number'
+}
+
+function historyLanguageLabel(code: string): string {
+  return ND_TRANSLATE_LANGUAGES.find((item) => item.code === code)?.label ?? code
+}
+
+function historyProviderLabel(id: string): string {
+  return PROVIDERS.find((item) => item.id === id)?.label ?? id
+}
+
+function TranslateHistory({ context, onLoad }: {
+  context: NdContext
+  onLoad(entry: NdTranslateHistoryEntry): void
+}): React.ReactNode {
+  const [entries, setEntries] = useState<NdTranslateHistoryEntry[] | null>(null)
+  const [message, setMessage] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [copiedId, setCopiedId] = useState<string | null>(null)
+  const [removingId, setRemovingId] = useState<string | null>(null)
+  const [confirmClear, setConfirmClear] = useState(false)
+  const [clearing, setClearing] = useState(false)
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const load = async (active: () => boolean): Promise<void> => {
+    try {
+      const value = await invokeHistoryAction(context, { action: 'history' })
+      if (!active()) return
+      setEntries(Array.isArray(value) ? value.filter(asHistoryEntry) : [])
+      setMessage(null)
+    } catch (cause) {
+      if (active()) setMessage(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      if (active()) setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    let active = true
+    void load(() => active)
+    return () => {
+      active = false
+      if (copyTimer.current) clearTimeout(copyTimer.current)
+    }
+    // The view remounts per context; history loads once for the mounted context.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const removeEntry = async (id: string): Promise<void> => {
+    setRemovingId(id)
+    try {
+      await invokeHistoryAction(context, { action: 'clear-history', id })
+      setEntries((current) => current?.filter((entry) => entry.id !== id) ?? null)
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setRemovingId(null)
+    }
+  }
+
+  const clearAll = async (): Promise<void> => {
+    if (!confirmClear) {
+      setConfirmClear(true)
+      return
+    }
+    setClearing(true)
+    try {
+      await invokeHistoryAction(context, { action: 'clear-history' })
+      setEntries([])
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setClearing(false)
+      setConfirmClear(false)
+    }
+  }
+
+  const copyEntry = async (entry: NdTranslateHistoryEntry): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(entry.translatedText)
+      setCopiedId(entry.id)
+      if (copyTimer.current) clearTimeout(copyTimer.current)
+      copyTimer.current = setTimeout(() => setCopiedId(null), 2000)
+    } catch {
+      setMessage('Clipboard access failed. Select the translation text and copy it manually.')
+    }
+  }
+
+  const count = entries?.length ?? 0
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] text-faint" role="status">
+          {loading ? 'Loading history…' : `${count.toLocaleString()} translation${count === 1 ? '' : 's'} saved in this context`}
+        </span>
+        <Button
+          type="button"
+          size="xs"
+          variant="ghost"
+          disabled={clearing || loading || count === 0}
+          onClick={() => void clearAll()}
+        >
+          {clearing ? <LoaderCircle className="size-3 animate-spin" /> : <Trash2 className="size-3" />}
+          {confirmClear ? 'Confirm clear all?' : 'Clear all'}
+        </Button>
+      </div>
+      {message ? <div role="alert" className="rounded-md border border-border-soft bg-surface-0/60 p-3 text-xs text-soft">{message}</div> : null}
+      {entries && entries.length === 0 ? (
+        <div className="rounded-md border border-border-soft px-3 py-8 text-center text-xs text-faint">
+          No translations yet. Translate text to see it here.
+        </div>
+      ) : null}
+      <div className="max-h-[46vh] space-y-2 overflow-y-auto pr-1">
+        {entries?.map((entry) => (
+          <div key={entry.id} className="rounded-lg border border-border-soft bg-surface-0/50">
+            <button type="button" className="block w-full px-3 pb-1.5 pt-2.5 text-left" title="Load this translation" onClick={() => onLoad(entry)}>
+              <div className="flex items-center justify-between gap-2 text-[11px] text-soft">
+                <span>{historyLanguageLabel(entry.sourceLanguage)} → {historyLanguageLabel(entry.targetLanguage)} · {historyProviderLabel(entry.provider)}</span>
+                <span className="shrink-0 text-faint">{new Date(entry.createdAt).toLocaleString()}</span>
+              </div>
+              <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-foreground/90">{entry.translatedText}</p>
+              {entry.text.trim() !== entry.translatedText.trim() ? (
+                <p className="mt-0.5 line-clamp-1 text-[10px] text-faint">{entry.text}</p>
+              ) : null}
+            </button>
+            <div className="flex items-center justify-end gap-1 px-2 pb-1.5">
+              <Button type="button" size="xs" variant="ghost" disabled={removingId === entry.id} onClick={() => void copyEntry(entry)}>
+                {copiedId === entry.id ? <Check className="size-3" /> : <Copy className="size-3" />}
+                {copiedId === entry.id ? 'Copied' : 'Copy'}
+              </Button>
+              <Button type="button" size="xs" variant="ghost" disabled={removingId === entry.id} onClick={() => void removeEntry(entry.id)}>
+                {removingId === entry.id ? <LoaderCircle className="size-3 animate-spin" /> : <Trash2 className="size-3" />}
+                Remove
+              </Button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 /** ND-owned view; all provider access stays behind the installed extension broker. */
 export default function NdTranslateView({ context, onOpenBrowser }: {
   context: NdContext
@@ -54,6 +216,7 @@ export default function NdTranslateView({ context, onOpenBrowser }: {
   const [busy, setBusy] = useState(false)
   const [copied, setCopied] = useState(false)
   const [openingBrowser, setOpeningBrowser] = useState(false)
+  const [mode, setMode] = useState<'translate' | 'history'>('translate')
   const mounted = useRef(true)
   const revision = useRef(0)
   const pending = useRef(false)
@@ -189,17 +352,45 @@ export default function NdTranslateView({ context, onOpenBrowser }: {
   }
   const needsBrowser = result?.status === 'login-required' || result?.status === 'challenge'
 
+  const loadEntry = (entry: NdTranslateHistoryEntry): void => {
+    if (opening.current) return
+    const source = ND_TRANSLATE_LANGUAGES.some((item) => item.code === entry.sourceLanguage) ? entry.sourceLanguage : 'auto'
+    const target = ND_TRANSLATE_LANGUAGES.some((item) => item.code === entry.targetLanguage && item.code !== 'auto') ? entry.targetLanguage : 'km'
+    const entryProvider = PROVIDERS.some((item) => item.id === entry.provider) ? entry.provider : 'google'
+    invalidate()
+    setText(entry.text.slice(0, ND_TRANSLATE_MAX_TEXT))
+    setSourceLanguage(source)
+    setTargetLanguage(target)
+    setProvider(entryProvider)
+    manuallySelectedTargets.add(contextKey(context))
+    setMode('translate')
+  }
+
+  const modeButtonClass = (active: boolean): string =>
+    active ? 'font-semibold text-foreground' : 'text-faint hover:text-foreground'
+
   return (
-    <form className="space-y-3" onSubmit={(event) => { event.preventDefault(); void translate() }}>
+    <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-xs text-soft"><Languages className="size-4 text-primary" /> Quick translation</div>
-        <label className="flex items-center gap-2 text-xs text-faint" htmlFor={`${id}-provider`}>
-          Provider
-          <select id={`${id}-provider`} className={SELECT_CLASS} disabled={openingBrowser} value={provider} onChange={(event) => { if (opening.current) return; invalidate(); setProvider(event.target.value as NdTranslateProvider) }}>
-            {PROVIDERS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-          </select>
-        </label>
+        <div className="flex items-center gap-2 text-xs text-soft">
+          <Languages className="size-4 text-primary" />
+          <button type="button" aria-pressed={mode === 'translate'} className={modeButtonClass(mode === 'translate')} onClick={() => setMode('translate')}>Translate</button>
+          <span className="text-border">·</span>
+          <button type="button" aria-pressed={mode === 'history'} className={modeButtonClass(mode === 'history')} onClick={() => setMode('history')}><History className="mr-1 inline size-3" />History</button>
+        </div>
+        {mode === 'translate' ? (
+          <label className="flex items-center gap-2 text-xs text-faint" htmlFor={`${id}-provider`}>
+            Provider
+            <select id={`${id}-provider`} className={SELECT_CLASS} disabled={openingBrowser} value={provider} onChange={(event) => { if (opening.current) return; invalidate(); setProvider(event.target.value as NdTranslateProvider) }}>
+              {PROVIDERS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+            </select>
+          </label>
+        ) : null}
       </div>
+      {mode === 'history' ? (
+        <TranslateHistory context={context} onLoad={loadEntry} />
+      ) : (
+      <form className="space-y-3" onSubmit={(event) => { event.preventDefault(); void translate() }}>
       <div className="flex items-center gap-2">
         <label htmlFor={`${id}-source`} className="sr-only">Source language</label>
         <select id={`${id}-source`} className={`${SELECT_CLASS} min-w-0 flex-1`} disabled={openingBrowser} value={sourceLanguage} onChange={(event) => { if (opening.current) return; invalidate(); setSourceLanguage(event.target.value) }}>
@@ -236,6 +427,8 @@ export default function NdTranslateView({ context, onOpenBrowser }: {
         <Button type="submit" size="sm" disabled={busy || openingBrowser || !text.trim() || text.length > ND_TRANSLATE_MAX_TEXT}>{busy ? <LoaderCircle className="size-3.5 animate-spin" /> : <Languages className="size-3.5" />}{busy ? 'Translating…' : 'Translate'}</Button>
       </div>
       <p className="text-[10px] text-faint">Ctrl / ⌘ + Enter to translate</p>
-    </form>
+      </form>
+      )}
+    </div>
   )
 }

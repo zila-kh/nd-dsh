@@ -29,6 +29,10 @@ function elements(node: ReactNode): TestElement[] {
   if (Array.isArray(node)) return node.flatMap(elements)
   if (!node || typeof node !== 'object' || !('props' in node)) return []
   const item = node as TestElement
+  const type = item.type as unknown
+  if (typeof type === 'function') {
+    return [item, ...elements((type as (props: Record<string, unknown>) => ReactNode)(item.props))]
+  }
   return [item, ...elements(item.props.children as ReactNode)]
 }
 function render(): TestElement {
@@ -44,7 +48,9 @@ function change(id: string, value: string): void {
   ;(field(id).props.onChange as (event: unknown) => void)({ target: { value } })
 }
 async function submit(): Promise<void> {
-  ;(render().props.onSubmit as (event: unknown) => void)({ preventDefault() {} })
+  const form = elements(render()).find((element) => element.type === 'form')
+  if (!form) throw new Error('Missing translate form')
+  ;(form.props.onSubmit as (event: unknown) => void)({ preventDefault() {} })
   await Promise.resolve()
   await Promise.resolve()
 }
@@ -275,5 +281,40 @@ describe('ND Translate form', () => {
     await Promise.resolve()
     expect(field('text').props.disabled).toBe(false)
     change('text', '')
+  })
+
+  it('lists persisted translations in history mode and loads one back into the form', async () => {
+    const entry = { id: 'h1', text: 'Hello', translatedText: 'សួស្តី', sourceLanguage: 'auto', targetLanguage: 'km', provider: 'google', createdAt: 1 }
+    invoke.mockResolvedValue({ ok: true, value: [entry] })
+    ;(button('History').props.onClick as () => void)()
+    elements(render()) // Mount the history view so its load effect runs.
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(invoke).toHaveBeenCalledWith({ extensionId: 'nd.translate', contributionId: 'translator', contributionKind: 'view', caller: 'user', context: { kind: 'personal' }, input: { action: 'history' } })
+    const row = elements(render()).find((element) => element.props.title === 'Load this translation')
+    expect(row).toBeDefined()
+    ;(row!.props.onClick as () => void)()
+    expect(field('text').props.value).toBe('Hello')
+    expect(field('provider').props.value).toBe('google')
+    expect(field('target').props.value).toBe('km')
+  })
+
+  it('clears all history only after an explicit confirmation step', async () => {
+    invoke.mockResolvedValue({ ok: true, value: [{ id: 'h1', text: 'Hello', translatedText: 'សួស្តី', sourceLanguage: 'auto', targetLanguage: 'km', provider: 'google', createdAt: 1 }] })
+    ;(button('History').props.onClick as () => void)()
+    elements(render()) // Mount the history view so its load effect runs.
+    await Promise.resolve()
+    await Promise.resolve()
+    const clearAll = elements(render()).find((element) =>
+      Array.isArray(element.props.children) && element.props.children.includes('Clear all'))
+    expect(clearAll).toBeDefined()
+    ;(clearAll!.props.onClick as () => void)()
+    expect(invoke).not.toHaveBeenCalledWith(expect.objectContaining({ input: { action: 'clear-history' } }))
+    const confirmClear = elements(render()).find((element) =>
+      Array.isArray(element.props.children) && element.props.children.includes('Confirm clear all?'))
+    expect(confirmClear).toBeDefined()
+    ;(confirmClear!.props.onClick as () => void)()
+    await Promise.resolve()
+    expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ input: { action: 'clear-history' } }))
   })
 })
