@@ -1,6 +1,21 @@
 export const ND_TRANSLATE_ID = 'nd.translate'
 export const ND_TRANSLATE_MAX_TEXT = 5_000
-export type NdTranslateProvider = 'google' | 'chatgpt' | 'gemini'
+export type NdBrowserTranslateProvider = 'google' | 'chatgpt' | 'gemini'
+/** A Settings → Models LLM provider, referenced as `llm:<providerId>`. */
+export type NdTranslateLlmProvider = `llm:${string}`
+export type NdTranslateProvider = NdBrowserTranslateProvider | NdTranslateLlmProvider
+
+export function isBrowserTranslateProvider(provider: string): provider is NdBrowserTranslateProvider {
+  return provider === 'google' || provider === 'chatgpt' || provider === 'gemini'
+}
+
+export function isLlmProvider(provider: string): provider is NdTranslateLlmProvider {
+  return provider.startsWith('llm:') && provider.length > 'llm:'.length
+}
+
+export function llmProviderId(provider: string): string {
+  return provider.slice('llm:'.length)
+}
 
 export const ND_TRANSLATE_LANGUAGES = [
   { code: 'auto', label: 'Detect language' }, { code: 'en', label: 'English' },
@@ -20,6 +35,8 @@ export interface NdTranslateRequest {
   sourceLanguage: string
   targetLanguage: string
   provider: NdTranslateProvider
+  /** LLM provider model override; defaults to the provider's first model. */
+  model?: string
 }
 
 export interface NdTranslateResult extends NdTranslateRequest {
@@ -37,6 +54,8 @@ export interface NdTranslateHistoryEntry {
   sourceLanguage: string
   targetLanguage: string
   provider: NdTranslateProvider
+  /** The LLM model that produced the translation, when one was selected. */
+  model?: string
   createdAt: number
 }
 

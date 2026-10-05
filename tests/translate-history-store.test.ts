@@ -73,6 +73,23 @@ describe('TranslateHistoryStore', () => {
     expect((await reopened.list('personal')).map((item) => item.text)).toEqual(['valid'])
   })
 
+  it('persists LLM provider entries with their model and rejects malformed llm ids', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nd-translate-history-'))
+    roots.push(root)
+    const path = join(root, 'history.json')
+    const store = new TranslateHistoryStore(path)
+    await store.add('personal', { ...entry('one'), provider: 'llm:deepseek', model: 'deepseek-v4-flash' })
+    expect(await store.list('personal')).toMatchObject([{ provider: 'llm:deepseek', model: 'deepseek-v4-flash' }])
+
+    const corrupted = { version: 1, entries: [
+      { ...entry('valid'), id: 'ok', contextKey: 'personal', createdAt: 1 },
+      { ...entry('empty-id'), id: 'bad', contextKey: 'personal', createdAt: 2, provider: 'llm:' },
+    ] }
+    await writeFile(path, JSON.stringify(corrupted), 'utf8')
+    const reopened = new TranslateHistoryStore(path)
+    expect((await reopened.list('personal')).map((item) => item.text)).toEqual(['valid'])
+  })
+
   it('treats a missing file as empty history', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nd-translate-history-'))
     roots.push(root)

@@ -261,6 +261,7 @@ export function registerIpc(deps: IpcDependencies): () => void {
     host: nativeHost,
     organization: deps.organizationStore,
     browser: deps.browser,
+    providers: deps.providers,
     workflow: workflowService,
     onHomeChanged: () => { void syncHomeSessions() },
   })

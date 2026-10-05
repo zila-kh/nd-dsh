@@ -32,8 +32,10 @@ import type { InvocationBroker, NdOrganizationPort } from './invocation-broker.j
 import type { InvocationStateStore } from './invocation-state.js'
 import type { NativeHostRegistry } from './native-host.js'
 import { NdTranslateService, type TranslateBrowserPort } from './translate-service.js'
+import { translateWithLlm } from './translate-llm.js'
 import { TranslateHistoryStore } from './translate-history-store.js'
-import { ND_TRANSLATE_ID, ND_TRANSLATE_MAX_TEXT } from '../../shared/nd-translate.js'
+import { ND_TRANSLATE_ID, ND_TRANSLATE_MAX_TEXT, isLlmProvider } from '../../shared/nd-translate.js'
+import type { ProviderStore } from '../providers.js'
 
 export interface NdOrganizationPortFull extends NdOrganizationPort {
   mutate(mutation: OrganizationMutation): Promise<unknown>
@@ -51,6 +53,7 @@ export interface NdIpcDependencies {
   host: NativeHostRegistry
   organization: NdOrganizationPortFull
   browser: Pick<BrowserController, 'navigate'> & TranslateBrowserPort
+  providers: ProviderStore
   workflow: Pick<WorkflowService, 'projectView' | 'refresh'>
   /** Notified after ND Home records change, so other services can re-derive views. */
   onHomeChanged?: () => void
@@ -362,13 +365,17 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
  * IPC, shell strings, or renderer code ever crosses this boundary.
  */
 export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void {
-  const { host } = deps
+  const { host, providers } = deps
   const organization = deps.organization
   const translator = new NdTranslateService(deps.browser)
   const history = new TranslateHistoryStore(join(app.getPath('userData'), 'nd-translate-history.json'))
   void history.initialize().catch((error) => console.warn('ND Translate history failed to load:', error))
   host.register('browser.translate', async (input, context) => {
-    const result = await translator.translate(input)
+    const requestedProvider = input && typeof input === 'object' ? (input as Record<string, unknown>).provider : undefined
+    const provider = typeof requestedProvider === 'string' ? requestedProvider : 'google'
+    const result = isLlmProvider(provider)
+      ? await translateWithLlm(providers, input)
+      : await translator.translate(input)
     if (result.status === 'translated' && result.translatedText?.trim()) {
       void history.add(contextKey(context.context), {
         text: result.text.slice(0, ND_TRANSLATE_MAX_TEXT),
@@ -376,6 +383,7 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void 
         sourceLanguage: result.sourceLanguage,
         targetLanguage: result.targetLanguage,
         provider: result.provider,
+        ...(result.model?.trim() ? { model: result.model.trim().slice(0, 128) } : {}),
       }).catch((error) => console.warn('ND Translate history write failed:', error))
     }
     return result

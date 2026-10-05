@@ -94,7 +94,7 @@ function sanitizeProvider(value: unknown, includeLegacySecret = false): ModelPro
   }
 }
 
-function resolveProbeHeaders(headers: Record<string, string> | undefined, baseUrl: string | undefined): Record<string, string> {
+export function resolveProbeHeaders(headers: Record<string, string> | undefined, baseUrl: string | undefined): Record<string, string> {
   const result: Record<string, string> = {}
   if (headers) {
     for (const [key, val] of Object.entries(headers)) {

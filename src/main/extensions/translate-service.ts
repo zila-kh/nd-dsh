@@ -1,4 +1,4 @@
-import { ND_TRANSLATE_LANGUAGES, ND_TRANSLATE_MAX_TEXT, type NdTranslatePage, type NdTranslateProvider, type NdTranslateRequest, type NdTranslateResult } from '../../shared/nd-translate.js'
+import { isBrowserTranslateProvider, isLlmProvider, ND_TRANSLATE_LANGUAGES, ND_TRANSLATE_MAX_TEXT, type NdTranslatePage, type NdTranslateProvider, type NdTranslateRequest, type NdTranslateResult } from '../../shared/nd-translate.js'
 
 export interface TranslateBrowserPort {
   createTab(url: string, activate: boolean): Promise<{ id: string }>
@@ -14,18 +14,24 @@ const PROVIDER_URLS = { google: 'https://translate.google.com/', chatgpt: 'https
 const LANGUAGE_CODES = new Set<string>(ND_TRANSLATE_LANGUAGES.map((item) => item.code))
 
 export function translateRequest(input: Record<string, unknown>): NdTranslateRequest {
-  const provider = input.provider ?? 'google'
-  if (provider !== 'google' && provider !== 'chatgpt' && provider !== 'gemini') throw new Error('Choose Google Translate, ChatGPT, or Gemini')
+  const rawProvider = input.provider ?? 'google'
+  if (typeof rawProvider !== 'string' || (!isBrowserTranslateProvider(rawProvider) && !isLlmProvider(rawProvider))) {
+    throw new Error('Choose Google Translate, ChatGPT, Gemini, or an LLM provider from Settings')
+  }
+  const provider: NdTranslateProvider = rawProvider
   const text = input.text ?? ''
   if (typeof text !== 'string' || text.length > ND_TRANSLATE_MAX_TEXT) throw new Error(`Translation text must be at most ${ND_TRANSLATE_MAX_TEXT} characters`)
   const sourceLanguage = input.sourceLanguage ?? 'auto'
   const targetLanguage = input.targetLanguage ?? 'km'
   if (typeof sourceLanguage !== 'string' || !LANGUAGE_CODES.has(sourceLanguage)) throw new Error('Choose a supported source language')
   if (typeof targetLanguage !== 'string' || targetLanguage === 'auto' || !LANGUAGE_CODES.has(targetLanguage)) throw new Error('Choose a supported target language')
-  return { text, provider, sourceLanguage, targetLanguage }
+  const model = typeof input.model === 'string' && input.model.trim() ? input.model.trim() : undefined
+  if (model && model.length > 128) throw new Error('Model id is too long')
+  return { text, provider, sourceLanguage, targetLanguage, ...(model ? { model } : {}) }
 }
 
 export function translationUrl(request: NdTranslateRequest): string {
+  if (isLlmProvider(request.provider)) throw new Error('LLM providers are handled directly by ND, not through the ND browser')
   const url = new URL(PROVIDER_URLS[request.provider])
   if (request.provider === 'google') {
     url.searchParams.set('sl', request.sourceLanguage)
@@ -37,6 +43,7 @@ export function translationUrl(request: NdTranslateRequest): string {
 }
 
 function providerOrigin(url: string, provider: NdTranslateProvider): boolean {
+  if (isLlmProvider(provider)) return false
   try { return new URL(url).origin === new URL(PROVIDER_URLS[provider]).origin } catch { return false }
 }
 
@@ -69,6 +76,7 @@ export class NdTranslateService {
   async translate(input: Record<string, unknown>): Promise<NdTranslateResult> {
     const request = translateRequest(input)
     if (!request.text.trim()) return { ...request, status: 'idle' }
+    if (isLlmProvider(request.provider)) return { ...request, status: 'error', message: 'This provider runs through ND Settings, not the ND browser.' }
     if (this.disposed) return { ...request, status: 'error', message: 'ND Translate is shutting down' }
     if (this.running) return { ...request, status: 'busy', message: 'A translation is already running. Wait for it to finish, then try again.' }
     this.running = true

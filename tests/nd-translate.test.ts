@@ -44,10 +44,19 @@ describe('ND Translate input and extension boundary', () => {
   })
 
   it('validates provider, languages, target, text type and length before opening a browser', () => {
-    for (const patch of [ { provider: 'other' }, { sourceLanguage: 'evil' }, { targetLanguage: 'auto' }, { text: 42 }, { text: 'x'.repeat(ND_TRANSLATE_MAX_TEXT + 1) } ]) {
+    for (const patch of [ { provider: 'other' }, { provider: 'llm:' }, { sourceLanguage: 'evil' }, { targetLanguage: 'auto' }, { text: 42 }, { text: 'x'.repeat(ND_TRANSLATE_MAX_TEXT + 1) } ]) {
       expect(() => translateRequest({ ...input, ...patch })).toThrow()
     }
     expect(translateRequest({})).toEqual({ text: '', sourceLanguage: 'auto', targetLanguage: 'km', provider: 'google' })
+    expect(translateRequest({ ...input, provider: 'llm:deepseek', model: ' deepseek-v4-flash ' })).toEqual({ ...input, provider: 'llm:deepseek', model: 'deepseek-v4-flash' })
+  })
+
+  it('keeps LLM providers out of the browser workflow and URL routes', async () => {
+    const request = translateRequest({ ...input, provider: 'llm:deepseek' })
+    expect(() => translationUrl(request)).toThrow('directly by ND')
+    await expect(new NdTranslateService(browser()).translate({ ...input, provider: 'llm:deepseek' })).resolves.toMatchObject({
+      status: 'error', message: expect.stringContaining('ND Settings'),
+    })
   })
 
   it('encodes submitted content as URL data and keeps an allowlisted HTTPS origin', () => {

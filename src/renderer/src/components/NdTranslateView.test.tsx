@@ -1,46 +1,99 @@
 import type { ReactElement, ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { NdInvocationResult } from '../../../shared/nd-invocations'
+import type { ModelProvider } from '../../../shared/contracts'
 
 // Drive the actual form handlers without adding a DOM dependency to the app.
-const hooks = vi.hoisted(() => ({ values: [] as unknown[], cursor: 0, cleanup: null as (() => void) | null }))
+// Hooks are keyed per component instance (path through the element tree) so
+// conditionally mounted children keep their own state, like real React.
+const hooks = vi.hoisted(() => ({
+  stack: [] as string[],
+  local: new Map<string, number>(),
+  store: new Map<string, unknown>(),
+  mounted: new Set<string>(),
+  effects: new Map<string, () => void>(),
+  generation: 1,
+  cleanup: null as (() => void) | null,
+  slot(instance: string, allocate = true): { key: string; index: number } {
+    const index = this.local.get(instance) ?? 0
+    if (allocate) this.local.set(instance, index + 1)
+    return { key: `${this.generation}:${instance}:${index}`, index }
+  },
+  enter(instance: string): void {
+    this.stack.push(instance)
+    this.local.set(instance, 0)
+  },
+  exit(): void {
+    this.stack.pop()
+  },
+  reset(): void {
+    this.generation += 1
+    this.store.clear()
+    this.mounted.clear()
+    this.effects.clear()
+    this.local.clear()
+    this.stack = []
+  },
+}))
 vi.mock('react', async (original) => ({
   ...await original<typeof import('react')>(),
   useId: () => 'translate',
   useState: (initial: unknown) => {
-    const index = hooks.cursor++
-    if (!(index in hooks.values)) hooks.values[index] = typeof initial === 'function' ? initial() : initial
-    return [hooks.values[index], (next: unknown) => { hooks.values[index] = next }]
+    const { key } = hooks.slot(hooks.stack[hooks.stack.length - 1] ?? 'root')
+    if (!hooks.store.has(key)) hooks.store.set(key, typeof initial === 'function' ? initial() : initial)
+    return [hooks.store.get(key), (next: unknown) => {
+      hooks.store.set(key, typeof next === 'function' ? (next as (previous: unknown) => unknown)(hooks.store.get(key)) : next)
+    }]
   },
   useRef: (initial: unknown) => {
-    const index = hooks.cursor++
-    if (!(index in hooks.values)) hooks.values[index] = { current: initial }
-    return hooks.values[index]
+    const { key } = hooks.slot(hooks.stack[hooks.stack.length - 1] ?? 'root')
+    if (!hooks.store.has(key)) hooks.store.set(key, { current: initial })
+    return hooks.store.get(key)
   },
-  useEffect: (effect: () => (() => void)) => {
-    const index = hooks.cursor++
-    if (!(index in hooks.values)) { hooks.values[index] = true; hooks.cleanup = effect() }
+  useEffect: (effect: () => (() => void) | void) => {
+    const { key } = hooks.slot(hooks.stack[hooks.stack.length - 1] ?? 'root')
+    if (hooks.mounted.has(key)) return
+    hooks.mounted.add(key)
+    const cleanupFn = effect()
+    if (typeof cleanupFn === 'function') hooks.effects.set(key, cleanupFn)
+    hooks.cleanup = () => {
+      for (const cleanup of hooks.effects.values()) cleanup()
+      hooks.effects.clear()
+      hooks.mounted.clear()
+    }
   },
 }))
 import NdTranslateView from './NdTranslateView'
 
 type TestElement = ReactElement<Record<string, unknown>>
-function elements(node: ReactNode): TestElement[] {
-  if (Array.isArray(node)) return node.flatMap(elements)
+function elements(node: ReactNode, path = 'root'): TestElement[] {
+  if (Array.isArray(node)) return node.flatMap((child, index) => elements(child, `${path}.${index}`))
   if (!node || typeof node !== 'object' || !('props' in node)) return []
   const item = node as TestElement
   const type = item.type as unknown
+  const identity = typeof item.key === 'string' && item.key ? `${path}@${item.key}` : path
   if (typeof type === 'function') {
-    return [item, ...elements((type as (props: Record<string, unknown>) => ReactNode)(item.props))]
+    hooks.enter(identity)
+    let rendered: ReactNode
+    try {
+      rendered = (type as (props: Record<string, unknown>) => ReactNode)(item.props)
+    } finally {
+      hooks.exit()
+    }
+    return [item, ...elements(rendered, identity)]
   }
-  return [item, ...elements(item.props.children as ReactNode)]
+  return [item, ...elements(item.props.children as ReactNode, identity)]
 }
 function render(): TestElement {
-  hooks.cursor = 0
-  return NdTranslateView({ context: { kind: 'personal' }, onOpenBrowser }) as TestElement
+  hooks.enter('root')
+  try {
+    return NdTranslateView({ context: { kind: 'personal' }, onOpenBrowser }) as TestElement
+  } finally {
+    hooks.exit()
+  }
 }
 function field(id: string): TestElement {
-  const item = elements(render()).find((element) => element.props.id === `translate-${id}`)
+  const item = elements(render()).find((element) => typeof element.type === 'string' && element.props.id === `translate-${id}`)
   if (!item) throw new Error(`Missing form field: ${id}`)
   return item
 }
@@ -71,13 +124,16 @@ function button(label: string): TestElement {
 
 const invoke = vi.fn<(request: unknown) => Promise<NdInvocationResult>>()
 const onOpenBrowser = vi.fn<(tabId: string) => Promise<void>>()
+const providersList = vi.fn<() => Promise<ModelProvider[]>>()
+const providersChanged = vi.fn<(listener: (providers: ModelProvider[]) => void) => () => void>()
 beforeEach(() => {
-  hooks.values = []
-  hooks.cursor = 0
+  hooks.reset()
   hooks.cleanup = null
   invoke.mockReset()
   onOpenBrowser.mockReset()
-  vi.stubGlobal('window', { ndDsh: { ndExtensions: { invoke } } })
+  providersList.mockReset().mockResolvedValue([])
+  providersChanged.mockReset().mockReturnValue(() => undefined)
+  vi.stubGlobal('window', { ndDsh: { ndExtensions: { invoke }, providers: { list: providersList, onChanged: providersChanged } } })
 })
 afterEach(() => {
   hooks.cleanup?.()
@@ -245,8 +301,7 @@ describe('ND Translate form', () => {
     ;(button('Open provider in ND browser').props.onClick as () => void)()
     await Promise.resolve()
     hooks.cleanup?.()
-    hooks.values = []
-    hooks.cursor = 0
+    hooks.reset()
     expect(field('text').props.value).toBe('  សួស្តី  ')
     expect(field('source').props.value).toBe('km')
     expect(field('target').props.value).toBe('fr')
@@ -316,5 +371,61 @@ describe('ND Translate form', () => {
     ;(confirmClear!.props.onClick as () => void)()
     await Promise.resolve()
     expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ input: { action: 'clear-history' } }))
+  })
+
+  it('lists enabled Settings providers as LLM targets, locks out keyless ones, and sends the chosen model', async () => {
+    providersList.mockResolvedValue([
+      { id: 'deepseek', name: 'DeepSeek', enabled: true, baseUrl: 'https://api.deepseek.com', apiFormat: 'Chat completions (/chat/completions)', apiKey: '', hasApiKey: true, models: [{ id: 'deepseek-v4-flash', context: '1M' }, { id: 'deepseek-v4-pro', context: '1M' }] },
+      { id: 'locked', name: 'Locked', enabled: true, baseUrl: '', apiFormat: '', apiKey: '', hasApiKey: false, models: [] },
+    ])
+    invoke.mockResolvedValue({ ok: true, value: { status: 'translated', translatedText: 'សួស្តី' } })
+    render()
+    await Promise.resolve()
+    await Promise.resolve()
+    const locked = elements(render()).find((element) => element.type === 'option' && element.props.value === 'llm:locked')
+    expect(locked?.props.disabled).toBe(true)
+    change('text', 'Hello')
+    change('provider', 'llm:deepseek')
+    expect(field('provider').props.value).toBe('llm:deepseek')
+    expect(field('model').props.value).toBe('deepseek-v4-flash')
+    change('model', 'deepseek-v4-pro')
+    await submit()
+    expect(invoke).toHaveBeenCalledWith({
+      extensionId: 'nd.translate', contributionId: 'translator', contributionKind: 'view', caller: 'user', context: { kind: 'personal' },
+      input: { text: 'Hello', sourceLanguage: 'auto', targetLanguage: 'km', provider: 'llm:deepseek', model: 'deepseek-v4-pro' },
+    })
+  })
+
+  it('loads a history entry made by an LLM provider back into the provider and model fields', async () => {
+    providersList.mockResolvedValue([
+      { id: 'deepseek', name: 'DeepSeek', enabled: true, baseUrl: 'https://api.deepseek.com', apiFormat: 'Chat completions (/chat/completions)', apiKey: '', hasApiKey: true, models: [{ id: 'deepseek-v4-flash', context: '1M' }, { id: 'deepseek-v4-pro', context: '1M' }] },
+    ])
+    const entry = { id: 'h2', text: 'Hello', translatedText: 'សួស្តី', sourceLanguage: 'auto', targetLanguage: 'km', provider: 'llm:deepseek', model: 'deepseek-v4-pro', createdAt: 2 }
+    invoke.mockResolvedValue({ ok: true, value: [entry] })
+    render()
+    await Promise.resolve()
+    await Promise.resolve()
+    ;(button('History').props.onClick as () => void)()
+    elements(render())
+    await Promise.resolve()
+    await Promise.resolve()
+    const row = elements(render()).find((element) => element.props.title === 'Load this translation')
+    ;(row!.props.onClick as () => void)()
+    expect(field('text').props.value).toBe('Hello')
+    expect(field('provider').props.value).toBe('llm:deepseek')
+    expect(field('model').props.value).toBe('deepseek-v4-pro')
+    expect(field('target').props.value).toBe('km')
+  })
+
+  it('falls back to Google for a history entry whose LLM provider is no longer enabled', async () => {
+    const entry = { id: 'h3', text: 'Hello', translatedText: 'សួស្តី', sourceLanguage: 'auto', targetLanguage: 'km', provider: 'llm:gone', model: 'm1', createdAt: 3 }
+    invoke.mockResolvedValue({ ok: true, value: [entry] })
+    ;(button('History').props.onClick as () => void)()
+    elements(render())
+    await Promise.resolve()
+    await Promise.resolve()
+    const row = elements(render()).find((element) => element.props.title === 'Load this translation')
+    ;(row!.props.onClick as () => void)()
+    expect(field('provider').props.value).toBe('google')
   })
 })

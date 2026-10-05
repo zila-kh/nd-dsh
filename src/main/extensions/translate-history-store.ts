@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import { dirname } from 'node:path'
-import { ND_TRANSLATE_MAX_TEXT, type NdTranslateHistoryEntry, type NdTranslateProvider } from '../../shared/nd-translate.js'
+import { ND_TRANSLATE_MAX_TEXT, isBrowserTranslateProvider, isLlmProvider, type NdTranslateHistoryEntry } from '../../shared/nd-translate.js'
 
 interface StoredEntry extends NdTranslateHistoryEntry {
   contextKey: string
@@ -13,7 +13,6 @@ interface Snapshot {
 }
 
 const MAX_ENTRIES = 200
-const PROVIDERS: readonly NdTranslateProvider[] = ['google', 'chatgpt', 'gemini']
 
 export class TranslateHistoryStore {
   private loaded = false
@@ -95,6 +94,8 @@ function validEntry(value: unknown): value is StoredEntry {
     && typeof entry.translatedText === 'string' && entry.translatedText.length <= ND_TRANSLATE_MAX_TEXT
     && typeof entry.sourceLanguage === 'string' && entry.sourceLanguage.length <= 16
     && typeof entry.targetLanguage === 'string' && entry.targetLanguage.length <= 16
-    && PROVIDERS.includes(entry.provider as NdTranslateProvider)
+    && typeof entry.provider === 'string' && entry.provider.length <= 128
+    && (isBrowserTranslateProvider(entry.provider) || isLlmProvider(entry.provider))
+    && (entry.model === undefined || (typeof entry.model === 'string' && entry.model.length <= 128))
     && typeof entry.createdAt === 'number' && Number.isFinite(entry.createdAt)
 }

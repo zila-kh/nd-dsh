@@ -2,17 +2,22 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { ArrowLeftRight, Check, Copy, ExternalLink, History, Languages, LoaderCircle, Trash2 } from 'lucide-react'
 import type { NdContext } from '../../../shared/nd-context'
 import { contextKey } from '../../../shared/nd-context'
+import type { ModelProvider } from '../../../shared/contracts'
 import {
+  isLlmProvider,
+  llmProviderId,
   ND_TRANSLATE_LANGUAGES,
   ND_TRANSLATE_MAX_TEXT,
+  type NdBrowserTranslateProvider,
   type NdTranslateHistoryEntry,
   type NdTranslateProvider,
   type NdTranslateRequest,
   type NdTranslateResult,
 } from '../../../shared/nd-translate'
 import { Button } from './ui/button'
+import { cn } from '../lib/utils'
 
-const PROVIDERS: Array<{ id: NdTranslateProvider; label: string }> = [
+const PROVIDERS: Array<{ id: NdBrowserTranslateProvider; label: string }> = [
   { id: 'google', label: 'Google Translate' },
   { id: 'chatgpt', label: 'ChatGPT' },
   { id: 'gemini', label: 'Gemini' },
@@ -22,6 +27,47 @@ const TEXT_CLASS = 'min-h-48 w-full resize-none bg-transparent p-4 text-sm leadi
 // Keep retry text only in this renderer's memory, scoped to the authorized context.
 const browserDrafts = new Map<string, NdTranslateRequest>()
 const manuallySelectedTargets = new Set<string>()
+
+/**
+ * Native select that owns its selected value. The parent observes changes
+ * through onValueChange and bumps `reset` to force a new default (swap,
+ * history load, provider change) without remounting or two-way state.
+ */
+function Select({ id, defaultValue, reset = 0, disabled, className, ariaLabel, onValueChange, children }: {
+  id?: string
+  defaultValue: string
+  reset?: number
+  disabled?: boolean
+  className?: string
+  ariaLabel?: string
+  onValueChange(value: string): void
+  children: React.ReactNode
+}): React.ReactNode {
+  const [selected, setSelected] = useState(defaultValue)
+  const [appliedReset, setAppliedReset] = useState(reset)
+  if (reset !== appliedReset) {
+    setAppliedReset(reset)
+    setSelected(defaultValue)
+  }
+  // Reflect a bumped reset in this same pass; React re-renders before commit.
+  const value = reset !== appliedReset ? defaultValue : selected
+  return (
+    <select
+      id={id}
+      aria-label={ariaLabel}
+      className={cn(SELECT_CLASS, className)}
+      disabled={disabled}
+      value={value}
+      onChange={(event) => {
+        if (disabled) return
+        setSelected(event.target.value)
+        onValueChange(event.target.value)
+      }}
+    >
+      {children}
+    </select>
+  )
+}
 
 function restoreBrowserDraft(context: NdContext): NdTranslateRequest | undefined {
   const key = contextKey(context)
@@ -59,19 +105,17 @@ function asHistoryEntry(value: unknown): value is NdTranslateHistoryEntry {
     && typeof entry.translatedText === 'string'
     && typeof entry.sourceLanguage === 'string' && typeof entry.targetLanguage === 'string'
     && typeof entry.provider === 'string' && typeof entry.createdAt === 'number'
+    && (entry.model === undefined || typeof entry.model === 'string')
 }
 
 function historyLanguageLabel(code: string): string {
   return ND_TRANSLATE_LANGUAGES.find((item) => item.code === code)?.label ?? code
 }
 
-function historyProviderLabel(id: string): string {
-  return PROVIDERS.find((item) => item.id === id)?.label ?? id
-}
-
-function TranslateHistory({ context, onLoad }: {
+function TranslateHistory({ context, onLoad, providerLabel }: {
   context: NdContext
   onLoad(entry: NdTranslateHistoryEntry): void
+  providerLabel(id: string): string
 }): React.ReactNode {
   const [entries, setEntries] = useState<NdTranslateHistoryEntry[] | null>(null)
   const [message, setMessage] = useState<string | null>(null)
@@ -172,7 +216,7 @@ function TranslateHistory({ context, onLoad }: {
           <div key={entry.id} className="rounded-lg border border-border-soft bg-surface-0/50">
             <button type="button" className="block w-full px-3 pb-1.5 pt-2.5 text-left" title="Load this translation" onClick={() => onLoad(entry)}>
               <div className="flex items-center justify-between gap-2 text-[11px] text-soft">
-                <span>{historyLanguageLabel(entry.sourceLanguage)} → {historyLanguageLabel(entry.targetLanguage)} · {historyProviderLabel(entry.provider)}</span>
+                <span>{historyLanguageLabel(entry.sourceLanguage)} → {historyLanguageLabel(entry.targetLanguage)} · {providerLabel(entry.provider)}</span>
                 <span className="shrink-0 text-faint">{new Date(entry.createdAt).toLocaleString()}</span>
               </div>
               <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-foreground/90">{entry.translatedText}</p>
@@ -212,6 +256,9 @@ export default function NdTranslateView({ context, onOpenBrowser }: {
   const [sourceLanguage, setSourceLanguage] = useState(initial?.sourceLanguage ?? 'auto')
   const [targetLanguage, setTargetLanguage] = useState(initial?.targetLanguage ?? 'km')
   const [provider, setProvider] = useState<NdTranslateProvider>(initial?.provider ?? 'google')
+  const [model, setModel] = useState(initial?.model ?? '')
+  const [llmProviders, setLlmProviders] = useState<ModelProvider[]>([])
+  const [selectReset, setSelectReset] = useState(0)
   const [result, setResult] = useState<NdTranslateResult | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -226,12 +273,36 @@ export default function NdTranslateView({ context, onOpenBrowser }: {
 
   useEffect(() => {
     mounted.current = true
+    let active = true
+    const providersApi = window.ndDsh?.providers
+    const unsubscribe = providersApi?.onChanged((list) => {
+      if (active) setLlmProviders(list.filter((item) => item.enabled))
+    })
+    if (providersApi) {
+      void providersApi.list().then((list) => {
+        if (active) setLlmProviders(list.filter((item) => item.enabled))
+      }).catch(() => undefined)
+    }
     return () => {
+      active = false
       mounted.current = false
       revision.current += 1
+      unsubscribe?.()
       if (copyTimer.current) clearTimeout(copyTimer.current)
     }
   }, [])
+
+  const llmOptions = llmProviders.map((item) => ({
+    id: `llm:${item.id}` as const,
+    label: item.name || item.id,
+    hasKey: Boolean(item.hasApiKey),
+  }))
+  const currentLlm = isLlmProvider(provider) ? llmProviders.find((item) => `llm:${item.id}` === provider) : undefined
+  const llmModels = currentLlm?.models ?? []
+  const resolvedModel = isLlmProvider(provider) ? (model.trim() || (llmModels.find((item) => item.id.trim())?.id.trim() ?? '')) : ''
+  const providerLabel = (value: string): string =>
+    PROVIDERS.find((item) => item.id === value)?.label
+    ?? (isLlmProvider(value) ? (llmProviders.find((item) => `llm:${item.id}` === value)?.name || llmProviderId(value)) : value)
 
   const invalidate = (): void => {
     revision.current += 1
@@ -246,7 +317,7 @@ export default function NdTranslateView({ context, onOpenBrowser }: {
     const tabId = result?.browserTabId
     if (!onOpenBrowser || typeof tabId !== 'string' || !tabId.trim() || opening.current) return
     const openedRevision = revision.current
-    const draft: NdTranslateRequest = { text, sourceLanguage, targetLanguage, provider }
+    const draft: NdTranslateRequest = { text, sourceLanguage, targetLanguage, provider, ...(resolvedModel ? { model: resolvedModel } : {}) }
     const key = contextKey(context)
     opening.current = true
     setOpeningBrowser(true)
@@ -269,7 +340,7 @@ export default function NdTranslateView({ context, onOpenBrowser }: {
 
   const translate = async (): Promise<void> => {
     if (pending.current || opening.current || !text.trim() || text.length > ND_TRANSLATE_MAX_TEXT) return
-    const request: NdTranslateRequest = { text, sourceLanguage, targetLanguage, provider }
+    const request: NdTranslateRequest = { text, sourceLanguage, targetLanguage, provider, ...(resolvedModel ? { model: resolvedModel } : {}) }
     const submittedRevision = revision.current
     pending.current = true
     setBusy(true)
@@ -308,7 +379,7 @@ export default function NdTranslateView({ context, onOpenBrowser }: {
       setMessage(typeof value.message === 'string' && value.message.trim()
         ? value.message
         : value.status === 'login-required'
-          ? `Sign in to ${PROVIDERS.find((item) => item.id === provider)?.label} in the ND browser, then translate again.`
+          ? `Sign in to ${providerLabel(provider)} in the ND browser, then translate again.`
           : value.status === 'challenge'
             ? 'Complete the provider check in the ND browser, then translate again.'
             : value.status === 'busy'
@@ -346,6 +417,7 @@ export default function NdTranslateView({ context, onOpenBrowser }: {
     invalidate()
     setSourceLanguage(targetLanguage)
     setTargetLanguage(sourceLanguage)
+    setSelectReset(selectReset + 1)
     if (translated) {
       setText(translated)
       if (translated.length > ND_TRANSLATE_MAX_TEXT) setMessage(`Shorten the text to ${ND_TRANSLATE_MAX_TEXT.toLocaleString()} characters before translating again.`)
@@ -357,12 +429,19 @@ export default function NdTranslateView({ context, onOpenBrowser }: {
     if (opening.current) return
     const source = ND_TRANSLATE_LANGUAGES.some((item) => item.code === entry.sourceLanguage) ? entry.sourceLanguage : 'auto'
     const target = ND_TRANSLATE_LANGUAGES.some((item) => item.code === entry.targetLanguage && item.code !== 'auto') ? entry.targetLanguage : 'km'
-    const entryProvider = PROVIDERS.some((item) => item.id === entry.provider) ? entry.provider : 'google'
+    const entryProvider = isLlmProvider(entry.provider)
+      ? (llmProviders.some((item) => `llm:${item.id}` === entry.provider) ? entry.provider : 'google')
+      : PROVIDERS.some((item) => item.id === entry.provider) ? entry.provider : 'google'
+    const entryModel = isLlmProvider(entryProvider) && typeof entry.model === 'string' && entry.model.trim()
+      && llmProviders.find((item) => `llm:${item.id}` === entryProvider)?.models.some((item) => item.id === entry.model)
+      ? entry.model : ''
     invalidate()
     setText(entry.text.slice(0, ND_TRANSLATE_MAX_TEXT))
     setSourceLanguage(source)
     setTargetLanguage(target)
     setProvider(entryProvider)
+    setModel(entryModel)
+    setSelectReset(selectReset + 1)
     manuallySelectedTargets.add(contextKey(context))
     setMode('translate')
   }
@@ -378,29 +457,60 @@ export default function NdTranslateView({ context, onOpenBrowser }: {
           <button type="button" role="tab" aria-selected={mode === 'history'} className={tabClass(mode === 'history')} onClick={() => setMode('history')}><History className="size-3.5" />History</button>
         </div>
         {mode === 'translate' ? (
-          <label className="flex items-center gap-2 text-xs text-faint" htmlFor={`${id}-provider`}>
-            Provider
-            <select id={`${id}-provider`} className={SELECT_CLASS} disabled={openingBrowser} value={provider} onChange={(event) => { if (opening.current) return; invalidate(); setProvider(event.target.value as NdTranslateProvider) }}>
-              {PROVIDERS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-            </select>
-          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-2 text-xs text-faint" htmlFor={`${id}-provider`}>
+              Provider
+              <Select
+                id={`${id}-provider`}
+                defaultValue={provider}
+                reset={selectReset}
+                disabled={openingBrowser}
+                onValueChange={(value) => { if (opening.current) return; invalidate(); setProvider(value as NdTranslateProvider); setModel(''); setSelectReset(selectReset + 1) }}
+              >
+                {PROVIDERS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+                {llmOptions.length > 0 ? (
+                  <optgroup label="Your providers (Settings → Models)">
+                    {llmOptions.map((item) => (
+                      <option key={item.id} value={item.id} disabled={!item.hasKey} title={item.hasKey ? undefined : 'Add an API key in Settings → Models'}>
+                        {item.label}{item.hasKey ? '' : ' (no API key)'}
+                      </option>
+                    ))}
+                  </optgroup>
+                ) : null}
+                {isLlmProvider(provider) && !llmOptions.some((item) => item.id === provider) ? (
+                  <option value={provider} disabled>{llmProviderId(provider)} (disabled in Settings)</option>
+                ) : null}
+              </Select>
+            </label>
+            <div className={cn('flex items-center gap-2 text-xs text-faint', (!isLlmProvider(provider) || llmModels.length === 0) && 'hidden')} aria-hidden={!isLlmProvider(provider) || llmModels.length === 0}>
+              <label htmlFor={`${id}-model`}>Model</label>
+              <Select
+                id={`${id}-model`}
+                defaultValue={model || llmModels[0]?.id || ''}
+                reset={selectReset}
+                disabled={openingBrowser}
+                onValueChange={(value) => { if (opening.current) return; invalidate(); setModel(value) }}
+              >
+                {llmModels.map((item) => <option key={item.id} value={item.id}>{item.id}</option>)}
+                {model && !llmModels.some((item) => item.id === model) ? <option value={model} disabled>{model} (unavailable)</option> : null}
+              </Select>
+            </div>
+          </div>
         ) : null}
       </div>
       {mode === 'history' ? (
-        <TranslateHistory context={context} onLoad={loadEntry} />
+        <TranslateHistory context={context} onLoad={loadEntry} providerLabel={providerLabel} />
       ) : (
       <form className="space-y-3" onSubmit={(event) => { event.preventDefault(); void translate() }}>
       <div className="flex items-center gap-2">
-        <label htmlFor={`${id}-source`} className="sr-only">Source language</label>
-        <select id={`${id}-source`} className={`${SELECT_CLASS} min-w-0 flex-1`} disabled={openingBrowser} value={sourceLanguage} onChange={(event) => { if (opening.current) return; invalidate(); setSourceLanguage(event.target.value) }}>
+        <Select id={`${id}-source`} className="min-w-0 flex-1" defaultValue={sourceLanguage} reset={selectReset} disabled={openingBrowser} ariaLabel="Source language" onValueChange={(value) => { if (opening.current) return; invalidate(); setSourceLanguage(value) }}>
           <option value="auto">Detect language</option>
           {ND_TRANSLATE_LANGUAGES.filter((item) => item.code !== 'auto').map((item) => <option key={item.code} value={item.code}>{item.label}</option>)}
-        </select>
+        </Select>
         <Button type="button" size="icon-sm" variant="ghost" aria-label="Swap languages" title={sourceLanguage === 'auto' ? 'Choose a source language to swap' : 'Swap languages'} disabled={sourceLanguage === 'auto' || busy || openingBrowser} onClick={swap}><ArrowLeftRight className="size-4" /></Button>
-        <label htmlFor={`${id}-target`} className="sr-only">Target language</label>
-        <select id={`${id}-target`} className={`${SELECT_CLASS} min-w-0 flex-1`} disabled={openingBrowser} value={targetLanguage} onChange={(event) => { if (opening.current) return; manuallySelectedTargets.add(contextKey(context)); invalidate(); setTargetLanguage(event.target.value) }}>
+        <Select id={`${id}-target`} className="min-w-0 flex-1" defaultValue={targetLanguage} reset={selectReset} disabled={openingBrowser} ariaLabel="Target language" onValueChange={(value) => { if (opening.current) return; manuallySelectedTargets.add(contextKey(context)); invalidate(); setTargetLanguage(value) }}>
           {ND_TRANSLATE_LANGUAGES.filter((item) => item.code !== 'auto').map((item) => <option key={item.code} value={item.code}>{item.label}</option>)}
-        </select>
+        </Select>
       </div>
       <div className="grid overflow-hidden rounded-lg border border-border-soft bg-surface-0/50 sm:grid-cols-2">
         <div className="border-b border-border-soft sm:border-b-0 sm:border-r">
@@ -410,7 +520,7 @@ export default function NdTranslateView({ context, onOpenBrowser }: {
         </div>
         <div aria-busy={busy}>
           <label htmlFor={`${id}-result`} className="block px-4 pt-3 text-xs font-medium text-soft">Translation</label>
-          <textarea id={`${id}-result`} className={TEXT_CLASS} readOnly value={result?.status === 'translated' ? result.translatedText ?? '' : ''} placeholder={busy ? 'Translating in the ND browser…' : 'Your translation appears here'} />
+          <textarea id={`${id}-result`} className={TEXT_CLASS} readOnly value={result?.status === 'translated' ? result.translatedText ?? '' : ''} placeholder={busy ? (isLlmProvider(provider) ? 'Translating…' : 'Translating in the ND browser…') : 'Your translation appears here'} />
           <div className="flex min-h-9 items-center justify-between gap-2 px-4 pb-3"><span className="text-[11px] text-faint" role="status">{busy ? 'Translation in progress' : result?.status === 'translated' ? 'Translation ready' : 'Ready to translate'}</span><Button type="button" size="xs" variant="ghost" disabled={result?.status !== 'translated'} onClick={() => void copy()}>{copied ? <Check className="size-3" /> : <Copy className="size-3" />}{copied ? 'Copied' : 'Copy'}</Button></div>
         </div>
       </div>
@@ -422,7 +532,11 @@ export default function NdTranslateView({ context, onOpenBrowser }: {
         </Button>
       ) : null}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="max-w-md text-[11px] text-faint">{provider === 'google' ? 'Google Translate usually works without signing in.' : `${PROVIDERS.find((item) => item.id === provider)?.label} may require sign-in or verification in the ND browser.`} Text is sent to the selected provider when you translate.</p>
+        <p className="max-w-md text-[11px] text-faint">{provider === 'google'
+          ? 'Google Translate usually works without signing in.'
+          : isLlmProvider(provider)
+            ? `Uses the ${providerLabel(provider)} API key stored in Settings → Models.`
+            : `${providerLabel(provider)} may require sign-in or verification in the ND browser.`} Text is sent to the selected provider when you translate.</p>
         <Button type="submit" size="sm" disabled={busy || openingBrowser || !text.trim() || text.length > ND_TRANSLATE_MAX_TEXT}>{busy ? <LoaderCircle className="size-3.5 animate-spin" /> : <Languages className="size-3.5" />}{busy ? 'Translating…' : 'Translate'}</Button>
       </div>
       <p className="text-[10px] text-faint">Ctrl / ⌘ + Enter to translate</p>
