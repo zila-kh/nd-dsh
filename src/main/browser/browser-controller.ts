@@ -577,11 +577,14 @@ export class BrowserController {
     }
   }
 
-  /** Offscreen but overlapping the surface by one pixel: fully offscreen views
+  /** Offscreen but overlapping the window by one pixel: fully offscreen views
    * are occluded by Chromium, hiding the page and zeroing its viewport, which
-   * makes provider pages defer rendering. */
+   * makes provider pages defer rendering. The overlap must sit at the window's
+   * own corner — anchoring to the pane rect puts a large slice of the view
+   * inside the window, where it paints over the app UI. */
   private backgroundRenderBounds(): Rectangle {
-    return { x: Math.max(0, this.bounds.width - 1), y: Math.max(0, this.bounds.height - 1), width: 1280, height: 900 }
+    const content = this.window.getContentBounds()
+    return { x: Math.max(0, content.width - 1), y: Math.max(0, content.height - 1), width: 1280, height: 900 }
   }
 
   async click(tabId: string, ref: string, revision: number): Promise<unknown> {
