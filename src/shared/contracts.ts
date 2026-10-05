@@ -255,6 +255,8 @@ export interface HarnessRunOptions {
   provider?: string
   model?: string
   image?: HarnessRunImage
+  /** User-pasted images riding with this prompt (base64 payloads, no data URL prefix). */
+  images?: HarnessRunImage[]
   permissionMode?: string
   /**
    * Exact working directory for this session/turn. It is used when a session

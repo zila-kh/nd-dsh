@@ -184,6 +184,7 @@ export class HarnessService {
     const textContent = [{ type: 'text', text: runtimePrompt }]
     const images = [
       ...(promptImage ? [promptImage] : []),
+      ...(options?.images ?? []),
       ...stagedElements.flatMap((item) => (item.screenshot ? [{ data: item.screenshot.data, mediaType: item.screenshot.mediaType, name: item.screenshot.name }] : [])),
     ]
     const content = [

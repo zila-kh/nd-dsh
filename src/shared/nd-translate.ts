@@ -1,19 +1,12 @@
+import { MAX_PASTED_IMAGE_BYTES, MAX_PASTED_IMAGE_LENGTH, MAX_PASTED_IMAGES } from './images.js'
+export { isImageDataUrl, imageMediaType } from './images.js'
+
 export const ND_TRANSLATE_ID = 'nd.translate'
 export const ND_TRANSLATE_MAX_TEXT = 5_000
-export const ND_TRANSLATE_MAX_IMAGES = 3
+export const ND_TRANSLATE_MAX_IMAGES = MAX_PASTED_IMAGES
 /** Pasted-image byte cap (~6 MB); the data-URL length cap below is its base64 inflation. */
-export const ND_TRANSLATE_MAX_IMAGE_BYTES = 6_000_000
-export const ND_TRANSLATE_MAX_IMAGE_LENGTH = ND_TRANSLATE_MAX_IMAGE_BYTES * 4 / 3
-const IMAGE_DATA_URL = /^data:image\/(png|jpe?g|gif|webp);base64,[A-Za-z0-9+/]+={0,2}$/
-
-export function isImageDataUrl(value: string): boolean {
-  return typeof value === 'string' && value.length <= ND_TRANSLATE_MAX_IMAGE_LENGTH && IMAGE_DATA_URL.test(value)
-}
-
-export function imageMediaType(value: string): string | undefined {
-  const match = /^data:(image\/[a-z0-9.+-]+);base64,/.exec(value)
-  return match?.[1]
-}
+export const ND_TRANSLATE_MAX_IMAGE_BYTES = MAX_PASTED_IMAGE_BYTES
+export const ND_TRANSLATE_MAX_IMAGE_LENGTH = MAX_PASTED_IMAGE_LENGTH
 export type NdBrowserTranslateProvider = 'google' | 'chatgpt' | 'gemini'
 /** A Settings → Models LLM provider, referenced as `llm:<providerId>`. */
 export type NdTranslateLlmProvider = `llm:${string}`

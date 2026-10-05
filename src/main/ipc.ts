@@ -1,6 +1,7 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, screen, shell, type IpcMainInvokeEvent } from 'electron'
 import { join } from 'node:path'
 import { CAPABILITIES_IPC, type CapabilityKind, type CapabilityProviderStatus, type CapabilitySubjectType } from '../shared/capabilities.js'
+import { asRunImages } from './run-images.js'
 import type { AppInspectArea, AppInspectMode, AppInspectOptions, BrowserBounds, DshSurface, HarnessRunOptions, InspectScope, ModelProvider, QaSuiteId, ThemeMode } from '../shared/contracts.js'
 import { IPC } from '../shared/contracts.js'
 import { EXTENSIONS_IPC } from '../shared/extensions.js'
@@ -1002,6 +1003,7 @@ function asRunOptions(value: unknown): HarnessRunOptions {
   if (workspaceCwd !== undefined && (typeof workspaceCwd !== 'string' || !workspaceCwd.trim() || workspaceCwd.length > 4_096)) {
     throw new Error('workspaceCwd must be a short non-empty path')
   }
+  const images = asRunImages(record.images)
   return {
     ...(typeof skillScope === 'string' ? { skillScope } : {}),
     ...(typeof skillSelectionId === 'string' ? { skillSelectionId } : {}),
@@ -1011,6 +1013,7 @@ function asRunOptions(value: unknown): HarnessRunOptions {
     ...(typeof model === 'string' ? { model: model.trim() } : {}),
     ...(permissionMode !== undefined ? { permissionMode } : {}),
     ...(typeof workspaceCwd === 'string' ? { workspaceCwd: workspaceCwd.trim() } : {}),
+    ...(images !== undefined ? { images } : {}),
   }
 }
 

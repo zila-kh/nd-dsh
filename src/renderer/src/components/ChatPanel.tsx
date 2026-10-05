@@ -1,5 +1,5 @@
 import { foldEvent, foldHistory, type HistoryEventEnvelope } from '../../../shared/chat-events'
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react'
 import type {
   CodingEngineDescriptor,
   DshEventFrame,
@@ -29,6 +29,7 @@ import type { BrowserPlatformState, BrowserSelection } from '../../../shared/bro
 import { openSkillPicker, parseSkillCatalog, skillSelectionScope, type SkillSuggestion } from '../../../shared/skill-catalog'
 import { isVisionModel, resolveModelSelectionDisplay, type ModelCatalogState } from '../lib/model-selection'
 import { archiveableVisibleSessionIds, cleanThreadTitle, nextSessionAfterArchive } from '../../../shared/session-archive-selection'
+import { imageMediaType, isImageDataUrl, MAX_PASTED_IMAGE_BYTES, MAX_PASTED_IMAGES } from '../../../shared/images'
 import { describeAgentError, type AgentErrorRoute } from '../lib/runtime-notices'
 import {
   ArchiveIcon,
@@ -183,6 +184,7 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, workspaceSelec
   const [providerPings, setProviderPings] = useState<Record<string, PingEntry>>({})
   const [permissionMode, setPermissionMode] = useState('workspace-write')
   const [prompt, setPrompt] = useState('')
+  const [pendingImages, setPendingImages] = useState<string[]>([])
   const [harnessSessionsLoaded, setHarnessSessionsLoaded] = useState(false)
   const [sessionListError, setSessionListError] = useState<string | null>(null)
   const sessionListRequestRef = useRef<Promise<void> | null>(null)
@@ -1145,17 +1147,40 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, workspaceSelec
     return () => document.removeEventListener('mousedown', handleOutsideClick)
   }, [])
 
+  const addPastedImages = (files: File[]): void => {
+    const candidates = files.filter((file) => file.type.startsWith('image/')).slice(0, MAX_PASTED_IMAGES)
+    if (candidates.length === 0) return
+    const oversized = candidates.some((file) => file.size > MAX_PASTED_IMAGE_BYTES)
+    void Promise.all(candidates.map((file) => new Promise<string | null>((resolve) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null)
+      reader.onerror = () => resolve(null)
+      reader.readAsDataURL(file)
+    }))).then((results) => {
+      const valid = results.filter((url): url is string => url !== null && isImageDataUrl(url))
+      if (oversized) onError(`Images must be under ${Math.floor(MAX_PASTED_IMAGE_BYTES / 1024 / 1024)} MB each.`)
+      if (valid.length > 0) setPendingImages((prev) => [...prev, ...valid].slice(0, MAX_PASTED_IMAGES))
+    })
+  }
+
   const run = async (): Promise<void> => {
     const input = prompt
-    if (!input.trim() || busy || submitting) return
+    if ((!input.trim() && pendingImages.length === 0) || busy || submitting) return
     const selection = /^\s*\//.test(input) ? selectedSkillScope.current : null
     let selectedScope: string | undefined
     try { selectedScope = skillSelectionScope(selection, skillsScope) } catch (cause) {
       onError(cause instanceof Error ? cause.message : String(cause))
       return
     }
+    const imageOption = pendingImages.length > 0
+      ? { images: pendingImages.map((dataUrl, index) => {
+          const mediaType = imageMediaType(dataUrl) ?? 'image/png'
+          return { data: dataUrl.slice(dataUrl.indexOf(',') + 1), mediaType, name: `pasted-${index + 1}.${mediaType.slice('image/'.length)}` }
+        }) }
+      : {}
     setSubmitting(true)
     setPrompt('')
+    setPendingImages([])
     setMentionCaret(0)
     setMentionDismissed(null)
     // A drafted engine chat has no session yet: the first send creates it on
@@ -1172,7 +1197,7 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, workspaceSelec
         : { permissionMode }
     try {
       const catalog = /^\s*\//.test(input) ? await window.ndDsh.skills.catalog(activeProjectId ?? null) : undefined
-      const result = await window.ndDsh.harness.run(input, { ...options, ...(catalog ? { skillScope: selectedScope ?? catalog.scope, ...(selection?.selectionId ? { skillSelectionId: selection.selectionId } : {}) } : {}) })
+      const result = await window.ndDsh.harness.run(input, { ...options, ...imageOption, ...(catalog ? { skillScope: selectedScope ?? catalog.scope, ...(selection?.selectionId ? { skillSelectionId: selection.selectionId } : {}) } : {}) })
       selectedSkillScope.current = null
       setActiveSessionId(result.sessionId)
       if (draftEngine !== null) {
@@ -2061,6 +2086,24 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, workspaceSelec
             {composerSkill && selectedSkillScope.current?.owner === skillsScope && prompt.trimStart().startsWith(`/${composerSkill.name} `) ? (
               <div className="mb-1 text-xs"><SkillMessage text={`/${composerSkill.name}`} skill={composerSkill} /></div>
             ) : null}
+            {pendingImages.length > 0 ? (
+              <div className="mb-1.5 flex flex-wrap gap-1.5">
+                {pendingImages.map((image, index) => (
+                  <div key={index} className="relative">
+                    <img src={image} alt={`Pasted image ${index + 1}`} className="h-14 w-14 rounded-md border border-border object-cover" />
+                    <button
+                      type="button"
+                      className="absolute -right-1.5 -top-1.5 grid size-4 place-items-center rounded-full border border-border-strong bg-surface-1 text-faint transition-colors hover:text-foreground"
+                      aria-label={`Remove image ${index + 1}`}
+                      title="Remove this image"
+                      onClick={() => setPendingImages((images) => images.filter((_, item) => item !== index))}
+                    >
+                      <CloseIcon className="size-2.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
             <textarea
               ref={textareaRef}
               value={prompt}
@@ -2070,6 +2113,12 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, workspaceSelec
               }}
               onSelect={(event: ChangeEvent<HTMLTextAreaElement>) => {
                 setMentionCaret(event.target.selectionStart ?? 0)
+              }}
+              onPaste={(event: ClipboardEvent<HTMLTextAreaElement>) => {
+                const items = Array.from(event.clipboardData.items)
+                if (!items.some((item) => item.kind === 'file' && item.type.startsWith('image/'))) return
+                event.preventDefault()
+                addPastedImages(items.map((item) => item.getAsFile()).filter((file): file is File => file !== null))
               }}
               onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
                 if (mentionTrigger) {
@@ -2397,7 +2446,7 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, workspaceSelec
               ) : (
                 <button
                   className="grid size-[25px] shrink-0 place-items-center rounded-[7px] bg-primary text-primary-foreground transition-[filter] enabled:hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-35 [&_svg]:size-3.5"
-                  disabled={!prompt.trim()}
+                  disabled={!prompt.trim() && pendingImages.length === 0}
                   onClick={() => void run()}
                   title="Send"
                 >
