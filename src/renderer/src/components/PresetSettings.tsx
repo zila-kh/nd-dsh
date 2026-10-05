@@ -30,26 +30,34 @@ interface PresetRow extends AgentPresetSummary {
 export function PresetSettings({ onError, onOpenSession }: PresetSettingsProps) {
   const [presets, setPresets] = useState<PresetRow[]>([])
   const [loaded, setLoaded] = useState(false)
+  const [failure, setFailure] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
 
   useEffect(() => {
     let mounted = true
-    void window.ndDsh.dsh.rpc('agentPresets.list', {})
+    // A failed roster read must leave the loading state: the toast `onError`
+    // raises is transient, and an empty roster would otherwise read as "this
+    // deployment has no presets" rather than "the runtime did not answer".
+    void window.ndDsh.dsh.rpc('agentPreset.list', {})
       .then((result) => {
         if (!mounted) return
+        setLoaded(true)
         if (!result.ok) {
-          onError(result.error?.message ?? 'Could not load agent presets')
+          const message = result.error?.message ?? 'Could not load agent presets'
+          setFailure(message)
+          onError(message)
           return
         }
         const value = (result.value ?? {}) as { presets?: PresetRow[] }
         setPresets(value.presets ?? [])
-        setLoaded(true)
       })
       .catch((cause) => {
         if (!mounted) return
+        const message = cause instanceof Error ? cause.message : String(cause)
         setLoaded(true)
-        onError(cause instanceof Error ? cause.message : String(cause))
+        setFailure(message)
+        onError(message)
       })
     return () => { mounted = false }
   }, [onError])
@@ -97,6 +105,8 @@ export function PresetSettings({ onError, onOpenSession }: PresetSettingsProps) 
         </SettingsNote>
         {!loaded ? (
           <SettingsNote>Loading presets…</SettingsNote>
+        ) : failure ? (
+          <SettingsNote>{failure}</SettingsNote>
         ) : presets.length === 0 ? (
           <SettingsNote>No presets are available in this deployment.</SettingsNote>
         ) : (

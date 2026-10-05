@@ -11,6 +11,7 @@ pub mod dispatcher;
 pub mod effect_journal;
 pub mod evidence;
 pub mod git;
+pub mod media;
 pub mod metrics;
 pub mod process;
 pub mod revision;

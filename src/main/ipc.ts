@@ -38,6 +38,7 @@ import { registerNdExtensionIpc } from './extensions/nd-ipc.js'
 import { HomeStore } from './home/home-store.js'
 import type { GitService } from './git/git-service.js'
 import type { GitExecRunner } from './git/git-cli.js'
+import type { CoreMedia } from './core/core-media.js'
 import type { HarnessService } from './harness/harness-service.js'
 import type { ProviderStore } from './providers.js'
 import type { QaService } from './qa/qa-service.js'
@@ -71,6 +72,8 @@ interface IpcDependencies {
   git: GitService
   /** nd-core-backed Git for the workflow-plugin and extension-package pipelines. */
   coreGit?: GitExecRunner
+  /** nd-core-backed native image and wallpaper surface for extensions. */
+  coreMedia?: CoreMedia
   qa: QaService
   sessionArchive: SessionArchiveStore
   /** ND's durable token accounting, captured from the runtime event stream. */
@@ -85,7 +88,7 @@ interface IpcDependencies {
 
 type Handler = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown | Promise<unknown>
 
-// The namespace segment is camelCase upstream too (agentPresets.list,
+// The namespace segment is camelCase upstream too (agentPreset.list,
 // settings.update), not lowercase-only.
 const GATEWAY_METHOD_PATTERN = /^[a-z][a-zA-Z0-9]*\.[a-zA-Z][a-zA-Z0-9]*$/
 const GATEWAY_METHOD_MAX_LENGTH = 64
@@ -271,6 +274,7 @@ export function registerIpc(deps: IpcDependencies): () => void {
     browser: deps.browser,
     providers: deps.providers,
     workflow: workflowService,
+    ...(deps.coreMedia ? { media: deps.coreMedia } : {}),
     onHomeChanged: () => { void syncHomeSessions() },
   })
   // Personal chats run outside the active workspace but must stay listed in the

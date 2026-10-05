@@ -8,18 +8,44 @@ An ND extension is one folder with an `nd-extension.json` manifest. It
 contributes **tools, skills, commands, views, and workflows** that ND renders
 and executes inside its own trusted surfaces. Extensions never inject renderer
 code, and contributions only reach the allowlisted ND host methods listed in
-[ND_HOST_METHODS](../src/shared/extension-package.ts).
+[ND_HOST_METHODS](../../src/shared/extension-package.ts).
 
 Launcher commands from installed/activated extensions are adapted into the same
 ND Command Registry as core, company, and project commands. Extension authors
 do not register launcher code or React components; they contribute command data
 and the broker remains the execution boundary.
 
+## 0. Two different things are both called "extensions"
+
+ND has two unrelated capability classes, and their manifests are **not**
+interchangeable. Validating one as the other fails.
+
+| | **ND Extensions** (this guide) | **Agent capabilities** |
+| --- | --- | --- |
+| Contract | `src/shared/extension-package.ts` | `src/shared/extensions.ts` |
+| Manifest | `nd-extension.json`, `protocol: "nd.extension/1"` | descriptor with `surface`, `enabled`, `engineRoutes`, `providerRoutes` |
+| Surfaces in | Settings → **Extensions** | Settings → **Agent capabilities** |
+| Contributes | tools, skills, commands, views, workflows that ND renders | memory, subagent, plugin, mcp, skill, command, hook routes for coding engines |
+| Install path | *Install from folder* → managed snapshot | enable in place, no snapshot |
+| Example | [`examples/nd-extension-hello`](../../examples/nd-extension-hello) | [`examples/extension-counter`](../../examples/extension-counter) |
+
+`examples/extension-counter/nd-extension.example.json` is an **agent
+capabilities** MCP descriptor despite its filename. It is not an
+`nd.extension/1` manifest and `validate-nd-extension.mjs` rejects it.
+
 ## 1. Manifest
 
-Start from [`examples/extension-counter/nd-extension.example.json`](../../examples/extension-counter/nd-extension.example.json)
-and the JSON Schema at [`schema/nd-extension.schema.json`](../../schema/nd-extension.schema.json).
-The older `examples/nd-extension-journal` folder is not in this tree.
+Copy [`examples/nd-extension-hello`](../../examples/nd-extension-hello) — a
+complete package that validates, installs through *Install from folder*, and
+runs from the launcher with no executable and no build step. Its
+[README](../../examples/nd-extension-hello/README.md) walks through the install
+and activation steps and lists the mistakes it is written to avoid.
+
+The JSON Schema is at [`schema/nd-extension.schema.json`](../../schema/nd-extension.schema.json).
+Point your editor at it for autocomplete, but treat
+[`src/shared/extension-package.ts`](../../src/shared/extension-package.ts) as
+authoritative: the runtime installer and `pnpm ext:validate` both execute those
+rules, and the schema is maintained by hand alongside them.
 
 ```json
 {
@@ -31,31 +57,58 @@ The older `examples/nd-extension-journal` folder is not in this tree.
   "apiVersion": 1,
   "contexts": ["personal", "company"],
   "permissions": ["notes.read", "notes.write"],
-  "settings": [{ "key": "template", "title": "Note template", "type": "string", "default": "Today: " }],
   "contributions": {
     "commands": [
-      { "id": "standup-add", "title": "Add standup note", "host": "note.create", "keywords": ["standup"] }
+      { "id": "standup-add", "title": "Add standup note", "host": "note.create",
+        "keywords": ["standup"], "contexts": ["personal", "company"] }
     ],
     "views": [
       { "id": "standup-notes", "title": "Standup notes", "kind": "list", "host": "note.search",
-        "itemTitleKey": "title", "itemBodyKey": "body",
-        "actions": [{ "id": "open", "title": "Open", "host": "note.open" }] }
+        "itemTitleKey": "title", "itemBodyKey": "body", "contexts": ["personal", "company"],
+        "actions": [{ "id": "standup-open", "title": "Open", "host": "note.open" }] }
     ]
   }
 }
 ```
+
+This snippet validates as-is; check it any time by saving it as
+`nd-extension.json` in a folder and running the validator on that folder. Note
+that every contribution repeats `contexts` — see the known defect below for why
+you should not rely on inheriting them.
 
 Rules the validator enforces (all of them, with actionable messages):
 
 - `protocol` must be `nd.extension/1` and `apiVersion` must be `1`.
 - Contexts are `personal`, `company`, and `project`. A contribution may narrow
   the package's `contexts` but never widen them.
-- Contribution ids are unique inside the package.
+- Contribution ids are unique **package-wide, including view action ids** — a
+  view action named `open` collides with a command named `open`. Ids use
+  lowercase letters, numbers, dots, dashes, or underscores.
 - Every host method used must appear in the allowlist, and the permission it
   needs must be declared in `permissions`.
+- A command's `openViewId` must name a view contributed by the same package.
+- A view's `refreshIntervalMs`, if set, is an integer from 2000 to 60000.
 - Tool contributions require an `executable` (`mcp-stdio`) runtime. `env` maps
   child variable names to **parent environment-variable names** — secret values
   in a manifest are rejected.
+
+Two rules the validator does **not** catch, because they depend on runtime data:
+
+- `itemTitleKey` / `itemBodyKey` must match the fields the host method actually
+  returns. `note.search` returns `{ id, title, body, updatedAt }`. Wrong keys
+  render an empty list with no error.
+- A host method's own context support still applies. `process.*` and
+  `os.wallpaper.*` are Personal-only and `workflow.*` is project-only, so a
+  contribution that names them in another context is rejected even when the
+  package contexts allow it.
+
+> **Known defect.** Omitting `contexts` on a contribution currently defaults it
+> to `personal, company, project` rather than inheriting the package's contexts,
+> so a package that declares fewer than all three and omits contribution
+> contexts fails with "contribution contexts (…) must be declared in the
+> package contexts". Until that is fixed, declare `contexts` explicitly on every
+> contribution whenever your package is not all-contexts.
+> `src/shared/extension-package.ts:324` is where the default is set.
 
 ## 2. Environments and contexts
 
@@ -86,8 +139,16 @@ and in the product.
 | `clipboard.write` | `clipboard.write` | Write text to the clipboard |
 | `browser.openUrl` / `browser.search` | `browser.navigate` | Navigate the visible embedded ND browser |
 | `browser.openExternal` | `browser.openExternal` | Open an http(s) URL in the system browser |
+| `browser.translate` | `browser.navigate` | Translate text in the ND browser (see §7 for providers and result states) |
+| `browser.translate.history` / `browser.translate.history.clear` | `translate.history` | Read or clear translation history |
 | `os.openTarget` | `os.launch` | Pick and open an app, file, or folder (user selection only; no shell strings) |
 | `os.wallpaper.chooseAndSet` | `os.wallpaper.write` | Pick an image in an ND-owned native dialog and set it as the host desktop wallpaper; Personal only |
+| `os.wallpaper.next` / `os.wallpaper.previous` / `os.wallpaper.random` | `os.wallpaper.write` | Cycle the library forward, backward, or randomly; Personal only, sensitive |
+| `os.wallpaper.applySelected` | `os.wallpaper.write` | Apply the currently previewed selection; Personal only, sensitive |
+| `os.wallpaper.preview` | `os.wallpaper.write` | Preview a library image without applying it; Personal only |
+| `os.wallpaper.setFolder` | `os.wallpaper.write` | Choose the library folder in an ND-owned dialog; Personal only |
+| `os.wallpaper.status` | `os.wallpaper.write` | Read the current wallpaper and library state; Personal only |
+| `os.wallpaper.thumbnails` | `os.wallpaper.write` | Render library thumbnails for the rows currently on screen. Decoding runs in the nd-core sidecar, never in the desktop main process; Personal only |
 | `process.list` | `process.read` | List running processes in Personal with CPU and memory |
 | `process.quit` / `process.forceQuit` | `process.quit` | Quit a selected process from a fresh ND-issued list handle; ND confirms each action and protects its own processes; Personal only |
 | `chat.ask` | `chat.start` | Start an ND chat/agent turn from typed text |
@@ -95,7 +156,36 @@ and in the product.
 
 Views are described, not coded: `host` loads the rows, `itemTitleKey` /
 `itemBodyKey` name the fields to render, and `actions` run through the same
-broker with the same authorization checks.
+broker with the same authorization checks. A view's `description` is its
+**empty-state message**, shown when the host method returns no rows — not
+documentation. Compare `extensions/quit-process`, whose view description reads
+"No processes are available. Refresh to try again."
+
+### Settings
+
+`settings` declares typed fields ND renders in the package's settings dialog.
+Values are stored **per activation**, validated against the manifest, and
+delivered to host methods on the invocation context.
+
+Each handler decides whether to read them. Wallpaper Manager consumes `folder`,
+`mode`, and `intervalMinutes`; the `note.*` handlers ignore settings entirely.
+Declaring a setting that no handler in your package reads produces a field the
+user can edit to no effect, so omit `settings` unless a host method you call
+actually consumes it — which is why the sample manifest above has none.
+
+The shape, taken from the shipped Wallpaper Manager:
+
+```json
+"settings": [
+  { "key": "folder", "title": "Wallpaper folder", "type": "string", "default": "",
+    "description": "Folder containing wallpapers. If empty, your system Pictures directory is used." },
+  { "key": "intervalMinutes", "title": "Auto-rotate timer (minutes)", "type": "number", "default": 0,
+    "description": "Change wallpaper automatically every N minutes (0 to disable)." }
+]
+```
+
+`type` is `string`, `boolean`, or `number`; `default` must match it. Setting keys
+match `^[A-Za-z][A-Za-z0-9._-]{0,63}$` and must be unique in the package.
 
 ## 4. Permissions, grants, and approval
 
@@ -116,9 +206,16 @@ broker with the same authorization checks.
 
 ## 5. Distribution and lifecycle
 
-- **Validate**: `node scripts/validate-nd-extension.mjs <folder>`
+- **Validate**: `node scripts/validate-nd-extension.mjs <folder>` (or
+  `pnpm ext:validate`). The folder form requires a file named exactly
+  `nd-extension.json`; you can also pass a manifest path directly. Multiple
+  targets are accepted, and `--builtins` validates the shipped packages.
 - **Install**: Settings → Extensions → *Install from folder*, or hand a teammate
-  a private Git checkout and install from that working copy.
+  a private Git checkout and install from that working copy. The dialog rejects
+  a directory without `nd-extension.json`, and rejects symlinks and paths that
+  escape the package root.
+- End-to-end walkthrough — validate, install, activate, run — is in
+  [`examples/nd-extension-hello/README.md`](../../examples/nd-extension-hello/README.md).
 - Packages ship **prebuilt**. ND snapshots content, records source provenance
   (including the resolved Git revision when available), and never runs
   `npm install`, `postinstall`, or build scripts.
@@ -142,10 +239,12 @@ broker with the same authorization checks.
 ## 7. Example: the ND-maintained packages
 
 `Daily Essentials`, `Wallpaper Manager`, and `Project Workflow` ship with ND and
-use exactly these contracts. Wallpaper Manager is the first native-host proving
-package: it is Personal-only and permission-scoped. The separate
-`examples/nd-extension-wallpaper` sample is not in this tree. Validate the
-built-ins any time with:
+use exactly these contracts. They are defined in
+[`src/shared/builtin-extension-packages.ts`](../../src/shared/builtin-extension-packages.ts)
+rather than as folders on disk, so they are readable as reference manifests
+inline. Wallpaper Manager is the first native-host proving package: it is
+Personal-only, permission-scoped, and the one package whose host methods
+actually consume `settings`. Validate the built-ins any time with:
 
 ```bash
 node scripts/validate-nd-extension.mjs --builtins

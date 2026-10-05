@@ -1,5 +1,5 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
-import { Check, ChevronLeft, ChevronRight, Download, ExternalLink, Eye, FolderOpen, Image, Languages, Layers, ListChecks, Package, PanelsTopLeft, Power, Puzzle, RefreshCw, Search, Settings2, ShieldCheck, Shuffle, SkipBack, SkipForward, Sparkles, SquareTerminal, Undo2, Workflow } from 'lucide-react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { BookOpen, Check, ChevronLeft, ChevronRight, Download, ExternalLink, Eye, FolderOpen, Image, Languages, Layers, ListChecks, Package, PanelsTopLeft, Power, Puzzle, RefreshCw, Search, Settings2, ShieldCheck, Shuffle, SkipBack, SkipForward, Sparkles, SquareTerminal, Undo2, Workflow } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { cn } from '../lib/utils'
 import type { NdContext } from '../../../shared/nd-context'
@@ -20,6 +20,7 @@ import type { OrganizationSnapshot } from '../../../shared/organization'
 import { SurfaceErrorBoundary } from './surface-error-boundary'
 
 const NdTranslateView = lazy(() => import('./NdTranslateView'))
+const ExtensionGuideDialog = lazy(() => import('./ExtensionGuideDialog'))
 
 type ExtensionViewTarget = { extensionId: string; viewId: string; context: NdContext }
 
@@ -102,6 +103,7 @@ export function ExtensionPackagesCard({ state, organization, contexts, requested
   const [busy, setBusy] = useState(false)
   const [catalogTab, setCatalogTab] = useState<'discover' | 'installed'>('installed')
   const [query, setQuery] = useState('')
+  const [guideOpen, setGuideOpen] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
 
   const normalizedQuery = query.trim().toLowerCase()
@@ -192,6 +194,9 @@ export function ExtensionPackagesCard({ state, organization, contexts, requested
             />
             <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-border-soft bg-surface-1 px-1.5 py-0.5 text-[9px] font-medium text-faint">Ctrl K</span>
           </label>
+          <Button size="sm" variant="outline" onClick={() => setGuideOpen(true)}>
+            <BookOpen className="size-3.5" /> Developer guide
+          </Button>
           <Button size="sm" variant="outline" disabled={busy} onClick={() => void run(() => window.ndDsh.ndExtensions.installLocal())}>
             <FolderOpen className="size-3.5" /> Install from folder
           </Button>
@@ -392,6 +397,11 @@ export function ExtensionPackagesCard({ state, organization, contexts, requested
         onChanged={onChanged}
         onOpenBrowser={onOpenBrowser}
       />
+
+      {/* Mounted on demand so the bundled guide text stays out of the initial chunk. */}
+      <Suspense fallback={null}>
+        {guideOpen ? <ExtensionGuideDialog open={guideOpen} onOpenChange={setGuideOpen} /> : null}
+      </Suspense>
     </div>
   )
 }
@@ -433,6 +443,14 @@ function WallpaperSettingsPreview({
   const [previewDetail, setPreviewDetail] = useState<WallpaperPreviewDetail | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [applying, setApplying] = useState(false)
+  // The settings filmstrip always shows the Personal wallpaper library, so its
+  // thumbnail target never changes and is memoised to keep the hook's cache.
+  const thumbTarget = useMemo(() => ({
+    extensionId: 'nd.wallpaper-manager',
+    viewId: 'wallpaper-studio',
+    context: { kind: 'personal' as const },
+  }), [])
+  const { thumbs, queueThumbnail } = useLazyWallpaperThumbnails(thumbTarget)
 
   const cleanFolder = folder.trim().replace(/^["']|["']$/g, '').trim()
 
@@ -756,18 +774,14 @@ function WallpaperSettingsPreview({
                     )}
                     title={item.title}
                   >
-                    {item.thumbnail ? (
-                      <img
-                        src={item.thumbnail}
-                        alt={item.title}
-                        className="size-full object-cover transition-transform group-hover/thumb:scale-105"
-                        loading="lazy"
-                      />
-                    ) : (
-                      <div className="flex size-full items-center justify-center text-faint">
-                        <Image className="size-4" />
-                      </div>
-                    )}
+                    <LazyWallpaperThumb
+                      id={item.id}
+                      alt={item.title}
+                      dataUrl={thumbs[item.id] ?? item.thumbnail}
+                      onVisible={queueThumbnail}
+                      imgClassName="size-full object-cover transition-transform group-hover/thumb:scale-105"
+                      iconClassName="size-4"
+                    />
                     {isActive ? (
                       <span className="absolute bottom-1 right-1 rounded bg-primary px-1 text-[8px] font-medium text-primary-foreground shadow">
                         Active
@@ -1273,6 +1287,148 @@ function EmptyExtensions({ title, detail }: { title: string; detail: string }): 
   )
 }
 
+const THUMBNAIL_FLUSH_MS = 60
+
+/**
+ * Fetches wallpaper thumbnails on demand for the rows a surface actually shows.
+ *
+ * Rows announce themselves through `queueThumbnail` as they scroll into view;
+ * the ids collected within one flush window go out as a single broker call. The
+ * decode happens in the nd-core sidecar, so the main process never blocks and a
+ * repeat view of the same library is served from its cache.
+ */
+function useLazyWallpaperThumbnails(
+  target: { extensionId: string; viewId: string; context: NdContext } | null,
+): { thumbs: Record<string, string>; queueThumbnail(id: string): void } {
+  const [thumbs, setThumbs] = useState<Record<string, string>>({})
+  const thumbsRef = useRef<Record<string, string>>({})
+  const queued = useRef<Set<string>>(new Set())
+  const inFlight = useRef(false)
+  const flushHandle = useRef<number | null>(null)
+  const targetRef = useRef(target)
+  targetRef.current = target
+
+  const scheduleFlush = (): void => {
+    if (flushHandle.current !== null) return
+    flushHandle.current = window.setTimeout(() => {
+      flushHandle.current = null
+      void pump()
+    }, THUMBNAIL_FLUSH_MS)
+  }
+
+  const pump = async (): Promise<void> => {
+    const current = targetRef.current
+    if (!current || inFlight.current) return
+    const ids = [...queued.current]
+    if (ids.length === 0) return
+    queued.current.clear()
+    inFlight.current = true
+    try {
+      const result = await window.ndDsh.ndExtensions.invoke({
+        extensionId: current.extensionId,
+        contributionId: current.viewId,
+        contributionKind: 'view',
+        context: current.context,
+        caller: 'user',
+        input: { action: 'thumbnails', ids },
+      })
+      const fetched = result.ok && result.value && typeof result.value === 'object'
+        ? (result.value as { thumbnails?: Array<{ id?: unknown; dataUrl?: unknown }> }).thumbnails
+        : undefined
+      if (Array.isArray(fetched) && fetched.length > 0) {
+        const next = { ...thumbsRef.current }
+        for (const entry of fetched) {
+          if (typeof entry?.id === 'string' && typeof entry?.dataUrl === 'string') next[entry.id] = entry.dataUrl
+        }
+        thumbsRef.current = next
+        setThumbs(next)
+      }
+    } catch {
+      // A row that never resolves keeps its placeholder; not worth an error toast.
+    } finally {
+      inFlight.current = false
+      if (queued.current.size > 0) scheduleFlush()
+    }
+  }
+
+  const queueThumbnail = (id: string): void => {
+    if (thumbsRef.current[id] !== undefined || queued.current.has(id)) return
+    queued.current.add(id)
+    scheduleFlush()
+  }
+
+  // Switching library or context invalidates every id seen so far.
+  useEffect(() => {
+    thumbsRef.current = {}
+    queued.current.clear()
+    setThumbs({})
+  }, [target])
+
+  useEffect(() => () => {
+    if (flushHandle.current !== null) {
+      window.clearTimeout(flushHandle.current)
+      flushHandle.current = null
+    }
+  }, [])
+
+  return { thumbs, queueThumbnail }
+}
+
+/**
+ * One wallpaper grid cell's image. Reports itself the first time it scrolls near
+ * the viewport so the parent can batch a thumbnail request; until the decode
+ * comes back it shows the same placeholder as a row with no image at all.
+ */
+function LazyWallpaperThumb({ id, alt, dataUrl, onVisible, imgClassName, iconClassName }: {
+  id: string
+  alt: string
+  dataUrl?: string | undefined
+  onVisible(id: string): void
+  imgClassName?: string | undefined
+  iconClassName?: string | undefined
+}): React.ReactNode {
+  const ref = useRef<HTMLDivElement>(null)
+  const onVisibleRef = useRef(onVisible)
+  onVisibleRef.current = onVisible
+
+  useEffect(() => {
+    if (dataUrl !== undefined) return
+    const node = ref.current
+    if (!node) return
+    if (typeof IntersectionObserver === 'undefined') {
+      onVisibleRef.current(id)
+      return
+    }
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue
+        onVisibleRef.current(id)
+        observer.disconnect()
+        return
+      }
+    }, { rootMargin: '240px' })
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [id, dataUrl])
+
+  return (
+    <div ref={ref} className="size-full">
+      {dataUrl ? (
+        <img
+          src={dataUrl}
+          alt={alt}
+          className={imgClassName ?? "size-full object-cover transition-transform duration-200 group-hover/thumb:scale-105"}
+          loading="lazy"
+        />
+      ) : (
+        <div className="flex size-full items-center justify-center text-faint">
+          <Image className={iconClassName ?? "size-6"} />
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ExtensionViewDialog({
   target,
   organization,
@@ -1300,6 +1456,10 @@ function ExtensionViewDialog({
   const [busy, setBusy] = useState(false)
   const [query, setQuery] = useState('')
   const [sortBy, setSortBy] = useState('name')
+  // Thumbnails are fetched for rows that actually scroll into view instead of
+  // arriving inside the view payload: a 4K library decoded eagerly in the main
+  // process froze the whole app for seconds on every open.
+  const { thumbs, queueThumbnail } = useLazyWallpaperThumbnails(target)
   const targetGeneration = useRef({ target, revision: 0 })
   if (targetGeneration.current.target !== target) {
     targetGeneration.current = { target, revision: targetGeneration.current.revision + 1 }
@@ -1383,7 +1543,7 @@ function ExtensionViewDialog({
     ? activeRecord.settings.folder.trim()
     : null
   const globalActions = isDetail
-    ? currentData?.actions.filter((action) => action.id !== 'apply' && action.id !== 'preview' && action.id !== 'set-folder') ?? []
+    ? currentData?.actions.filter((action) => action.id !== 'apply' && action.id !== 'preview' && action.id !== 'set-folder' && action.id !== 'thumbnails') ?? []
     : []
 
   useEffect(() => {
@@ -1792,18 +1952,12 @@ function ExtensionViewDialog({
                       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setPreviewItem(row) } }}
                       title={`Preview ${row.title}`}
                     >
-                      {row.thumbnail ? (
-                        <img
-                          src={row.thumbnail}
-                          alt={row.title}
-                          className="size-full object-cover transition-transform duration-200 group-hover/thumb:scale-105"
-                          loading="lazy"
-                        />
-                      ) : (
-                        <div className="flex size-full items-center justify-center text-faint">
-                          <Image className="size-6" />
-                        </div>
-                      )}
+                      <LazyWallpaperThumb
+                        id={row.id}
+                        alt={row.title}
+                        dataUrl={thumbs[row.id] ?? row.thumbnail}
+                        onVisible={queueThumbnail}
+                      />
                       <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover/thumb:opacity-100">
                         <span className="flex items-center gap-1 rounded bg-black/75 px-2 py-1 text-[11px] font-medium text-white shadow">
                           <Eye className="size-3.5" /> Preview

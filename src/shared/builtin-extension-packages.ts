@@ -194,6 +194,9 @@ export const WALLPAPER_MANAGER_MANIFEST: NdExtensionManifest = {
           { id: 'choose', title: 'Pick file...', host: 'os.wallpaper.chooseAndSet' },
           { id: 'set-folder', title: 'Select folder...', host: 'os.wallpaper.setFolder' },
           { id: 'preview', title: 'Preview image', host: 'os.wallpaper.preview' },
+          // Data fetch for the grid, not a user-facing button: the library view
+          // asks for thumbnails for the rows currently on screen.
+          { id: 'thumbnails', title: 'Render thumbnails', host: 'os.wallpaper.thumbnails' },
         ],
       },
     ],

@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { access, readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, dirname, extname, join, win32 } from 'node:path'
+import { basename, dirname, extname, join } from 'node:path'
 import process from 'node:process'
 import { promisify } from 'node:util'
 
@@ -14,28 +14,21 @@ export interface WallpaperCommand {
   optional?: boolean
 }
 
-const WINDOWS_SCRIPT = String.raw`
-$path = [Environment]::GetEnvironmentVariable('ND_WALLPAPER_PATH', 'Process')
-if ([string]::IsNullOrWhiteSpace($path)) { throw 'ND_WALLPAPER_PATH is empty' }
-Add-Type @'
-using System;
-using System.Runtime.InteropServices;
-public static class NdWallpaper {
-  [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-  public static extern bool SystemParametersInfo(int action, int param, string path, int flags);
-}
-'@
-if (-not [NdWallpaper]::SystemParametersInfo(20, 0, $path, 3)) {
-  throw ('SystemParametersInfo failed: ' + [Runtime.InteropServices.Marshal]::GetLastWin32Error())
-}
-`
+/**
+ * Applies a wallpaper through the nd-core sidecar. Windows is owned there
+ * because the desktop implementation spawned `powershell.exe` and recompiled an
+ * inline C# type on every single change, which cost ~900 ms of process startup
+ * and JIT before the OS call even ran.
+ */
+export type WallpaperApply = (imagePath: string) => Promise<void>
 
 /**
  * Build fixed-binary, no-shell commands for a wallpaper update.
  *
- * The user-selected path is never interpolated into PowerShell/AppleScript.
- * Windows and macOS receive it through a process environment variable; Linux
- * passes a file:// URI as a plain execFile argument.
+ * The user-selected path is never interpolated into AppleScript or a shell:
+ * macOS receives it through a process environment variable and Linux passes a
+ * file:// URI as a plain execFile argument. Windows has no command at all — it
+ * goes through the sidecar's in-process `SystemParametersInfoW`.
  */
 export function wallpaperCommands(
   platform: NodeJS.Platform,
@@ -43,12 +36,7 @@ export function wallpaperCommands(
   env: NodeJS.ProcessEnv = process.env,
 ): WallpaperCommand[] {
   if (platform === 'win32') {
-    const systemRoot = env.SystemRoot || env.WINDIR || 'C:\\Windows'
-    return [{
-      file: win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
-      args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', WINDOWS_SCRIPT],
-      env: { ...env, ND_WALLPAPER_PATH: imagePath },
-    }]
+    throw new Error('The Windows desktop wallpaper is set through the nd-core sidecar, not a shell command')
   }
 
   if (platform === 'darwin') {
@@ -80,8 +68,25 @@ export function wallpaperCommands(
   throw new Error(`Changing wallpaper is not supported on ${platform}`)
 }
 
-export async function setDesktopWallpaper(imagePath: string, platform: NodeJS.Platform = process.platform): Promise<void> {
+export async function setDesktopWallpaper(
+  imagePath: string,
+  platform: NodeJS.Platform = process.platform,
+  apply?: WallpaperApply,
+): Promise<void> {
   await access(imagePath)
+  if (platform === 'win32') {
+    // Fail closed rather than quietly skipping: a wallpaper command that reports
+    // success without changing anything is worse than a visible error.
+    if (!apply) throw new Error('The nd-core sidecar is required to change the Windows desktop wallpaper')
+    try {
+      await apply(imagePath)
+    } catch (error) {
+      throw new Error(`Could not change desktop wallpaper: ${message(error)}`)
+    }
+    setActiveWallpaperState(imagePath)
+    return
+  }
+
   for (const command of wallpaperCommands(platform, imagePath)) {
     try {
       await execFileAsync(command.file, command.args, {
@@ -136,14 +141,23 @@ export function normalizeWallpaperPath(raw?: string): string {
   return cleaned
 }
 
-export async function listWallpapersInFolder(folderPath?: string): Promise<WallpaperEntry[]> {
+/**
+ * The folder a wallpaper library actually reads, after applying the default and
+ * the "a file was supplied, use its directory" fallback.
+ *
+ * Exported because the sidecar addresses images relative to a root, so callers
+ * need the same resolved root the listing used rather than re-deriving it.
+ */
+export async function resolveWallpaperFolder(folderPath?: string): Promise<string> {
   const normalized = normalizeWallpaperPath(folderPath)
-  let targetFolder = normalized || resolveDefaultWallpaperFolder()
+  const targetFolder = normalized || resolveDefaultWallpaperFolder()
+  const stats = await stat(targetFolder).catch(() => null)
+  return stats && !stats.isDirectory() ? dirname(targetFolder) : targetFolder
+}
+
+export async function listWallpapersInFolder(folderPath?: string): Promise<WallpaperEntry[]> {
   try {
-    const s = await stat(targetFolder).catch(() => null)
-    if (s && !s.isDirectory()) {
-      targetFolder = dirname(targetFolder)
-    }
+    const targetFolder = await resolveWallpaperFolder(folderPath)
     await access(targetFolder)
     const entries = await readdir(targetFolder, { withFileTypes: true })
     const results: WallpaperEntry[] = []
@@ -202,6 +216,7 @@ export async function cycleWallpaper(options: {
   folder?: string | undefined
   mode?: 'next' | 'random' | 'previous' | undefined
   platform?: NodeJS.Platform | undefined
+  apply?: WallpaperApply | undefined
 }): Promise<{ changed: boolean; name?: string; path?: string }> {
   const items = await listWallpapersInFolder(options.folder)
   if (items.length === 0) return { changed: false }
@@ -236,7 +251,7 @@ export async function cycleWallpaper(options: {
   }
 
   const chosen = items[targetIndex]!
-  await setDesktopWallpaper(chosen.path, options.platform)
+  await setDesktopWallpaper(chosen.path, options.platform, options.apply)
   setActiveWallpaperState(chosen.path, options.folder || resolveDefaultWallpaperFolder())
   return { changed: true, name: chosen.filename, path: chosen.path }
 }
@@ -245,6 +260,7 @@ export async function applyWallpaperFromFolder(
   folder: string | undefined,
   filename: string,
   platform?: NodeJS.Platform | undefined,
+  apply?: WallpaperApply | undefined,
 ): Promise<{ changed: boolean; name: string; path: string }> {
   const targetFolder = normalizeWallpaperPath(folder) || resolveDefaultWallpaperFolder()
   let targetPath = filename
@@ -270,7 +286,7 @@ export async function applyWallpaperFromFolder(
     targetPath = join(targetFolder, basename(filename))
     await access(targetPath)
   }
-  await setDesktopWallpaper(targetPath, platform)
+  await setDesktopWallpaper(targetPath, platform, apply)
   setActiveWallpaperState(targetPath, targetFolder)
   return { changed: true, name: basename(targetPath), path: targetPath }
 }

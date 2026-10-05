@@ -1,24 +1,73 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   getActiveWallpaperState,
   listWallpapersInFolder,
   normalizeWallpaperPath,
   setActiveWallpaperState,
+  setDesktopWallpaper,
   wallpaperCommands,
 } from '../src/main/os/wallpaper.js'
 
 describe('desktop wallpaper adapter', () => {
-  it('does not interpolate a Windows path into the PowerShell program', () => {
+  it('has no Windows shell command at all, because the sidecar owns that call', () => {
     const path = 'C:\\Users\\ND User\\Pictures\\quote " dangerous.png'
-    const [command] = wallpaperCommands('win32', path, { SystemRoot: 'C:\\Windows' })
 
-    expect(command?.file).toBe('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
-    expect(command?.env?.ND_WALLPAPER_PATH).toBe(path)
-    expect(command?.args.join(' ')).not.toContain(path)
-    expect(command?.args).toContain('-NonInteractive')
+    // The previous implementation spawned powershell.exe and recompiled an inline
+    // C# type per change (~900 ms). There is now no command to build, so there is
+    // also no program text a path could be interpolated into.
+    expect(() => wallpaperCommands('win32', path, { SystemRoot: 'C:\\Windows' })).toThrow(/sidecar/)
+  })
+
+  it('routes the Windows change through the sidecar applier and not a child process', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'nd-wp-win-'))
+    try {
+      const target = join(dir, "nd user's wallpaper.png")
+      await writeFile(target, 'fake-image')
+      const apply = vi.fn(async () => undefined)
+
+      await setDesktopWallpaper(target, 'win32', apply)
+
+      expect(apply).toHaveBeenCalledTimes(1)
+      // The exact path is handed over intact; nothing is quoted or escaped.
+      expect(apply).toHaveBeenCalledWith(target)
+      expect(getActiveWallpaperState().path).toBe(target)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('fails closed on Windows when the sidecar applier is unavailable', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'nd-wp-nocore-'))
+    try {
+      const target = join(dir, 'a.png')
+      await writeFile(target, 'fake-image')
+
+      await expect(setDesktopWallpaper(target, 'win32')).rejects.toThrow(/nd-core sidecar is required/)
+      // A refused change must not be recorded as the active wallpaper.
+      expect(getActiveWallpaperState().path).not.toBe(target)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('surfaces a sidecar failure as a wallpaper error', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'nd-wp-fail-'))
+    try {
+      const target = join(dir, 'a.png')
+      await writeFile(target, 'fake-image')
+      const apply = vi.fn(async () => {
+        throw new Error('SystemParametersInfoW rejected the wallpaper')
+      })
+
+      await expect(setDesktopWallpaper(target, 'win32', apply)).rejects.toThrow(
+        /Could not change desktop wallpaper: SystemParametersInfoW/,
+      )
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 
   it('passes the macOS path through the environment instead of AppleScript text', () => {

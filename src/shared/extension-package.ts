@@ -79,6 +79,7 @@ export const ND_HOST_METHODS = [
   { id: 'os.wallpaper.random', title: 'Set random wallpaper', permission: 'os.wallpaper.write', contexts: ['personal'], sensitive: true },
   { id: 'os.wallpaper.setFolder', title: 'Choose wallpaper folder', permission: 'os.wallpaper.write', contexts: ['personal'], sensitive: false },
   { id: 'os.wallpaper.status', title: 'Read wallpaper status and library', permission: 'os.wallpaper.write', contexts: ['personal'], sensitive: false },
+  { id: 'os.wallpaper.thumbnails', title: 'Render wallpaper thumbnails', permission: 'os.wallpaper.write', contexts: ['personal'], sensitive: false },
   { id: 'os.wallpaper.preview', title: 'Preview wallpaper image', permission: 'os.wallpaper.write', contexts: ['personal'], sensitive: false },
   { id: 'os.wallpaper.applySelected', title: 'Apply selected wallpaper', permission: 'os.wallpaper.write', contexts: ['personal'], sensitive: true },
   { id: 'process.list', title: 'List running processes', permission: 'process.read', contexts: ['personal'], sensitive: false },

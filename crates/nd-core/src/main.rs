@@ -12,6 +12,7 @@ use nd_runtime::effect_journal::{
 };
 use nd_runtime::evidence::{self, EvidenceParams};
 use nd_runtime::git::{self, GitExecParams, GitLogParams, GitQueryParams};
+use nd_runtime::media;
 use nd_runtime::metrics::{self, MetricsRegistry};
 use nd_runtime::process::{
     CancelParams, CloseStdinParams, ProcessManager, SpawnParams, WriteParams,
@@ -195,6 +196,7 @@ fn dispatch(
                     "evidence",
                     "artifacts",
                     "workspace",
+                    "media",
                     "search",
                     "revision",
                     "cache",
@@ -546,6 +548,17 @@ fn dispatch(
             let params = from_params::<snapshot::SnapshotParams>(params)?;
             state.metrics.observe_workspace(&params.root);
             to_value(snapshot::snapshot(params, interrupt)?)
+        }
+        // Media roots are directories the desktop handed to the sidecar for a
+        // native surface (a wallpaper library), not linked workspaces, so they
+        // deliberately do not feed `observe_workspace`.
+        "media.thumbnails" => {
+            let params = from_params::<media::ThumbnailsParams>(params)?;
+            to_value(media::thumbnails(params, interrupt)?)
+        }
+        "media.set-wallpaper" => {
+            let params = from_params::<media::WallpaperSetParams>(params)?;
+            to_value(media::set_wallpaper(params)?)
         }
         other => {
             let _ = request_id;

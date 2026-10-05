@@ -1,6 +1,6 @@
 import { app, clipboard, dialog, ipcMain, nativeImage, shell, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
 import { existsSync, promises as fs } from 'node:fs'
-import { basename, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import process from 'node:process'
 import { asNdContext, contextKey, type NdContext } from '../../shared/nd-context.js'
 import { ND_HOST_METHODS, manifestPermissionIssues, validateNdExtensionManifest, type NdHostMethod } from '../../shared/extension-package.js'
@@ -21,8 +21,12 @@ import {
   listWallpapersInFolder,
   normalizeWallpaperPath,
   resolveDefaultWallpaperFolder,
+  resolveWallpaperFolder,
   setDesktopWallpaper,
+  type WallpaperEntry,
 } from '../os/wallpaper.js'
+import { WallpaperThumbnailCache, type CachedThumbnail } from '../os/wallpaper-thumbnails.js'
+import type { CoreMedia } from '../core/core-media.js'
 import { ProcessInventory } from '../os/process-inventory.js'
 import type { BrowserController } from '../browser/browser-controller.js'
 import type { WorkflowService } from '../workflows/workflow-service.js'
@@ -55,6 +59,12 @@ export interface NdIpcDependencies {
   browser: Pick<BrowserController, 'navigate'> & TranslateBrowserPort
   providers: ProviderStore
   workflow: Pick<WorkflowService, 'projectView' | 'refresh'>
+  /**
+   * nd-core's native image and wallpaper surface. Optional because the sidecar
+   * can be unavailable; the wallpaper handlers fail closed without it rather
+   * than silently doing nothing.
+   */
+  media?: CoreMedia
   /** Notified after ND Home records change, so other services can re-derive views. */
   onHomeChanged?: () => void
 }
@@ -370,6 +380,28 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void 
   const translator = new NdTranslateService(deps.browser)
   const history = new TranslateHistoryStore(join(app.getPath('userData'), 'nd-translate-history.json'))
   void history.initialize().catch((error) => console.warn('ND Translate history failed to load:', error))
+  const media = deps.media
+  const thumbnailCache = media ? new WallpaperThumbnailCache(media) : null
+  const applyWallpaper = media
+    ? async (imagePath: string): Promise<void> => { await media.setWallpaper(imagePath) }
+    : undefined
+
+  /**
+   * Decode through the sidecar, never in this process. Returns only the entries
+   * the sidecar could actually read, in request order, so one unreadable file
+   * leaves a gap in the grid instead of failing it.
+   */
+  const readThumbnails = async (
+    root: string,
+    sources: readonly WallpaperEntry[],
+    width: number,
+  ): Promise<CachedThumbnail[]> => {
+    if (!thumbnailCache) throw new Error('The nd-core sidecar is required to render wallpaper thumbnails')
+    const found = await thumbnailCache.get(root, sources, width)
+    return sources
+      .map((source) => found.get(source.path))
+      .filter((entry): entry is CachedThumbnail => entry !== undefined)
+  }
   host.register('browser.translate', async (input, context) => {
     const requestedProvider = input && typeof input === 'object' ? (input as Record<string, unknown>).provider : undefined
     const provider = typeof requestedProvider === 'string' ? requestedProvider : 'google'
@@ -586,25 +618,25 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void 
     })
     if (result.canceled || result.filePaths.length !== 1) return { changed: false }
     const target = result.filePaths[0]!
-    await setDesktopWallpaper(target)
+    await setDesktopWallpaper(target, process.platform, applyWallpaper)
     return { changed: true, path: target, platform: process.platform }
   })
 
   host.register('os.wallpaper.next', async (_input, context) => {
     const folder = typeof context.settings?.folder === 'string' && context.settings.folder ? context.settings.folder : undefined
-    const result = await cycleWallpaper({ folder, mode: 'next' })
+    const result = await cycleWallpaper({ folder, mode: 'next', apply: applyWallpaper })
     return { changed: result.changed, name: result.name, path: result.path }
   })
 
   host.register('os.wallpaper.previous', async (_input, context) => {
     const folder = typeof context.settings?.folder === 'string' && context.settings.folder ? context.settings.folder : undefined
-    const result = await cycleWallpaper({ folder, mode: 'previous' })
+    const result = await cycleWallpaper({ folder, mode: 'previous', apply: applyWallpaper })
     return { changed: result.changed, name: result.name, path: result.path }
   })
 
   host.register('os.wallpaper.random', async (_input, context) => {
     const folder = typeof context.settings?.folder === 'string' && context.settings.folder ? context.settings.folder : undefined
-    const result = await cycleWallpaper({ folder, mode: 'random' })
+    const result = await cycleWallpaper({ folder, mode: 'random', apply: applyWallpaper })
     return { changed: result.changed, name: result.name, path: result.path }
   })
 
@@ -629,7 +661,7 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void 
     const folder = normalizeWallpaperPath(typeof input?.folder === 'string' ? input.folder : undefined)
       || normalizeWallpaperPath(typeof context.settings?.folder === 'string' ? context.settings.folder : undefined)
       || undefined
-    const result = await applyWallpaperFromFolder(folder, filename)
+    const result = await applyWallpaperFromFolder(folder, filename, undefined, applyWallpaper)
     return { changed: result.changed, name: result.name, path: result.path }
   })
 
@@ -638,84 +670,85 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void 
     const folder = normalizeWallpaperPath(typeof input?.folder === 'string' ? input.folder : undefined)
       || normalizeWallpaperPath(typeof context.settings?.folder === 'string' ? context.settings.folder : undefined)
       || undefined
-    const targetFolder = folder || resolveDefaultWallpaperFolder()
-    let targetPath = filename
-    let exists = false
-    try {
-      await fs.access(filename)
-      exists = true
-      targetPath = filename
-    } catch {
-      // not direct/absolute
-    }
-    if (!exists) {
-      try {
-        const candidate = join(targetFolder, filename)
-        await fs.access(candidate)
-        exists = true
-        targetPath = candidate
-      } catch {
-        // try basename
-      }
-    }
-    if (!exists) {
-      targetPath = join(targetFolder, basename(filename))
-      await fs.access(targetPath)
-    }
+    const targetPath = await resolveWallpaperTarget(filename, folder)
     const safeName = basename(targetPath)
-    const img = nativeImage.createFromPath(targetPath)
-    if (img.isEmpty()) throw new Error('Could not read image file')
-    const originalSize = img.getSize()
-    const previewImg = (originalSize.width > 1920 || originalSize.height > 1080)
-      ? img.resize({ width: Math.min(1920, originalSize.width), height: Math.min(1080, Math.round(originalSize.height * (1920 / Math.max(1, originalSize.width)))) })
-      : img
-    const dataUrl = previewImg.toDataURL()
-    const thumbnail = img.resize({ width: 240, quality: 'good' }).toDataURL()
     const fileStat = await fs.stat(targetPath)
+    const source: WallpaperEntry = {
+      filename: safeName,
+      path: targetPath,
+      size: fileStat.size,
+      modifiedAt: fileStat.mtimeMs,
+    }
+    // The previewed file may live outside the library folder, so its own
+    // directory is the confinement root for this read.
+    const root = dirname(targetPath)
+    const [preview] = await readThumbnails(root, [source], PREVIEW_WIDTH)
+    const [thumbnail] = await readThumbnails(root, [source], GRID_THUMBNAIL_WIDTH)
+    if (!preview) throw new Error('Could not read image file')
     return {
       id: safeName,
       filename: safeName,
       path: targetPath,
-      dataUrl,
-      thumbnail,
-      width: originalSize.width,
-      height: originalSize.height,
+      dataUrl: preview.dataUrl,
+      thumbnail: thumbnail?.dataUrl ?? preview.dataUrl,
+      width: preview.sourceWidth,
+      height: preview.sourceHeight,
       size: fileStat.size,
       modifiedAt: fileStat.mtimeMs,
     }
   })
 
+  /**
+   * Library metadata only. Thumbnails are deliberately not part of this
+   * response: they are fetched per visible row through
+   * `os.wallpaper.thumbnails`, because eagerly decoding the first 60 images here
+   * blocked the main process for seconds on a 4K library.
+   */
   host.register('os.wallpaper.status', async (input, context) => {
     const inputFolder = normalizeWallpaperPath(typeof input?.folder === 'string' ? input.folder : undefined)
     const settingFolder = normalizeWallpaperPath(typeof context.settings?.folder === 'string' ? context.settings.folder : undefined)
     const folder = inputFolder || settingFolder || undefined
     const items = await listWallpapersInFolder(folder)
     const active = getActiveWallpaperState()
-    return items.map((item, index) => {
+    return items.map((item) => {
       const isActive = active.path === item.path || (active.path !== null && active.path.endsWith(item.filename))
-      let thumbnail: string | undefined
-      if (index < 60) {
-        try {
-          const img = nativeImage.createFromPath(item.path)
-          if (!img.isEmpty()) {
-            thumbnail = img.resize({ width: 240, quality: 'good' }).toDataURL()
-          }
-        } catch {
-          // fallback to undefined
-        }
-      }
       return {
         id: item.filename,
         title: item.filename,
         detail: `${Math.round(item.size / 1024)} KB · ${item.path}`,
         status: isActive ? 'Active' : undefined,
-        thumbnail,
         path: item.path,
         size: item.size,
         modifiedAt: item.modifiedAt,
         sortValues: { size: item.size, date: item.modifiedAt },
       }
     })
+  })
+
+  host.register('os.wallpaper.thumbnails', async (input, context) => {
+    const ids = readThumbnailIds(input?.ids)
+    if (ids.length === 0) return { thumbnails: [] }
+    const inputFolder = normalizeWallpaperPath(typeof input?.folder === 'string' ? input.folder : undefined)
+    const settingFolder = normalizeWallpaperPath(typeof context.settings?.folder === 'string' ? context.settings.folder : undefined)
+    const folder = inputFolder || settingFolder || undefined
+    const root = await resolveWallpaperFolder(folder)
+    const items = await listWallpapersInFolder(folder)
+    const byId = new Map(items.map((item) => [item.filename, item]))
+    const wanted: WallpaperEntry[] = []
+    for (const id of ids) {
+      const item = byId.get(id)
+      if (item) wanted.push(item)
+    }
+    const thumbnails = await readThumbnails(root, wanted, GRID_THUMBNAIL_WIDTH)
+    return {
+      thumbnails: thumbnails.map((thumbnail) => ({
+        id: basename(thumbnail.path),
+        path: thumbnail.path,
+        dataUrl: thumbnail.dataUrl,
+        width: thumbnail.width,
+        height: thumbnail.height,
+      })),
+    }
   })
 
   host.register('process.list', async () => processes.list())
@@ -877,6 +910,50 @@ function absolutePath(value: unknown): string {
 
 function shortId(value: unknown, label: string): string {
   return requiredText(value, label, 160)
+}
+
+const GRID_THUMBNAIL_WIDTH = 240
+const PREVIEW_WIDTH = 1920
+/** One screenful at a time, matching the sidecar's own per-batch bound. */
+const MAX_THUMBNAIL_IDS = 64
+
+/**
+ * Validate a thumbnail request from the renderer. Unknown, blank, oversized, and
+ * duplicate ids are dropped rather than trusted; the id is only ever used to look
+ * up an entry ND itself listed, so nothing here reaches the filesystem.
+ */
+function readThumbnailIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const ids: string[] = []
+  for (const entry of value) {
+    if (ids.length >= MAX_THUMBNAIL_IDS) break
+    if (typeof entry !== 'string') continue
+    const id = entry.trim()
+    if (!id || id.length > 4096 || ids.includes(id)) continue
+    ids.push(id)
+  }
+  return ids
+}
+
+/** Resolve a caller-supplied filename to a file that actually exists. */
+async function resolveWallpaperTarget(filename: string, folder: string | undefined): Promise<string> {
+  const targetFolder = folder || resolveDefaultWallpaperFolder()
+  try {
+    await fs.access(filename)
+    return filename
+  } catch {
+    // Not a directly usable path; try it inside the library folder.
+  }
+  const inFolder = join(targetFolder, filename)
+  try {
+    await fs.access(inFolder)
+    return inFolder
+  } catch {
+    // Fall through to the basename form, whose failure surfaces the real error.
+  }
+  const fallback = join(targetFolder, basename(filename))
+  await fs.access(fallback)
+  return fallback
 }
 
 function requiredText(value: unknown, label: string, max: number): string {

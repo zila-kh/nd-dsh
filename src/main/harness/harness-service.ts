@@ -414,7 +414,7 @@ export class HarnessService {
     }
     if (method === 'session.history') return sanitizeHistoryResult(result)
     if (method === 'session.list') return this.annotateArchivedSessions(result)
-    if (method === 'agentPresets.list') return annotatePresetRoster(result)
+    if (method === 'agentPreset.list') return annotatePresetRoster(result)
     if (method === 'session.models' && result.ok && result.value && typeof result.value === 'object') {
       return { ...result, value: restrictDeepSeekCatalog(result.value as SessionModels, this.providers.list()) }
     }
