@@ -38,6 +38,114 @@ const READY_POLL_MS = 300
 const UI_CONTEXT_MARKER = '\n\n[ND-DSH LIVE UI CONTEXT]'
 
 /**
+ * ND owns the product's agent identity, so every session runs the shipped
+ * ND preset. The runtime applies its persisted settings AFTER the ND patch
+ * overlay, so the overlay's own `default:` row cannot beat a stale persisted
+ * selection; the launch-time write below keeps the product preset
+ * authoritative. `ND_DSH_PRESET` is a developer override (preset validation).
+ */
+export const ND_DSH_PRESET_ID = process.env.ND_DSH_PRESET ?? 'nd-dsh'
+
+/**
+ * Rewrite the runtime settings.yaml so `agent-presets.default` is the given
+ * preset id. Returns the updated text and whether anything changed.
+ */
+export function withDefaultPreset(settings: string, presetId: string): { content: string; changed: boolean } {
+  const eol = settings.includes('\r\n') ? '\r\n' : '\n'
+  const lines = settings.split(/\r?\n/)
+  let sectionIndex = -1
+  for (let i = 0; i < lines.length; i++) {
+    if (/^agent-presets:\s*$/.test(lines[i]!)) {
+      sectionIndex = i
+      break
+    }
+  }
+  if (sectionIndex < 0) {
+    const trimmed = settings.trimEnd()
+    return { content: `${trimmed}${trimmed.length > 0 ? eol + eol : ''}agent-presets:${eol}  default: ${presetId}${eol}`, changed: true }
+  }
+  for (let i = sectionIndex + 1; i < lines.length; i++) {
+    if (/^\S/.test(lines[i]!)) break
+    const match = /^(\s*)default:\s*(\S*)\s*$/.exec(lines[i]!)
+    if (match) {
+      // Both groups are unconditional in the pattern, so a match always fills them.
+      if (match[2]! === presetId) return { content: settings, changed: false }
+      lines[i] = `${match[1]!}default: ${presetId}`
+      return { content: lines.join(eol), changed: true }
+    }
+  }
+  lines.splice(sectionIndex + 1, 0, `  default: ${presetId}`)
+  return { content: lines.join(eol), changed: true }
+}
+
+async function enforceRuntimePreset(dshHome: string): Promise<void> {
+  const settingsPath = join(dshHome, 'settings.yaml')
+  let existing: string
+  try {
+    existing = await fs.readFile(settingsPath, 'utf8')
+  } catch (err) {
+    // Nothing persisted yet: no stale selection to beat the overlay default.
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw err
+  }
+  const { content, changed } = withDefaultPreset(existing, ND_DSH_PRESET_ID)
+  if (changed) await fs.writeFile(settingsPath, content, 'utf8')
+}
+
+/**
+ * Product guard for the upstream `cordis` preset. Its cordis_define tool
+ * schema uses JSON Schema `const`, which the nd-router origin rejects with a
+ * Cloudflare 502 on every request listing the tool. Patch layers cannot
+ * disable the tool (preset-nested plugin rows are not patch-addressable), so
+ * ND blocks the selection surface instead: no new cordis sessions, no cordis
+ * default, and the roster marks the preset unavailable. Existing cordis
+ * sessions keep resuming; the durable fix is router-side `const` support.
+ */
+export const BLOCKED_PRESET_ID = 'cordis'
+export const PRESET_BLOCK_REASON = 'Creator mode (cordis) is unavailable in this build: its tool schemas trip a model-provider route defect (HTTP 502). Existing cordis sessions keep resuming.'
+
+function blockedPresetResult(): GatewayRpcResult {
+  return { ok: false, error: { code: 'agent-preset/blocked', message: PRESET_BLOCK_REASON } }
+}
+
+/**
+ * Reject product calls that would start a new session on the blocked preset or
+ * make it the default. Returns the closed result, or undefined to allow the
+ * call through to the runtime.
+ */
+export function blockPresetSelection(method: string, payload: unknown): GatewayRpcResult | undefined {
+  if (method === 'session.create') {
+    const agentPreset = (payload as { agentPreset?: unknown } | undefined)?.agentPreset
+    return agentPreset === BLOCKED_PRESET_ID ? blockedPresetResult() : undefined
+  }
+  if (method === 'settings.update') {
+    const record = payload as { ns?: unknown; patch?: unknown } | undefined
+    if (record?.ns === 'agent-presets') {
+      const patch = record.patch as { default?: unknown } | undefined
+      if (patch?.default === BLOCKED_PRESET_ID) return blockedPresetResult()
+    }
+  }
+  return undefined
+}
+
+/**
+ * Mark the blocked preset's roster rows so the UI can disable selection and
+ * explain why. The runtime payload otherwise passes through untouched.
+ */
+export function annotatePresetRoster(result: GatewayRpcResult): GatewayRpcResult {
+  if (!result.ok || !result.value || typeof result.value !== 'object') return result
+  const value = result.value as { presets?: unknown }
+  if (!Array.isArray(value.presets)) return result
+  let changed = false
+  const presets = value.presets.map((row) => {
+    if (!row || typeof row !== 'object' || (row as { id?: unknown }).id !== BLOCKED_PRESET_ID) return row
+    changed = true
+    return { ...row, blocked: true, blockedReason: PRESET_BLOCK_REASON }
+  })
+  return changed ? { ...result, value: { ...value, presets } } : result
+}
+
+/**
  * Main-process image attachment for prompts (cross-app screen capture).
  * Bytes stay in the trusted main process; the renderer only triggers it.
  */
@@ -265,6 +373,10 @@ export class HarnessService {
       if (method === 'session.list') return { ok: true, value: { items: [] } }
       this.workspace.assertUsable()
     }
+    // Preset policy fails closed before the runtime is even started: a blocked
+    // selection must not boot the runtime just to be rejected.
+    const blocked = blockPresetSelection(method, payload)
+    if (blocked) return blocked
     // Creating a session is a launch-policy boundary just like run(): if the
     // Token Saver switch changed, rebuild the runtime before that new session.
     let started = await this.ensureStarted(method === 'session.create')
@@ -302,6 +414,7 @@ export class HarnessService {
     }
     if (method === 'session.history') return sanitizeHistoryResult(result)
     if (method === 'session.list') return this.annotateArchivedSessions(result)
+    if (method === 'agentPresets.list') return annotatePresetRoster(result)
     if (method === 'session.models' && result.ok && result.value && typeof result.value === 'object') {
       return { ...result, value: restrictDeepSeekCatalog(result.value as SessionModels, this.providers.list()) }
     }
@@ -578,6 +691,9 @@ export class HarnessService {
     ensureProfilePluginLinks(dshHome, harnessRoot())
     // The nd-dsh preset ships with the desktop; a fresh copy keeps it current.
     await fs.cp(presetsDir, join(dshHome, '.agent-presets'), { recursive: true, force: true })
+    // Persisted runtime settings outrank the ND patch overlay; pin the product
+    // preset so a stale persisted selection cannot silently change sessions.
+    await enforceRuntimePreset(dshHome)
     assertCurrentLaunch()
 
     const providerRevision = this.providers.revision()

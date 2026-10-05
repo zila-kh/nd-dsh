@@ -106,16 +106,20 @@ export function PresetSettings({ onError, onOpenSession }: PresetSettingsProps) 
                 <div className={rowStack}>
                   <strong className={rowTitle}>{preset.name ?? preset.id}</strong>
                   <span className={rowPathText}>{preset.description ?? preset.id}</span>
-                  {preset.trust === 'system' ? <StatusChip neutral>shipped</StatusChip> : null}
-                  {preset.isDefault ? <StatusChip good>default</StatusChip> : null}
+                  {preset.blocked === true && preset.blockedReason ? (
+                    <span className="text-[10px]/[1.45] text-muted-foreground">{preset.blockedReason}</span>
+                  ) : null}
                 </div>
                 <div className="flex shrink-0 items-center gap-1.5">
-                  <SettingsButton disabled={busyId === preset.id} onClick={() => void startSession(preset)}>
+                  {preset.trust === 'system' ? <StatusChip neutral>shipped</StatusChip> : null}
+                  {preset.blocked === true ? <StatusChip warn>unavailable</StatusChip> : null}
+                  {preset.isDefault ? <StatusChip good>default</StatusChip> : null}
+                  <SettingsButton disabled={busyId === preset.id || preset.blocked === true} onClick={() => void startSession(preset)}>
                     New session
                   </SettingsButton>
                   <SettingsButton
                     active={preset.isDefault}
-                    disabled={busyId === preset.id || preset.isDefault === true}
+                    disabled={busyId === preset.id || preset.isDefault === true || preset.blocked === true}
                     onClick={() => void setDefault(preset)}
                   >
                     {preset.isDefault ? 'Default' : 'Set default'}

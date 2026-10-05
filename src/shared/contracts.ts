@@ -404,6 +404,9 @@ export interface AgentPresetSummary {
   description?: string
   order?: number
   broken?: string
+  /** ND product policy marks this preset unselectable for new sessions. */
+  blocked?: boolean
+  blockedReason?: string
 }
 
 export interface SessionEventEnvelope {
