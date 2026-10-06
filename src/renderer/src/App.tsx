@@ -25,6 +25,7 @@ import { RuntimePrompts } from './components/RuntimePrompts'
 import { ThemeToggle } from './components/ThemeToggle'
 import { TitlebarIconButton } from './components/titlebar-icon-button'
 import { CaptureOverlay, type CaptureOverlayMode } from './components/CaptureOverlay'
+import { ModalInspectDock } from './components/modal-inspect-dock'
 import { ScreenshotDropdown } from './components/ScreenshotDropdown'
 import { QuickLauncher } from './components/QuickLauncher'
 import { HomeView } from './components/HomeView'
@@ -1879,6 +1880,15 @@ export default function App() {
         />
       ) : null}
       <RuntimePrompts onError={notify} organization={orgState} />
+      <ModalInspectDock
+        hidden={captureOverlay !== null}
+        pickDisabled={elementInspectActive}
+        screenshotDisabled={appInspectCountdown !== null || appInspectInFlight}
+        onPickElement={startElementInspect}
+        onScreenshot={() => {
+          void startAppInspect('full')
+        }}
+      />
       {pendingPick ? (
         <div role="dialog" aria-label="Picked element" className="fixed right-4 bottom-[46px] z-[150] flex w-[300px] flex-col gap-2 rounded-[10px] border border-border-strong bg-surface-1 p-3 shadow-[0_14px_40px_rgba(0,0,0,0.5)]">
           <div title={pendingPick.hover} className="flex min-w-0 cursor-help items-center gap-[7px]">
