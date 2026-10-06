@@ -77,7 +77,7 @@ describe('extension package manifests', () => {
       }),
       expect.objectContaining({
         id: 'set-wallpaper-folder',
-        host: 'os.wallpaper.setFolder',
+        host: 'os.wallpaper.folders.add',
         contexts: ['personal'],
       }),
       expect.objectContaining({
@@ -114,7 +114,7 @@ describe('extension package manifests', () => {
           expect.objectContaining({ id: 'next', host: 'os.wallpaper.next' }),
           expect.objectContaining({ id: 'random', host: 'os.wallpaper.random' }),
           expect.objectContaining({ id: 'choose', host: 'os.wallpaper.chooseAndSet' }),
-          expect.objectContaining({ id: 'set-folder', host: 'os.wallpaper.setFolder' }),
+          expect.objectContaining({ id: 'folders-add', host: 'os.wallpaper.folders.add' }),
           expect.objectContaining({ id: 'preview', host: 'os.wallpaper.preview' }),
         ]),
       }),

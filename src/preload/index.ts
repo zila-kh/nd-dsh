@@ -88,6 +88,7 @@ const ndExtensionsApi: NdExtensionsDesktopApi = {
   installLocal: () => ipcRenderer.invoke(ND_EXTENSIONS_IPC.installLocal) as Promise<NdExtensionsStateView | null>,
   installFromPath: (path: string) => ipcRenderer.invoke(ND_EXTENSIONS_IPC.installFromPath, path) as Promise<NdExtensionsStateView>,
   installAvailable: (extensionId: string) => ipcRenderer.invoke(ND_EXTENSIONS_IPC.installAvailable, extensionId) as Promise<NdExtensionsStateView>,
+  exportStarterKit: () => ipcRenderer.invoke(ND_EXTENSIONS_IPC.exportStarterKit) as Promise<{ saved: boolean; path?: string } | null>,
   update: (extensionId: string, sourcePath?: string) => ipcRenderer.invoke(ND_EXTENSIONS_IPC.update, extensionId, sourcePath) as Promise<NdExtensionsStateView>,
   rollback: (extensionId: string) => ipcRenderer.invoke(ND_EXTENSIONS_IPC.rollback, extensionId) as Promise<NdExtensionsStateView>,
   uninstall: (extensionId: string) => ipcRenderer.invoke(ND_EXTENSIONS_IPC.uninstall, extensionId) as Promise<NdExtensionsStateView>,

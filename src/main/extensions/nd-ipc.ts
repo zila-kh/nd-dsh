@@ -23,9 +23,18 @@ import {
   resolveDefaultWallpaperFolder,
   resolveWallpaperFolder,
   setDesktopWallpaper,
+  setActiveWallpaperState,
   type WallpaperEntry,
 } from '../os/wallpaper.js'
 import { WallpaperThumbnailCache, type CachedThumbnail } from '../os/wallpaper-thumbnails.js'
+import {
+  WallpaperLinkStore,
+  bundledWallpaperLinksPath,
+  bundledWallpaperLinksWithSource,
+  downloadWallpaperImage,
+  findCachedImage,
+} from '../os/wallpaper-links.js'
+import { parseWallpaperLinkUrl, parseWallpaperLinksBundle, type WallpaperCollectionEntry, type WallpaperCollectionItemInput, type WallpaperLink } from '../../shared/wallpaper-links.js'
 import type { CoreMedia } from '../core/core-media.js'
 import { ProcessInventory } from '../os/process-inventory.js'
 import type { BrowserController } from '../browser/browser-controller.js'
@@ -38,6 +47,8 @@ import type { NativeHostRegistry } from './native-host.js'
 import { NdTranslateService, type TranslateBrowserPort } from './translate-service.js'
 import { translateWithLlm } from './translate-llm.js'
 import { TranslateHistoryStore } from './translate-history-store.js'
+import { starterKitFiles } from './starter-kit.js'
+import { createZipFile } from './zip.js'
 import { ND_TRANSLATE_ID, ND_TRANSLATE_MAX_TEXT, isLlmProvider } from '../../shared/nd-translate.js'
 import type { ProviderStore } from '../providers.js'
 
@@ -73,6 +84,31 @@ const NOTE_TITLE_MAX = 80
 const MAX_OPEN_TARGETS = 1
 const QUIT_PROCESS_ID = 'nd.quit-process'
 
+/**
+ * Bridges the auto-rotate timer (wired early, in the IPC layer) to the
+ * rotation player (wired with the native hosts below). The player reads the
+ * current play sources on every tick, so edits take effect without a resync;
+ * before registration, and when nothing is playable, rotation walks the
+ * default Pictures folder exactly as it always has.
+ */
+let applyWallpaperRotation: ((mode: 'next' | 'random' | 'previous') => Promise<unknown>) | null = null
+let refreshWallpaperRotation: (() => void) | null = null
+
+/** Linked folders: the `folders` list, falling back to the legacy single `folder`. */
+function readLinkedFolders(settings: Record<string, unknown> | undefined): string[] {
+  const raw = settings?.folders
+  if (Array.isArray(raw)) return raw.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+  const legacy = typeof settings?.folder === 'string' ? settings.folder.trim() : ''
+  return legacy ? [legacy] : []
+}
+
+/** Playback sources as `folder:<path>` / `collection:<id>` refs; empty means all linked folders. */
+function readPlaySources(settings: Record<string, unknown> | undefined): string[] {
+  const raw = settings?.playSources
+  if (!Array.isArray(raw)) return []
+  return raw.filter((value): value is string => typeof value === 'string' && /^(folder|collection):/.test(value))
+}
+
 function quitProcessPackagePath(): string {
   return app.isPackaged
     ? join(process.resourcesPath, 'nd-extensions', 'quit-process')
@@ -107,16 +143,20 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
       if (!activation?.enabled) return
       const intervalMinutes = typeof activation.settings.intervalMinutes === 'number' ? activation.settings.intervalMinutes : 0
       if (intervalMinutes <= 0) return
-      const folder = typeof activation.settings.folder === 'string' && activation.settings.folder ? activation.settings.folder : undefined
       const mode = activation.settings.mode === 'random' ? 'random' : 'next'
       const intervalMs = Math.max(1, intervalMinutes) * 60 * 1000
       wallpaperTimer = setInterval(() => {
-        void cycleWallpaper({ folder, mode }).catch(() => undefined)
+        if (applyWallpaperRotation) {
+          void applyWallpaperRotation(mode).catch(() => undefined)
+        } else {
+          void cycleWallpaper({ mode }).catch(() => undefined)
+        }
       }, intervalMs)
     } catch {
       // Ignore background rotation failure
     }
   }
+  refreshWallpaperRotation = () => { void syncWallpaperRotation() }
 
   const ensureSeeded = (): Promise<void> => {
     seeded ??= seedBuiltinPackages(deps).then(async () => {
@@ -192,6 +232,18 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
     await deps.packages.installFromDirectory(absolutePath(rawPath))
     await emitState()
     return stateView()
+  })
+
+  handle(ND_EXTENSIONS_IPC.exportStarterKit, async () => {
+    const result = await dialog.showSaveDialog(deps.window, {
+      title: 'Save extension starter kit',
+      defaultPath: 'nd-extension-starter.zip',
+      filters: [{ name: 'ZIP archive', extensions: ['zip'] }],
+    })
+    if (result.canceled || !result.filePath) return null
+    const archive = createZipFile(starterKitFiles())
+    await fs.writeFile(result.filePath, archive)
+    return { saved: true, path: result.filePath }
   })
 
   handle(ND_EXTENSIONS_IPC.installAvailable, async (_event, extensionId) => {
@@ -430,6 +482,656 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void 
     ...app.getAppMetrics().map((metric) => metric.pid),
   ])
 
+  // --- Wallpaper Studio Discovery links ---------------------------------------
+  //
+  // Remote image links the user saved (JSON in userData) plus the read-only
+  // ND-curated bundle shipped in resources. Images are downloaded only into
+  // the local cache, through `downloadWallpaperImage`, so no renderer ever
+  // talks to the network and every fetch is SSRF-checked and size-capped.
+
+  const wallpaperLinkStore = new WallpaperLinkStore(join(app.getPath('userData'), 'wallpaper-links.json'))
+  void wallpaperLinkStore.initialize().catch((error) => console.warn('Wallpaper links failed to load:', error))
+  const wallpaperCacheDir = join(app.getPath('userData'), 'wallpaper-cache')
+  const wallpaperThumbCacheDir = join(wallpaperCacheDir, 'thumbs')
+  let bundledLinks: WallpaperLink[] | null = null
+  const bundledLinksOnce = async (): Promise<WallpaperLink[]> => {
+    if (bundledLinks) return bundledLinks
+    try {
+      bundledLinks = bundledWallpaperLinksWithSource(
+        await fs.readFile(bundledWallpaperLinksPath({ appPath: app.getAppPath(), resourcesPath: app.isPackaged ? process.resourcesPath : undefined }), 'utf8'),
+      )
+    } catch (error) {
+      console.warn('ND wallpaper bundle failed to load:', error)
+      bundledLinks = []
+    }
+    return bundledLinks
+  }
+
+  /** `source` marks which list a caller is addressing: `user` links or `bundle` links. */
+  const findLink = async (id: string, source: string): Promise<WallpaperLink | null> => {
+    if (source === 'bundle') return (await bundledLinksOnce()).find((link) => link.id === id) ?? null
+    return wallpaperLinkStore.find(id)
+  }
+
+  /**
+   * The on-disk image a link's cover should render from: the cached full-size
+   * wallpaper when present, otherwise the bundle's small thumb URL (fetched
+   * once into `thumbs/` so Discovery shows real artwork before any apply).
+   */
+  const ensureLinkCover = async (link: WallpaperLink): Promise<WallpaperEntry | null> => {
+    if (link.cachedPath) {
+      try {
+        const fileStat = await fs.stat(link.cachedPath)
+        return { filename: basename(link.cachedPath), path: link.cachedPath, size: fileStat.size, modifiedAt: fileStat.mtimeMs }
+      } catch {
+        // Cached file vanished; fall back to the thumb if there is one.
+      }
+    }
+    if (!link.thumbUrl) return null
+    const existing = await findCachedImage(wallpaperThumbCacheDir, link.thumbUrl)
+    if (existing) {
+      return { filename: basename(existing.path), path: existing.path, size: existing.size, modifiedAt: existing.modifiedAt }
+    }
+    try {
+      const cached = await downloadWallpaperImage(link.thumbUrl, {
+        cacheDir: wallpaperThumbCacheDir,
+        maxBytes: WALLPAPER_THUMB_MAX_BYTES,
+      })
+      return { filename: basename(cached.path), path: cached.path, size: cached.size, modifiedAt: Date.now() }
+    } catch {
+      // No cover available; the card keeps its placeholder.
+      return null
+    }
+  }
+
+  /** Thumbnails for links whose image is already in the cache; uncached links are simply skipped. */
+  const readLinkThumbnails = async (links: readonly WallpaperLink[]): Promise<Map<string, CachedThumbnail>> => {
+    if (!thumbnailCache) throw new Error('The nd-core sidecar is required to render wallpaper thumbnails')
+    const sources: WallpaperEntry[] = []
+    const pathToLinkId = new Map<string, string>()
+    for (const link of links) {
+      const entry = await ensureLinkCover(link)
+      if (!entry) continue
+      sources.push(entry)
+      pathToLinkId.set(entry.path, link.id)
+    }
+    if (sources.length === 0) return new Map()
+    const found = await thumbnailCache.get(wallpaperCacheDir, sources, GRID_THUMBNAIL_WIDTH)
+    const byLinkId = new Map<string, CachedThumbnail>()
+    for (const source of sources) {
+      const thumbnail = found.get(source.path)
+      const id = pathToLinkId.get(source.path)
+      if (thumbnail && id) byLinkId.set(id, thumbnail)
+    }
+    return byLinkId
+  }
+
+  const ensureLinkCached = async (link: WallpaperLink): Promise<WallpaperLink> => {
+    if (link.cachedPath) {
+      try {
+        await fs.access(link.cachedPath)
+        return link
+      } catch {
+        // Cached file is gone; fall through and download again.
+      }
+    }
+    const cached = await downloadWallpaperImage(link.url, { cacheDir: wallpaperCacheDir })
+    if (link.source === 'user') {
+      const updated = await wallpaperLinkStore.recordCache(link.id, cached)
+      if (updated) return updated
+    }
+    return { ...link, cachedPath: cached.path, cachedSize: cached.size, cachedAt: Date.now() }
+  }
+
+  host.register('os.wallpaper.links.list', async () => {
+    await wallpaperLinkStore.initialize()
+    const active = getActiveWallpaperState()
+    const withActive = (link: WallpaperLink) => ({
+      ...link,
+      active: Boolean(link.cachedPath && active.path && link.cachedPath === active.path),
+    })
+    return {
+      user: wallpaperLinkStore.list().map(withActive),
+      bundle: (await bundledLinksOnce()).map(withActive),
+      defaultFolder: resolveDefaultWallpaperFolder(),
+    }
+  })
+
+  host.register('os.wallpaper.links.add', async (input) => {
+    await wallpaperLinkStore.initialize()
+    const url = requiredText(input.url, 'Image link', 2_048)
+    const title = typeof input.title === 'string' ? input.title.slice(0, 200) : undefined
+    // Download first so a link is only ever saved after proving it is a real,
+    // supported image the sidecar can render.
+    const cached = await downloadWallpaperImage(url, { cacheDir: wallpaperCacheDir })
+    const { link, created } = await wallpaperLinkStore.add(url, title, cached)
+    const thumbnailMap = await readLinkThumbnails([link])
+    return { link: { ...link, active: false }, created, thumbnail: thumbnailMap.get(link.id)?.dataUrl }
+  })
+
+  host.register('os.wallpaper.links.remove', async (input) => {
+    await wallpaperLinkStore.initialize()
+    const id = requiredText(input.id, 'Link selection', 200)
+    const result = await wallpaperLinkStore.remove(id)
+    if (result.cachedPath) await fs.unlink(result.cachedPath).catch(() => undefined)
+    return { removed: result.removed }
+  })
+
+  host.register('os.wallpaper.links.apply', async (input) => {
+    await wallpaperLinkStore.initialize()
+    const id = requiredText(input.id, 'Link selection', 200)
+    const link = await findLink(id, typeof input.source === 'string' ? input.source : 'user')
+    if (!link) throw new Error('That wallpaper link no longer exists')
+    const ensured = await ensureLinkCached(link)
+    await setDesktopWallpaper(ensured.cachedPath!, process.platform, applyWallpaper)
+    setActiveWallpaperState(ensured.cachedPath!)
+    return { changed: true, name: ensured.title, path: ensured.cachedPath }
+  })
+
+  // Discovery collects, it does not touch the desktop: saving copies a bundle
+  // entry into the user's own list, where applying stays a deliberate act.
+  host.register('os.wallpaper.links.save', async (input) => {
+    await wallpaperLinkStore.initialize()
+    const id = requiredText(input.id, 'Link selection', 200)
+    const link = await findLink(id, typeof input.source === 'string' ? input.source : 'bundle')
+    if (!link) throw new Error('That wallpaper link no longer exists')
+    const existing = wallpaperLinkStore.list().find((entry) => entry.url === link.url)
+    if (existing) return { saved: false, exists: true, link: existing }
+    const { link: saved } = await wallpaperLinkStore.add(link.url, link.title, undefined, link.thumbUrl)
+    return { saved: true, exists: false, link: saved }
+  })
+
+  /**
+   * Play the saved links like a queue. `next` walks the list in order;
+   * `random` avoids repeating the current wallpaper. Missing images download
+   * on the way, so the first pass through the queue is the slow one.
+   */
+  const applyLinkFromQueue = async (mode: 'next' | 'random'): Promise<{ changed: boolean; name?: string; path?: string | undefined }> => {
+    await wallpaperLinkStore.initialize()
+    const links = wallpaperLinkStore.list()
+    if (links.length === 0) throw new Error('Save some wallpaper links in Discovery first')
+    const active = getActiveWallpaperState()
+    let chosen: WallpaperLink | undefined
+    if (mode === 'random') {
+      const candidates = links.filter((link) => !link.cachedPath || link.cachedPath !== active.path)
+      const pool = candidates.length > 0 ? candidates : links
+      chosen = pool[Math.floor(Math.random() * pool.length)]
+    } else {
+      const currentIndex = links.findIndex((link) => link.cachedPath === active.path)
+      chosen = links[currentIndex >= 0 ? (currentIndex + 1) % links.length : 0]
+    }
+    if (!chosen) throw new Error('No wallpaper link could be selected')
+    const ensured = await ensureLinkCached(chosen)
+    await setDesktopWallpaper(ensured.cachedPath!, process.platform, applyWallpaper)
+    setActiveWallpaperState(ensured.cachedPath!)
+    return { changed: true, name: ensured.title, path: ensured.cachedPath }
+  }
+
+  host.register('os.wallpaper.links.next', async () => applyLinkFromQueue('next'))
+  host.register('os.wallpaper.links.random', async () => applyLinkFromQueue('random'))
+
+  // --- Wallpaper Studio collections -------------------------------------------
+  //
+  // Named, user-curated sets ("Nature", "Cities") that mix saved remote links
+  // and local folder images. Collections are the playable unit: next/random
+  // walk one collection, and the auto-rotate timer can be pointed at one so a
+  // whole day stays on theme.
+
+  const collectionEntryFromInput = async (input: Record<string, unknown>): Promise<WallpaperCollectionEntry> => {
+    await wallpaperLinkStore.initialize()
+    const collectionId = requiredText(input.collectionId ?? input.id, 'Collection', 100)
+    const entryId = requiredText(input.entryId ?? input.id, 'Collection entry', 100)
+    const collection = wallpaperLinkStore.findCollection(collectionId)
+    if (!collection) throw new Error('That collection no longer exists')
+    const entry = collection.entries.find((item) => item.id === entryId)
+    if (!entry) throw new Error('That image is no longer in the collection')
+    return entry
+  }
+
+  /** The user link backing a collection's link entry, when it is still known. */
+  const knownLinkForRef = async (ref: string): Promise<WallpaperLink | null> => {
+    const normalized = parseWallpaperLinkUrl(ref).toString()
+    return wallpaperLinkStore.list().find((link) => link.url === normalized)
+      ?? (await bundledLinksOnce()).find((link) => link.url === normalized)
+      ?? null
+  }
+
+  const applyCollectionEntry = async (entry: WallpaperCollectionEntry): Promise<{ changed: boolean; name: string; path?: string | undefined }> => {
+    if (entry.kind === 'link') {
+      const known = await knownLinkForRef(entry.ref)
+      const link: WallpaperLink = known ?? { id: entry.id, url: parseWallpaperLinkUrl(entry.ref).toString(), title: entry.title, source: 'user', addedAt: 0 }
+      const ensured = await ensureLinkCached(link)
+      await setDesktopWallpaper(ensured.cachedPath!, process.platform, applyWallpaper)
+      setActiveWallpaperState(ensured.cachedPath!)
+      return { changed: true, name: ensured.title, path: ensured.cachedPath }
+    }
+    await setDesktopWallpaper(entry.ref, process.platform, applyWallpaper)
+    setActiveWallpaperState(entry.ref)
+    return { changed: true, name: entry.title, path: entry.ref }
+  }
+
+  /**
+   * Picks from a flat list of playable entries — links resolve through their
+   * cached file, files apply directly — walking in order for next/previous
+   * and avoiding the current wallpaper for random.
+   */
+  const applyFromEntries = async (entries: readonly WallpaperCollectionEntry[], mode: 'next' | 'random' | 'previous'): Promise<{ changed: boolean; name?: string; path?: string | undefined }> => {
+    if (entries.length === 0) throw new Error('There are no wallpapers to play')
+    const active = getActiveWallpaperState()
+    const resolved: { entry: WallpaperCollectionEntry; path: string | null }[] = []
+    for (const entry of entries) {
+      if (entry.kind === 'file') {
+        resolved.push({ entry, path: entry.ref })
+        continue
+      }
+      const known = wallpaperLinkStore.list().find((link) => link.url === entry.ref)
+      resolved.push({ entry, path: known?.cachedPath ?? null })
+    }
+    const currentIndex = resolved.findIndex((item) => item.path !== null && item.path === active.path)
+    let chosen: WallpaperCollectionEntry
+    if (mode === 'random') {
+      const candidates = resolved.filter((_, index) => index !== currentIndex)
+      const pool = candidates.length > 0 ? candidates : resolved
+      chosen = (pool[Math.floor(Math.random() * pool.length)] ?? pool[0]!).entry
+    } else if (mode === 'previous') {
+      chosen = resolved[currentIndex > 0 ? currentIndex - 1 : resolved.length - 1]!.entry
+    } else {
+      chosen = resolved[currentIndex >= 0 ? (currentIndex + 1) % resolved.length : 0]!.entry
+    }
+    return applyCollectionEntry(chosen)
+  }
+
+  const applyCollectionQueue = async (collectionId: string, mode: 'next' | 'random'): Promise<{ changed: boolean; name?: string; path?: string | undefined }> => {
+    await wallpaperLinkStore.initialize()
+    const collection = wallpaperLinkStore.findCollection(collectionId)
+    if (!collection) throw new Error('That collection no longer exists')
+    if (collection.entries.length === 0) throw new Error('This collection is empty — save some images into it first')
+    return applyFromEntries(collection.entries, mode)
+  }
+
+  /**
+   * The rotation pool: the union of the selected play sources. Sources are
+   * `folder:<path>` / `collection:<id>` refs; when none are selected the pool
+   * is every linked folder. Nothing linked means nothing plays — the library
+   * is only what the user linked, never an implicit default folder.
+   */
+  const buildRotationPool = async (settings: Record<string, unknown> | undefined): Promise<WallpaperCollectionEntry[]> => {
+    const folders = readLinkedFolders(settings)
+    const sources = readPlaySources(settings)
+    const folderRefs = sources.filter((ref) => ref.startsWith('folder:')).map((ref) => ref.slice('folder:'.length))
+    const collectionRefs = sources.filter((ref) => ref.startsWith('collection:')).map((ref) => ref.slice('collection:'.length))
+    const activeFolders = sources.length > 0 ? folderRefs : folders
+    const pool: WallpaperCollectionEntry[] = []
+    const addFolder = async (folder: string): Promise<void> => {
+      const items = await listWallpapersInFolder(folder)
+      for (const item of items) {
+        pool.push({ id: `pool-${item.path}`, kind: 'file', ref: item.path, title: item.filename, addedAt: 0 })
+      }
+    }
+    for (const folder of activeFolders) await addFolder(folder)
+    for (const id of collectionRefs) {
+      const collection = wallpaperLinkStore.findCollection(id)
+      if (collection) pool.push(...collection.entries)
+    }
+    const seen = new Set<string>()
+    return pool.filter((entry) => {
+      const key = `${entry.kind}:${entry.ref}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+  }
+
+  const applyRotationPool = async (mode: 'next' | 'random' | 'previous', settings?: Record<string, unknown> | undefined): Promise<{ changed: boolean; name?: string; path?: string | undefined }> => {
+    await wallpaperLinkStore.initialize()
+    const resolvedSettings = settings ?? await deps.state.activation(WALLPAPER_MANAGER_ID, { kind: 'personal' }).then((activation) => (activation?.settings ?? {}) as Record<string, unknown>)
+    const pool = await buildRotationPool(resolvedSettings)
+    return applyFromEntries(pool, mode)
+  }
+  applyWallpaperRotation = (mode) => applyRotationPool(mode)
+
+  // Play walks the pool: the Next/Shuffle/Prev buttons and the auto-rotate
+  // timer all draw from the same selected folders + collections.
+  host.register('os.wallpaper.next', async (_input, context) => applyRotationPool('next', context.settings as Record<string, unknown> | undefined))
+  host.register('os.wallpaper.previous', async (_input, context) => applyRotationPool('previous', context.settings as Record<string, unknown> | undefined))
+  host.register('os.wallpaper.random', async (_input, context) => applyRotationPool('random', context.settings as Record<string, unknown> | undefined))
+
+  host.register('os.wallpaper.folders.list', async (_input, context) => {
+    const settings = context.settings as Record<string, unknown> | undefined
+    const folders = await Promise.all(readLinkedFolders(settings).map(async (path) => ({
+      path,
+      count: (await listWallpapersInFolder(path)).length,
+    })))
+    return {
+      folders,
+      defaultFolder: resolveDefaultWallpaperFolder(),
+      sources: readPlaySources(settings),
+    }
+  })
+
+  host.register('os.wallpaper.folders.add', async (_input, context) => {
+    const result = await dialog.showOpenDialog(deps.window, {
+      title: 'Link wallpaper folder',
+      defaultPath: resolveDefaultWallpaperFolder(),
+      properties: ['openDirectory'],
+    })
+    if (result.canceled || result.filePaths.length !== 1) return { changed: false }
+    const selected = result.filePaths[0]!
+    const settings = context.settings as Record<string, unknown> | undefined
+    const folders = readLinkedFolders(settings)
+    if (!folders.includes(selected)) folders.push(selected)
+    await deps.state.setSetting(WALLPAPER_MANAGER_ID, context.context, 'folders', folders)
+    refreshWallpaperRotation?.()
+    return { changed: true, folder: selected, count: (await listWallpapersInFolder(selected)).length }
+  })
+
+  host.register('os.wallpaper.folders.remove', async (input, context) => {
+    const path = requiredText(input.path, 'Folder', 4096)
+    const settings = context.settings as Record<string, unknown> | undefined
+    const folders = readLinkedFolders(settings).filter((folder) => folder !== path)
+    await deps.state.setSetting(WALLPAPER_MANAGER_ID, context.context, 'folders', folders)
+    const before = readPlaySources(settings)
+    const sources = before.filter((ref) => ref !== `folder:${path}`)
+    if (sources.length !== before.length) {
+      await deps.state.setSetting(WALLPAPER_MANAGER_ID, context.context, 'playSources', sources)
+    }
+    refreshWallpaperRotation?.()
+    return { removed: true, folders, sources }
+  })
+
+  host.register('os.wallpaper.playSources.set', async (input, context) => {
+    await wallpaperLinkStore.initialize()
+    const settings = context.settings as Record<string, unknown> | undefined
+    const folders = readLinkedFolders(settings)
+    const requested = Array.isArray(input.sources)
+      ? input.sources.filter((value): value is string => typeof value === 'string').slice(0, 100)
+      : []
+    const valid: string[] = []
+    for (const ref of requested) {
+      if (ref.startsWith('folder:')) {
+        if (folders.includes(ref.slice('folder:'.length))) valid.push(ref)
+      } else if (ref.startsWith('collection:')) {
+        if (wallpaperLinkStore.findCollection(ref.slice('collection:'.length))) valid.push(ref)
+      }
+    }
+    await deps.state.setSetting(WALLPAPER_MANAGER_ID, context.context, 'playSources', valid)
+    refreshWallpaperRotation?.()
+    return { sources: valid }
+  })
+
+  host.register('os.wallpaper.collections.list', async (_input, context) => {
+    await wallpaperLinkStore.initialize()
+    const sources = readPlaySources(context.settings as Record<string, unknown> | undefined)
+    // The collections panel marks a collection "Rotating" when it is the solo play source.
+    const soloCollectionId = sources.length === 1 && sources[0]!.startsWith('collection:')
+      ? sources[0]!.slice('collection:'.length)
+      : ''
+    return {
+      collections: wallpaperLinkStore.listCollections(),
+      rotateCollectionId: soloCollectionId,
+    }
+  })
+
+  host.register('os.wallpaper.collections.create', async (input) => {
+    await wallpaperLinkStore.initialize()
+    const name = requiredText(input.name, 'Collection name', 80)
+    return { collection: await wallpaperLinkStore.createCollection(name) }
+  })
+
+  host.register('os.wallpaper.collections.delete', async (input) => {
+    await wallpaperLinkStore.initialize()
+    const id = requiredText(input.id, 'Collection', 100)
+    const result = await wallpaperLinkStore.deleteCollection(id)
+    // Deleting the rotating collection falls rotation back to the folder.
+    if (result.deleted) {
+      await deps.state.setSetting(WALLPAPER_MANAGER_ID, { kind: 'personal' }, 'rotateCollectionId', '')
+      refreshWallpaperRotation?.()
+    }
+    return result
+  })
+
+  /**
+   * Saves items into one or more collections in a single call. With
+   * `saveLink`, link items also land in My links (Discovery saves), keeping
+   * the curated title and cover thumb when the same link is known.
+   */
+  host.register('os.wallpaper.collections.add', async (input) => {
+    await wallpaperLinkStore.initialize()
+    const collectionIds = Array.isArray(input.collectionIds)
+      ? input.collectionIds.filter((value): value is string => typeof value === 'string').slice(0, 50)
+      : []
+    if (collectionIds.length === 0) throw new Error('Choose at least one collection')
+    const rawItems = Array.isArray(input.items) ? input.items.slice(0, 100) : []
+    const items: WallpaperCollectionItemInput[] = rawItems
+      .map((item) => {
+        const record = (item ?? {}) as Record<string, unknown>
+        return {
+          kind: record.kind === 'file' ? 'file' as const : 'link' as const,
+          ref: typeof record.ref === 'string' ? record.ref.trim() : '',
+          ...(typeof record.title === 'string' ? { title: record.title } : {}),
+        }
+      })
+      .filter((item) => item.ref)
+    if (items.length === 0) throw new Error('Nothing to save')
+    if (input.saveLink === true) {
+      for (const item of items.filter((item) => item.kind === 'link')) {
+        const known = await knownLinkForRef(item.ref)
+        await wallpaperLinkStore.add(item.ref, item.title ?? known?.title, undefined, known?.thumbUrl)
+      }
+    }
+    const results: Array<Record<string, unknown>> = []
+    for (const id of collectionIds) {
+      try {
+        const outcome = await wallpaperLinkStore.addToCollection(id, items)
+        results.push({ id, ok: true, added: outcome.added, skipped: outcome.skipped })
+      } catch (error) {
+        results.push({ id, ok: false, error: error instanceof Error ? error.message : String(error) })
+      }
+    }
+    return { results }
+  })
+
+  host.register('os.wallpaper.collections.removeEntry', async (input) => {
+    await wallpaperLinkStore.initialize()
+    const collectionId = requiredText(input.collectionId ?? input.id, 'Collection', 100)
+    const entryId = requiredText(input.entryId, 'Collection entry', 100)
+    return wallpaperLinkStore.removeFromCollection(collectionId, entryId)
+  })
+
+  host.register('os.wallpaper.collections.apply', async (input) => {
+    const entry = await collectionEntryFromInput(input)
+    return applyCollectionEntry(entry)
+  })
+
+  host.register('os.wallpaper.collections.next', async (input) => {
+    const collectionId = requiredText(input.id, 'Collection', 100)
+    return applyCollectionQueue(collectionId, 'next')
+  })
+
+  host.register('os.wallpaper.collections.random', async (input) => {
+    const collectionId = requiredText(input.id, 'Collection', 100)
+    return applyCollectionQueue(collectionId, 'random')
+  })
+
+  host.register('os.wallpaper.collections.rotate', async (input, context) => {
+    await wallpaperLinkStore.initialize()
+    const requested = typeof input.id === 'string' ? input.id.trim() : ''
+    if (requested && !wallpaperLinkStore.findCollection(requested)) {
+      throw new Error('That collection no longer exists')
+    }
+    const settings = context.settings as Record<string, unknown> | undefined
+    const current = readPlaySources(settings)
+    const ref = `collection:${requested}`
+    // Solo-plays that collection on the timer; toggling off returns rotation
+    // to the default (every linked folder).
+    const sources = requested
+      ? (current.includes(ref) ? current.filter((item) => item !== ref) : [ref])
+      : []
+    await deps.state.setSetting(WALLPAPER_MANAGER_ID, context.context, 'playSources', sources)
+    refreshWallpaperRotation?.()
+    return { sources }
+  })
+
+  host.register('os.wallpaper.collections.preview', async (input) => {
+    const entry = await collectionEntryFromInput(input)
+    let source: WallpaperEntry
+    let root: string
+    if (entry.kind === 'link') {
+      const known = await knownLinkForRef(entry.ref)
+      const link: WallpaperLink = known ?? { id: entry.id, url: parseWallpaperLinkUrl(entry.ref).toString(), title: entry.title, source: 'user', addedAt: 0 }
+      const ensured = await ensureLinkCached(link)
+      source = { filename: basename(ensured.cachedPath!), path: ensured.cachedPath!, size: ensured.cachedSize ?? 0, modifiedAt: ensured.cachedAt ?? 0 }
+      root = wallpaperCacheDir
+    } else {
+      const fileStat = await fs.stat(entry.ref)
+      source = { filename: basename(entry.ref), path: entry.ref, size: fileStat.size, modifiedAt: fileStat.mtimeMs }
+      root = dirname(entry.ref)
+    }
+    const [preview] = await readThumbnails(root, [source], PREVIEW_WIDTH)
+    const [thumbnail] = await readThumbnails(root, [source], GRID_THUMBNAIL_WIDTH)
+    if (!preview) throw new Error('Could not render the image')
+    return {
+      id: entry.id,
+      filename: entry.title,
+      path: entry.ref,
+      dataUrl: preview.dataUrl,
+      thumbnail: thumbnail?.dataUrl ?? preview.dataUrl,
+      width: preview.sourceWidth,
+      height: preview.sourceHeight,
+      size: source.size,
+      modifiedAt: source.modifiedAt,
+    }
+  })
+
+  host.register('os.wallpaper.collections.thumbnails', async (input) => {
+    if (!thumbnailCache) throw new Error('The nd-core sidecar is required to render wallpaper thumbnails')
+    await wallpaperLinkStore.initialize()
+    const collectionId = requiredText(input?.id, 'Collection', 100)
+    const ids = readThumbnailIds(input?.ids)
+    const collection = wallpaperLinkStore.findCollection(collectionId)
+    if (!collection || ids.length === 0) return { thumbnails: [] }
+    const byEntryId = new Map(collection.entries.map((entry) => [entry.id, entry]))
+    const linkEntries: WallpaperLink[] = []
+    const fileGroups = new Map<string, { entry: WallpaperCollectionEntry; source: WallpaperEntry }[]>()
+    for (const id of ids) {
+      const entry = byEntryId.get(id)
+      if (!entry) continue
+      if (entry.kind === 'link') {
+        const known = await knownLinkForRef(entry.ref)
+        linkEntries.push(known ? { ...known, id: entry.id } : { id: entry.id, url: entry.ref, title: entry.title, source: 'user', addedAt: 0 })
+        continue
+      }
+      try {
+        const fileStat = await fs.stat(entry.ref)
+        const root = dirname(entry.ref)
+        const group = fileGroups.get(root) ?? []
+        group.push({ entry, source: { filename: basename(entry.ref), path: entry.ref, size: fileStat.size, modifiedAt: fileStat.mtimeMs } })
+        fileGroups.set(root, group)
+      } catch {
+        // File moved or deleted; the card keeps its placeholder until removed.
+      }
+    }
+    const results = new Map<string, CachedThumbnail>()
+    for (const [id, thumbnail] of await readLinkThumbnails(linkEntries)) results.set(id, thumbnail)
+    for (const [root, group] of fileGroups) {
+      const found = await thumbnailCache.get(root, group.map((item) => item.source), GRID_THUMBNAIL_WIDTH)
+      for (const item of group) {
+        const thumbnail = found.get(item.source.path)
+        if (thumbnail) results.set(item.entry.id, thumbnail)
+      }
+    }
+    return {
+      thumbnails: [...results].map(([id, thumbnail]) => ({
+        id,
+        path: thumbnail.path,
+        dataUrl: thumbnail.dataUrl,
+        width: thumbnail.width,
+        height: thumbnail.height,
+      })),
+    }
+  })
+
+  host.register('os.wallpaper.links.preview', async (input) => {
+    await wallpaperLinkStore.initialize()
+    const id = requiredText(input.id, 'Link selection', 200)
+    const link = await findLink(id, typeof input.source === 'string' ? input.source : 'user')
+    if (!link) throw new Error('That wallpaper link no longer exists')
+    const ensured = await ensureLinkCached(link)
+    const root = wallpaperCacheDir
+    const source: WallpaperEntry = {
+      filename: basename(ensured.cachedPath!),
+      path: ensured.cachedPath!,
+      size: ensured.cachedSize ?? 0,
+      modifiedAt: ensured.cachedAt ?? 0,
+    }
+    const [preview] = await readThumbnails(root, [source], PREVIEW_WIDTH)
+    const [thumbnail] = await readThumbnails(root, [source], GRID_THUMBNAIL_WIDTH)
+    if (!preview) throw new Error('Could not render the linked image')
+    return {
+      id: link.id,
+      filename: link.title,
+      path: link.url,
+      dataUrl: preview.dataUrl,
+      thumbnail: thumbnail?.dataUrl ?? preview.dataUrl,
+      width: preview.sourceWidth,
+      height: preview.sourceHeight,
+      size: ensured.cachedSize ?? 0,
+      modifiedAt: ensured.cachedAt ?? 0,
+      source: link.source,
+    }
+  })
+
+  host.register('os.wallpaper.links.thumbnails', async (input) => {
+    await wallpaperLinkStore.initialize()
+    const ids = readThumbnailIds(input?.ids)
+    if (ids.length === 0) return { thumbnails: [] }
+    const byId = new Map(wallpaperLinkStore.list().filter((link) => ids.includes(link.id)).map((link) => [link.id, link]))
+    const bundleById = new Map((await bundledLinksOnce()).filter((link) => ids.includes(link.id)).map((link) => [link.id, link]))
+    const wanted: WallpaperLink[] = []
+    for (const id of ids) {
+      const link = byId.get(id) ?? bundleById.get(id)
+      if (link) wanted.push(link)
+    }
+    const found = await readLinkThumbnails(wanted.filter(Boolean))
+    return {
+      thumbnails: [...found].map(([id, thumbnail]) => ({
+        id,
+        path: thumbnail.path,
+        dataUrl: thumbnail.dataUrl,
+        width: thumbnail.width,
+        height: thumbnail.height,
+      })),
+    }
+  })
+
+  host.register('os.wallpaper.links.import', async () => {
+    await wallpaperLinkStore.initialize()
+    const result = await dialog.showOpenDialog(deps.window, {
+      title: 'Import wallpaper links',
+      properties: ['openFile'],
+      filters: [{ name: 'Wallpaper links (JSON)', extensions: ['json'] }],
+    })
+    if (result.canceled || result.filePaths.length !== 1) return { imported: false, added: 0, skipped: 0 }
+    const raw = await fs.readFile(result.filePaths[0]!, 'utf8')
+    const bundle = parseWallpaperLinksBundle(JSON.parse(raw))
+    const summary = await wallpaperLinkStore.importLinks(bundle.links)
+    return { imported: true, name: bundle.name, ...summary }
+  })
+
+  host.register('os.wallpaper.links.export', async () => {
+    await wallpaperLinkStore.initialize()
+    const payload = wallpaperLinkStore.exportBundle()
+    if (payload.links.length === 0) throw new Error('There are no saved links to export yet')
+    const result = await dialog.showSaveDialog(deps.window, {
+      title: 'Export wallpaper links',
+      defaultPath: 'nd-wallpaper-links.json',
+      filters: [{ name: 'Wallpaper links (JSON)', extensions: ['json'] }],
+    })
+    if (result.canceled || !result.filePath) return { saved: false }
+    await fs.writeFile(result.filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8')
+    return { saved: true, path: result.filePath, count: payload.links.length }
+  })
+
   host.register('note.create', async (input, context) => {
     const text = requiredText(input.text, 'Note text', 64_000)
     const tags = Array.isArray(input.tags) ? input.tags.filter((tag): tag is string => typeof tag === 'string') : []
@@ -622,40 +1324,6 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void 
     return { changed: true, path: target, platform: process.platform }
   })
 
-  host.register('os.wallpaper.next', async (_input, context) => {
-    const folder = typeof context.settings?.folder === 'string' && context.settings.folder ? context.settings.folder : undefined
-    const result = await cycleWallpaper({ folder, mode: 'next', apply: applyWallpaper })
-    return { changed: result.changed, name: result.name, path: result.path }
-  })
-
-  host.register('os.wallpaper.previous', async (_input, context) => {
-    const folder = typeof context.settings?.folder === 'string' && context.settings.folder ? context.settings.folder : undefined
-    const result = await cycleWallpaper({ folder, mode: 'previous', apply: applyWallpaper })
-    return { changed: result.changed, name: result.name, path: result.path }
-  })
-
-  host.register('os.wallpaper.random', async (_input, context) => {
-    const folder = typeof context.settings?.folder === 'string' && context.settings.folder ? context.settings.folder : undefined
-    const result = await cycleWallpaper({ folder, mode: 'random', apply: applyWallpaper })
-    return { changed: result.changed, name: result.name, path: result.path }
-  })
-
-  host.register('os.wallpaper.setFolder', async (_input, context) => {
-    const defaultPath = typeof context.settings?.folder === 'string' && context.settings.folder.trim()
-      ? context.settings.folder.trim()
-      : resolveDefaultWallpaperFolder()
-    const result = await dialog.showOpenDialog(deps.window, {
-      title: 'Choose wallpaper folder',
-      defaultPath,
-      properties: ['openDirectory'],
-    })
-    if (result.canceled || result.filePaths.length !== 1) return { changed: false }
-    const selected = result.filePaths[0]!
-    await deps.state.setSetting(WALLPAPER_MANAGER_ID, context.context, 'folder', selected)
-    const items = await listWallpapersInFolder(selected)
-    return { changed: true, folder: selected, count: items.length }
-  })
-
   host.register('os.wallpaper.applySelected', async (input, context) => {
     const filename = requiredText(input.id ?? input.filename ?? input.path, 'Wallpaper file', 4096)
     const folder = normalizeWallpaperPath(typeof input?.folder === 'string' ? input.folder : undefined)
@@ -707,6 +1375,8 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void 
   host.register('os.wallpaper.status', async (input, context) => {
     const inputFolder = normalizeWallpaperPath(typeof input?.folder === 'string' ? input.folder : undefined)
     const settingFolder = normalizeWallpaperPath(typeof context.settings?.folder === 'string' ? context.settings.folder : undefined)
+      || readLinkedFolders(context.settings)[0]
+      || undefined
     const folder = inputFolder || settingFolder || undefined
     const items = await listWallpapersInFolder(folder)
     const active = getActiveWallpaperState()
@@ -730,6 +1400,8 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void 
     if (ids.length === 0) return { thumbnails: [] }
     const inputFolder = normalizeWallpaperPath(typeof input?.folder === 'string' ? input.folder : undefined)
     const settingFolder = normalizeWallpaperPath(typeof context.settings?.folder === 'string' ? context.settings.folder : undefined)
+      || readLinkedFolders(context.settings)[0]
+      || undefined
     const folder = inputFolder || settingFolder || undefined
     const root = await resolveWallpaperFolder(folder)
     const items = await listWallpapersInFolder(folder)
@@ -913,6 +1585,8 @@ function shortId(value: unknown, label: string): string {
 }
 
 const GRID_THUMBNAIL_WIDTH = 240
+/** Bound for Discovery cover thumbs, which are small preview images, not wallpapers. */
+const WALLPAPER_THUMB_MAX_BYTES = 8 * 1024 * 1024
 const PREVIEW_WIDTH = 1920
 /** One screenful at a time, matching the sidecar's own per-batch bound. */
 const MAX_THUMBNAIL_IDS = 64

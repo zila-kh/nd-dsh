@@ -143,12 +143,25 @@ and in the product.
 | `browser.translate.history` / `browser.translate.history.clear` | `translate.history` | Read or clear translation history |
 | `os.openTarget` | `os.launch` | Pick and open an app, file, or folder (user selection only; no shell strings) |
 | `os.wallpaper.chooseAndSet` | `os.wallpaper.write` | Pick an image in an ND-owned native dialog and set it as the host desktop wallpaper; Personal only |
-| `os.wallpaper.next` / `os.wallpaper.previous` / `os.wallpaper.random` | `os.wallpaper.write` | Cycle the library forward, backward, or randomly; Personal only, sensitive |
+| `os.wallpaper.folders.list` / `add` / `remove` | `os.wallpaper.write` | Manage the linked wallpaper folders (multiple allowed; legacy single-folder setting is honored); Personal only |
+| `os.wallpaper.playSources.set` | `os.wallpaper.write` | Choose what rotation plays: any mix of linked folders and collections (`folder:<path>` / `collection:<id>` refs); empty plays every linked folder; Personal only |
+| `os.wallpaper.next` / `os.wallpaper.previous` / `os.wallpaper.random` | `os.wallpaper.write` | Play the rotation pool — the selected folders and collections — forward, backward, or randomly; Personal only, sensitive |
 | `os.wallpaper.applySelected` | `os.wallpaper.write` | Apply the currently previewed selection; Personal only, sensitive |
 | `os.wallpaper.preview` | `os.wallpaper.write` | Preview a library image without applying it; Personal only |
-| `os.wallpaper.setFolder` | `os.wallpaper.write` | Choose the library folder in an ND-owned dialog; Personal only |
 | `os.wallpaper.status` | `os.wallpaper.write` | Read the current wallpaper and library state; Personal only |
 | `os.wallpaper.thumbnails` | `os.wallpaper.write` | Render library thumbnails for the rows currently on screen. Decoding runs in the nd-core sidecar, never in the desktop main process; Personal only |
+| `os.wallpaper.links.list` | `os.wallpaper.write` | List the user's saved remote image links and the read-only ND-curated bundle; Personal only |
+| `os.wallpaper.links.add` / `os.wallpaper.links.remove` | `os.wallpaper.write` | Save or remove a remote image link. Adding downloads the image first so only real, supported images are saved; Personal only |
+| `os.wallpaper.links.apply` | `os.wallpaper.write` | Download (if needed) a linked image into the local cache and set it as the desktop wallpaper; Personal only, sensitive |
+| `os.wallpaper.links.save` | `os.wallpaper.write` | Copy a curated bundle link into the user's own list without changing the wallpaper; Personal only |
+| `os.wallpaper.links.next` / `os.wallpaper.links.random` | `os.wallpaper.write` | Play through the user's saved links in order or randomly, downloading missing images on the way; Personal only, sensitive |
+| `os.wallpaper.collections.list` / `create` / `delete` | `os.wallpaper.write` | Manage named wallpaper collections (mixes of saved links and local folder images); Personal only |
+| `os.wallpaper.collections.add` / `removeEntry` | `os.wallpaper.write` | Save images into one or more collections, or remove an entry; link refs must be valid https URLs, file refs absolute paths to supported images; Personal only |
+| `os.wallpaper.collections.apply` / `next` / `random` | `os.wallpaper.write` | Play a collection: apply a specific entry, or walk it in order / randomly; Personal only, sensitive |
+| `os.wallpaper.collections.rotate` | `os.wallpaper.write` | Solo a collection as the play source for rotation (toggling off returns to every linked folder); Personal only |
+| `os.wallpaper.collections.preview` / `thumbnails` | `os.wallpaper.write` | Preview or thumbnail collection entries; decoding runs in the nd-core sidecar; Personal only |
+| `os.wallpaper.links.preview` / `os.wallpaper.links.thumbnails` | `os.wallpaper.write` | Preview or thumbnail a linked image from the local cache; Personal only |
+| `os.wallpaper.links.import` / `os.wallpaper.links.export` | `os.wallpaper.write` | Merge a wallpaper-links JSON bundle into the user's list, or export the user's links in the same bundle format; Personal only |
 | `process.list` | `process.read` | List running processes in Personal with CPU and memory |
 | `process.quit` / `process.forceQuit` | `process.quit` | Quit a selected process from a fresh ND-issued list handle; ND confirms each action and protects its own processes; Personal only |
 | `chat.ask` | `chat.start` | Start an ND chat/agent turn from typed text |

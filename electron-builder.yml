@@ -65,6 +65,8 @@ extraResources:
     to: browser-extensions
   - from: resources/nd-pencil
     to: nd-pencil
+  - from: resources/nd-bundles
+    to: nd-bundles
   - from: LICENSE
     to: LICENSE.nd-dsh
 

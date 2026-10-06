@@ -1012,7 +1012,7 @@ export default function App() {
       case 'os.wallpaper.applySelected':
         if (result.changed) notify(typeof result.name === 'string' ? `Wallpaper changed to ${result.name}.` : 'Desktop wallpaper updated.')
         return
-      case 'os.wallpaper.setFolder':
+      case 'os.wallpaper.folders.add':
         if (result.changed) notify(typeof result.folder === 'string' ? `Wallpaper folder set to ${String(result.folder)}.` : 'Wallpaper folder updated.')
         return
       case 'browser.openExternal':

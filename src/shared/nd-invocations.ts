@@ -255,6 +255,11 @@ export interface NdExtensionsDesktopApi {
   installLocal(): Promise<NdExtensionsStateView | null>
   installFromPath(path: string): Promise<NdExtensionsStateView>
   installAvailable(extensionId: string): Promise<NdExtensionsStateView>
+  /**
+   * Builds the extension starter kit (a complete, installable sample package)
+   * and saves it as a ZIP through a native save dialog. Null when cancelled.
+   */
+  exportStarterKit(): Promise<{ saved: boolean; path?: string } | null>
   update(extensionId: string, sourcePath?: string): Promise<NdExtensionsStateView>
   rollback(extensionId: string): Promise<NdExtensionsStateView>
   uninstall(extensionId: string): Promise<NdExtensionsStateView>
@@ -293,6 +298,7 @@ export const ND_EXTENSIONS_IPC = {
   installLocal: 'nd-ext:install-local',
   installFromPath: 'nd-ext:install-path',
   installAvailable: 'nd-ext:install-available',
+  exportStarterKit: 'nd-ext:export-starter-kit',
   update: 'nd-ext:update',
   rollback: 'nd-ext:rollback',
   uninstall: 'nd-ext:uninstall',

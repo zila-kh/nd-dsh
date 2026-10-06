@@ -33,7 +33,7 @@ beforeEach(async () => {
   host = new NativeHostRegistry()
   calls = []
   policyEffect = 'allow'
-  for (const method of ['note.create', 'note.search', 'capture.screen', 'clipboard.read', 'workflow.list', 'os.wallpaper.chooseAndSet', 'os.wallpaper.next', 'os.wallpaper.previous', 'os.wallpaper.random', 'os.wallpaper.setFolder', 'os.wallpaper.status', 'os.wallpaper.preview', 'os.wallpaper.applySelected'] as const) {
+  for (const method of ['note.create', 'note.search', 'capture.screen', 'clipboard.read', 'workflow.list', 'os.wallpaper.chooseAndSet', 'os.wallpaper.next', 'os.wallpaper.previous', 'os.wallpaper.random', 'os.wallpaper.folders.add', 'os.wallpaper.status', 'os.wallpaper.preview', 'os.wallpaper.applySelected'] as const) {
     host.register(method, async (input, context) => {
       calls.push({ host: method, input, contextKey: context.context.kind })
       if (method === 'os.wallpaper.status') {
@@ -158,7 +158,7 @@ describe('InvocationBroker authorization', () => {
       input: {},
     })
     expect(setFolder.ok).toBe(true)
-    expect(calls.at(-1)?.host).toBe('os.wallpaper.setFolder')
+    expect(calls.at(-1)?.host).toBe('os.wallpaper.folders.add')
 
     const previous = await broker.invoke({
       extensionId: WALLPAPER_MANAGER_MANIFEST.id,

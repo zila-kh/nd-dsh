@@ -10,7 +10,7 @@ inject renderer code.
 
 | I want to… | Go to |
 | --- | --- |
-| Build my first extension | [`examples/nd-extension-hello`](../../examples/nd-extension-hello) — copy it, validate it, install it |
+| Build my first extension | **Download the starter ZIP** from the in-app guide (Extensions → Extension developer guide), or copy [`examples/nd-extension-hello`](../../examples/nd-extension-hello) |
 | Read the full contract | [`authoring.md`](authoring.md) |
 | Autocomplete my manifest | [`schema/nd-extension.schema.json`](../../schema/nd-extension.schema.json) |
 | See every host method and permission | `ND_HOST_METHODS` in [`src/shared/extension-package.ts`](../../src/shared/extension-package.ts) |

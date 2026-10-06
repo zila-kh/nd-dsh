@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { BookOpen, Check, ChevronLeft, ChevronRight, Download, ExternalLink, Eye, FolderOpen, Image, Languages, Layers, ListChecks, Package, PanelsTopLeft, Power, Puzzle, RefreshCw, Search, Settings2, ShieldCheck, Shuffle, SkipBack, SkipForward, Sparkles, SquareTerminal, Undo2, Workflow } from 'lucide-react'
+import { BookOpen, Check, ChevronLeft, ChevronRight, Download, ExternalLink, Eye, FolderOpen, FolderPlus, Image, Languages, Layers, Link2, ListChecks, MonitorPlay, Package, PanelsTopLeft, Plus, Power, Puzzle, RefreshCw, Repeat, Search, Settings2, ShieldCheck, Shuffle, SkipBack, SkipForward, Sparkles, SquareTerminal, Trash2, Undo2, Upload, Workflow } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { cn } from '../lib/utils'
 import type { NdContext } from '../../../shared/nd-context'
@@ -11,6 +11,7 @@ import type {
   NdViewData,
   NdViewRow,
 } from '../../../shared/nd-invocations'
+import type { WallpaperCollection, WallpaperCollectionEntryKind, WallpaperLink } from '../../../shared/wallpaper-links'
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog'
@@ -969,7 +970,7 @@ function PackageRow({
                                     contributionKind: 'view',
                                     context: effectiveContext,
                                     caller: 'user',
-                                    input: { action: 'set-folder' },
+                                    input: { action: 'folders-add' },
                                   })
                                   if (result.ok && result.value && typeof (result.value as { folder?: unknown }).folder === 'string') {
                                     const chosen = (result.value as { folder: string }).folder
@@ -1299,6 +1300,7 @@ const THUMBNAIL_FLUSH_MS = 60
  */
 function useLazyWallpaperThumbnails(
   target: { extensionId: string; viewId: string; context: NdContext } | null,
+  channel?: { actionId?: string; folder?: string | null | undefined; extra?: Record<string, unknown> | undefined } | undefined,
 ): { thumbs: Record<string, string>; queueThumbnail(id: string): void } {
   const [thumbs, setThumbs] = useState<Record<string, string>>({})
   const thumbsRef = useRef<Record<string, string>>({})
@@ -1307,6 +1309,8 @@ function useLazyWallpaperThumbnails(
   const flushHandle = useRef<number | null>(null)
   const targetRef = useRef(target)
   targetRef.current = target
+  const channelRef = useRef(channel)
+  channelRef.current = channel
 
   const scheduleFlush = (): void => {
     if (flushHandle.current !== null) return
@@ -1324,13 +1328,19 @@ function useLazyWallpaperThumbnails(
     queued.current.clear()
     inFlight.current = true
     try {
+      const folder = channelRef.current?.folder
       const result = await window.ndDsh.ndExtensions.invoke({
         extensionId: current.extensionId,
         contributionId: current.viewId,
         contributionKind: 'view',
         context: current.context,
         caller: 'user',
-        input: { action: 'thumbnails', ids },
+        input: {
+          action: channelRef.current?.actionId ?? 'thumbnails',
+          ids,
+          ...(folder ? { folder } : {}),
+          ...(channelRef.current?.extra ?? {}),
+        },
       })
       const fetched = result.ok && result.value && typeof result.value === 'object'
         ? (result.value as { thumbnails?: Array<{ id?: unknown; dataUrl?: unknown }> }).thumbnails
@@ -1357,12 +1367,14 @@ function useLazyWallpaperThumbnails(
     scheduleFlush()
   }
 
-  // Switching library or context invalidates every id seen so far.
+  // Switching library, context, source folder, or collection invalidates every
+  // id seen so far; the same filename can exist in two folders with different
+  // images.
   useEffect(() => {
     thumbsRef.current = {}
     queued.current.clear()
     setThumbs({})
-  }, [target])
+  }, [target, channel?.folder, (channel?.extra as { id?: string } | undefined)?.id])
 
   useEffect(() => () => {
     if (flushHandle.current !== null) {
@@ -1429,6 +1441,267 @@ function LazyWallpaperThumb({ id, alt, dataUrl, onVisible, imgClassName, iconCla
   )
 }
 
+/**
+ * The wallpaper card grid shared by the play-folder library and Discovery's
+ * setup-folder listing. Images decode lazily: each cell reports itself through
+ * `queueThumbnail` the first time it scrolls near the viewport.
+ */
+function WallpaperLibraryGrid({ rows, thumbs, queueThumbnail, busy, onPreview, onApply, onCollect }: {
+  rows: NdViewRow[]
+  thumbs: Record<string, string>
+  queueThumbnail(id: string): void
+  busy: boolean
+  onPreview(row: NdViewRow): void
+  onApply(row: NdViewRow): void
+  onCollect?(row: NdViewRow): void
+}): React.ReactNode {
+  return (
+    <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 md:grid-cols-3 max-h-[440px] overflow-y-auto pr-1">
+      {rows.map((row) => {
+        const isActive = row.meta === 'Active'
+        return (
+          <div
+            key={row.id}
+            className={cn(
+              "group/card relative flex flex-col justify-between rounded-lg border p-3 transition-colors",
+              isActive
+                ? "border-primary/60 bg-primary/10 shadow-sm ring-1 ring-primary/40"
+                : "border-border-soft bg-surface-0/50 hover:bg-surface-0/80"
+            )}
+          >
+            <div
+              className="group/thumb relative mb-2.5 h-28 w-full cursor-pointer overflow-hidden rounded-md border border-border-soft bg-surface-2/60 transition-colors hover:border-primary/50"
+              onClick={() => onPreview(row)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPreview(row) } }}
+              title={`Preview ${row.title}`}
+            >
+              <LazyWallpaperThumb
+                id={row.id}
+                alt={row.title}
+                dataUrl={thumbs[row.id] ?? row.thumbnail}
+                onVisible={queueThumbnail}
+              />
+              <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover/thumb:opacity-100">
+                <span className="flex items-center gap-1 rounded bg-black/75 px-2 py-1 text-[11px] font-medium text-white shadow">
+                  <Eye className="size-3.5" /> Preview
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-start justify-between gap-2 min-w-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className={cn(
+                  "flex size-6 shrink-0 items-center justify-center rounded",
+                  isActive ? "bg-primary text-primary-foreground" : "bg-surface-2 text-foreground/80"
+                )}>
+                  <Image className="size-3.5" />
+                </div>
+                <div className="min-w-0">
+                  <span className="block truncate text-xs font-medium text-foreground" title={row.title}>
+                    {row.title}
+                  </span>
+                  {row.body ? (
+                    <span className="block truncate text-[10px] text-faint" title={row.body}>
+                      {row.body}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+              {row.meta ? (
+                <Badge variant={isActive ? "default" : "outline"} className="text-[10px] shrink-0">
+                  {row.meta}
+                </Badge>
+              ) : null}
+            </div>
+
+            <div className="mt-3 flex items-center justify-between border-t border-border-soft/60 pt-2">
+              <span className="text-[10px] text-faint">
+                {isActive ? 'Active wallpaper' : 'Available'}
+              </span>
+              <div className="flex items-center gap-1.5">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 text-[11px] px-2"
+                  disabled={busy}
+                  onClick={() => onPreview(row)}
+                  title="Preview wallpaper"
+                >
+                  <Eye className="mr-1 size-3" /> Preview
+                </Button>
+                {onCollect ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 w-6 p-0 text-faint hover:text-primary"
+                    disabled={busy}
+                    onClick={() => onCollect(row)}
+                    title="Save to collections"
+                  >
+                    <FolderPlus className="size-3.5" />
+                  </Button>
+                ) : null}
+                <Button
+                  size="sm"
+                  variant={isActive ? "secondary" : "outline"}
+                  className="h-6 text-[11px] px-2.5"
+                  disabled={busy || isActive}
+                  onClick={() => onApply(row)}
+                >
+                  {isActive ? 'Active' : 'Apply'}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/**
+ * Discovery's remote-link cards. Rows carry the link source in `path`
+ * (`user` or `bundle`); bundle rows are read-only and save into My links
+ * instead of applying — collecting from Discovery never touches the desktop.
+ */
+function WallpaperLinksGrid({ rows, thumbs, queueThumbnail, busy, onPreview, onApply, onRemove, onSave, savedUrls, onCollect }: {
+  rows: NdViewRow[]
+  thumbs: Record<string, string>
+  queueThumbnail(id: string): void
+  busy: boolean
+  onPreview(row: NdViewRow): void
+  onApply(row: NdViewRow): void
+  onRemove(row: NdViewRow): void
+  /** When present, the primary action saves to My links instead of applying. */
+  onSave?(row: NdViewRow): void
+  savedUrls?: Set<string>
+  /** When present, cards get a "save to collections" affordance. */
+  onCollect?(row: NdViewRow): void
+}): React.ReactNode {
+  return (
+    <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 md:grid-cols-3 max-h-[400px] overflow-y-auto pr-1">
+      {rows.map((row) => {
+        const isActive = row.meta === 'Active'
+        const isBundle = row.path === 'bundle'
+        const isSaved = onSave ? (savedUrls?.has(row.body ?? '') ?? false) : false
+        return (
+          <div
+            key={row.id}
+            className={cn(
+              "group/card relative flex flex-col justify-between rounded-lg border p-3 transition-colors",
+              isActive
+                ? "border-primary/60 bg-primary/10 shadow-sm ring-1 ring-primary/40"
+                : "border-border-soft bg-surface-0/50 hover:bg-surface-0/80"
+            )}
+          >
+            <div
+              className="group/thumb relative mb-2.5 h-28 w-full cursor-pointer overflow-hidden rounded-md border border-border-soft bg-surface-2/60 transition-colors hover:border-primary/50"
+              onClick={() => onPreview(row)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPreview(row) } }}
+              title={`Preview ${row.title}`}
+            >
+              <LazyWallpaperThumb
+                id={row.id}
+                alt={row.title}
+                dataUrl={thumbs[row.id] ?? row.thumbnail}
+                onVisible={queueThumbnail}
+              />
+              <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover/thumb:opacity-100">
+                <span className="flex items-center gap-1 rounded bg-black/75 px-2 py-1 text-[11px] font-medium text-white shadow">
+                  <Eye className="size-3.5" /> Preview
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-start justify-between gap-2 min-w-0">
+              <div className="min-w-0">
+                <span className="block truncate text-xs font-medium text-foreground" title={row.title}>
+                  {row.title}
+                </span>
+                <span className="block truncate text-[10px] text-faint font-mono" title={row.body}>
+                  {row.body}
+                </span>
+              </div>
+              <Badge variant="outline" className={cn("text-[10px] shrink-0", isBundle && "border-violet-500/30 text-violet-500")}>
+                {isBundle ? 'ND' : row.path === 'file' ? 'File' : 'Yours'}
+              </Badge>
+            </div>
+
+            <div className="mt-3 flex items-center justify-between border-t border-border-soft/60 pt-2">
+              <span className="text-[10px] text-faint" title={isActive ? undefined : onSave ? 'Saved links live in My links; apply them from there' : 'Applying downloads the image to your wallpaper cache first'}>
+                {isActive ? 'Active wallpaper' : isBundle ? 'Curated by ND' : 'Saved by you'}
+              </span>
+              <div className="flex items-center gap-1.5">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 text-[11px] px-2"
+                  disabled={busy}
+                  onClick={() => onPreview(row)}
+                  title="Preview linked image"
+                >
+                  <Eye className="mr-1 size-3" /> Preview
+                </Button>
+                {onSave ? (
+                  <Button
+                    size="sm"
+                    variant={isSaved ? "secondary" : "outline"}
+                    className="h-6 text-[11px] px-2.5"
+                    disabled={busy || isSaved}
+                    onClick={() => onSave(row)}
+                    title={isSaved ? 'Already in My links' : 'Add this link to My links without changing your wallpaper'}
+                  >
+                    {isSaved ? <><Check className="mr-1 size-3" /> Saved</> : <><Plus className="mr-1 size-3" /> Save</>}
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant={isActive ? "secondary" : "outline"}
+                    className="h-6 text-[11px] px-2.5"
+                    disabled={busy || isActive}
+                    onClick={() => onApply(row)}
+                    title={isActive ? undefined : 'Download (if needed) and set as wallpaper'}
+                  >
+                    {isActive ? 'Active' : 'Apply'}
+                  </Button>
+                )}
+                {onCollect ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 w-6 p-0 text-faint hover:text-primary"
+                    disabled={busy}
+                    onClick={() => onCollect(row)}
+                    title="Save to collections"
+                  >
+                    <FolderPlus className="size-3.5" />
+                  </Button>
+                ) : null}
+                {!isBundle ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 w-6 p-0 text-faint hover:text-destructive"
+                    disabled={busy}
+                    onClick={() => onRemove(row)}
+                    title="Remove this link"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function ExtensionViewDialog({
   target,
   organization,
@@ -1456,10 +1729,46 @@ function ExtensionViewDialog({
   const [busy, setBusy] = useState(false)
   const [query, setQuery] = useState('')
   const [sortBy, setSortBy] = useState('name')
+  // Wallpaper Studio surfaces. `studioTab` splits Library / Now playing; the
+  // Library holds every source as a sub-tab (play folder, setup folder, links,
+  // collections, bundle). `previewSource` says which row list an open preview
+  // belongs to, so the overlay and its apply button reach the right host.
+  const [studioTab, setStudioTab] = useState<'library' | 'now'>('library')
+  const [discoveryTab, setDiscoveryTab] = useState<'folders' | 'links' | 'collections' | 'bundle'>('folders')
+  const [previewSource, setPreviewSource] = useState<'library' | 'setup' | 'links' | 'collection'>('library')
+  const [linksData, setLinksData] = useState<{ user: WallpaperLink[]; bundle: WallpaperLink[]; defaultFolder: string | null } | null>(null)
+  // Folders source: linked folders + the system Pictures default, with the
+  // play-source multi-select that decides what rotation draws from.
+  const [foldersData, setFoldersData] = useState<{ folders: { path: string; count: number }[]; defaultFolder: string; sources: string[] } | null>(null)
+  // Which source the Folders grid browses: a linked folder (path) or a
+  // collection (id) — exactly the things "Play from" can select, so an active
+  // play source is always visible right here.
+  const [activeFolder, setActiveFolder] = useState<string | null>(null)
+  const [browseCollectionId, setBrowseCollectionId] = useState<string | null>(null)
+  const [folderRows, setFolderRows] = useState<NdViewRow[] | null>(null)
+  const [folderRowsFor, setFolderRowsFor] = useState<string | null>(null)
+  const [folderQuery, setFolderQuery] = useState('')
+  const [addUrl, setAddUrl] = useState('')
+  const [addLinkBusy, setAddLinkBusy] = useState(false)
+  const [nowDetail, setNowDetail] = useState<WallpaperPreviewDetail | null>(null)
+  const [nowLoading, setNowLoading] = useState(false)
+  // Collections: named playable sets, plus the "save to collections" picker
+  // that every image card can open.
+  const [collectionsData, setCollectionsData] = useState<{ collections: WallpaperCollection[]; rotateCollectionId: string } | null>(null)
+  const [selectedCollectionId, setSelectedCollectionId] = useState<string | null>(null)
+  const [picker, setPicker] = useState<{ item: { kind: WallpaperCollectionEntryKind; ref: string; title: string }; saveLink: boolean } | null>(null)
+  const [pickerChecked, setPickerChecked] = useState<Set<string>>(new Set())
+  const [pickerNewName, setPickerNewName] = useState('')
+  const [pickerBusy, setPickerBusy] = useState(false)
+  const [newCollectionName, setNewCollectionName] = useState('')
+  const [createCollectionBusy, setCreateCollectionBusy] = useState(false)
   // Thumbnails are fetched for rows that actually scroll into view instead of
   // arriving inside the view payload: a 4K library decoded eagerly in the main
   // process froze the whole app for seconds on every open.
   const { thumbs, queueThumbnail } = useLazyWallpaperThumbnails(target)
+  const { thumbs: folderThumbs, queueThumbnail: queueFolderThumbnail } = useLazyWallpaperThumbnails(target, { folder: activeFolder ?? undefined })
+  const { thumbs: linkThumbs, queueThumbnail: queueLinkThumbnail } = useLazyWallpaperThumbnails(target, { actionId: 'links-thumbnails' })
+  const { thumbs: collectionThumbs, queueThumbnail: queueCollectionThumbnail } = useLazyWallpaperThumbnails(target, { actionId: 'collections-thumbnails', extra: { id: selectedCollectionId ?? '' } })
   const targetGeneration = useRef({ target, revision: 0 })
   if (targetGeneration.current.target !== target) {
     targetGeneration.current = { target, revision: targetGeneration.current.revision + 1 }
@@ -1471,6 +1780,7 @@ function ExtensionViewDialog({
     setPreviewDetail(null)
     onClose()
   }
+
   useEffect(() => () => { targetGeneration.current.revision += 1 }, [])
   const targetKey = target ? `${target.extensionId}:${target.viewId}:${contextKey(target.context)}` : null
   const currentData = target && data && loadedTarget === targetKey
@@ -1489,6 +1799,23 @@ function ExtensionViewDialog({
     setSelected(null)
     setPreviewItem(null)
     setPreviewDetail(null)
+    setStudioTab('library')
+    setDiscoveryTab('folders')
+    setPreviewSource('library')
+    setLinksData(null)
+    setFoldersData(null)
+    setActiveFolder(null)
+    setBrowseCollectionId(null)
+    setFolderRows(null)
+    setFolderRowsFor(null)
+    setFolderQuery('')
+    setAddUrl('')
+    setNowDetail(null)
+    setCollectionsData(null)
+    setSelectedCollectionId(null)
+    setPicker(null)
+    setPickerChecked(new Set())
+    setPickerNewName('')
     if (!target) {
       return
     }
@@ -1536,15 +1863,378 @@ function ExtensionViewDialog({
     && currentData?.extensionId === target.extensionId && currentData.viewId === target.viewId
     && contextKey(currentData.context) === contextKey(target.context)
   const isWallpaperStudio = target?.extensionId === 'nd.wallpaper-manager' && target.viewId === 'wallpaper-studio'
-  const activeRecord = isWallpaperStudio && target && state
-    ? state.activations.find((a) => a.extensionId === target.extensionId && a.contextKey === contextKey(target.context))
-    : null
-  const currentWallpaperFolder = typeof activeRecord?.settings?.folder === 'string' && activeRecord.settings.folder.trim()
-    ? activeRecord.settings.folder.trim()
-    : null
   const globalActions = isDetail
-    ? currentData?.actions.filter((action) => action.id !== 'apply' && action.id !== 'preview' && action.id !== 'set-folder' && action.id !== 'thumbnails') ?? []
+    ? currentData?.actions.filter((action) => action.id !== 'apply' && action.id !== 'preview' && action.id !== 'thumbnails' && !action.id.startsWith('links-') && !action.id.startsWith('collections-') && !action.id.startsWith('folders-') && !action.id.startsWith('play-sources')) ?? []
     : []
+
+  // --- Wallpaper Studio Discovery & Now playing -------------------------------
+
+  const loadDiscoveryLinks = useCallback(async (): Promise<void> => {
+    if (!target) return
+    try {
+      const res = await window.ndDsh.ndExtensions.invoke({
+        extensionId: target.extensionId,
+        contributionId: target.viewId,
+        contributionKind: 'view',
+        context: target.context,
+        caller: 'user',
+        input: { action: 'links-list' },
+      })
+      if (!res.ok) throw new Error(res.error?.message ?? 'Could not load wallpaper links')
+      const value = (res.value ?? {}) as { user?: WallpaperLink[]; bundle?: WallpaperLink[]; defaultFolder?: unknown }
+      setLinksData({
+        user: Array.isArray(value.user) ? value.user : [],
+        bundle: Array.isArray(value.bundle) ? value.bundle : [],
+        defaultFolder: typeof value.defaultFolder === 'string' ? value.defaultFolder : null,
+      })
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }, [target, onError])
+
+  const loadFolders = useCallback(async (): Promise<void> => {
+    if (!target) return
+    try {
+      const res = await window.ndDsh.ndExtensions.invoke({
+        extensionId: target.extensionId,
+        contributionId: target.viewId,
+        contributionKind: 'view',
+        context: target.context,
+        caller: 'user',
+        input: { action: 'folders-list' },
+      })
+      if (!res.ok) throw new Error(res.error?.message ?? 'Could not load linked folders')
+      const value = (res.value ?? {}) as { folders?: { path?: unknown; count?: unknown }[]; defaultFolder?: unknown; sources?: unknown }
+      const folders = (Array.isArray(value.folders) ? value.folders : [])
+        .filter((entry): entry is { path: string; count: number } => typeof entry?.path === 'string')
+        .map((entry) => ({ path: entry.path, count: typeof entry.count === 'number' ? entry.count : 0 }))
+      setFoldersData({
+        folders,
+        defaultFolder: typeof value.defaultFolder === 'string' ? value.defaultFolder : '',
+        sources: Array.isArray(value.sources) ? value.sources.filter((item): item is string => typeof item === 'string') : [],
+      })
+      setActiveFolder((current) => {
+        if (current && folders.some((folder) => folder.path === current)) return current
+        return folders[0]?.path ?? null
+      })
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }, [target, onError])
+
+  const loadFolderRows = useCallback(async (): Promise<void> => {
+    if (!target || !activeFolder) return
+    try {
+      const res = await window.ndDsh.ndExtensions.invoke({
+        extensionId: target.extensionId,
+        contributionId: target.viewId,
+        contributionKind: 'view',
+        context: target.context,
+        caller: 'user',
+        input: { folder: activeFolder },
+      })
+      if (!res.ok) throw new Error(res.error?.message ?? 'Could not load the folder')
+      const records = Array.isArray(res.value) ? res.value as Record<string, unknown>[] : []
+      setFolderRowsFor(activeFolder)
+      setFolderRows(records.map((rec, idx) => ({
+        id: typeof rec.id === 'string' ? rec.id : `folder-${idx}`,
+        title: typeof rec.title === 'string' ? rec.title : `Wallpaper ${idx + 1}`,
+        ...(typeof rec.detail === 'string' ? { body: rec.detail } : {}),
+        ...(typeof rec.status === 'string' ? { meta: rec.status } : {}),
+        ...(typeof rec.path === 'string' ? { path: rec.path } : {}),
+      })))
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }, [target, activeFolder, onError])
+
+  const setPlaySources = useCallback(async (sources: string[]): Promise<void> => {
+    if (!target) return
+    try {
+      const res = await window.ndDsh.ndExtensions.invoke({
+        extensionId: target.extensionId,
+        contributionId: target.viewId,
+        contributionKind: 'view',
+        context: target.context,
+        caller: 'user',
+        input: { action: 'play-sources-set', sources },
+      })
+      if (!res.ok) {
+        onError(res.error?.message ?? 'Could not update the play sources')
+        return
+      }
+      const value = (res.value ?? {}) as { sources?: unknown }
+      setFoldersData((current) => current ? {
+        ...current,
+        sources: Array.isArray(value.sources) ? value.sources.filter((item): item is string => typeof item === 'string') : [],
+      } : current)
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }, [target, onError])
+
+  const loadCollections = useCallback(async (): Promise<void> => {
+    if (!target) return
+    try {
+      const res = await window.ndDsh.ndExtensions.invoke({
+        extensionId: target.extensionId,
+        contributionId: target.viewId,
+        contributionKind: 'view',
+        context: target.context,
+        caller: 'user',
+        input: { action: 'collections-list' },
+      })
+      if (!res.ok) throw new Error(res.error?.message ?? 'Could not load collections')
+      const value = (res.value ?? {}) as { collections?: WallpaperCollection[]; rotateCollectionId?: unknown }
+      setCollectionsData({
+        collections: Array.isArray(value.collections) ? value.collections : [],
+        rotateCollectionId: typeof value.rotateCollectionId === 'string' ? value.rotateCollectionId : '',
+      })
+      setSelectedCollectionId((current) => {
+        if (current && value.collections?.some((collection) => collection.id === current)) return current
+        return value.collections?.[0]?.id ?? null
+      })
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }, [target, onError])
+
+  useEffect(() => {
+    if (!isWallpaperStudio || !target || previewItem) return
+    if (studioTab === 'library') {
+      if (discoveryTab === 'folders') {
+        if (!foldersData) void loadFolders()
+        if (!collectionsData) void loadCollections()
+        if (foldersData && activeFolder && folderRowsFor !== activeFolder) void loadFolderRows()
+      } else if (discoveryTab === 'collections') {
+        if (!collectionsData) void loadCollections()
+      } else if ((discoveryTab === 'links' || discoveryTab === 'bundle') && !linksData) {
+        void loadDiscoveryLinks()
+      }
+    } else if (studioTab === 'now' && !linksData) {
+      // Now playing also reports an active Discovery link as the current wallpaper.
+      void loadDiscoveryLinks()
+    }
+  }, [isWallpaperStudio, target, studioTab, discoveryTab, foldersData, collectionsData, folderRowsFor, activeFolder, browseCollectionId, linksData, previewItem, loadFolders, loadFolderRows, loadDiscoveryLinks, loadCollections])
+
+  // The Folders grid always shows something playable when there is anything
+  // to play: pick the first linked folder, else the first collection, so an
+  // active "Play from" source is never invisible.
+  useEffect(() => {
+    if (!foldersData || activeFolder || browseCollectionId) return
+    if (foldersData.folders[0]) {
+      setActiveFolder(foldersData.folders[0]!.path)
+    } else if (collectionsData?.collections[0]) {
+      setBrowseCollectionId(collectionsData.collections[0]!.id)
+    }
+  }, [foldersData, collectionsData, activeFolder, browseCollectionId])
+
+  const selectedCollection = useMemo(
+    () => collectionsData?.collections.find((collection) => collection.id === selectedCollectionId) ?? null,
+    [collectionsData, selectedCollectionId],
+  )
+  const collectionRows: NdViewRow[] = useMemo(
+    () => (selectedCollection?.entries ?? []).map((entry) => ({
+      id: entry.id,
+      title: entry.title,
+      body: entry.ref,
+      path: entry.kind,
+      ...(collectionThumbs[entry.id] ? { thumbnail: collectionThumbs[entry.id] } : {}),
+    })),
+    [selectedCollection, collectionThumbs],
+  )
+  // The collection currently browsed from the Folders tab (its play source can
+  // be checked there), rendered with the same thumbnails as the Collections tab.
+  const browsedCollection = useMemo(
+    () => collectionsData?.collections.find((collection) => collection.id === browseCollectionId) ?? null,
+    [collectionsData, browseCollectionId],
+  )
+  const { thumbs: browseCollectionThumbs, queueThumbnail: queueBrowseCollectionThumbnail } = useLazyWallpaperThumbnails(
+    target,
+    { actionId: 'collections-thumbnails', extra: { id: browseCollectionId ?? '' } },
+  )
+  const browseCollectionRows: NdViewRow[] = useMemo(
+    () => (browsedCollection?.entries ?? []).map((entry) => ({
+      id: entry.id,
+      title: entry.title,
+      body: entry.ref,
+      path: entry.kind,
+      ...(browseCollectionThumbs[entry.id] ? { thumbnail: browseCollectionThumbs[entry.id] } : {}),
+    })),
+    [browsedCollection, browseCollectionThumbs],
+  )
+
+  // --- Save-to-collections picker ----------------------------------------------
+
+  const openCollectionPicker = (item: { kind: WallpaperCollectionEntryKind; ref: string; title: string }, saveLink: boolean): void => {
+    setPicker({ item, saveLink })
+    setPickerChecked(new Set())
+    setPickerNewName('')
+    if (!collectionsData) void loadCollections()
+  }
+
+  const confirmPicker = async (): Promise<void> => {
+    if (!picker || !target) return
+    setPickerBusy(true)
+    try {
+      const ids = [...pickerChecked]
+      if (ids.length > 0) {
+        const res = await window.ndDsh.ndExtensions.invoke({
+          extensionId: target.extensionId,
+          contributionId: target.viewId,
+          contributionKind: 'view',
+          context: target.context,
+          caller: 'user',
+          input: {
+            action: 'collections-add',
+            collectionIds: ids,
+            items: [{ kind: picker.item.kind, ref: picker.item.ref, title: picker.item.title }],
+            saveLink: picker.saveLink,
+          },
+        })
+        if (!res.ok) {
+          onError(res.error?.message ?? 'Could not save to the collection')
+          return
+        }
+      } else if (picker.saveLink) {
+        // No collection chosen: a Discovery save still lands in My links.
+        const res = await window.ndDsh.ndExtensions.invoke({
+          extensionId: target.extensionId,
+          contributionId: target.viewId,
+          contributionKind: 'view',
+          context: target.context,
+          caller: 'user',
+          input: { action: 'links-add', url: picker.item.ref, title: picker.item.title },
+        })
+        if (!res.ok) {
+          onError(res.error?.message ?? 'Could not save that link')
+          return
+        }
+      }
+      setPicker(null)
+      await Promise.all([
+        picker.saveLink ? loadDiscoveryLinks() : Promise.resolve(),
+        loadCollections(),
+      ])
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setPickerBusy(false)
+    }
+  }
+
+  const createCollection = async (name: string): Promise<WallpaperCollection | null> => {
+    if (!target || !name.trim()) return null
+    try {
+      const res = await window.ndDsh.ndExtensions.invoke({
+        extensionId: target.extensionId,
+        contributionId: target.viewId,
+        contributionKind: 'view',
+        context: target.context,
+        caller: 'user',
+        input: { action: 'collections-create', name: name.trim() },
+      })
+      if (!res.ok) {
+        onError(res.error?.message ?? 'Could not create the collection')
+        return null
+      }
+      const created = (res.value as { collection?: WallpaperCollection }).collection ?? null
+      await loadCollections()
+      if (created) setSelectedCollectionId(created.id)
+      return created
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause))
+      return null
+    }
+  }
+
+  const handleCreateCollection = async (): Promise<void> => {
+    if (!newCollectionName.trim()) return
+    setCreateCollectionBusy(true)
+    try {
+      if (await createCollection(newCollectionName)) setNewCollectionName('')
+    } finally {
+      setCreateCollectionBusy(false)
+    }
+  }
+
+  const createPickerCollection = async (): Promise<void> => {
+    if (!picker || !pickerNewName.trim()) return
+    setPickerBusy(true)
+    try {
+      const created = await createCollection(pickerNewName)
+      setPickerNewName('')
+      if (created) setPickerChecked((current) => new Set(current).add(created.id))
+    } finally {
+      setPickerBusy(false)
+    }
+  }
+
+
+  const linkRowFrom = (link: WallpaperLink, source: 'user' | 'bundle'): NdViewRow => ({
+    id: link.id,
+    title: link.title,
+    body: link.url,
+    ...(link.active ? { meta: 'Active' } : {}),
+    ...(linkThumbs[link.id] ? { thumbnail: linkThumbs[link.id] } : {}),
+    path: source,
+  })
+  const userLinkRows: NdViewRow[] = useMemo(
+    () => (linksData?.user ?? []).map((link) => linkRowFrom(link, 'user')),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [linksData?.user, linkThumbs],
+  )
+  const bundleLinkRows: NdViewRow[] = useMemo(
+    () => (linksData?.bundle ?? []).map((link) => linkRowFrom(link, 'bundle')),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [linksData?.bundle, linkThumbs],
+  )
+
+  const activeLink = useMemo(
+    () => [...(linksData?.user ?? []), ...(linksData?.bundle ?? [])].find((link) => link.active) ?? null,
+    [linksData],
+  )
+  // Bundle cards check this set to flip their Save button into "Saved".
+  const savedLinkUrls = useMemo(
+    () => new Set((linksData?.user ?? []).map((link) => link.url)),
+    [linksData],
+  )
+  const activeRow = useMemo(
+    () => currentData?.rows.find((row) => row.meta === 'Active') ?? null,
+    [currentData],
+  )
+
+  useEffect(() => {
+    if (!isWallpaperStudio || studioTab !== 'now' || !target || (!activeRow && !activeLink)) {
+      setNowDetail(null)
+      return
+    }
+    let mounted = true
+    setNowLoading(true)
+    const input = activeLink
+      ? { id: activeLink.id, source: activeLink.source, action: 'links-preview' }
+      : { id: activeRow!.id, action: 'preview' }
+    void window.ndDsh.ndExtensions.invoke({
+      extensionId: target.extensionId,
+      contributionId: target.viewId,
+      contributionKind: 'view',
+      context: target.context,
+      caller: 'user',
+      input,
+    }).then((res) => {
+      if (!mounted) return
+      if (res.ok && res.value && typeof res.value === 'object') setNowDetail(res.value as WallpaperPreviewDetail)
+    }).catch(() => {
+      // Keep the placeholder; not every active image can be previewed.
+    }).finally(() => {
+      if (mounted) setNowLoading(false)
+    })
+    return () => { mounted = false }
+  }, [isWallpaperStudio, studioTab, target, activeRow?.id, activeLink?.id, activeLink?.source, activeLink, activeRow])
+
+  // A collection preview can come from the Collections tab or from browsing a
+  // collection inside the Folders tab; both address the same host.
+  const previewCollectionId = discoveryTab === 'folders' ? browseCollectionId : selectedCollectionId
 
   useEffect(() => {
     if (!previewItem || !target) {
@@ -1567,7 +2257,13 @@ function ExtensionViewDialog({
       contributionKind: 'view',
       context: target.context,
       caller: 'user',
-      input: { id: previewItem.id, action: 'preview' },
+      input: previewSource === 'links'
+        ? { id: previewItem.id, source: previewItem.path === 'bundle' ? 'bundle' : 'user', action: 'links-preview' }
+        : previewSource === 'collection' && previewCollectionId
+          ? { id: previewItem.id, collectionId: previewCollectionId, action: 'collections-preview' }
+          : previewSource === 'setup' && activeFolder
+            ? { id: previewItem.id, folder: activeFolder, action: 'preview' }
+            : { id: previewItem.id, action: 'preview' },
     }).then((res) => {
       if (!active) return
       if (res.ok && res.value && typeof res.value === 'object') {
@@ -1581,28 +2277,44 @@ function ExtensionViewDialog({
     })
 
     return () => { active = false }
-  }, [previewItem, target])
+  }, [previewItem, target, previewSource, activeFolder, previewCollectionId])
 
-  const previewIndex = previewItem ? visibleRows.findIndex((r) => r.id === previewItem.id) : -1
+  // The rows an open preview can navigate across depend on where it was opened.
+  const folderRowsFiltered: NdViewRow[] = useMemo(
+    () => (folderRows ?? []).filter((row) => !folderQuery.trim() || `${row.title} ${row.body ?? ''}`.toLowerCase().includes(folderQuery.trim().toLowerCase())),
+    [folderRows, folderQuery],
+  )
+  const browseRows = previewSource === 'links'
+    ? (discoveryTab === 'bundle' ? bundleLinkRows : userLinkRows)
+    : previewSource === 'collection'
+      ? (discoveryTab === 'folders' ? browseCollectionRows : collectionRows)
+      : previewSource === 'setup'
+        ? folderRowsFiltered
+        : visibleRows
+  const openPreview = (row: NdViewRow, source: 'library' | 'setup' | 'links' | 'collection'): void => {
+    setPreviewSource(source)
+    setPreviewItem(row)
+  }
+  const previewIndex = previewItem ? browseRows.findIndex((r) => r.id === previewItem.id) : -1
   const isPreviewActive = Boolean(
-    previewItem && currentData?.rows.find((r) => r.id === previewItem.id)?.meta === 'Active'
+    previewItem && browseRows.find((r) => r.id === previewItem.id)?.meta === 'Active'
   )
 
   const handlePrevPreview = (): void => {
-    if (visibleRows.length === 0) return
-    const idx = previewIndex <= 0 ? visibleRows.length - 1 : previewIndex - 1
-    const nextRow = visibleRows[idx]
+    if (browseRows.length === 0) return
+    const idx = previewIndex <= 0 ? browseRows.length - 1 : previewIndex - 1
+    const nextRow = browseRows[idx]
     if (nextRow) setPreviewItem(nextRow)
   }
 
   const handleNextPreview = (): void => {
-    if (visibleRows.length === 0) return
-    const idx = previewIndex >= visibleRows.length - 1 ? 0 : previewIndex + 1
-    const nextRow = visibleRows[idx]
+    if (browseRows.length === 0) return
+    const idx = previewIndex >= browseRows.length - 1 ? 0 : previewIndex + 1
+    const nextRow = browseRows[idx]
     if (nextRow) setPreviewItem(nextRow)
   }
 
-  const runAction = async (actionId: string, host: string, row?: { id: string; title: string }): Promise<void> => {
+  const runAction = async (actionId: string, host: string, row?: { id: string; title: string }, extraInput?: Record<string, unknown>): Promise<void> => {
     if (!target) return
     setBusy(true)
     try {
@@ -1619,7 +2331,7 @@ function ExtensionViewDialog({
         contributionKind: 'view',
         context: target.context,
         caller: 'user',
-        input: { ...input, action: actionId },
+        input: { ...input, ...(extraInput ?? {}), action: actionId },
       })
       if (!result.ok) {
         onError(result.error?.message ?? 'The action failed')
@@ -1636,6 +2348,9 @@ function ExtensionViewDialog({
       await onChanged()
       const reloaded = await window.ndDsh.ndExtensions.loadView(target.extensionId, target.viewId, target.context)
       setData(reloaded)
+      if (actionId.startsWith('links-')) await loadDiscoveryLinks()
+      if (actionId.startsWith('folders-')) await loadFolders()
+      if (actionId.startsWith('collections-')) await Promise.all([loadCollections(), loadDiscoveryLinks(), loadFolders()])
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : String(cause))
     } finally {
@@ -1645,7 +2360,45 @@ function ExtensionViewDialog({
 
   const handleSetPreviewWallpaper = async (): Promise<void> => {
     if (!previewItem) return
-    await runAction('apply', 'os.wallpaper.applySelected', previewItem)
+    if (previewSource === 'links') {
+      await runAction('links-apply', 'os.wallpaper.links.apply', previewItem, { source: previewItem.path === 'bundle' ? 'bundle' : 'user' })
+      return
+    }
+    if (previewSource === 'collection' && previewCollectionId) {
+      await runAction('collections-apply', 'os.wallpaper.collections.apply', previewItem, { collectionId: previewCollectionId })
+      return
+    }
+    await runAction(
+      'apply',
+      'os.wallpaper.applySelected',
+      previewItem,
+      previewSource === 'setup' && linksData?.defaultFolder ? { folder: linksData.defaultFolder } : undefined,
+    )
+  }
+
+  const handleAddLink = async (): Promise<void> => {
+    if (!target || !addUrl.trim()) return
+    setAddLinkBusy(true)
+    try {
+      const result = await window.ndDsh.ndExtensions.invoke({
+        extensionId: target.extensionId,
+        contributionId: target.viewId,
+        contributionKind: 'view',
+        context: target.context,
+        caller: 'user',
+        input: { action: 'links-add', url: addUrl.trim() },
+      })
+      if (!result.ok) {
+        onError(result.error?.message ?? 'Could not add that link')
+        return
+      }
+      setAddUrl('')
+      await loadDiscoveryLinks()
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setAddLinkBusy(false)
+    }
   }
 
   useEffect(() => {
@@ -1672,9 +2425,10 @@ function ExtensionViewDialog({
     }
     window.addEventListener('keydown', handleKeyDown, true)
     return () => window.removeEventListener('keydown', handleKeyDown, true)
-  }, [previewItem, previewIndex, visibleRows])
+  }, [previewItem, previewIndex, browseRows])
 
   return (
+    <>
     <Dialog open={target !== null} onOpenChange={(open) => { if (!open) closeDialog() }}>
       <DialogContent className={cn("max-h-[90vh] overflow-y-auto border-border-strong bg-surface-1 transition-all", isDetail || isTranslate ? "max-w-3xl sm:max-w-4xl" : "max-w-xl")}>
         <DialogHeader>
@@ -1701,7 +2455,8 @@ function ExtensionViewDialog({
         ) : !currentData ? (
           <p className="text-xs text-faint" role={loadError ? 'alert' : 'status'}>{loadError ?? 'Loading extension view…'}</p>
         ) : <>
-        {!previewItem && isDetail && globalActions.length > 0 ? (
+        {!previewItem && isDetail && globalActions.length > 0
+          && (!isWallpaperStudio || (studioTab === 'library' && discoveryTab === 'folders')) ? (
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border-soft bg-surface-0/60 p-2.5">
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-xs font-semibold text-foreground mr-1">Actions:</span>
@@ -1740,24 +2495,577 @@ function ExtensionViewDialog({
         ) : null}
 
         {!previewItem && isWallpaperStudio ? (
-          <div className="flex items-center justify-between gap-2 rounded-md border border-border-soft bg-surface-0/40 px-3 py-1.5 text-xs">
-            <div className="flex items-center gap-1.5 min-w-0">
-              <FolderOpen className="size-3.5 shrink-0 text-primary" />
-              <span className="font-semibold text-foreground shrink-0">Folder:</span>
-              <span className="truncate text-soft font-mono text-[11px]" title={currentWallpaperFolder ?? 'System Pictures'}>
-                {currentWallpaperFolder ?? 'Default (system Pictures directory)'}
-              </span>
-            </div>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-6 px-2 text-[11px] shrink-0"
-              disabled={busy}
-              onClick={() => void runAction('set-folder', 'os.wallpaper.setFolder')}
-            >
-              <FolderOpen className="mr-1 size-3" /> Browse…
-            </Button>
+          <div className="flex items-center gap-1 rounded-md border border-border-soft bg-surface-0/60 p-1" role="tablist" aria-label="Wallpaper Studio sections">
+            {([
+              ['library', 'Library', Image],
+              ['now', 'Now playing', MonitorPlay],
+            ] as const).map(([tabId, label, Icon]) => (
+              <button
+                key={tabId}
+                type="button"
+                role="tab"
+                aria-selected={studioTab === tabId}
+                onClick={() => setStudioTab(tabId)}
+                className={cn(
+                  'flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors',
+                  studioTab === tabId
+                    ? 'bg-primary text-primary-foreground shadow-sm'
+                    : 'text-soft hover:bg-surface-2 hover:text-foreground'
+                )}
+              >
+                <Icon className="size-3.5" /> {label}
+              </button>
+            ))}
           </div>
+        ) : null}
+
+        {!previewItem && isWallpaperStudio && studioTab === 'library' ? (
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-1 rounded-md border border-border-soft bg-surface-0/60 p-0.5" role="tablist" aria-label="Library sources">
+                {([
+                  ['folders', 'Folders', FolderOpen],
+                  ['links', 'My links', Link2],
+                  ['collections', 'Collections', Layers],
+                  ['bundle', 'ND bundle', ShieldCheck],
+                ] as const).map(([tabId, label, Icon]) => (
+                  <button
+                    key={tabId}
+                    type="button"
+                    role="tab"
+                    aria-selected={discoveryTab === tabId}
+                    onClick={() => setDiscoveryTab(tabId)}
+                    className={cn(
+                      'flex items-center gap-1.5 rounded px-2 py-1 text-[11px] font-medium transition-colors',
+                      discoveryTab === tabId
+                        ? 'bg-primary text-primary-foreground shadow-sm'
+                        : 'text-soft hover:bg-surface-2 hover:text-foreground'
+                    )}
+                  >
+                    <Icon className="size-3.5" /> {label}
+                  </button>
+                ))}
+              </div>
+              {discoveryTab === 'links' ? (
+                <div className="flex items-center gap-1.5">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs"
+                    disabled={busy || (linksData?.user.length ?? 0) === 0}
+                    onClick={() => void runAction('links-next', 'os.wallpaper.links.next')}
+                    title="Apply the next saved link in order"
+                  >
+                    <SkipForward className="mr-1 size-3.5" /> Next
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs"
+                    disabled={busy || (linksData?.user.length ?? 0) === 0}
+                    onClick={() => void runAction('links-random', 'os.wallpaper.links.random')}
+                    title="Apply a random saved link"
+                  >
+                    <Shuffle className="mr-1 size-3.5" /> Shuffle
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs"
+                    disabled={busy}
+                    onClick={() => void runAction('links-export', 'os.wallpaper.links.export')}
+                    title="Save your links as a shareable JSON bundle"
+                  >
+                    <Download className="mr-1 size-3.5" /> Export
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs"
+                    disabled={busy}
+                    onClick={() => void runAction('links-import', 'os.wallpaper.links.import')}
+                    title="Merge links from a JSON bundle file"
+                  >
+                    <Upload className="mr-1 size-3.5" /> Import
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+
+            {discoveryTab === 'folders' ? (
+              foldersData === null ? (
+                <p className="text-xs text-faint" role="status">Loading your folders…</p>
+              ) : (
+                <div className="space-y-3">
+                  {foldersData.folders.length > 0 || collectionsData?.collections.length ? (
+                    <div className="rounded-md border border-border-soft bg-surface-0/40 px-3 py-2">
+                      <p className="mb-1.5 text-[11px] font-semibold text-foreground">Play from</p>
+                      <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                        {foldersData.folders.map((folder) => {
+                          const ref = `folder:${folder.path}`
+                          return (
+                            <label key={ref} className="flex cursor-pointer items-center gap-1.5 text-xs text-soft">
+                              <input
+                                type="checkbox"
+                                style={{ accentColor: 'var(--primary)' }}
+                                className="size-3.5 shrink-0"
+                                checked={foldersData.sources.includes(ref)}
+                                onChange={() => {
+                                  const next = new Set(foldersData.sources)
+                                  if (next.has(ref)) next.delete(ref)
+                                  else next.add(ref)
+                                  void setPlaySources([...next])
+                                }}
+                              />
+                              {folder.path.split(/[\\/]/).pop() || folder.path}
+                              <span className="text-[10px] text-faint">{folder.count}</span>
+                            </label>
+                          )
+                        })}
+                        {(collectionsData?.collections ?? []).map((collection) => {
+                          const ref = `collection:${collection.id}`
+                          return (
+                            <label key={ref} className="flex cursor-pointer items-center gap-1.5 text-xs text-soft">
+                              <input
+                                type="checkbox"
+                                style={{ accentColor: 'var(--primary)' }}
+                                className="size-3.5 shrink-0"
+                                checked={foldersData.sources.includes(ref)}
+                                onChange={() => {
+                                  const next = new Set(foldersData.sources)
+                                  if (next.has(ref)) next.delete(ref)
+                                  else next.add(ref)
+                                  void setPlaySources([...next])
+                                }}
+                              />
+                              {collection.name}
+                              <span className="text-[10px] text-faint">{collection.entries.length}</span>
+                            </label>
+                          )
+                        })}
+                      </div>
+                      <p className="mt-1.5 text-[10px] text-faint">
+                        {foldersData.sources.length === 0
+                          ? foldersData.folders.length === 0
+                            ? 'Nothing checked: link a folder (or solo a collection below) to give rotation something to play.'
+                            : 'Nothing checked: rotation plays every linked folder.'
+                          : 'Rotation, Next, and Shuffle draw from exactly these folders and collections.'}
+                      </p>
+                    </div>
+                  ) : null}
+
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {foldersData.folders.map((folder) => (
+                      <span
+                        key={folder.path}
+                        className={cn(
+                          'flex items-center gap-1 rounded-full border py-1 pl-3 pr-1 text-xs font-medium transition-colors',
+                          activeFolder === folder.path
+                            ? 'border-primary bg-primary text-primary-foreground shadow-sm'
+                            : 'border-border-soft bg-surface-0/60 text-soft hover:bg-surface-2 hover:text-foreground'
+                        )}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => { setActiveFolder(folder.path); setBrowseCollectionId(null) }}
+                          className="flex items-center gap-1.5"
+                          title={folder.path}
+                        >
+                          {folder.path.split(/[\\/]/).pop() || folder.path}
+                          <span className={cn('rounded-full px-1.5 text-[10px]', activeFolder === folder.path ? 'bg-primary-foreground/20' : 'bg-surface-2')}>
+                            {folder.count}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`Remove folder ${folder.path}`}
+                          disabled={busy}
+                          onClick={() => void runAction('folders-remove', 'os.wallpaper.folders.remove', undefined, { path: folder.path })}
+                          className={cn(
+                            'grid size-5 place-items-center rounded-full transition-colors',
+                            activeFolder === folder.path ? 'hover:bg-primary-foreground/20' : 'hover:bg-surface-2 hover:text-destructive'
+                          )}
+                          title="Unlink this folder"
+                        >
+                          <Trash2 className="size-3" />
+                        </button>
+                      </span>
+                    ))}
+                    {(collectionsData?.collections ?? []).map((collection) => (
+                      <span
+                        key={collection.id}
+                        className={cn(
+                          'flex items-center rounded-full border py-1 text-xs font-medium transition-colors',
+                          browseCollectionId === collection.id && !activeFolder
+                            ? 'border-primary bg-primary text-primary-foreground shadow-sm'
+                            : 'border-border-soft bg-surface-0/60 text-soft hover:bg-surface-2 hover:text-foreground'
+                        )}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => { setBrowseCollectionId(collection.id); setActiveFolder(null) }}
+                          className="flex items-center gap-1.5 py-0 pl-3 pr-1"
+                          title={`Browse the ${collection.name} collection`}
+                        >
+                          <Layers className="size-3" />
+                          {collection.name}
+                          <span className={cn('rounded-full px-1.5 text-[10px]', browseCollectionId === collection.id && !activeFolder ? 'bg-primary-foreground/20' : 'bg-surface-2')}>
+                            {collection.entries.length}
+                          </span>
+                        </button>
+                      </span>
+                    ))}
+                    <span
+                      className={cn(
+                        'flex items-center rounded-full border border-border-soft bg-surface-0/60 py-1 text-xs font-medium text-soft transition-colors',
+                        foldersData.folders.length === 0 && !collectionsData?.collections.length && 'border-dashed'
+                      )}
+                    >
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void runAction('folders-add', 'os.wallpaper.folders.add')}
+                        className="flex items-center gap-1.5 px-3 hover:text-foreground disabled:opacity-50"
+                        title="Link a folder to your library"
+                      >
+                        <FolderPlus className="size-3.5" /> {foldersData.folders.length === 0 && !collectionsData?.collections.length ? 'Link your first folder…' : 'Link folder…'}
+                      </button>
+                    </span>
+                  </div>
+
+                  {browseCollectionId && !activeFolder && browsedCollection ? (
+                    browsedCollection.entries.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border-soft py-8 px-4 text-center">
+                        <Layers className="mb-2 size-8 text-faint" />
+                        <p className="text-xs text-soft">The {browsedCollection.name} collection is empty.</p>
+                        <p className="mt-1 max-w-sm text-[11px] text-faint">
+                          Use the folder-plus button on any image card to save images into it.
+                        </p>
+                      </div>
+                    ) : (
+                      <WallpaperLinksGrid
+                        rows={browseCollectionRows}
+                        thumbs={browseCollectionThumbs}
+                        queueThumbnail={queueBrowseCollectionThumbnail}
+                        busy={busy}
+                        onPreview={(row) => openPreview(row, 'collection')}
+                        onApply={(row) => void runAction('collections-apply', 'os.wallpaper.collections.apply', row, { collectionId: browsedCollection.id })}
+                        onRemove={(row) => void runAction('collections-remove', 'os.wallpaper.collections.removeEntry', undefined, { collectionId: browsedCollection.id, entryId: row.id })}
+                      />
+                    )
+                  ) : foldersData.folders.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border-soft py-8 px-4 text-center">
+                      <FolderOpen className="mb-2 size-8 text-faint" />
+                      <p className="text-xs text-soft">No folders or collections yet.</p>
+                      <p className="mt-1 max-w-sm text-[11px] text-faint">
+                        Link a folder of images to browse it here, save its pictures into collections, and play it as your wallpaper.
+                      </p>
+                    </div>
+                  ) : folderRows === null || activeFolder !== folderRowsFor ? (
+                    <p className="text-xs text-faint" role="status">Loading images…</p>
+                  ) : folderRowsFiltered.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border-soft py-8 px-4 text-center">
+                      <FolderOpen className="mb-2 size-8 text-faint" />
+                      <p className="text-xs text-soft">
+                        {folderQuery.trim() ? 'No images match your search.' : 'No images found in this folder.'}
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          aria-label="Search folder images"
+                          placeholder="Search this folder…"
+                          value={folderQuery}
+                          onChange={(event) => setFolderQuery(event.target.value)}
+                          className="h-8 flex-1 text-xs"
+                        />
+                        <span className="shrink-0 text-xs text-faint">{folderRowsFiltered.length} images</span>
+                      </div>
+                      <WallpaperLibraryGrid
+                        rows={folderRowsFiltered}
+                        thumbs={folderThumbs}
+                        queueThumbnail={queueFolderThumbnail}
+                        busy={busy}
+                        onPreview={(row) => openPreview(row, 'setup')}
+                        onApply={(row) => void runAction(
+                          'apply',
+                          'os.wallpaper.applySelected',
+                          row,
+                          activeFolder ? { folder: activeFolder } : undefined,
+                        )}
+                        onCollect={(row) => openCollectionPicker({ kind: 'file', ref: row.path ?? row.body ?? '', title: row.title }, false)}
+                      />
+                    </>
+                  )}
+                </div>
+              )
+            ) : null}
+
+            {discoveryTab === 'collections' ? (
+              collectionsData === null ? (
+                <p className="text-xs text-faint" role="status">Loading collections…</p>
+              ) : (
+                <div className="space-y-3">
+                  {collectionsData.collections.length === 0 ? (
+                    <p className="text-xs text-faint">
+                      No collections yet — create one below, then save images into it from Discovery, your folders, or My links.
+                    </p>
+                  ) : (
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {collectionsData.collections.map((collection) => (
+                        <button
+                          key={collection.id}
+                          type="button"
+                          onClick={() => setSelectedCollectionId(collection.id)}
+                          className={cn(
+                            'flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors',
+                            selectedCollectionId === collection.id
+                              ? 'border-primary bg-primary text-primary-foreground shadow-sm'
+                              : 'border-border-soft bg-surface-0/60 text-soft hover:bg-surface-2 hover:text-foreground'
+                          )}
+                        >
+                          {collection.name}
+                          <span className={cn('rounded-full px-1.5 text-[10px]', selectedCollectionId === collection.id ? 'bg-primary-foreground/20' : 'bg-surface-2')}>
+                            {collection.entries.length}
+                          </span>
+                          {collectionsData.rotateCollectionId === collection.id ? <Repeat className="size-3" /> : null}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  <form
+                    className="flex items-center gap-2"
+                    onSubmit={(event) => { event.preventDefault(); void handleCreateCollection() }}
+                  >
+                    <Input
+                      aria-label="New collection name"
+                      placeholder="New collection (e.g. Nature)"
+                      value={newCollectionName}
+                      onChange={(event) => setNewCollectionName(event.target.value)}
+                      className="h-8 flex-1 text-xs"
+                    />
+                    <Button type="submit" size="sm" className="h-8 shrink-0 text-xs" disabled={createCollectionBusy || !newCollectionName.trim()}>
+                      {createCollectionBusy ? <RefreshCw className="mr-1 size-3.5 animate-spin" /> : <Plus className="mr-1 size-3.5" />}
+                      Create
+                    </Button>
+                  </form>
+
+                  {selectedCollection ? (
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border-soft bg-surface-0/40 px-3 py-1.5 text-xs">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="truncate font-semibold text-foreground">{selectedCollection.name}</span>
+                          <span className="shrink-0 text-faint">{selectedCollection.entries.length} images</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-6 text-[11px] px-2"
+                            disabled={busy || selectedCollection.entries.length === 0}
+                            onClick={() => void runAction('collections-next', 'os.wallpaper.collections.next', undefined, { id: selectedCollection.id })}
+                            title="Apply the next image in this collection"
+                          >
+                            <SkipForward className="mr-1 size-3" /> Next
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-6 text-[11px] px-2"
+                            disabled={busy || selectedCollection.entries.length === 0}
+                            onClick={() => void runAction('collections-random', 'os.wallpaper.collections.random', undefined, { id: selectedCollection.id })}
+                            title="Apply a random image from this collection"
+                          >
+                            <Shuffle className="mr-1 size-3" /> Shuffle
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant={collectionsData.rotateCollectionId === selectedCollection.id ? 'secondary' : 'outline'}
+                            className="h-6 text-[11px] px-2"
+                            disabled={busy}
+                            onClick={() => void runAction(
+                              'collections-rotate',
+                              'os.wallpaper.collections.rotate',
+                              undefined,
+                              { id: collectionsData.rotateCollectionId === selectedCollection.id ? '' : selectedCollection.id },
+                            )}
+                            title="Auto-rotate this collection on the timer configured in Wallpaper Manager → Settings (0 disables)"
+                          >
+                            <Repeat className="mr-1 size-3" /> {collectionsData.rotateCollectionId === selectedCollection.id ? 'Rotating' : 'Auto-rotate'}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-6 w-6 p-0 text-faint hover:text-destructive"
+                            disabled={busy}
+                            onClick={() => void runAction('collections-delete', 'os.wallpaper.collections.delete', undefined, { id: selectedCollection.id })}
+                            title="Delete this collection (saved links stay in My links)"
+                          >
+                            <Trash2 className="size-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+
+                      {collectionRows.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border-soft py-8 px-4 text-center">
+                          <Layers className="mb-2 size-8 text-faint" />
+                          <p className="text-xs text-soft">No images in this collection yet.</p>
+                          <p className="mt-1 max-w-sm text-[11px] text-faint">
+                            Use the folder-plus button on any image card — bundle links, My links, or your folders — to save it here.
+                          </p>
+                        </div>
+                      ) : (
+                        <WallpaperLinksGrid
+                          rows={collectionRows}
+                          thumbs={collectionThumbs}
+                          queueThumbnail={queueCollectionThumbnail}
+                          busy={busy}
+                          onPreview={(row) => openPreview(row, 'collection')}
+                          onApply={(row) => void runAction('collections-apply', 'os.wallpaper.collections.apply', row, { collectionId: selectedCollection.id })}
+                          onRemove={(row) => void runAction('collections-remove', 'os.wallpaper.collections.removeEntry', undefined, { collectionId: selectedCollection.id, entryId: row.id })}
+                        />
+                      )}
+                      <p className="text-[10px] text-faint">
+                        Next and Shuffle play this collection. Auto-rotate keeps it going on the timer in Wallpaper Manager → Settings — set it above 0 minutes.
+                      </p>
+                    </div>
+                  ) : null}
+                </div>
+              )
+            ) : null}
+
+            {discoveryTab === 'links' ? (
+              <div className="space-y-3">
+                <form
+                  className="flex items-center gap-2"
+                  onSubmit={(event) => { event.preventDefault(); void handleAddLink() }}
+                >
+                  <Input
+                    aria-label="Image URL"
+                    placeholder="Paste a direct image link (https://… .jpg, .png, .webp, .bmp)"
+                    value={addUrl}
+                    onChange={(event) => setAddUrl(event.target.value)}
+                    className="h-8 flex-1 text-xs"
+                    inputMode="url"
+                    spellCheck={false}
+                  />
+                  <Button type="submit" size="sm" className="h-8 shrink-0 text-xs" disabled={addLinkBusy || !addUrl.trim()}>
+                    {addLinkBusy
+                      ? <RefreshCw className="mr-1 size-3.5 animate-spin" />
+                      : <Plus className="mr-1 size-3.5" />}
+                    {addLinkBusy ? 'Checking…' : 'Add link'}
+                  </Button>
+                </form>
+                {userLinkRows.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border-soft py-8 px-4 text-center">
+                    <Link2 className="mb-2 size-8 text-faint" />
+                    <p className="text-xs text-soft">No saved links yet.</p>
+                    <p className="mt-1 max-w-sm text-[11px] text-faint">
+                      Paste a direct image URL above to add one, or import a links bundle exported from another ND install.
+                    </p>
+                  </div>
+                ) : (
+                  <WallpaperLinksGrid
+                    rows={userLinkRows}
+                    thumbs={linkThumbs}
+                    queueThumbnail={queueLinkThumbnail}
+                    busy={busy}
+                    onPreview={(row) => openPreview(row, 'links')}
+                    onApply={(row) => void runAction('links-apply', 'os.wallpaper.links.apply', row, { source: 'user' })}
+                    onRemove={(row) => void runAction('links-remove', 'os.wallpaper.links.remove', row)}
+                    onCollect={(row) => openCollectionPicker({ kind: 'link', ref: row.body ?? '', title: row.title }, false)}
+                  />
+                )}
+                <p className="text-[10px] text-faint">
+                  Links live in a local JSON file — Export shares them in the same format as the ND bundle. Images download only when you preview or apply a link.
+                </p>
+              </div>
+            ) : null}
+
+            {discoveryTab === 'bundle' ? (
+              bundleLinkRows.length === 0 ? (
+                <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border-soft py-8 px-4 text-center">
+                  <ShieldCheck className="mb-2 size-8 text-faint" />
+                  <p className="text-xs text-soft">The ND-curated wallpaper bundle is not available in this install.</p>
+                </div>
+              ) : (
+                <WallpaperLinksGrid
+                  rows={bundleLinkRows}
+                  thumbs={linkThumbs}
+                  queueThumbnail={queueLinkThumbnail}
+                  busy={busy}
+                  onPreview={(row) => openPreview(row, 'links')}
+                  onApply={(row) => void runAction('links-apply', 'os.wallpaper.links.apply', row, { source: 'bundle' })}
+                  onRemove={() => undefined}
+                  onSave={(row) => openCollectionPicker({ kind: 'link', ref: row.body ?? '', title: row.title }, true)}
+                  savedUrls={savedLinkUrls}
+                  onCollect={(row) => openCollectionPicker({ kind: 'link', ref: row.body ?? '', title: row.title }, true)}
+                />
+              )
+            ) : null}
+          </div>
+        ) : null}
+
+        {!previewItem && isWallpaperStudio && studioTab === 'now' ? (
+          activeRow || activeLink ? (
+            <div className="space-y-3">
+              <div className="relative flex min-h-[280px] max-h-[50vh] items-center justify-center overflow-hidden rounded-xl border border-border-soft bg-black/70 p-3 shadow-inner">
+                {nowDetail?.dataUrl || nowDetail?.thumbnail ? (
+                  <img
+                    src={nowDetail.dataUrl ?? nowDetail.thumbnail}
+                    alt={activeLink?.title ?? activeRow?.title ?? 'Current wallpaper'}
+                    className="max-h-[46vh] max-w-full rounded-md object-contain shadow-2xl"
+                  />
+                ) : (
+                  <div className="flex flex-col items-center justify-center p-8 text-faint">
+                    <Image className="mb-2 size-12 opacity-50" />
+                    <p className="text-xs">{nowLoading ? 'Loading current wallpaper…' : 'No wallpaper preview available'}</p>
+                  </div>
+                )}
+                {nowLoading ? (
+                  <div className="absolute top-3 right-3 flex items-center gap-1.5 rounded-full bg-black/75 px-3 py-1 text-[11px] font-medium text-white shadow backdrop-blur-sm">
+                    <RefreshCw className="size-3 animate-spin" /> Loading…
+                  </div>
+                ) : null}
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border-soft bg-surface-0/40 px-3 py-2 text-xs">
+                <div className="min-w-0">
+                  <span className="block max-w-xs truncate font-semibold text-foreground" title={activeLink?.title ?? activeRow?.title}>
+                    {activeLink?.title ?? activeRow?.title}
+                  </span>
+                  {(activeLink?.url ?? activeRow?.body) ? (
+                    <p className="mt-0.5 truncate text-[11px] text-faint font-mono" title={activeLink?.url ?? activeRow?.body}>
+                      {activeLink?.url ?? activeRow?.body}
+                    </p>
+                  ) : null}
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <Button size="sm" variant="outline" className="h-7 text-xs" disabled={busy} onClick={() => void runAction('prev', 'os.wallpaper.previous')}>
+                    <SkipBack className="mr-1 size-3.5" /> Prev
+                  </Button>
+                  <Button size="sm" variant="outline" className="h-7 text-xs" disabled={busy} onClick={() => void runAction('next', 'os.wallpaper.next')}>
+                    Next <SkipForward className="ml-1 size-3.5" />
+                  </Button>
+                  <Button size="sm" variant="outline" className="h-7 text-xs" disabled={busy} onClick={() => void runAction('random', 'os.wallpaper.random')}>
+                    <Shuffle className="mr-1 size-3.5" /> Random
+                  </Button>
+                </div>
+              </div>
+              <p className="text-[10px] text-faint">
+                Auto-rotation (interval and order) is configured in Wallpaper Manager → Settings. Discovery links you apply appear here too.
+              </p>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border-soft py-8 px-4 text-center">
+              <MonitorPlay className="mb-2 size-8 text-faint" />
+              <p className="text-xs text-soft">No wallpaper is active yet.</p>
+              <p className="mt-1 max-w-sm text-[11px] text-faint">
+                Apply one from the Library tab and it will show up here.
+              </p>
+            </div>
+          )
         ) : null}
 
         {!previewItem && data && !selected && !isDetail ? (
@@ -1776,10 +3084,10 @@ function ExtensionViewDialog({
           </div>
         ) : null}
 
-        {!previewItem && data && !selected && isDetail && visibleRows.length > 0 ? (
+        {!previewItem && data && !selected && isDetail && visibleRows.length > 0 && !isWallpaperStudio ? (
           <div className="flex items-center gap-2">
-            <Input aria-label="Search wallpapers" placeholder="Search wallpapers..." value={query} onChange={(event) => setQuery(event.target.value)} className="h-8 flex-1 text-xs" />
-            <span className="text-xs text-faint shrink-0">{visibleRows.length} wallpapers</span>
+            <Input aria-label="Search extension view" placeholder="Search" value={query} onChange={(event) => setQuery(event.target.value)} className="h-8 flex-1 text-xs" />
+            <span className="text-xs text-faint shrink-0">{visibleRows.length} rows</span>
           </div>
         ) : null}
 
@@ -1797,7 +3105,7 @@ function ExtensionViewDialog({
                 </Button>
                 {previewIndex >= 0 ? (
                   <span className="text-xs text-faint">
-                    {previewIndex + 1} of {visibleRows.length}
+                    {previewIndex + 1} of {browseRows.length}
                   </span>
                 ) : null}
               </div>
@@ -1807,7 +3115,7 @@ function ExtensionViewDialog({
                   size="sm"
                   variant="outline"
                   className="h-7 px-2.5 text-xs"
-                  disabled={busy || visibleRows.length <= 1}
+                  disabled={busy || browseRows.length <= 1}
                   onClick={handlePrevPreview}
                   title="Previous wallpaper (Left arrow)"
                 >
@@ -1817,7 +3125,7 @@ function ExtensionViewDialog({
                   size="sm"
                   variant="outline"
                   className="h-7 px-2.5 text-xs"
-                  disabled={busy || visibleRows.length <= 1}
+                  disabled={busy || browseRows.length <= 1}
                   onClick={handleNextPreview}
                   title="Next wallpaper (Right arrow)"
                 >
@@ -1929,124 +3237,43 @@ function ExtensionViewDialog({
             <p className="max-h-[320px] overflow-y-auto whitespace-pre-wrap text-xs text-soft">{selected.body}</p>
             <Button size="sm" variant="outline" onClick={() => setSelected(null)}>Back to list</Button>
           </div>
-        ) : data && visibleRows.length > 0 ? (
-          isDetail ? (
-            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 md:grid-cols-3 max-h-[440px] overflow-y-auto pr-1">
-              {visibleRows.map((row) => {
-                const isActive = row.meta === 'Active'
-                return (
-                  <div
-                    key={row.id}
-                    className={cn(
-                      "group/card relative flex flex-col justify-between rounded-lg border p-3 transition-colors",
-                      isActive
-                        ? "border-primary/60 bg-primary/10 shadow-sm ring-1 ring-primary/40"
-                        : "border-border-soft bg-surface-0/50 hover:bg-surface-0/80"
-                    )}
-                  >
-                    <div
-                      className="group/thumb relative mb-2.5 h-28 w-full cursor-pointer overflow-hidden rounded-md border border-border-soft bg-surface-2/60 transition-colors hover:border-primary/50"
-                      onClick={() => setPreviewItem(row)}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setPreviewItem(row) } }}
-                      title={`Preview ${row.title}`}
-                    >
-                      <LazyWallpaperThumb
-                        id={row.id}
-                        alt={row.title}
-                        dataUrl={thumbs[row.id] ?? row.thumbnail}
-                        onVisible={queueThumbnail}
-                      />
-                      <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover/thumb:opacity-100">
-                        <span className="flex items-center gap-1 rounded bg-black/75 px-2 py-1 text-[11px] font-medium text-white shadow">
-                          <Eye className="size-3.5" /> Preview
-                        </span>
+        ) : !isWallpaperStudio ? (
+          data && visibleRows.length > 0 ? (
+            isDetail ? (
+              <WallpaperLibraryGrid
+                rows={visibleRows}
+                thumbs={thumbs}
+                queueThumbnail={queueThumbnail}
+                busy={busy}
+                onPreview={(row) => openPreview(row, 'library')}
+                onApply={(row) => void runAction('apply', 'os.wallpaper.applySelected', row)}
+                onCollect={(row) => openCollectionPicker({ kind: 'file', ref: row.path ?? row.body ?? '', title: row.title }, false)}
+              />
+            ) : (
+              <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+                {visibleRows.map((row) => (
+                  <div key={row.id} className="rounded-md border border-border-soft bg-surface-0/40 p-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <span className="block truncate text-xs font-medium text-foreground">{row.title}</span>
+                        {row.body ? <span className="mt-0.5 block line-clamp-2 text-[11px] text-faint">{row.body}</span> : null}
+                        {row.meta ? <Badge variant="outline">{row.meta}</Badge> : null}
                       </div>
                     </div>
-
-                    <div className="flex items-start justify-between gap-2 min-w-0">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <div className={cn(
-                          "flex size-6 shrink-0 items-center justify-center rounded",
-                          isActive ? "bg-primary text-primary-foreground" : "bg-surface-2 text-foreground/80"
-                        )}>
-                          <Image className="size-3.5" />
-                        </div>
-                        <div className="min-w-0">
-                          <span className="block truncate text-xs font-medium text-foreground" title={row.title}>
-                            {row.title}
-                          </span>
-                          {row.body ? (
-                            <span className="block truncate text-[10px] text-faint" title={row.body}>
-                              {row.body}
-                            </span>
-                          ) : null}
-                        </div>
+                    {data.actions.length > 0 ? (
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">
+                        {data.actions.map((action) => (
+                          <Button key={action.id} size="sm" variant="ghost" className="h-6 px-2 text-[11px]" disabled={busy || row.actionsDisabled} onClick={() => void runAction(action.id, action.host, row)}>
+                            {action.title}
+                          </Button>
+                        ))}
                       </div>
-                      {row.meta ? (
-                        <Badge variant={isActive ? "default" : "outline"} className="text-[10px] shrink-0">
-                          {row.meta}
-                        </Badge>
-                      ) : null}
-                    </div>
-
-                    <div className="mt-3 flex items-center justify-between border-t border-border-soft/60 pt-2">
-                      <span className="text-[10px] text-faint">
-                        {isActive ? 'Active wallpaper' : 'Available'}
-                      </span>
-                      <div className="flex items-center gap-1.5">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-6 text-[11px] px-2"
-                          disabled={busy}
-                          onClick={() => setPreviewItem(row)}
-                          title="Preview wallpaper"
-                        >
-                          <Eye className="mr-1 size-3" /> Preview
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant={isActive ? "secondary" : "outline"}
-                          className="h-6 text-[11px] px-2.5"
-                          disabled={busy || row.actionsDisabled || isActive}
-                          onClick={() => void runAction('apply', 'os.wallpaper.applySelected', row)}
-                        >
-                          {isActive ? 'Active' : 'Apply'}
-                        </Button>
-                      </div>
-                    </div>
+                    ) : null}
                   </div>
-                )
-              })}
-            </div>
-          ) : (
-            <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
-              {visibleRows.map((row) => (
-                <div key={row.id} className="rounded-md border border-border-soft bg-surface-0/40 p-2">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <span className="block truncate text-xs font-medium text-foreground">{row.title}</span>
-                      {row.body ? <span className="mt-0.5 block line-clamp-2 text-[11px] text-faint">{row.body}</span> : null}
-                      {row.meta ? <Badge variant="outline">{row.meta}</Badge> : null}
-                    </div>
-                  </div>
-                  {data.actions.length > 0 ? (
-                    <div className="mt-1.5 flex flex-wrap gap-1.5">
-                      {data.actions.map((action) => (
-                        <Button key={action.id} size="sm" variant="ghost" className="h-6 px-2 text-[11px]" disabled={busy || row.actionsDisabled} onClick={() => void runAction(action.id, action.host, row)}>
-                          {action.title}
-                        </Button>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          )
-        ) : (
-          isDetail ? (
+                ))}
+              </div>
+            )
+          ) : isDetail ? (
             <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border-soft py-10 px-4 text-center">
               <div className="flex size-12 items-center justify-center rounded-full bg-surface-2 text-primary mb-3">
                 <Image className="size-6" />
@@ -2059,9 +3286,9 @@ function ExtensionViewDialog({
                 <Button
                   size="sm"
                   disabled={busy}
-                  onClick={() => void runAction('set-folder', 'os.wallpaper.setFolder')}
+                  onClick={() => void runAction('folders-add', 'os.wallpaper.folders.add')}
                 >
-                  <FolderOpen className="mr-1.5 size-3.5" /> Select Wallpaper Folder
+                  <FolderOpen className="mr-1.5 size-3.5" /> Link Wallpaper Folder
                 </Button>
                 <Button
                   size="sm"
@@ -2076,10 +3303,94 @@ function ExtensionViewDialog({
           ) : (
             <p className="text-xs text-faint">{query && data?.rows.length ? 'No rows match your search.' : data?.empty ?? 'This view has no rows yet.'}</p>
           )
-        )}
+        ) : null}
         </>}
       </DialogContent>
     </Dialog>
+
+    {picker ? (
+      <Dialog open onOpenChange={(open) => { if (!open) setPicker(null) }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Save to collections</DialogTitle>
+            <DialogDescription className="truncate">{picker.item.title}</DialogDescription>
+          </DialogHeader>
+          <div className="max-h-48 space-y-1 overflow-y-auto pr-1">
+            {(collectionsData?.collections.length ?? 0) === 0 ? (
+              <p className="text-xs text-faint">No collections yet — create one below.</p>
+            ) : collectionsData!.collections.map((collection) => {
+              const alreadyIn = collection.entries.some((entry) => entry.ref === picker.item.ref)
+              return (
+                <label
+                  key={collection.id}
+                  className="flex cursor-pointer items-center gap-2 rounded-md border border-border-soft bg-surface-0/40 px-2.5 py-1.5 text-xs transition-colors hover:bg-surface-0/70"
+                >
+                  <input
+                    type="checkbox"
+                    style={{ accentColor: 'var(--primary)' }}
+                    className="size-3.5 shrink-0"
+                    checked={pickerChecked.has(collection.id) || alreadyIn}
+                    onChange={() => {
+                      if (alreadyIn) return
+                      setPickerChecked((current) => {
+                        const next = new Set(current)
+                        if (next.has(collection.id)) next.delete(collection.id)
+                        else next.add(collection.id)
+                        return next
+                      })
+                    }}
+                  />
+                  <span className="truncate font-medium text-foreground">{collection.name}</span>
+                  {alreadyIn ? (
+                    <Badge variant="outline" className="ml-auto shrink-0 text-[10px]">Saved</Badge>
+                  ) : (
+                    <span className="ml-auto shrink-0 text-[10px] text-faint">{collection.entries.length}</span>
+                  )}
+                </label>
+              )
+            })}
+          </div>
+          <div className="flex items-center gap-2">
+            <Input
+              aria-label="New collection name"
+              placeholder="New collection"
+              value={pickerNewName}
+              onChange={(event) => setPickerNewName(event.target.value)}
+              className="h-8 flex-1 text-xs"
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 shrink-0 text-xs"
+              disabled={pickerBusy || !pickerNewName.trim()}
+              onClick={() => void createPickerCollection()}
+            >
+              {pickerBusy ? <RefreshCw className="mr-1 size-3.5 animate-spin" /> : <Plus className="mr-1 size-3.5" />} Create
+            </Button>
+          </div>
+          {picker.saveLink ? (
+            <p className="text-[10px] text-faint">
+              This link is also saved to My links, so you can apply or share it later.
+            </p>
+          ) : null}
+          <div className="flex justify-end gap-1.5">
+            <Button size="sm" variant="ghost" className="h-8 text-xs" disabled={pickerBusy} onClick={() => setPicker(null)}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              className="h-8 text-xs"
+              disabled={pickerBusy || (pickerChecked.size === 0 && !picker.saveLink)}
+              onClick={() => void confirmPicker()}
+            >
+              {pickerBusy ? <RefreshCw className="mr-1 size-3.5 animate-spin" /> : <Check className="mr-1 size-3.5" />}
+              Save{pickerChecked.size > 0 ? ` to ${pickerChecked.size}` : ''}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    ) : null}
+    </>
   )
 }
 

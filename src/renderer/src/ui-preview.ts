@@ -618,6 +618,7 @@ const desktopApi: DesktopApi = {
     installLocal: async () => null,
     installFromPath: async () => previewExtensionsState(),
     installAvailable: async () => previewExtensionsState(),
+    exportStarterKit: async () => null,
     update: async () => previewExtensionsState(),
     rollback: async () => previewExtensionsState(),
     uninstall: async () => previewExtensionsState(),
