@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { BookOpen, Check, ChevronLeft, ChevronRight, Download, ExternalLink, Eye, FolderOpen, FolderPlus, Image, Languages, Layers, Link2, ListChecks, MonitorPlay, Package, PanelsTopLeft, Plus, Power, Puzzle, RefreshCw, Repeat, Search, Settings2, ShieldCheck, Shuffle, SkipBack, SkipForward, Sparkles, SquareTerminal, Trash2, Undo2, Upload, Workflow } from 'lucide-react'
+import { BookOpen, Check, ChevronLeft, ChevronRight, Download, ExternalLink, Eye, FolderOpen, FolderPlus, Image, Languages, Layers, Link2, ListChecks, MonitorPlay, Package, PanelsTopLeft, Pencil, Plus, Power, Puzzle, RefreshCw, Repeat, Search, Settings2, ShieldCheck, Shuffle, SkipBack, SkipForward, Sparkles, SquareTerminal, Trash2, Undo2, Upload, Workflow } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { cn } from '../lib/utils'
 import type { NdContext } from '../../../shared/nd-context'
@@ -1566,19 +1566,26 @@ function WallpaperLibraryGrid({ rows, thumbs, queueThumbnail, busy, onPreview, o
  * (`user` or `bundle`); bundle rows are read-only and save into My links
  * instead of applying — collecting from Discovery never touches the desktop.
  */
-function WallpaperLinksGrid({ rows, thumbs, queueThumbnail, busy, onPreview, onApply, onRemove, onSave, savedUrls, onCollect }: {
+function WallpaperLinksGrid({ rows, thumbs, queueThumbnail, busy, onPreview, onApply, onRemove, onSave, savedUrls, onCollect, onEdit, rowCategories, bundleEditable }: {
   rows: NdViewRow[]
   thumbs: Record<string, string>
   queueThumbnail(id: string): void
   busy: boolean
   onPreview(row: NdViewRow): void
   onApply(row: NdViewRow): void
-  onRemove(row: NdViewRow): void
+  /** Omit for read-only row lists (curated collections) to hide the trash. */
+  onRemove?: ((row: NdViewRow) => void) | undefined
   /** When present, the primary action saves to My links instead of applying. */
   onSave?(row: NdViewRow): void
   savedUrls?: Set<string>
+  /** Dev-only: edit affordance for bundle cards. */
+  onEdit?(row: NdViewRow): void
   /** When present, cards get a "save to collections" affordance. */
   onCollect?(row: NdViewRow): void
+  /** row id → bundle category label, rendered as a small chip on the card. */
+  rowCategories?: Record<string, string>
+  /** Dev-only: bundle cards gain edit/remove affordances. */
+  bundleEditable?: boolean
 }): React.ReactNode {
   return (
     <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 md:grid-cols-3 max-h-[400px] overflow-y-auto pr-1">
@@ -1629,6 +1636,11 @@ function WallpaperLinksGrid({ rows, thumbs, queueThumbnail, busy, onPreview, onA
               <Badge variant="outline" className={cn("text-[10px] shrink-0", isBundle && "border-violet-500/30 text-violet-500")}>
                 {isBundle ? 'ND' : row.path === 'file' ? 'File' : 'Yours'}
               </Badge>
+              {rowCategories?.[row.id] ? (
+                <Badge variant="outline" className="text-[10px] shrink-0" title="Bundle category">
+                  {rowCategories[row.id]}
+                </Badge>
+              ) : null}
             </div>
 
             <div className="mt-3 flex items-center justify-between border-t border-border-soft/60 pt-2">
@@ -1681,7 +1693,7 @@ function WallpaperLinksGrid({ rows, thumbs, queueThumbnail, busy, onPreview, onA
                     <FolderPlus className="size-3.5" />
                   </Button>
                 ) : null}
-                {!isBundle ? (
+                {!isBundle && onRemove ? (
                   <Button
                     size="sm"
                     variant="ghost"
@@ -1692,6 +1704,29 @@ function WallpaperLinksGrid({ rows, thumbs, queueThumbnail, busy, onPreview, onA
                   >
                     <Trash2 className="size-3.5" />
                   </Button>
+                ) : bundleEditable ? (
+                  <>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 w-6 p-0 text-faint hover:text-foreground"
+                      disabled={busy}
+                      onClick={() => onEdit?.(row)}
+                      title="Edit this ND bundle link (dev builds write the in-repo bundle file)"
+                    >
+                      <Pencil className="size-3.5" />
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 w-6 p-0 text-faint hover:text-destructive"
+                      disabled={busy}
+                      onClick={() => onRemove?.(row)}
+                      title="Remove this link from the ND bundle (dev builds write the in-repo bundle file)"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </Button>
+                  </>
                 ) : null}
               </div>
             </div>
@@ -1736,7 +1771,12 @@ function ExtensionViewDialog({
   const [studioTab, setStudioTab] = useState<'library' | 'now'>('library')
   const [discoveryTab, setDiscoveryTab] = useState<'folders' | 'links' | 'collections' | 'bundle'>('folders')
   const [previewSource, setPreviewSource] = useState<'library' | 'setup' | 'links' | 'collection'>('library')
-  const [linksData, setLinksData] = useState<{ user: WallpaperLink[]; bundle: WallpaperLink[]; defaultFolder: string | null } | null>(null)
+  const [linksData, setLinksData] = useState<{ user: WallpaperLink[]; bundle: WallpaperLink[]; defaultFolder: string | null; bundleEditable: boolean } | null>(null)
+  // ND bundle curation (dev builds only): the active category chip filter and
+  // the inline add/edit form. `null` category means "All".
+  const [bundleCategory, setBundleCategory] = useState<string | null>(null)
+  const [bundleEdit, setBundleEdit] = useState<{ mode: 'add' } | { mode: 'edit'; link: WallpaperLink } | null>(null)
+  const [bundleDraft, setBundleDraft] = useState({ url: '', title: '', thumb: '', category: '' })
   // Folders source: linked folders + the system Pictures default, with the
   // play-source multi-select that decides what rotation draws from.
   const [foldersData, setFoldersData] = useState<{ folders: { path: string; count: number }[]; defaultFolder: string; sources: string[] } | null>(null)
@@ -1881,11 +1921,12 @@ function ExtensionViewDialog({
         input: { action: 'links-list' },
       })
       if (!res.ok) throw new Error(res.error?.message ?? 'Could not load wallpaper links')
-      const value = (res.value ?? {}) as { user?: WallpaperLink[]; bundle?: WallpaperLink[]; defaultFolder?: unknown }
+      const value = (res.value ?? {}) as { user?: WallpaperLink[]; bundle?: WallpaperLink[]; defaultFolder?: unknown; bundleEditable?: unknown }
       setLinksData({
         user: Array.isArray(value.user) ? value.user : [],
         bundle: Array.isArray(value.bundle) ? value.bundle : [],
         defaultFolder: typeof value.defaultFolder === 'string' ? value.defaultFolder : null,
+        bundleEditable: value.bundleEditable === true,
       })
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : String(cause))
@@ -2010,6 +2051,9 @@ function ExtensionViewDialog({
         if (!collectionsData) void loadCollections()
       } else if ((discoveryTab === 'links' || discoveryTab === 'bundle') && !linksData) {
         void loadDiscoveryLinks()
+      } else if (discoveryTab === 'bundle' && linksData?.bundleEditable && !collectionsData) {
+        // The dev bundle editor offers collection names as category options.
+        void loadCollections()
       }
     } else if (studioTab === 'now' && !linksData) {
       // Now playing also reports an active Discovery link as the current wallpaper.
@@ -2062,6 +2106,12 @@ function ExtensionViewDialog({
       ...(browseCollectionThumbs[entry.id] ? { thumbnail: browseCollectionThumbs[entry.id] } : {}),
     })),
     [browsedCollection, browseCollectionThumbs],
+  )
+
+  /** Collections the user can save into: curated ND collections are read-only. */
+  const editableCollections = useMemo(
+    () => (collectionsData?.collections ?? []).filter((collection) => collection.source !== 'bundle'),
+    [collectionsData],
   )
 
   // --- Save-to-collections picker ----------------------------------------------
@@ -2185,10 +2235,33 @@ function ExtensionViewDialog({
     [linksData?.user, linkThumbs],
   )
   const bundleLinkRows: NdViewRow[] = useMemo(
-    () => (linksData?.bundle ?? []).map((link) => linkRowFrom(link, 'bundle')),
+    () => (linksData?.bundle ?? [])
+      .filter((link) => bundleCategory === null || (link.category ?? '') === bundleCategory)
+      .map((link) => linkRowFrom(link, 'bundle')),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [linksData?.bundle, linkThumbs],
+    [linksData?.bundle, linkThumbs, bundleCategory],
   )
+  /** Category chips for the ND bundle tab: label → entry count, sorted. */
+  const bundleCategories = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const link of linksData?.bundle ?? []) {
+      const key = link.category ?? ''
+      counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+    return [...counts.entries()].sort(([a], [b]) => a.localeCompare(b))
+  }, [linksData?.bundle])
+  const bundleCategoryLabels = useMemo(
+    () => Object.fromEntries((linksData?.bundle ?? []).filter((link) => link.category).map((link) => [link.id, link.category as string])),
+    [linksData?.bundle],
+  )
+  /** Category choices for the bundle editor: your collection names, plus any category already in use. */
+  const bundleCategoryOptions = useMemo(() => {
+    const names = new Set<string>()
+    for (const collection of collectionsData?.collections ?? []) names.add(collection.name)
+    for (const link of linksData?.bundle ?? []) if (link.category) names.add(link.category)
+    if (bundleDraft.category) names.add(bundleDraft.category)
+    return [...names].sort((a, b) => a.localeCompare(b))
+  }, [collectionsData?.collections, linksData?.bundle, bundleDraft.category])
 
   const activeLink = useMemo(
     () => [...(linksData?.user ?? []), ...(linksData?.bundle ?? [])].find((link) => link.active) ?? null,
@@ -2199,6 +2272,64 @@ function ExtensionViewDialog({
     () => new Set((linksData?.user ?? []).map((link) => link.url)),
     [linksData],
   )
+
+  // --- ND bundle curation (dev builds only) ------------------------------------
+  // Packaged builds refuse these hosts in the main process; the UI only shows
+  // the affordances when links-list reports bundleEditable.
+  const invokeWallpaperAction = async (action: string, input: Record<string, unknown>): Promise<unknown> => {
+    if (!target) throw new Error('Wallpaper Studio is not open')
+    const res = await window.ndDsh.ndExtensions.invoke({
+      extensionId: target.extensionId,
+      contributionId: target.viewId,
+      contributionKind: 'view',
+      context: target.context,
+      caller: 'user',
+      input: { ...input, action },
+    })
+    if (!res.ok) throw new Error(res.error?.message ?? 'The ND bundle edit failed')
+    return res.value
+  }
+  const openBundleAdd = (): void => {
+    setBundleDraft({ url: '', title: '', thumb: '', category: bundleCategory ?? '' })
+    setBundleEdit({ mode: 'add' })
+  }
+  const openBundleEdit = (row: NdViewRow): void => {
+    const link = (linksData?.bundle ?? []).find((entry) => entry.id === row.id)
+    if (!link) return
+    setBundleDraft({ url: link.url, title: link.title, thumb: link.thumbUrl ?? '', category: link.category ?? '' })
+    setBundleEdit({ mode: 'edit', link })
+  }
+  const submitBundleEdit = async (): Promise<void> => {
+    if (!bundleEdit) return
+    const draft = {
+      url: bundleDraft.url.trim(),
+      title: bundleDraft.title.trim(),
+      thumb: bundleDraft.thumb.trim(),
+      category: bundleDraft.category.trim(),
+    }
+    setBusy(true)
+    try {
+      if (bundleEdit.mode === 'add') await invokeWallpaperAction('bundle-add', draft)
+      else await invokeWallpaperAction('bundle-update', { id: bundleEdit.link.id, ...draft })
+      setBundleEdit(null)
+      await loadDiscoveryLinks()
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const removeBundleLink = async (row: NdViewRow): Promise<void> => {
+    setBusy(true)
+    try {
+      await invokeWallpaperAction('bundle-remove', { id: row.id })
+      await loadDiscoveryLinks()
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
   const activeRow = useMemo(
     () => currentData?.rows.find((row) => row.meta === 'Active') ?? null,
     [currentData],
@@ -2750,7 +2881,7 @@ function ExtensionViewDialog({
                         busy={busy}
                         onPreview={(row) => openPreview(row, 'collection')}
                         onApply={(row) => void runAction('collections-apply', 'os.wallpaper.collections.apply', row, { collectionId: browsedCollection.id })}
-                        onRemove={(row) => void runAction('collections-remove', 'os.wallpaper.collections.removeEntry', undefined, { collectionId: browsedCollection.id, entryId: row.id })}
+                        onRemove={browsedCollection.source === 'bundle' ? undefined : (row) => void runAction('collections-remove', 'os.wallpaper.collections.removeEntry', undefined, { collectionId: browsedCollection.id, entryId: row.id })}
                       />
                     )
                   ) : foldersData.folders.length === 0 ? (
@@ -2826,6 +2957,9 @@ function ExtensionViewDialog({
                           )}
                         >
                           {collection.name}
+                          {collection.source === 'bundle' ? (
+                            <ShieldCheck className="size-3 opacity-80" aria-label="Curated by ND" />
+                          ) : null}
                           <span className={cn('rounded-full px-1.5 text-[10px]', selectedCollectionId === collection.id ? 'bg-primary-foreground/20' : 'bg-surface-2')}>
                             {collection.entries.length}
                           </span>
@@ -2857,6 +2991,11 @@ function ExtensionViewDialog({
                       <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border-soft bg-surface-0/40 px-3 py-1.5 text-xs">
                         <div className="flex items-center gap-2 min-w-0">
                           <span className="truncate font-semibold text-foreground">{selectedCollection.name}</span>
+                          {selectedCollection.source === 'bundle' ? (
+                            <Badge variant="outline" className="shrink-0 border-violet-500/30 text-[10px] text-violet-500" title="Ships in the ND bundle; read-only">
+                              ND
+                            </Badge>
+                          ) : null}
                           <span className="shrink-0 text-faint">{selectedCollection.entries.length} images</span>
                         </div>
                         <div className="flex items-center gap-1.5">
@@ -2895,16 +3034,18 @@ function ExtensionViewDialog({
                           >
                             <Repeat className="mr-1 size-3" /> {collectionsData.rotateCollectionId === selectedCollection.id ? 'Rotating' : 'Auto-rotate'}
                           </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-6 w-6 p-0 text-faint hover:text-destructive"
-                            disabled={busy}
-                            onClick={() => void runAction('collections-delete', 'os.wallpaper.collections.delete', undefined, { id: selectedCollection.id })}
-                            title="Delete this collection (saved links stay in My links)"
-                          >
-                            <Trash2 className="size-3.5" />
-                          </Button>
+                          {selectedCollection.source === 'bundle' ? null : (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-6 w-6 p-0 text-faint hover:text-destructive"
+                              disabled={busy}
+                              onClick={() => void runAction('collections-delete', 'os.wallpaper.collections.delete', undefined, { id: selectedCollection.id })}
+                              title="Delete this collection (saved links stay in My links)"
+                            >
+                              <Trash2 className="size-3.5" />
+                            </Button>
+                          )}
                         </div>
                       </div>
 
@@ -2924,7 +3065,7 @@ function ExtensionViewDialog({
                           busy={busy}
                           onPreview={(row) => openPreview(row, 'collection')}
                           onApply={(row) => void runAction('collections-apply', 'os.wallpaper.collections.apply', row, { collectionId: selectedCollection.id })}
-                          onRemove={(row) => void runAction('collections-remove', 'os.wallpaper.collections.removeEntry', undefined, { collectionId: selectedCollection.id, entryId: row.id })}
+                          onRemove={selectedCollection.source === 'bundle' ? undefined : (row) => void runAction('collections-remove', 'os.wallpaper.collections.removeEntry', undefined, { collectionId: selectedCollection.id, entryId: row.id })}
                         />
                       )}
                       <p className="text-[10px] text-faint">
@@ -2985,25 +3126,145 @@ function ExtensionViewDialog({
             ) : null}
 
             {discoveryTab === 'bundle' ? (
-              bundleLinkRows.length === 0 ? (
-                <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border-soft py-8 px-4 text-center">
-                  <ShieldCheck className="mb-2 size-8 text-faint" />
-                  <p className="text-xs text-soft">The ND-curated wallpaper bundle is not available in this install.</p>
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-1" role="tablist" aria-label="ND bundle categories">
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={bundleCategory === null}
+                      onClick={() => setBundleCategory(null)}
+                      className={cn(
+                        'rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors',
+                        bundleCategory === null
+                          ? 'border-primary/50 bg-primary/10 text-primary'
+                          : 'border-border-soft text-soft hover:bg-surface-2 hover:text-foreground'
+                      )}
+                    >
+                      All {linksData?.bundle.length ?? 0}
+                    </button>
+                    {bundleCategories.map(([category, count]) => (
+                      <button
+                        key={category || 'uncategorized'}
+                        type="button"
+                        role="tab"
+                        aria-selected={bundleCategory === category}
+                        onClick={() => setBundleCategory(category)}
+                        className={cn(
+                          'rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors',
+                          bundleCategory === category
+                            ? 'border-primary/50 bg-primary/10 text-primary'
+                            : 'border-border-soft text-soft hover:bg-surface-2 hover:text-foreground'
+                        )}
+                      >
+                        {category || 'Uncategorized'} {count}
+                      </button>
+                    ))}
+                  </div>
+                  {linksData?.bundleEditable ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs"
+                      disabled={busy}
+                      onClick={openBundleAdd}
+                      title="Add a link to the in-repo ND bundle (dev builds only)"
+                    >
+                      <Plus className="mr-1 size-3.5" /> Add link
+                    </Button>
+                  ) : null}
                 </div>
-              ) : (
-                <WallpaperLinksGrid
-                  rows={bundleLinkRows}
-                  thumbs={linkThumbs}
-                  queueThumbnail={queueLinkThumbnail}
-                  busy={busy}
-                  onPreview={(row) => openPreview(row, 'links')}
-                  onApply={(row) => void runAction('links-apply', 'os.wallpaper.links.apply', row, { source: 'bundle' })}
-                  onRemove={() => undefined}
-                  onSave={(row) => openCollectionPicker({ kind: 'link', ref: row.body ?? '', title: row.title }, true)}
-                  savedUrls={savedLinkUrls}
-                  onCollect={(row) => openCollectionPicker({ kind: 'link', ref: row.body ?? '', title: row.title }, true)}
-                />
-              )
+
+                {bundleEdit ? (
+                  <form
+                    className="space-y-2 rounded-md border border-border-soft bg-surface-0/60 p-3"
+                    onSubmit={(event) => {
+                      event.preventDefault()
+                      void submitBundleEdit()
+                    }}
+                  >
+                    <p className="text-[11px] font-semibold text-foreground">
+                      {bundleEdit.mode === 'add' ? 'Add to the ND bundle' : 'Edit ND bundle link'}
+                    </p>
+                    <input
+                      className="h-8 w-full rounded-[7px] border border-border-soft bg-surface-1 px-2 font-mono text-[11px] text-foreground outline-none focus:border-primary/60"
+                      placeholder="https://example.com/wallpaper.jpg"
+                      title="Image URL (https only, public hosts only)"
+                      value={bundleDraft.url}
+                      onChange={(event) => setBundleDraft((draft) => ({ ...draft, url: event.target.value }))}
+                      required={bundleEdit.mode === 'add'}
+                    />
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                      <input
+                        className="h-8 w-full rounded-[7px] border border-border-soft bg-surface-1 px-2 text-[11px] text-foreground outline-none focus:border-primary/60"
+                        placeholder="Title"
+                        value={bundleDraft.title}
+                        onChange={(event) => setBundleDraft((draft) => ({ ...draft, title: event.target.value }))}
+                      />
+                      <input
+                        className="h-8 w-full rounded-[7px] border border-border-soft bg-surface-1 px-2 font-mono text-[11px] text-foreground outline-none focus:border-primary/60"
+                        placeholder="Thumb URL (optional)"
+                        title="Small cover image shown in the grid before the full image is downloaded"
+                        value={bundleDraft.thumb}
+                        onChange={(event) => setBundleDraft((draft) => ({ ...draft, thumb: event.target.value }))}
+                      />
+                      <select
+                        className="h-8 w-full rounded-[7px] border border-border-soft bg-surface-1 px-2 text-[11px] text-foreground outline-none focus:border-primary/60"
+                        title="Category — reuse a collection name so the filter chips and your collections stay aligned"
+                        value={bundleDraft.category}
+                        onChange={(event) => setBundleDraft((draft) => ({ ...draft, category: event.target.value }))}
+                      >
+                        <option value="">Uncategorized</option>
+                        {bundleCategoryOptions.map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <Button type="submit" size="sm" variant="outline" className="h-7 text-xs" disabled={busy}>
+                        <Check className="mr-1 size-3.5" /> Save
+                      </Button>
+                      <Button type="button" size="sm" variant="ghost" className="h-7 text-xs" disabled={busy} onClick={() => setBundleEdit(null)}>
+                        Cancel
+                      </Button>
+                    </div>
+                    <p className="text-[10px] text-faint">
+                      Dev builds write resources/nd-bundles/wallpaper-links.json in this repo, so the curation lands as a normal git diff.
+                    </p>
+                  </form>
+                ) : null}
+
+                {(linksData?.bundle.length ?? 0) === 0 ? (
+                  <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border-soft py-8 px-4 text-center">
+                    <ShieldCheck className="mb-2 size-8 text-faint" />
+                    <p className="text-xs text-soft">
+                      {linksData?.bundleEditable
+                        ? 'The ND bundle in this repo is empty. Add the first link above.'
+                        : 'The ND-curated wallpaper bundle is not available in this install.'}
+                    </p>
+                  </div>
+                ) : bundleLinkRows.length === 0 ? (
+                  <p className="text-xs text-faint" role="status">No bundle links in this category yet.</p>
+                ) : (
+                  <WallpaperLinksGrid
+                    rows={bundleLinkRows}
+                    thumbs={linkThumbs}
+                    queueThumbnail={queueLinkThumbnail}
+                    busy={busy}
+                    onPreview={(row) => openPreview(row, 'links')}
+                    onApply={(row) => void runAction('links-apply', 'os.wallpaper.links.apply', row, { source: 'bundle' })}
+                    onRemove={(row) => void removeBundleLink(row)}
+                    onSave={(row) => openCollectionPicker({ kind: 'link', ref: row.body ?? '', title: row.title }, true)}
+                    savedUrls={savedLinkUrls}
+                    onCollect={(row) => openCollectionPicker({ kind: 'link', ref: row.body ?? '', title: row.title }, true)}
+                    onEdit={openBundleEdit}
+                    rowCategories={bundleCategoryLabels}
+                    bundleEditable={linksData?.bundleEditable === true}
+                  />
+                )}
+              </div>
             ) : null}
           </div>
         ) : null}
@@ -3316,9 +3577,13 @@ function ExtensionViewDialog({
             <DialogDescription className="truncate">{picker.item.title}</DialogDescription>
           </DialogHeader>
           <div className="max-h-48 space-y-1 overflow-y-auto pr-1">
-            {(collectionsData?.collections.length ?? 0) === 0 ? (
-              <p className="text-xs text-faint">No collections yet — create one below.</p>
-            ) : collectionsData!.collections.map((collection) => {
+            {editableCollections.length === 0 ? (
+              <p className="text-xs text-faint">
+                {(collectionsData?.collections.length ?? 0) === 0
+                  ? 'No collections yet — create one below.'
+                  : 'Curated ND collections are read-only — create your own below.'}
+              </p>
+            ) : editableCollections.map((collection) => {
               const alreadyIn = collection.entries.some((entry) => entry.ref === picker.item.ref)
               return (
                 <label

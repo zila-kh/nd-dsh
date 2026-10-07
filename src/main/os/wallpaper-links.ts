@@ -5,8 +5,14 @@ import { basename, isAbsolute, join } from 'node:path'
 import process from 'node:process'
 import { promisify } from 'node:util'
 import {
+  COLLECTION_ENTRIES_MAX,
+  COLLECTIONS_MAX,
+  COLLECTION_NAME_MAX,
   WALLPAPER_LINKS_MAX,
+  WALLPAPER_LINKS_SCHEMA,
+  WALLPAPER_LINK_TITLE_MAX,
   isPrivateHostname,
+  normalizeWallpaperCategory,
   parseWallpaperLinkUrl,
   parseWallpaperLinksBundle,
   type WallpaperCollection,
@@ -14,6 +20,7 @@ import {
   type WallpaperCollectionItemInput,
   type WallpaperLink,
   type WallpaperLinkSeed,
+  type WallpaperLinksBundle,
 } from '../../shared/wallpaper-links.js'
 import { SUPPORTED_WALLPAPER_EXTENSIONS } from './wallpaper.js'
 
@@ -39,10 +46,6 @@ export function linkIdForUrl(url: string): string {
 export function collectionEntryId(kind: 'link' | 'file', ref: string): string {
   return createHash('sha256').update(`${kind}:${ref}`).digest('hex').slice(0, 16)
 }
-
-const COLLECTION_NAME_MAX = 80
-const COLLECTIONS_MAX = 50
-const COLLECTION_ENTRIES_MAX = 500
 
 /** A collection file entry must be an absolute path to a supported image. */
 export function validateCollectionFileRef(ref: string): string {
@@ -226,7 +229,150 @@ export function bundledLinkFromSeed(seed: WallpaperLinkSeed): WallpaperLink {
     source: 'bundle',
     addedAt: 0,
     ...(thumbUrl ? { thumbUrl } : {}),
+    ...(seed.category ? { category: seed.category } : {}),
   }
+}
+
+/**
+ * Dev-only curation of the shipped ND bundle document. Unpacked builds write
+ * `resources/nd-bundles/wallpaper-links.json` in place so a curation pass lands
+ * as a normal git diff; packaged builds never reach these helpers.
+ */
+export interface BundledWallpaperLinkEdit {
+  url?: string
+  title?: string
+  thumb?: string
+  category?: string
+}
+
+/** Read + parse the bundle document; a missing file starts as an empty doc. */
+export async function readWallpaperLinksBundle(filePath: string): Promise<WallpaperLinksBundle> {
+  let raw: string
+  try {
+    raw = await fs.readFile(filePath, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { schema: WALLPAPER_LINKS_SCHEMA, name: 'ND Curated Wallpaper Links', links: [] }
+    }
+    throw error
+  }
+  return parseWallpaperLinksBundle(JSON.parse(raw))
+}
+
+/**
+ * Re-validate the serialized document before writing, so a bad edit never lands
+ * on disk. Entries keep the shipped one-per-line style so a curation pass diffs
+ * as exactly the lines that changed.
+ */
+export async function writeWallpaperLinksBundle(filePath: string, bundle: WallpaperLinksBundle): Promise<void> {
+  const entry = (seed: WallpaperLinkSeed): string => {
+    const parts = [`"url": ${JSON.stringify(seed.url)}`]
+    if (seed.thumb) parts.push(`"thumb": ${JSON.stringify(seed.thumb)}`)
+    parts.push(`"title": ${JSON.stringify(seed.title)}`)
+    if (seed.category) parts.push(`"category": ${JSON.stringify(seed.category)}`)
+    return `    { ${parts.join(', ')} }`
+  }
+  const head = [`  "schema": ${JSON.stringify(bundle.schema)}`, `  "name": ${JSON.stringify(bundle.name)}`]
+  if (bundle.description) head.push(`  "description": ${JSON.stringify(bundle.description)}`)
+  const linksBlock = bundle.links.length > 0 ? `[\n${bundle.links.map(entry).join(',\n')}\n  ]` : '[]'
+  // One line per curated collection so curation diffs stay readable.
+  const collectionsBlock = bundle.collections && bundle.collections.length > 0
+    ? `[\n${bundle.collections.map((collection) => {
+        const entries = collection.entries
+          .map((seed) => `      { "kind": ${JSON.stringify(seed.kind)}, "ref": ${JSON.stringify(seed.ref)}, "title": ${JSON.stringify(seed.title)}${seed.id ? `, "id": ${JSON.stringify(seed.id)}` : ''} }`)
+          .join(',\n')
+        return `    { "id": ${JSON.stringify(collection.id ?? '')}, "name": ${JSON.stringify(collection.name)}, "createdAt": ${JSON.stringify(collection.createdAt ?? 0)}, "entries": [\n${entries}\n    ] }`
+      }).join(',\n')}\n  ]`
+    : null
+  // Keep whatever line endings the checkout already uses, so a curation pass
+  // never shows up as whole-file EOL churn in git.
+  let eol = '\n'
+  try {
+    if ((await fs.readFile(filePath, 'utf8')).includes('\r\n')) eol = '\r\n'
+  } catch {
+    // First write for a missing file; LF is fine.
+  }
+  const payload = `{\n${head.join(',\n')},\n  "links": ${linksBlock}${collectionsBlock ? `,\n  "collections": ${collectionsBlock}` : ''}\n}\n`.replace(/\n/g, eol)
+  parseWallpaperLinksBundle(JSON.parse(payload))
+  await fs.mkdir(join(filePath, '..'), { recursive: true })
+  await fs.writeFile(filePath, payload, 'utf8')
+}
+
+export async function addBundledWallpaperLink(filePath: string, edit: BundledWallpaperLinkEdit): Promise<WallpaperLinksBundle> {
+  const bundle = await readWallpaperLinksBundle(filePath)
+  const url = parseWallpaperLinkUrl(edit.url ?? '').toString()
+  if (bundle.links.some((seed) => seed.url === url)) throw new Error('That link is already in the ND bundle')
+  if (bundle.links.length >= WALLPAPER_LINKS_MAX) {
+    throw new Error(`The ND bundle is full (max ${WALLPAPER_LINKS_MAX} links); remove some before adding more`)
+  }
+  const thumb = edit.thumb?.trim() ? parseWallpaperLinkUrl(edit.thumb).toString() : undefined
+  const category = normalizeWallpaperCategory(edit.category)
+  bundle.links.push({
+    url,
+    title: (edit.title?.trim() || titleForUrl(new URL(url))).slice(0, WALLPAPER_LINK_TITLE_MAX),
+    ...(thumb ? { thumb } : {}),
+    ...(category ? { category } : {}),
+  })
+  await writeWallpaperLinksBundle(filePath, bundle)
+  return bundle
+}
+
+export async function updateBundledWallpaperLink(filePath: string, currentUrl: string, edit: BundledWallpaperLinkEdit): Promise<WallpaperLinksBundle> {
+  const bundle = await readWallpaperLinksBundle(filePath)
+  const normalized = parseWallpaperLinkUrl(currentUrl).toString()
+  const seed = bundle.links.find((entry) => entry.url === normalized)
+  if (!seed) throw new Error('That ND bundle link no longer exists')
+  if (edit.url !== undefined && edit.url.trim() !== '') {
+    const next = parseWallpaperLinkUrl(edit.url).toString()
+    if (next !== normalized && bundle.links.some((entry) => entry.url === next)) {
+      throw new Error('That link is already in the ND bundle')
+    }
+    seed.url = next
+  }
+  if (edit.title !== undefined) seed.title = (edit.title.trim() || titleForUrl(new URL(seed.url))).slice(0, WALLPAPER_LINK_TITLE_MAX)
+  if (edit.thumb !== undefined) {
+    const thumb = edit.thumb.trim() ? parseWallpaperLinkUrl(edit.thumb).toString() : undefined
+    if (thumb) seed.thumb = thumb
+    else delete seed.thumb
+  }
+  if (edit.category !== undefined) {
+    const category = normalizeWallpaperCategory(edit.category)
+    if (category) seed.category = category
+    else delete seed.category
+  }
+  await writeWallpaperLinksBundle(filePath, bundle)
+  return bundle
+}
+
+export async function removeBundledWallpaperLink(filePath: string, currentUrl: string): Promise<{ removed: boolean; bundle: WallpaperLinksBundle }> {
+  const bundle = await readWallpaperLinksBundle(filePath)
+  const normalized = parseWallpaperLinkUrl(currentUrl).toString()
+  const before = bundle.links.length
+  bundle.links = bundle.links.filter((entry) => entry.url !== normalized)
+  if (bundle.links.length === before) return { removed: false, bundle }
+  await writeWallpaperLinksBundle(filePath, bundle)
+  return { removed: true, bundle }
+}
+
+/**
+ * Mirror the user's collections into the bundle document (dev builds only, the
+ * caller gates on `app.isPackaged`). File entries are dropped: a curated
+ * collection ships link entries only, since an absolute local path would be
+ * meaningless on anyone else's machine.
+ */
+export async function writeBundledCollections(filePath: string, collections: WallpaperCollection[]): Promise<WallpaperLinksBundle> {
+  const bundle = await readWallpaperLinksBundle(filePath)
+  bundle.collections = collections.slice(0, COLLECTIONS_MAX).map((collection) => ({
+    id: collection.id,
+    name: collection.name.slice(0, COLLECTION_NAME_MAX),
+    createdAt: collection.createdAt,
+    entries: collection.entries
+      .filter((entry) => entry.kind === 'link')
+      .slice(0, COLLECTION_ENTRIES_MAX)
+      .map((entry) => ({ id: entry.id, kind: 'link' as const, ref: entry.ref, title: entry.title })),
+  }))
+  await writeWallpaperLinksBundle(filePath, bundle)
+  return bundle
 }
 
 /**

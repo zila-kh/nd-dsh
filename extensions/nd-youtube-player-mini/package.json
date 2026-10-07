@@ -1,0 +1,16 @@
+{
+  "name": "@nd-dsh/nd-youtube-player-mini",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "ND YouTube Mini — declarative nd.extension/1 package scaffold with a zero-dependency verification chain.",
+  "engines": {
+    "node": ">=21.0.0"
+  },
+  "scripts": {
+    "verify": "node scripts/typecheck.mjs && node --test \"test/*.test.mjs\" && node scripts/build.mjs",
+    "typecheck": "node scripts/typecheck.mjs",
+    "test": "node --test \"test/*.test.mjs\"",
+    "build": "node scripts/build.mjs"
+  }
+}

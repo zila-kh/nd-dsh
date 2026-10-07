@@ -39,6 +39,7 @@ import { HomeStore } from './home/home-store.js'
 import type { GitService } from './git/git-service.js'
 import type { GitExecRunner } from './git/git-cli.js'
 import type { CoreMedia } from './core/core-media.js'
+import type { CoreClipboard } from './core/core-clipboard.js'
 import type { HarnessService } from './harness/harness-service.js'
 import type { ProviderStore } from './providers.js'
 import type { QaService } from './qa/qa-service.js'
@@ -74,6 +75,8 @@ interface IpcDependencies {
   coreGit?: GitExecRunner
   /** nd-core-backed native image and wallpaper surface for extensions. */
   coreMedia?: CoreMedia
+  /** nd-core-backed clipboard read/write/watcher surface for extensions. */
+  coreClipboard?: CoreClipboard
   qa: QaService
   sessionArchive: SessionArchiveStore
   /** ND's durable token accounting, captured from the runtime event stream. */
@@ -275,6 +278,7 @@ export function registerIpc(deps: IpcDependencies): () => void {
     providers: deps.providers,
     workflow: workflowService,
     ...(deps.coreMedia ? { media: deps.coreMedia } : {}),
+    ...(deps.coreClipboard ? { coreClipboard: deps.coreClipboard } : {}),
     onHomeChanged: () => { void syncHomeSessions() },
   })
   // Personal chats run outside the active workspace but must stay listed in the

@@ -2,7 +2,7 @@
 
 > Priority: P1
 > Owner: ND extensions + nd-core sidecar
-> Status: proposal; not started, no code written, no validation established
+> Status: **implemented — local validation recorded 2026-10-07 (Rust unit + real-clipboard spike tests, desktop reconcile/store tests, all repo gates green); packaged-build manual pass still open**
 > Depends on: [0036](0036-extension-invocation-and-permissions.md) (invocation broker), [0045](0045-command-registry-native-wallpaper.md) (command registry + native capability proof)
 > PRD: [0008 — Command Registry and Governed Native Extensions](../prd/0008-command-registry-native-extensions.md)
 > Reference: [magibarapp `clipboard-history`](https://github.com/invisal/magibarapp/tree/main/src/extensions/clipboard-history) — design only, see §Licensing
@@ -172,20 +172,40 @@ Behaviour and cost:
 
 Record actual evidence when implemented; this planning document establishes none.
 
-- `pnpm core:test`, `cargo fmt --check`, `cargo clippy` — per the done-0012 lesson, unformatted `nd-core` source aborts `pnpm core:test` on Linux too, so format and lint are not Windows-only concerns.
-- `pnpm typecheck`, `pnpm test`, `pnpm build`, `pnpm verify`.
-- `node scripts/validate-nd-extension.mjs extensions/clipboard-history`. Note `--builtins` does **not** cover this package, because it is deliberately not a built-in; the catalog and allowlist paths need their own check.
-- New Rust unit tests driving the watcher against an injected clipboard source, with no real clipboard.
-- New desktop tests for `syncClipboardWatcher` covering every transition in the §Acceptance lifecycle list, asserting watcher count rather than inferring it from settings.
-- Windows manual, on a packaged build: install from the catalog, opt in, third-party app copy, image copy, file copy, write-back non-echo, opt out and confirm recording stops, console and window suppression, shutdown teardown.
+**Recorded 2026-10-07 (local, Windows dev machine):**
 
-GitHub Actions remain parked, so no automated-run claim is made until these local gates are recorded.
+- `pnpm core:test` steps: `cargo fmt --check` clean; `cargo clippy -p nd-protocol -p nd-runtime -p nd-core -p nd-agent --all-targets -- -D warnings` clean; `cargo test` for all four crates green (nd-runtime 95 passed incl. 23 new clipboard tests + 2 spike tests run separately, protocol contract 21, nd-protocol 10, nd-agent 15 + stdio contract 1). The `cargo test` link ran with `CARGO_TARGET_DIR=target-check` because a concurrently running dev app held `target\debug\nd-core.exe`; fmt and clippy ran against the default target dir.
+- `pnpm typecheck` clean; `pnpm test` green (169 files / 1434 tests passed, incl. the new `tests/clipboard-watcher.test.ts` and `tests/clipboard-history-store.test.ts`); `pnpm build` green; `pnpm verify` green (345 source files, 183 test files).
+- `node scripts/validate-nd-extension.mjs extensions/clipboard-history` PASS. A protocol-level smoke against the freshly built `nd-core` binary confirmed the full surface end to end: `core.health` advertises `clipboard` + `clipboardWatcherCount`, `clipboard.watch` returns an id with `mode: "push"`, `clipboard.write` then `clipboard.read` round-trips text, the write-back emitted **zero** `clipboard.changed` events (echo suppression holds across the protocol), and `clipboard.unwatch` returned the watcher count to 0. As planned, `--builtins` does not cover this package — it is deliberately not a built-in; the catalog/allowlist path is exercised by the desktop catalog view code and the on-demand install handler (`AVAILABLE_PACKAGES` allowlist).
+
+**Phase 0 spike evidence (from the `#[ignore]` real-clipboard tests, run with `cargo test -p nd-runtime clipboard::tests::real_clipboard -- --ignored --test-threads=1`):**
+
+1. *Does the watcher receive events?* Yes — same-session proof: a message-only window + `AddClipboardFormatListener` in the nd-runtime test process observed a copy made by **another process** (`cmd /C clip`) with tier 1 (`mode: "push"`). Recorded: event-to-emit latency ≈ 66–68 ms across two runs, signature `[1, 7, 13, 16]` (text + locale formats), and a 2-second idle window produced zero events. Packaged-build confirmation remains open (below).
+2. *Console suppression interaction.* The spike process is a console subprocess and still created the message-only window, ran the pump, and received updates; message-only windows do not allocate a console. The packaged-build check under 0048's `GetConsoleWindow() == 0` invariant is part of the manual pass.
+3. *Self-echo.* Option (a) adopted: nd-core owns clipboard read **and** write (plus the watcher), and a shared operation lock serialises writes against observation so the suppression guard is always armed before a `WM_CLIPBOARDUPDATE` is processed. Verified by the spike test: an nd-core write-back produced no event, and the following external copy still did. Two implementation refinements beyond the plan: signatures carry the platform change counter (`GetClipboardSequenceNumber`) because consecutive *text* copies share the same format list, and the counter doubles as the tier-2 near-free poll short-circuit.
+4. *Cost.* Event-to-emit latency ≈ 66–68 ms measured (mostly `clip.exe` process spawn outside the watcher); idle window clean. The 30-minute idle-CPU comparison against the 750 ms poll baseline is **not yet recorded** — it needs the packaged build session below.
+
+**Still open (manual, packaged build `dist/win-unpacked/ND-DSH.exe`):**
+
+- Third-party-app and Electron copies observed end-to-end with history recording, image copy, file copy, write-back non-echo in the real app.
+- Opt-out stops recording (validated by desktop tests against the reconcile contract; confirm in the packaged UI).
+- Console/window suppression coexistence with 0048 invariants, teardown asserted by handle/thread count, and the 30-minute idle-CPU measurement with the watcher off and on.
 
 ## Open product question
 
 ND's existing answer to "remember this" is already different: `clipboard.read` routes the clipboard into a **note** (`nd-ipc.ts:1252`). Clipboard history is a launcher-class utility; ND is an organisation control plane with companies, projects, agents, and policies.
 
-Before Phase 2, decide whether the product wants the *utility* or only the *watcher primitive*. If it is only the primitive, clipboard may not be the first consumer worth proving it on — file-watch, git-watch, and process-watch all need the same resource shape and carry clearer product value. Phase 0 and Phase 1 are worth doing either way; Phase 2 is conditional on that answer.
+**Resolved for this implementation (2026-10-07):** Phase 0 and Phase 1 were worth doing either way and are done; Phase 2 shipped as a *minimal* utility — Personal-only, declarative list view, no paste-back, no agent affordances — so ND gains the watcher primitive and the cheapest consumer of it without becoming a launcher platform. If the utility earns its place, file-watch/git-watch/process-watch reuse the same resource shape.
+
+## Implemented
+
+- **`crates/nd-runtime/src/clipboard.rs`** — the watcher primitive: `clipboard.watch`/`clipboard.unwatch` returning a resource id and delivery tier, content-free `clipboard.changed` events (format list, content class, timestamp, drop accounting), tier-1 push on Windows (message-only window + `AddClipboardFormatListener`, one-time class registration, idempotent stop, joined teardown) with visible fallback to a bounded 750 ms poll tier, injectable `ClipboardSource` trait, in-process write-echo suppression serialised through an operation lock, per-watcher bounded notification channel plus an outbound-queue room check as the drop policy, and sidecar-owned `clipboard.read` (bounded text, DIB/PNG/HDROP-file image decode to fingerprinted PNG, file lists) and `clipboard.write`.
+- **`crates/nd-core/src/main.rs`** — dispatch arms for the four clipboard methods, `clipboard` capability, `clipboardWatcherCount` in health/metrics, and watcher teardown joined in `AppState::shutdown()`.
+- **`src/main/core/core-clipboard.ts`** — typed desktop client for the sidecar surface, with `core.ready`/`core.exit` subscription so a sidecar restart forgets the stale watcher and reconciles again.
+- **`src/main/extensions/clipboard-history.ts`** — the history index (JSON metadata only; image bytes on disk named by pixel fingerprint), caps with pins exempt and pins-survive-clear semantics, the `ClipboardWatcherController` reconcile loop (stop first, then require Personal activation AND `recordHistory === true`, fail closed), and the event→read→record pipeline.
+- **`src/main/extensions/nd-ipc.ts` + `src/main/ipc.ts` + `src/main/index.ts`** — on-demand wiring: `AVAILABLE_PACKAGES` allowlist (translate, quit-process, clipboard-history), catalog view, manifest re-snapshot, reconcile hooks on install/update/rollback/uninstall/activation/setting change and sidecar ready; `clipboard.read`/`clipboard.write` now prefer the sidecar and fall back to Electron's clipboard when it is unavailable; six `clipboard.history.*` host methods (Personal only; reads keep `sensitive: true`).
+- **`extensions/clipboard-history/`** — the on-demand package manifest (`nd.clipboard-history`, Personal, `recordHistory` default false, caps as settings, list view + two commands). **Not** in `BUILTIN_EXTENSION_PACKAGES`; nothing registers, activates, or records it automatically.
+- Tests: `tests/clipboard-watcher.test.ts` (every acceptance lifecycle transition, asserted against watcher count) and `tests/clipboard-history-store.test.ts` (dedup, caps, pins, clear, orphan image cleanup, corruption recovery, truncation bounds).
 
 ## Out of scope
 

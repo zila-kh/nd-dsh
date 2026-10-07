@@ -226,6 +226,10 @@ export const WALLPAPER_MANAGER_MANIFEST: NdExtensionManifest = {
           { id: 'links-thumbnails', title: 'Render linked thumbnails', host: 'os.wallpaper.links.thumbnails' },
           { id: 'links-import', title: 'Import wallpaper links', host: 'os.wallpaper.links.import' },
           { id: 'links-export', title: 'Export wallpaper links', host: 'os.wallpaper.links.export' },
+          // Dev-only curation of the shipped ND bundle; packaged builds refuse.
+          { id: 'bundle-add', title: 'Add ND bundle link', host: 'os.wallpaper.bundle.add' },
+          { id: 'bundle-update', title: 'Edit ND bundle link', host: 'os.wallpaper.bundle.update' },
+          { id: 'bundle-remove', title: 'Remove ND bundle link', host: 'os.wallpaper.bundle.remove' },
         ],
       },
     ],

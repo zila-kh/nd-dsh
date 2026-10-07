@@ -29,13 +29,21 @@ import {
 import { WallpaperThumbnailCache, type CachedThumbnail } from '../os/wallpaper-thumbnails.js'
 import {
   WallpaperLinkStore,
+  addBundledWallpaperLink,
+  bundledLinkFromSeed,
   bundledWallpaperLinksPath,
-  bundledWallpaperLinksWithSource,
+  collectionEntryId,
   downloadWallpaperImage,
   findCachedImage,
+  linkIdForUrl,
+  readWallpaperLinksBundle,
+  removeBundledWallpaperLink,
+  updateBundledWallpaperLink,
+  writeBundledCollections,
 } from '../os/wallpaper-links.js'
-import { parseWallpaperLinkUrl, parseWallpaperLinksBundle, type WallpaperCollectionEntry, type WallpaperCollectionItemInput, type WallpaperLink } from '../../shared/wallpaper-links.js'
+import { parseWallpaperLinkUrl, parseWallpaperLinksBundle, type WallpaperCollection, type WallpaperCollectionEntry, type WallpaperCollectionItemInput, type WallpaperLink } from '../../shared/wallpaper-links.js'
 import type { CoreMedia } from '../core/core-media.js'
+import type { CoreClipboard } from '../core/core-clipboard.js'
 import { ProcessInventory } from '../os/process-inventory.js'
 import type { BrowserController } from '../browser/browser-controller.js'
 import type { WorkflowService } from '../workflows/workflow-service.js'
@@ -47,6 +55,13 @@ import type { NativeHostRegistry } from './native-host.js'
 import { NdTranslateService, type TranslateBrowserPort } from './translate-service.js'
 import { translateWithLlm } from './translate-llm.js'
 import { TranslateHistoryStore } from './translate-history-store.js'
+import {
+  attachClipboardHistory,
+  capsFromSettings,
+  CLIPBOARD_HISTORY_ID,
+  type ClipboardHistoryAttachment,
+  type ClipboardHistoryStore,
+} from './clipboard-history.js'
 import { starterKitFiles } from './starter-kit.js'
 import { createZipFile } from './zip.js'
 import { ND_TRANSLATE_ID, ND_TRANSLATE_MAX_TEXT, isLlmProvider } from '../../shared/nd-translate.js'
@@ -76,6 +91,12 @@ export interface NdIpcDependencies {
    * than silently doing nothing.
    */
   media?: CoreMedia
+  /**
+   * nd-core's clipboard surface (read, write, watcher). Optional for the same
+   * reason; the clipboard.read and clipboard.write host methods fall back to
+   * Electron's in-process clipboard, and history recording stays off.
+   */
+  coreClipboard?: CoreClipboard
   /** Notified after ND Home records change, so other services can re-derive views. */
   onHomeChanged?: () => void
 }
@@ -83,6 +104,19 @@ export interface NdIpcDependencies {
 const NOTE_TITLE_MAX = 80
 const MAX_OPEN_TARGETS = 1
 const QUIT_PROCESS_ID = 'nd.quit-process'
+
+/**
+ * The bundled on-demand packages. Not built-ins: nothing here is registered or
+ * activated automatically, and each is installed only by explicit user action
+ * through the catalog. Clipboard History in particular must never appear in
+ * `BUILTIN_EXTENSION_PACKAGES` — a clipboard watcher that starts by default is
+ * surveillance, not a feature.
+ */
+const AVAILABLE_PACKAGES: readonly { id: string; path: () => string }[] = [
+  { id: ND_TRANSLATE_ID, path: translatePackagePath },
+  { id: QUIT_PROCESS_ID, path: quitProcessPackagePath },
+  { id: CLIPBOARD_HISTORY_ID, path: clipboardHistoryPackagePath },
+]
 
 /**
  * Bridges the auto-rotate timer (wired early, in the IPC layer) to the
@@ -121,6 +155,12 @@ function translatePackagePath(): string {
     : join(app.getAppPath(), 'extensions', 'translate')
 }
 
+function clipboardHistoryPackagePath(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'nd-extensions', 'clipboard-history')
+    : join(app.getAppPath(), 'extensions', 'clipboard-history')
+}
+
 /**
  * The ND extension invocation surface plus the ND Home personal surface. Every
  * handler runs in the trusted main process, is registered on narrow channels
@@ -131,6 +171,20 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
   const channels: string[] = []
   let seeded: Promise<void> | undefined
   let wallpaperTimer: NodeJS.Timeout | null = null
+
+  /**
+   * Clipboard History: store + watcher reconcile + event recorder. Exists only
+   * in full when the sidecar is available; it never records unless the user
+   * both activates the package and turns on `recordHistory`.
+   */
+  const clipboardHistory = attachClipboardHistory({
+    state: deps.state,
+    ...(deps.coreClipboard ? { coreClipboard: deps.coreClipboard } : {}),
+    userDataDir: app.getPath('userData'),
+  })
+  const syncClipboardWatcher = (): void => {
+    void clipboardHistory.sync().catch(() => undefined)
+  }
 
   const syncWallpaperRotation = async (): Promise<void> => {
     if (wallpaperTimer) {
@@ -162,6 +216,7 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
     seeded ??= seedBuiltinPackages(deps).then(async () => {
       await refreshAvailablePackages(deps)
       void syncWallpaperRotation()
+      syncClipboardWatcher()
     })
     return seeded
   }
@@ -195,7 +250,14 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
 
   const stateView = async (): Promise<NdExtensionsStateView> => {
     const state = await deps.broker.stateView()
-    return { ...state, available: await Promise.all([quitProcessCatalogView(state), translateCatalogView(state)]) }
+    return {
+      ...state,
+      available: await Promise.all([
+        quitProcessCatalogView(state),
+        translateCatalogView(state),
+        clipboardHistoryCatalogView(state),
+      ]),
+    }
   }
   const emitState = async (): Promise<void> => {
     if (deps.window.isDestroyed()) return
@@ -207,7 +269,7 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
     deps.window.webContents.send(ND_HOME_IPC.changedEvent, await homeView())
   }
 
-  const disposeNativeHost = registerNativeHostHandlers(deps)
+  const disposeNativeHost = registerNativeHostHandlers(deps, clipboardHistory)
 
   deps.broker.setOnApprovalRequested(() => { void emitState() })
   deps.home.setOnChanged(() => { void emitHome(); deps.onHomeChanged?.() })
@@ -247,10 +309,13 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
   })
 
   handle(ND_EXTENSIONS_IPC.installAvailable, async (_event, extensionId) => {
-    if (extensionId !== QUIT_PROCESS_ID && extensionId !== ND_TRANSLATE_ID) throw new Error('Unknown available ND extension')
-    const packagePath = extensionId === ND_TRANSLATE_ID ? translatePackagePath() : quitProcessPackagePath()
+    const requestedId = shortId(extensionId, 'Extension id')
+    const available = AVAILABLE_PACKAGES.find((entry) => entry.id === requestedId)
+    if (!available) throw new Error('Unknown available ND extension')
+    const packagePath = available.path()
     if (!existsSync(join(packagePath, 'nd-extension.json'))) throw new Error('This extension is missing from this ND build')
-    await deps.packages.installFromDirectory(packagePath, { expectId: extensionId })
+    await deps.packages.installFromDirectory(packagePath, { expectId: requestedId })
+    syncClipboardWatcher()
     await emitState()
     return stateView()
   })
@@ -264,6 +329,7 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
       : record.source.kind === 'local' || record.source.kind === 'git' ? record.source.location : undefined
     if (!sourcePath) throw new Error('This package records no local source; choose the updated package folder')
     await deps.packages.installFromDirectory(sourcePath, { expectId: id })
+    syncClipboardWatcher()
     await emitState()
     return stateView()
   })
@@ -271,6 +337,7 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
   handle(ND_EXTENSIONS_IPC.rollback, async (_event, extensionId) => {
     const id = shortId(extensionId, 'Extension id')
     await deps.packages.rollback(id)
+    syncClipboardWatcher()
     await emitState()
     return stateView()
   })
@@ -282,6 +349,7 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
     // captures are user data and stay untouched.
     await deps.state.revokeActivationsForExtension(id)
     await deps.state.revokeGrantsForExtension(id)
+    syncClipboardWatcher()
     await emitState()
     return stateView()
   })
@@ -294,6 +362,7 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
     await deps.state.setActivation(id, target, enabled === true)
     if (enabled !== true) await deps.state.revokeGrantsForExtension(id)
     if (id === WALLPAPER_MANAGER_ID) void syncWallpaperRotation()
+    if (id === CLIPBOARD_HISTORY_ID) syncClipboardWatcher()
     await emitState()
     return stateView()
   })
@@ -308,6 +377,7 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
     if (typeof value !== field.type) throw new Error(`"${field.title}" must be a ${field.type}`)
     await deps.state.setSetting(id, target, field.key, value)
     if (id === WALLPAPER_MANAGER_ID) void syncWallpaperRotation()
+    if (id === CLIPBOARD_HISTORY_ID) syncClipboardWatcher()
     await emitState()
     return stateView()
   })
@@ -413,9 +483,10 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
   void ensureSeeded().catch((error) => console.warn('ND built-in extension packages failed to seed:', error))
 
   return () => {
-    disposeNativeHost()
+    disposeNativeHost.dispose()
     if (wallpaperTimer) clearInterval(wallpaperTimer)
     for (const channel of channels) ipcMain.removeHandler(channel)
+    void clipboardHistory.dispose()
     deps.broker.setOnApprovalRequested(undefined)
     deps.home.setOnChanged(undefined)
   }
@@ -426,13 +497,18 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
  * bridge between extension contributions and trusted services: no arbitrary
  * IPC, shell strings, or renderer code ever crosses this boundary.
  */
-export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void {
+export function registerNativeHostHandlers(
+  deps: NdIpcDependencies,
+  clipboardHistory?: ClipboardHistoryAttachment,
+): { dispose: () => void } {
   const { host, providers } = deps
   const organization = deps.organization
   const translator = new NdTranslateService(deps.browser)
   const history = new TranslateHistoryStore(join(app.getPath('userData'), 'nd-translate-history.json'))
   void history.initialize().catch((error) => console.warn('ND Translate history failed to load:', error))
   const media = deps.media
+  const coreClipboard = deps.coreClipboard
+  const clipboardStore: ClipboardHistoryStore | undefined = clipboardHistory?.store
   const thumbnailCache = media ? new WallpaperThumbnailCache(media) : null
   const applyWallpaper = media
     ? async (imagePath: string): Promise<void> => { await media.setWallpaper(imagePath) }
@@ -493,18 +569,57 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void 
   void wallpaperLinkStore.initialize().catch((error) => console.warn('Wallpaper links failed to load:', error))
   const wallpaperCacheDir = join(app.getPath('userData'), 'wallpaper-cache')
   const wallpaperThumbCacheDir = join(wallpaperCacheDir, 'thumbs')
-  let bundledLinks: WallpaperLink[] | null = null
-  const bundledLinksOnce = async (): Promise<WallpaperLink[]> => {
-    if (bundledLinks) return bundledLinks
+  interface BundledDoc { links: WallpaperLink[]; collections: WallpaperCollection[] }
+  let bundledDoc: BundledDoc | null = null
+  const bundledDocOnce = async (): Promise<BundledDoc> => {
+    if (bundledDoc) return bundledDoc
+    let doc: BundledDoc
     try {
-      bundledLinks = bundledWallpaperLinksWithSource(
-        await fs.readFile(bundledWallpaperLinksPath({ appPath: app.getAppPath(), resourcesPath: app.isPackaged ? process.resourcesPath : undefined }), 'utf8'),
+      const parsed = await readWallpaperLinksBundle(
+        bundledWallpaperLinksPath({ appPath: app.getAppPath(), resourcesPath: app.isPackaged ? process.resourcesPath : undefined }),
       )
+      doc = {
+        links: parsed.links.map(bundledLinkFromSeed),
+        collections: (parsed.collections ?? []).map((seed) => ({
+          id: seed.id?.trim() || `col-${linkIdForUrl(seed.name)}`,
+          name: seed.name,
+          createdAt: seed.createdAt ?? 0,
+          entries: seed.entries.map((entry) => ({
+            id: entry.id?.trim() || collectionEntryId(entry.kind, entry.ref),
+            kind: entry.kind,
+            ref: entry.ref,
+            title: entry.title,
+            addedAt: 0,
+          })),
+          source: 'bundle' as const,
+        })),
+      }
     } catch (error) {
       console.warn('ND wallpaper bundle failed to load:', error)
-      bundledLinks = []
+      doc = { links: [], collections: [] }
     }
-    return bundledLinks
+    bundledDoc = doc
+    return doc
+  }
+  const bundledLinksOnce = async (): Promise<WallpaperLink[]> => (await bundledDocOnce()).links
+
+  /** Collections resolve from the user's store first, then the curated bundle. */
+  const findCollectionAnywhere = async (id: string): Promise<WallpaperCollection | null> =>
+    wallpaperLinkStore.findCollection(id) ?? (await bundledDocOnce()).collections.find((entry) => entry.id === id) ?? null
+
+  /** Curated collections ship read-only; edits belong in the user's own copy. */
+  const assertCollectionEditable = async (id: string): Promise<void> => {
+    if (wallpaperLinkStore.findCollection(id)) return
+    if ((await bundledDocOnce()).collections.some((entry) => entry.id === id)) {
+      throw new Error('Curated ND collections are read-only — save its images into one of your own collections to edit them')
+    }
+  }
+
+  /** Dev builds mirror the user's collections into the in-repo bundle document. */
+  const mirrorCollectionsToBundle = async (): Promise<void> => {
+    if (app.isPackaged) return
+    await writeBundledCollections(bundledWallpaperLinksPath({ appPath: app.getAppPath() }), wallpaperLinkStore.listCollections())
+    bundledDoc = null
   }
 
   /** `source` marks which list a caller is addressing: `user` links or `bundle` links. */
@@ -594,6 +709,7 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void 
       user: wallpaperLinkStore.list().map(withActive),
       bundle: (await bundledLinksOnce()).map(withActive),
       defaultFolder: resolveDefaultWallpaperFolder(),
+      bundleEditable: !app.isPackaged,
     }
   })
 
@@ -641,6 +757,46 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void 
     return { saved: true, exists: false, link: saved }
   })
 
+  // Dev-only curation of the shipped ND bundle. Unpacked builds edit the
+  // in-repo resources document so a curation pass shows up as a normal git
+  // diff; packaged builds refuse here, keeping the shipped bundle read-only.
+  const bundledLinksFilePath = (): string => {
+    if (app.isPackaged) throw new Error('The ND bundle is read-only in packaged builds')
+    return bundledWallpaperLinksPath({ appPath: app.getAppPath() })
+  }
+  const bundledUrlForId = async (id: string): Promise<string> => {
+    const link = (await bundledLinksOnce()).find((entry) => entry.id === id)
+    if (!link) throw new Error('That ND bundle link no longer exists')
+    return link.url
+  }
+  host.register('os.wallpaper.bundle.add', async (input) => {
+    const bundle = await addBundledWallpaperLink(bundledLinksFilePath(), {
+      url: requiredText(input.url, 'Image link', 2_048),
+      ...(typeof input.title === 'string' ? { title: input.title } : {}),
+      ...(typeof input.thumb === 'string' ? { thumb: input.thumb } : {}),
+      ...(typeof input.category === 'string' ? { category: input.category } : {}),
+    })
+    bundledDoc = null
+    return { editable: true, count: bundle.links.length }
+  })
+  host.register('os.wallpaper.bundle.update', async (input) => {
+    const url = await bundledUrlForId(requiredText(input.id, 'Link selection', 200))
+    const bundle = await updateBundledWallpaperLink(bundledLinksFilePath(), url, {
+      ...(typeof input.url === 'string' ? { url: input.url } : {}),
+      ...(typeof input.title === 'string' ? { title: input.title } : {}),
+      ...(typeof input.thumb === 'string' ? { thumb: input.thumb } : {}),
+      ...(typeof input.category === 'string' ? { category: input.category } : {}),
+    })
+    bundledDoc = null
+    return { editable: true, count: bundle.links.length }
+  })
+  host.register('os.wallpaper.bundle.remove', async (input) => {
+    const url = await bundledUrlForId(requiredText(input.id, 'Link selection', 200))
+    const { removed, bundle } = await removeBundledWallpaperLink(bundledLinksFilePath(), url)
+    bundledDoc = null
+    return { removed, count: bundle.links.length }
+  })
+
   /**
    * Play the saved links like a queue. `next` walks the list in order;
    * `random` avoids repeating the current wallpaper. Missing images download
@@ -681,7 +837,7 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void 
     await wallpaperLinkStore.initialize()
     const collectionId = requiredText(input.collectionId ?? input.id, 'Collection', 100)
     const entryId = requiredText(input.entryId ?? input.id, 'Collection entry', 100)
-    const collection = wallpaperLinkStore.findCollection(collectionId)
+    const collection = await findCollectionAnywhere(collectionId)
     if (!collection) throw new Error('That collection no longer exists')
     const entry = collection.entries.find((item) => item.id === entryId)
     if (!entry) throw new Error('That image is no longer in the collection')
@@ -743,7 +899,7 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void 
 
   const applyCollectionQueue = async (collectionId: string, mode: 'next' | 'random'): Promise<{ changed: boolean; name?: string; path?: string | undefined }> => {
     await wallpaperLinkStore.initialize()
-    const collection = wallpaperLinkStore.findCollection(collectionId)
+    const collection = await findCollectionAnywhere(collectionId)
     if (!collection) throw new Error('That collection no longer exists')
     if (collection.entries.length === 0) throw new Error('This collection is empty — save some images into it first')
     return applyFromEntries(collection.entries, mode)
@@ -770,7 +926,7 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void 
     }
     for (const folder of activeFolders) await addFolder(folder)
     for (const id of collectionRefs) {
-      const collection = wallpaperLinkStore.findCollection(id)
+      const collection = await findCollectionAnywhere(id)
       if (collection) pool.push(...collection.entries)
     }
     const seen = new Set<string>()
@@ -866,8 +1022,12 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void 
     const soloCollectionId = sources.length === 1 && sources[0]!.startsWith('collection:')
       ? sources[0]!.slice('collection:'.length)
       : ''
+    const own = wallpaperLinkStore.listCollections()
+    const ownNames = new Set(own.map((collection) => collection.name.toLowerCase()))
+    // Curated collections ship in the bundle; a same-named personal copy wins.
+    const curated = (await bundledDocOnce()).collections.filter((collection) => !ownNames.has(collection.name.toLowerCase()))
     return {
-      collections: wallpaperLinkStore.listCollections(),
+      collections: [...own.map((collection) => ({ ...collection, source: 'user' as const })), ...curated],
       rotateCollectionId: soloCollectionId,
     }
   })
@@ -875,17 +1035,21 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void 
   host.register('os.wallpaper.collections.create', async (input) => {
     await wallpaperLinkStore.initialize()
     const name = requiredText(input.name, 'Collection name', 80)
-    return { collection: await wallpaperLinkStore.createCollection(name) }
+    const collection = await wallpaperLinkStore.createCollection(name)
+    await mirrorCollectionsToBundle()
+    return { collection }
   })
 
   host.register('os.wallpaper.collections.delete', async (input) => {
     await wallpaperLinkStore.initialize()
     const id = requiredText(input.id, 'Collection', 100)
+    await assertCollectionEditable(id)
     const result = await wallpaperLinkStore.deleteCollection(id)
     // Deleting the rotating collection falls rotation back to the folder.
     if (result.deleted) {
       await deps.state.setSetting(WALLPAPER_MANAGER_ID, { kind: 'personal' }, 'rotateCollectionId', '')
       refreshWallpaperRotation?.()
+      await mirrorCollectionsToBundle()
     }
     return result
   })
@@ -920,14 +1084,18 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void 
       }
     }
     const results: Array<Record<string, unknown>> = []
+    let mutated = false
     for (const id of collectionIds) {
       try {
+        await assertCollectionEditable(id)
         const outcome = await wallpaperLinkStore.addToCollection(id, items)
         results.push({ id, ok: true, added: outcome.added, skipped: outcome.skipped })
+        mutated = true
       } catch (error) {
         results.push({ id, ok: false, error: error instanceof Error ? error.message : String(error) })
       }
     }
+    if (mutated) await mirrorCollectionsToBundle()
     return { results }
   })
 
@@ -935,7 +1103,10 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void 
     await wallpaperLinkStore.initialize()
     const collectionId = requiredText(input.collectionId ?? input.id, 'Collection', 100)
     const entryId = requiredText(input.entryId, 'Collection entry', 100)
-    return wallpaperLinkStore.removeFromCollection(collectionId, entryId)
+    await assertCollectionEditable(collectionId)
+    const result = await wallpaperLinkStore.removeFromCollection(collectionId, entryId)
+    if (result.removed) await mirrorCollectionsToBundle()
+    return result
   })
 
   host.register('os.wallpaper.collections.apply', async (input) => {
@@ -956,7 +1127,7 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void 
   host.register('os.wallpaper.collections.rotate', async (input, context) => {
     await wallpaperLinkStore.initialize()
     const requested = typeof input.id === 'string' ? input.id.trim() : ''
-    if (requested && !wallpaperLinkStore.findCollection(requested)) {
+    if (requested && !(await findCollectionAnywhere(requested))) {
       throw new Error('That collection no longer exists')
     }
     const settings = context.settings as Record<string, unknown> | undefined
@@ -1008,7 +1179,7 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void 
     await wallpaperLinkStore.initialize()
     const collectionId = requiredText(input?.id, 'Collection', 100)
     const ids = readThumbnailIds(input?.ids)
-    const collection = wallpaperLinkStore.findCollection(collectionId)
+    const collection = await findCollectionAnywhere(collectionId)
     if (!collection || ids.length === 0) return { thumbnails: [] }
     const byEntryId = new Map(collection.entries.map((entry) => [entry.id, entry]))
     const linkEntries: WallpaperLink[] = []
@@ -1246,7 +1417,10 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void 
   host.register('clipboard.read', async (_input, context) => {
     // An explicit user command authorizes exactly this one read; agent callers
     // reach this handler only through a grant or a per-action approval.
-    const text = clipboard.readText().trim()
+    // Reading through the sidecar keeps read and write in one process (which
+    // is what echo suppression relies on); without a sidecar, fall back to
+    // Electron's clipboard so note capture keeps working.
+    const text = (await readClipboardText()).trim()
     if (!text) throw new Error('The clipboard does not contain text to capture')
     if (context.context.kind === 'personal') {
       const note = await deps.home.createNote({ body: text, tags: ['capture', 'clipboard'], context: context.context })
@@ -1266,7 +1440,194 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void 
   host.register('clipboard.write', async (input) => {
     const text = typeof input.text === 'string' ? input.text : ''
     if (!text.trim()) throw new Error('There is nothing to copy')
-    clipboard.writeText(text.slice(0, 256_000))
+    const bounded = text.slice(0, 256_000)
+    if (coreClipboard) {
+      try {
+        await coreClipboard.writeText(bounded)
+        return { copied: true }
+      } catch {
+        // Sidecar unavailable: fall back to the in-process clipboard.
+      }
+    }
+    clipboard.writeText(bounded)
+    return { copied: true }
+  })
+
+  // --- Clipboard History -------------------------------------------------------
+  //
+  // Personal-context only host methods over the local history store. Reads
+  // stay on the `clipboard.read` permission and keep its `sensitive` flag, so
+  // an agent caller needs the existing explicit grant path — recording being
+  // on grants nothing new.
+
+  const requireClipboardHistory = (): ClipboardHistoryStore => {
+    if (!clipboardStore) throw new Error('Clipboard history is not available in this build')
+    return clipboardStore
+  }
+  const requirePersonalContext = (context: { context: { kind: string } }): void => {
+    if (context.context.kind !== 'personal') {
+      throw new Error('Clipboard history is available only in the Personal context')
+    }
+  }
+
+  /**
+   * Read clipboard text through the sidecar when it is available — keeping
+   * read and write in the process that owns the watcher — and fall back to
+   * Electron's clipboard when it is not. A non-text clipboard is a content
+   * error, not an availability error, and never retries on the fallback path.
+   */
+  const readClipboardText = async (): Promise<string> => {
+    if (coreClipboard) {
+      try {
+        const content = await coreClipboard.read()
+        if (content.kind === 'text') return content.text ?? ''
+        throw new Error('The clipboard does not contain text to capture')
+      } catch (error) {
+        if (error instanceof Error && error.message.includes('does not contain text')) throw error
+        // The sidecar is unavailable; fall through to Electron.
+      }
+    }
+    return clipboard.readText()
+  }
+
+  const historyEntryTitle = (entry: { kind: string; text?: string | undefined; fileName?: string | undefined; names?: string[] | undefined }): string => {
+    if (entry.kind === 'text') return firstLine(entry.text ?? '', 120)
+    if (entry.kind === 'image') return entry.fileName ? `Image · ${entry.fileName}` : 'Image'
+    return entry.names?.length === 1 ? basename(entry.names[0]!) : `${entry.names?.length ?? 0} files`
+  }
+
+  host.register('clipboard.history.list', async (_input, context) => {
+    requirePersonalContext(context)
+    const store = requireClipboardHistory()
+    const entries = await store.list()
+    // Image rows render through the sidecar's bounded thumbnail path; a
+    // missing sidecar simply omits previews rather than failing the list.
+    const withImage = entries.filter((entry) => entry.imageFile)
+    const thumbnails = new Map<string, string>()
+    if (media && withImage.length > 0 && thumbnailCache) {
+      try {
+        const sources = []
+        for (const entry of withImage) {
+          const buffer = await store.readImageFile(entry)
+          if (!buffer) continue
+          const path = join(store.imageDirectory, entry.imageFile!)
+          try {
+            const fileStat = await fs.stat(path)
+            sources.push({ id: entry.id, entry: { filename: entry.imageFile!, path, size: fileStat.size, modifiedAt: fileStat.mtimeMs } })
+          } catch {
+            // The image file is gone; the row keeps its placeholder.
+          }
+        }
+        if (sources.length > 0) {
+          const found = await thumbnailCache.get(
+            store.imageDirectory,
+            sources.map((item) => item.entry),
+            GRID_THUMBNAIL_WIDTH,
+          )
+          for (const item of sources) {
+            const thumbnail = found.get(item.entry.path)
+            if (thumbnail) thumbnails.set(item.id, thumbnail.dataUrl)
+          }
+        }
+      } catch {
+        // Thumbnails are cosmetic; never fail the list over them.
+      }
+    }
+    return {
+      watcherActive: clipboardHistory?.controller.watching ?? false,
+      items: entries.map((entry) => ({
+        id: entry.id,
+        title: historyEntryTitle(entry),
+        detail: entry.kind === 'text'
+          ? (entry.text ?? '').slice(0, 400)
+          : `${new Date(entry.lastCopiedAt).toLocaleString()} · copied ${entry.occurrences}×`,
+        status: entry.pinned ? 'Pinned' : entry.kind,
+        ...(thumbnails.get(entry.id) ? { thumbnail: thumbnails.get(entry.id) } : {}),
+        sortValues: { date: entry.lastCopiedAt },
+      })),
+    }
+  })
+
+  host.register('clipboard.history.get', async (input, context) => {
+    requirePersonalContext(context)
+    const store = requireClipboardHistory()
+    const id = requiredText(input.id, 'History entry', 160)
+    const entry = await store.get(id)
+    if (!entry) throw new Error('That history entry no longer exists')
+    if (entry.kind === 'image' && entry.imageFile) {
+      const buffer = await store.readImageFile(entry)
+      return {
+        id: entry.id,
+        kind: entry.kind,
+        pinned: entry.pinned,
+        ...(buffer ? { dataUrl: `data:image/png;base64,${buffer.toString('base64')}` } : {}),
+        ...(entry.imageWidth ? { width: entry.imageWidth } : {}),
+        ...(entry.imageHeight ? { height: entry.imageHeight } : {}),
+        ...(entry.fileName ? { fileName: entry.fileName } : {}),
+      }
+    }
+    return {
+      id: entry.id,
+      kind: entry.kind,
+      pinned: entry.pinned,
+      ...(entry.text ? { text: entry.text } : {}),
+      ...(entry.names ? { names: entry.names } : {}),
+    }
+  })
+
+  host.register('clipboard.history.pin', async (input, context) => {
+    requirePersonalContext(context)
+    const store = requireClipboardHistory()
+    const id = requiredText(input.id, 'History entry', 160)
+    const pinned = input.pinned === undefined ? undefined : input.pinned === true
+    const entry = await store.get(id)
+    if (!entry) throw new Error('That history entry no longer exists')
+    await store.setPinned(id, pinned ?? !entry.pinned, capsFromSettings(context.settings))
+    return { id, pinned: pinned ?? !entry.pinned }
+  })
+
+  host.register('clipboard.history.delete', async (input, context) => {
+    requirePersonalContext(context)
+    const store = requireClipboardHistory()
+    const id = requiredText(input.id, 'History entry', 160)
+    return { removed: await store.delete(id) }
+  })
+
+  host.register('clipboard.history.clear', async (_input, context) => {
+    requirePersonalContext(context)
+    const store = requireClipboardHistory()
+    return store.clear()
+  })
+
+  host.register('clipboard.history.copyAgain', async (input, context) => {
+    requirePersonalContext(context)
+    const store = requireClipboardHistory()
+    const id = requiredText(input.id, 'History entry', 160)
+    const entry = await store.get(id)
+    if (!entry) throw new Error('That history entry no longer exists')
+    if (entry.kind === 'text' && entry.text) {
+      if (coreClipboard) {
+        try {
+          await coreClipboard.writeText(entry.text.slice(0, 256_000))
+          return { copied: true }
+        } catch {
+          // Fall through to the in-process clipboard.
+        }
+      }
+      clipboard.writeText(entry.text.slice(0, 256_000))
+      return { copied: true }
+    }
+    if (entry.kind === 'image') {
+      const buffer = await store.readImageFile(entry)
+      if (!buffer) throw new Error('That image is no longer stored')
+      // Electron writes the pixels; the sidecar observes the change and
+      // history dedups it into this same entry by pixel fingerprint.
+      clipboard.writeImage(nativeImage.createFromBuffer(buffer))
+      return { copied: true }
+    }
+    const names = entry.names ?? []
+    if (names.length === 0) throw new Error('That entry has no file list to copy')
+    clipboard.writeText(names.join('\n'))
     return { copied: true }
   })
 
@@ -1463,7 +1824,7 @@ export function registerNativeHostHandlers(deps: NdIpcDependencies): () => void 
     await deps.workflow.refresh(context.context.companyId, context.context.projectId)
     return workflowView(deps, context.context)
   })
-  return () => translator.dispose()
+  return { dispose: () => translator.dispose() }
 }
 
 async function translateCatalogView(state: NdExtensionsStateView): Promise<NdAvailablePackageView> {
@@ -1475,6 +1836,14 @@ async function translateCatalogView(state: NdExtensionsStateView): Promise<NdAva
 async function quitProcessCatalogView(state: NdExtensionsStateView): Promise<NdAvailablePackageView> {
   return packageCatalogView(state, QUIT_PROCESS_ID, quitProcessPackagePath(), {
     name: 'Quit Processes', description: 'Inspect running processes and quit a selected process from ND.', permissions: ['process.read', 'process.quit'],
+  })
+}
+
+async function clipboardHistoryCatalogView(state: NdExtensionsStateView): Promise<NdAvailablePackageView> {
+  return packageCatalogView(state, CLIPBOARD_HISTORY_ID, clipboardHistoryPackagePath(), {
+    name: 'Clipboard History',
+    description: 'Records your clipboard only after you turn recording on. Nothing is saved at install, at activation, or by default.',
+    permissions: ['clipboard.read', 'clipboard.write'],
   })
 }
 
@@ -1543,10 +1912,8 @@ async function seedBuiltinPackages(deps: NdIpcDependencies): Promise<void> {
 
 /** Re-snapshot installed ND-bundled on-demand packages when their bundled manifest changed. */
 async function refreshAvailablePackages(deps: NdIpcDependencies): Promise<void> {
-  for (const [id, packagePath] of [
-    [ND_TRANSLATE_ID, translatePackagePath()],
-    [QUIT_PROCESS_ID, quitProcessPackagePath()],
-  ] as const) {
+  for (const { id, path } of AVAILABLE_PACKAGES) {
+    const packagePath = path()
     const installed = await deps.packages.record(id)
     if (!installed) continue
     let parsed: unknown

@@ -3,6 +3,10 @@ use nd_protocol::errors::{self, CODE_INVALID_PARAMS, CODE_METHOD_FAILED, CODE_RU
 use nd_protocol::{PROTOCOL_VERSION, ProtocolWriter, read_request};
 use nd_runtime::artifacts;
 use nd_runtime::cache::{self, ResponseCache};
+use nd_runtime::clipboard::{
+    ClipboardManager, ClipboardReadParams, ClipboardUnwatchParams, ClipboardWatchParams,
+    ClipboardWriteTextParams,
+};
 use nd_runtime::deadline::{Deadline, Interrupt, InterruptGuard, InterruptRegistry};
 use nd_runtime::decision::{self, DecisionEvaluateParams};
 use nd_runtime::dispatcher::{DispatchStats, Dispatcher, priority_for_method};
@@ -43,6 +47,7 @@ struct AppState {
     scheduler: Arc<Scheduler>,
     processes: Arc<ProcessManager>,
     terminals: Arc<TerminalManager>,
+    clipboard: Arc<ClipboardManager>,
     session_journal: Arc<SessionJournalStore>,
     effect_journal: Arc<EffectJournalStore>,
     metrics: Arc<MetricsRegistry>,
@@ -60,6 +65,12 @@ impl AppState {
             Arc::clone(&scheduler),
         ));
         let terminals = Arc::new(TerminalManager::new(Arc::clone(&writer)));
+        let clipboard_sink =
+            Arc::clone(&writer) as Arc<dyn nd_runtime::clipboard::ClipboardEventSink>;
+        let clipboard = Arc::new(ClipboardManager::new(
+            clipboard_sink,
+            nd_runtime::clipboard::platform_source(),
+        ));
         let session_journal = Arc::new(SessionJournalStore::new(
             DEFAULT_MAX_EVENTS_PER_SESSION,
             DEFAULT_MAX_BYTES_PER_SESSION,
@@ -70,6 +81,7 @@ impl AppState {
             scheduler,
             processes,
             terminals,
+            clipboard,
             session_journal,
             effect_journal,
             metrics: Arc::new(MetricsRegistry::new()),
@@ -88,6 +100,9 @@ impl AppState {
         self.interrupts.cancel_all();
         self.terminals.shutdown();
         self.processes.shutdown();
+        // Watcher teardown is joined, not fire-and-forget: no leaked thread or
+        // message-only window survives the sidecar.
+        self.clipboard.shutdown();
     }
 }
 
@@ -189,6 +204,7 @@ fn dispatch(
                     "scheduler",
                     "process",
                     "terminal",
+                    "clipboard",
                     "session-journal",
                     "effect-journal",
                     "decision-kernel",
@@ -206,6 +222,7 @@ fn dispatch(
                 ],
                 "processCount": state.processes.process_count(),
                 "terminalCount": state.terminals.terminal_count(),
+                "clipboardWatcherCount": state.clipboard.watcher_count(),
                 "workspaceCount": state.metrics.workspace_count(),
                 "pendingRpcCount": dispatch.active + dispatch.queued_high + dispatch.queued_normal + dispatch.queued_background,
             }))
@@ -234,6 +251,7 @@ fn dispatch(
                 "workspaceCount": state.metrics.workspace_count(),
                 "processCount": state.processes.process_count(),
                 "terminalCount": state.terminals.terminal_count(),
+                "clipboardWatcherCount": state.clipboard.watcher_count(),
                 "retainedTerminalCount": state.terminals.retained_terminal_count(),
                 "retainedTerminalBufferBytes": state.terminals.retained_buffer_bytes(),
                 "sessionJournalSessionCount": session_journal.session_count,
@@ -559,6 +577,26 @@ fn dispatch(
         "media.set-wallpaper" => {
             let params = from_params::<media::WallpaperSetParams>(params)?;
             to_value(media::set_wallpaper(params)?)
+        }
+        // The sidecar owns clipboard read, write, and observation in one
+        // process, which is what makes write-back echo suppression exact.
+        // Watchers exist only in response to `clipboard.watch` from the
+        // desktop and never survive shutdown.
+        "clipboard.watch" => {
+            let params = from_params::<ClipboardWatchParams>(params)?;
+            to_value(state.clipboard.watch(params)?)
+        }
+        "clipboard.unwatch" => {
+            let params = from_params::<ClipboardUnwatchParams>(params)?;
+            to_value(state.clipboard.unwatch(params)?)
+        }
+        "clipboard.read" => {
+            let params = from_params::<ClipboardReadParams>(params)?;
+            to_value(state.clipboard.read(params)?)
+        }
+        "clipboard.write" => {
+            let params = from_params::<ClipboardWriteTextParams>(params)?;
+            to_value(state.clipboard.write_text(params)?)
         }
         other => {
             let _ = request_id;

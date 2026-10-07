@@ -16,5 +16,15 @@
     { "url": "https://picsum.photos/id/1043/3840/2160", "thumb": "https://picsum.photos/id/1043/480/270", "title": "City lights" },
     { "url": "https://picsum.photos/id/1044/3840/2160", "thumb": "https://picsum.photos/id/1044/480/270", "title": "Autumn road" },
     { "url": "https://picsum.photos/id/1050/3840/2160", "thumb": "https://picsum.photos/id/1050/480/270", "title": "Lanterns" }
+  ],
+  "collections": [
+    { "id": "col-23b6b2d3377f", "name": "Natural", "createdAt": 1791310342805, "entries": [
+      { "kind": "link", "ref": "https://picsum.photos/id/1015/3840/2160", "title": "River valley", "id": "da2adba8963a4fc8" },
+      { "kind": "link", "ref": "https://picsum.photos/id/1016/3840/2160", "title": "Canyon walls", "id": "cd96253cd638dbd8" },
+      { "kind": "link", "ref": "https://picsum.photos/id/1018/3840/2160", "title": "Mountain pass", "id": "d325ad6291c4d19a" }
+    ] },
+    { "id": "col-9185eaabd970", "name": "City", "createdAt": 1791310348349, "entries": [
+
+    ] }
   ]
 }

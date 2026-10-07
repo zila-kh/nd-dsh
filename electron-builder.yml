@@ -36,6 +36,8 @@ extraResources:
     to: nd-extensions/quit-process
   - from: extensions/translate
     to: nd-extensions/translate
+  - from: extensions/clipboard-history
+    to: nd-extensions/clipboard-history
   - from: .release/harness
     to: vendor/deepseek-harness
   - from: .release/harness/node_modules

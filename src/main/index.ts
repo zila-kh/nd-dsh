@@ -32,6 +32,7 @@ import { createCoreSpawn, stopCoreManagedChildProcess } from './core/core-child-
 import { createCorePtySpawner } from './core/core-pty.js'
 import { CoreSessionJournalStore } from './core/core-session-journal.js'
 import { createCoreMedia } from './core/core-media.js'
+import { createCoreClipboard } from './core/core-clipboard.js'
 import { createCoreWorkspaceFileSystem } from './core/core-workspace.js'
 import { createCoreWorktreeGit } from './core/core-worktree-git.js'
 import { DesignService } from './design/design-service.js'
@@ -449,7 +450,8 @@ async function createWindow(cdpPort: number): Promise<void> {
   qa.setProjectRoot(workspace.state().root)
   const coreGit = new GitCli({ core })
   const coreMedia = createCoreMedia(core)
-  const disposeIpc = registerIpc({ window, preloadPath: preload, launcherPopup, browser, dshSurface, engines, engineRouter, nativeToolBroker: nativeBroker, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, coreGit: coreGit.exec.bind(coreGit), coreMedia, qa, sessionArchive, usageLedger, capabilities, organizationStore })
+  const coreClipboard = createCoreClipboard(core)
+  const disposeIpc = registerIpc({ window, preloadPath: preload, launcherPopup, browser, dshSurface, engines, engineRouter, nativeToolBroker: nativeBroker, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, coreGit: coreGit.exec.bind(coreGit), coreMedia, coreClipboard, qa, sessionArchive, usageLedger, capabilities, organizationStore })
   if (nativeAgent.ready()) void nativeAgent.start().catch((error) => {
     console.warn('ND Agent private runtime could not initialize:', error instanceof Error ? error.message : String(error))
   })

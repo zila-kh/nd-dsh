@@ -11,6 +11,18 @@ export const WALLPAPER_LINKS_SCHEMA = 'nd.wallpaper-links/1'
 
 export const WALLPAPER_LINKS_MAX = 500
 export const WALLPAPER_LINK_TITLE_MAX = 200
+export const WALLPAPER_LINK_CATEGORY_MAX = 40
+export const COLLECTION_NAME_MAX = 80
+export const COLLECTIONS_MAX = 50
+export const COLLECTION_ENTRIES_MAX = 500
+
+/** Normalize a bundle category label; empty/absent means "uncategorized". */
+export function normalizeWallpaperCategory(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined
+  const trimmed = raw.replace(/\s+/g, ' ').trim()
+  if (!trimmed) return undefined
+  return trimmed.slice(0, WALLPAPER_LINK_CATEGORY_MAX)
+}
 
 /** Where a discovered link came from. `bundle` entries are read-only. */
 export type WallpaperLinkSource = 'user' | 'bundle'
@@ -32,12 +44,15 @@ export interface WallpaperLink {
    * grid shows real artwork before the full-size wallpaper is downloaded.
    */
   thumbUrl?: string
+  /** Curated grouping label ("Nature", "Cities") for bundle filter chips. */
+  category?: string
 }
 
 export interface WallpaperLinkSeed {
   url: string
   title: string
   thumb?: string
+  category?: string
 }
 
 export interface WallpaperLinksBundle {
@@ -45,6 +60,8 @@ export interface WallpaperLinksBundle {
   name: string
   description?: string
   links: WallpaperLinkSeed[]
+  /** Curated collections shipped with the bundle; read-only at runtime. */
+  collections?: WallpaperCollectionSeed[]
 }
 
 /**
@@ -69,6 +86,28 @@ export interface WallpaperCollection {
   name: string
   createdAt: number
   entries: WallpaperCollectionEntry[]
+  /** `bundle` collections ship in the ND bundle and are read-only. */
+  source?: WallpaperLinkSource
+}
+
+/**
+ * A collection as carried inside the ND bundle document. Curated collections
+ * hold link entries only — a shipped absolute file path would be meaningless
+ * on anyone else's machine — so file entries are dropped when mirroring.
+ */
+export interface WallpaperCollectionSeed {
+  id?: string
+  name: string
+  createdAt?: number
+  entries: WallpaperCollectionEntrySeed[]
+}
+
+/** Bundle collection entries are link-only; ids are filled in by the main process. */
+export interface WallpaperCollectionEntrySeed {
+  id?: string
+  kind: WallpaperCollectionEntryKind
+  ref: string
+  title: string
 }
 
 /** What a "save to collections" action adds; validated in the main process. */
@@ -194,11 +233,67 @@ export function parseWallpaperLinksBundle(raw: unknown): WallpaperLinksBundle {
         thumb = undefined
       }
     }
-    links.push({
+    const seed: WallpaperLinkSeed = {
       url: key,
       title: typeof item.title === 'string' && item.title.trim() ? item.title.trim().slice(0, WALLPAPER_LINK_TITLE_MAX) : url.hostname,
-      ...(thumb ? { thumb } : {}),
+    }
+    if (thumb) seed.thumb = thumb
+    const category = normalizeWallpaperCategory(item.category)
+    if (category) seed.category = category
+    links.push(seed)
+  }
+  const collections = parseBundleCollections(record.collections)
+  return {
+    schema: WALLPAPER_LINKS_SCHEMA,
+    name,
+    ...(description ? { description } : {}),
+    links,
+    ...(collections.length ? { collections } : {}),
+  }
+}
+
+/**
+ * Curated collections inside a bundle document. Link entries only: a shipped
+ * absolute file path would point at somebody else's disk, so file entries are
+ * dropped here rather than failing the collection.
+ */
+function parseBundleCollections(raw: unknown): WallpaperCollectionSeed[] {
+  if (!Array.isArray(raw)) return []
+  const collections: WallpaperCollectionSeed[] = []
+  const seenNames = new Set<string>()
+  for (const entry of raw.slice(0, COLLECTIONS_MAX)) {
+    if (!entry || typeof entry !== 'object') continue
+    const item = entry as Record<string, unknown>
+    const collectionName = typeof item.name === 'string' ? item.name.trim().slice(0, COLLECTION_NAME_MAX) : ''
+    if (!collectionName || seenNames.has(collectionName.toLowerCase())) continue
+    seenNames.add(collectionName.toLowerCase())
+    const entries: WallpaperCollectionEntrySeed[] = []
+    const seenRefs = new Set<string>()
+    for (const rawEntry of Array.isArray(item.entries) ? item.entries.slice(0, COLLECTION_ENTRIES_MAX) : []) {
+      if (!rawEntry || typeof rawEntry !== 'object') continue
+      const candidate = rawEntry as Record<string, unknown>
+      if (candidate.kind !== 'link' || typeof candidate.ref !== 'string') continue
+      let ref: string
+      try {
+        ref = parseWallpaperLinkUrl(candidate.ref).toString()
+      } catch {
+        continue
+      }
+      if (seenRefs.has(ref)) continue
+      seenRefs.add(ref)
+      entries.push({
+        ...(typeof candidate.id === 'string' && candidate.id.trim() ? { id: candidate.id.trim().slice(0, 64) } : {}),
+        kind: 'link',
+        ref,
+        title: typeof candidate.title === 'string' && candidate.title.trim() ? candidate.title.trim().slice(0, WALLPAPER_LINK_TITLE_MAX) : new URL(ref).hostname,
+      })
+    }
+    collections.push({
+      ...(typeof item.id === 'string' && item.id.trim() ? { id: item.id.trim().slice(0, 64) } : {}),
+      name: collectionName,
+      ...(typeof item.createdAt === 'number' && Number.isFinite(item.createdAt) ? { createdAt: item.createdAt } : {}),
+      entries,
     })
   }
-  return { schema: WALLPAPER_LINKS_SCHEMA, name, ...(description ? { description } : {}), links }
+  return collections
 }

@@ -13,13 +13,18 @@ import {
 } from '../src/shared/wallpaper-links.js'
 import {
   WallpaperLinkStore,
+  addBundledWallpaperLink,
   bundledWallpaperLinksPath,
   bundledWallpaperLinksWithSource,
   collectionEntryId,
   downloadWallpaperImage,
   findCachedImage,
   linkIdForUrl,
+  readWallpaperLinksBundle,
+  removeBundledWallpaperLink,
+  updateBundledWallpaperLink,
   validateCollectionFileRef,
+  writeBundledCollections,
 } from '../src/main/os/wallpaper-links.js'
 
 /** A DNS answer that points at a public address, except loopback, which resolves truthfully. */
@@ -132,6 +137,49 @@ describe('wallpaper links bundle parsing', () => {
     expect(() => parseWallpaperLinksBundle({ schema: 'other/1', links: [] })).toThrow(/format/i)
     expect(() => parseWallpaperLinksBundle('nope')).toThrow()
     expect(() => parseWallpaperLinksBundle({ schema: WALLPAPER_LINKS_SCHEMA })).toThrow(/links/i)
+  })
+
+  it('carries bundle categories through and normalizes them', () => {
+    const bundle = parseWallpaperLinksBundle({
+      schema: WALLPAPER_LINKS_SCHEMA,
+      name: 'Categories',
+      links: [
+        { url: 'https://example.com/a.jpg', category: '  Nature  ' },
+        { url: 'https://example.com/b.jpg', category: '' },
+        { url: 'https://example.com/c.jpg', category: 42 },
+      ],
+    })
+    expect(bundle.links[0]!.category).toBe('Nature')
+    expect(bundle.links[1]!.category).toBeUndefined()
+    expect(bundle.links[2]!.category).toBeUndefined()
+  })
+
+  it('parses curated collections as link-only, deduped and validated', () => {
+    const bundle = parseWallpaperLinksBundle({
+      schema: WALLPAPER_LINKS_SCHEMA,
+      name: 'With collections',
+      links: [],
+      collections: [
+        {
+          id: 'col-1',
+          name: 'Nature',
+          entries: [
+            { kind: 'link', ref: 'https://example.com/a.jpg', title: 'A' },
+            { kind: 'link', ref: 'https://example.com/a.jpg', title: 'dup' },
+            { kind: 'link', ref: 'http://insecure.example.com/b.jpg' },
+            { kind: 'file', ref: 'C:/Users/someone/Pictures/x.jpg' },
+            'garbage',
+          ],
+        },
+        { name: '' },
+        { name: 'Empty', entries: [] },
+      ],
+    })
+    expect(bundle.collections).toHaveLength(2)
+    expect(bundle.collections![0]!.name).toBe('Nature')
+    expect(bundle.collections![0]!.entries).toHaveLength(1)
+    expect(bundle.collections![0]!.entries[0]!.ref).toBe('https://example.com/a.jpg')
+    expect(bundle.collections![1]!.name).toBe('Empty')
   })
 })
 
@@ -467,5 +515,84 @@ describe('shipped ND wallpaper bundle', () => {
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('ND bundle curation (dev-only edits)', () => {
+  let dir: string
+  let file: string
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'nd-wallpaper-bundle-'))
+    file = join(dir, 'nd-bundles', 'wallpaper-links.json')
+  })
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  it('starts from an empty document when the bundle file is missing', async () => {
+    const bundle = await readWallpaperLinksBundle(file)
+    expect(bundle.schema).toBe(WALLPAPER_LINKS_SCHEMA)
+    expect(bundle.links).toEqual([])
+  })
+
+  it('adds, updates and removes entries on disk', async () => {
+    let bundle = await addBundledWallpaperLink(file, { url: 'https://example.com/a.jpg', title: 'A', category: ' nature ' })
+    expect(bundle.links).toHaveLength(1)
+    expect(bundle.links[0]!.category).toBe('nature')
+
+    bundle = await addBundledWallpaperLink(file, { url: 'https://example.com/b.jpg', thumb: 'https://cdn.example.com/b-small.jpg' })
+    expect(bundle.links).toHaveLength(2)
+    expect(bundle.links[1]!.thumb).toBe('https://cdn.example.com/b-small.jpg')
+
+    // The document on disk is the interchange format, categories included.
+    const onDisk = JSON.parse(await readFile(file, 'utf8'))
+    expect(onDisk.schema).toBe(WALLPAPER_LINKS_SCHEMA)
+    expect(onDisk.links).toHaveLength(2)
+    expect(onDisk.links[0].category).toBe('nature')
+
+    bundle = await updateBundledWallpaperLink(file, 'https://example.com/a.jpg', { title: 'Renamed', category: '' })
+    expect(bundle.links[0]!.title).toBe('Renamed')
+    expect(bundle.links[0]!.category).toBeUndefined()
+
+    const gone = await removeBundledWallpaperLink(file, 'https://example.com/b.jpg')
+    expect(gone.removed).toBe(true)
+    expect(gone.bundle.links).toHaveLength(1)
+
+    const missing = await removeBundledWallpaperLink(file, 'https://example.com/never-there.jpg')
+    expect(missing.removed).toBe(false)
+  })
+
+  it('refuses duplicates, invalid URLs and unknown edits', async () => {
+    await addBundledWallpaperLink(file, { url: 'https://example.com/a.jpg' })
+    await expect(addBundledWallpaperLink(file, { url: 'https://example.com/a.jpg' })).rejects.toThrow(/already/i)
+    await expect(addBundledWallpaperLink(file, { url: 'http://insecure.example.com/a.jpg' })).rejects.toThrow(/https/i)
+    await expect(addBundledWallpaperLink(file, { url: 'https://127.0.0.1/private.jpg' })).rejects.toThrow(/private/i)
+    await expect(updateBundledWallpaperLink(file, 'https://example.com/nope.jpg', { title: 'X' })).rejects.toThrow(/no longer exists/i)
+  })
+
+  it('mirrors collections into the bundle document as link-only seeds', async () => {
+    await addBundledWallpaperLink(file, { url: 'https://example.com/a.jpg', title: 'A' })
+    const mirrored = await writeBundledCollections(file, [
+      {
+        id: 'col-1',
+        name: 'Nature',
+        createdAt: 1,
+        entries: [
+          { id: 'e-1', kind: 'link', ref: 'https://example.com/a.jpg', title: 'A', addedAt: 0 },
+          // File entries must not ship: they are meaningless on another machine.
+          { id: 'e-2', kind: 'file', ref: 'C:/Users/someone/Pictures/x.jpg', title: 'local', addedAt: 0 },
+        ],
+      },
+    ])
+    expect(mirrored.collections).toHaveLength(1)
+    expect(mirrored.collections![0]!.entries).toHaveLength(1)
+    expect(mirrored.collections![0]!.entries[0]!.kind).toBe('link')
+
+    const roundTrip = await readWallpaperLinksBundle(file)
+    expect(roundTrip.collections![0]!.name).toBe('Nature')
+    expect(roundTrip.collections![0]!.entries[0]!.ref).toBe('https://example.com/a.jpg')
+    // Links survive the collection mirror untouched.
+    expect(roundTrip.links).toHaveLength(1)
   })
 })

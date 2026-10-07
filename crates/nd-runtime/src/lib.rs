@@ -5,6 +5,7 @@
 
 pub mod artifacts;
 pub mod cache;
+pub mod clipboard;
 pub mod deadline;
 pub mod decision;
 pub mod dispatcher;
