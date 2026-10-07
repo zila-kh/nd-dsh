@@ -67,6 +67,10 @@ extraResources:
       - '!bin/agent-browser-darwin*'
   - from: resources/browser-extensions
     to: browser-extensions
+    filter:
+      - '**/*'
+      # Chromium's generated rule-set index; it is rebuilt per profile at runtime.
+      - '!**/_metadata/**'
   - from: resources/nd-pencil
     to: nd-pencil
   - from: resources/nd-bundles

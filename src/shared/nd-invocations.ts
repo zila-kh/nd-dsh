@@ -48,6 +48,17 @@ export interface NdPendingApprovalView {
   requestedAt: number
 }
 
+/**
+ * A real browser tab was opened or focused by an ND context. The tab belongs to
+ * exactly that context, so the shell presents it there: Personal browsing is
+ * Personal, never a company's or a project's.
+ */
+export interface NdBrowserFocusEvent {
+  url: string
+  tabId?: string
+  context: NdContext
+}
+
 export interface NdCommandView {
   extensionId: string
   contributionId: string
@@ -229,11 +240,21 @@ export interface NdHomeChatView {
   updatedAt: number
 }
 
+/** One saved dialpad link of the Personal browser. */
+export interface NdHomeLinkView {
+  id: string
+  url: string
+  title: string
+  addedAt: number
+}
+
 export interface NdHomeStateView {
   storageRoot: string
   notes: NdHomeNoteView[]
   captures: NdHomeCaptureView[]
   chats: NdHomeChatView[]
+  /** Saved Personal browser dialpad links, newest first. */
+  links: NdHomeLinkView[]
 }
 
 export interface NdCaptureResultView {
@@ -285,6 +306,8 @@ export interface NdExtensionsDesktopApi {
   approve(approvalId: string, remember?: boolean): Promise<NdInvocationResult>
   deny(approvalId: string): Promise<void>
   onChanged(listener: (state: NdExtensionsStateView) => void): () => void
+  /** The host opened or focused a real browser tab: the app surfaces it in the tab's own context. */
+  onBrowserFocus(listener: (focus: NdBrowserFocusEvent) => void): () => void
 }
 
 export interface NdHomeDesktopApi {
@@ -302,6 +325,9 @@ export interface NdHomeDesktopApi {
   ensureChat(context: NdContext): Promise<NdHomeChatView>
   bindChat(chatId: string, sessionId: string): Promise<NdHomeChatView>
   setChatTitle(sessionId: string, title: string): Promise<NdHomeStateView>
+  /** Personal browser dialpad: the user's own one-click sites. */
+  saveLink(input: { url: string; title?: string }): Promise<NdHomeStateView>
+  removeLink(id: string): Promise<NdHomeStateView>
   revealStorage(): Promise<void>
   onChanged(listener: (state: NdHomeStateView) => void): () => void
 }
@@ -325,6 +351,7 @@ export const ND_EXTENSIONS_IPC = {
   approve: 'nd-ext:approve',
   deny: 'nd-ext:deny',
   changedEvent: 'nd-ext:changed',
+  browserFocusEvent: 'nd-ext:browser-focus',
 } as const
 
 export const ND_HOME_IPC = {
@@ -341,6 +368,8 @@ export const ND_HOME_IPC = {
   chatEnsure: 'nd-home:chat:ensure',
   chatBind: 'nd-home:chat:bind',
   chatTitle: 'nd-home:chat:title',
+  linkSave: 'nd-home:link:save',
+  linkRemove: 'nd-home:link:remove',
   reveal: 'nd-home:reveal',
   changedEvent: 'nd-home:changed',
 } as const

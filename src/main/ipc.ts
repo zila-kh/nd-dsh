@@ -17,6 +17,7 @@ import { NdSkillService } from './skills/nd-skill-service.js'
 import { capturePrimaryDisplay, captureSelfWindow } from './capture/app-capture.js'
 import { describePick, ExternalElementStage, formatExternalElementContext, pickElementInExternalApp, RecentPickStore, type ExternalPick } from './capture/external-inspect.js'
 import type { BrowserController } from './browser/browser-controller.js'
+import type { BrowserPlatformService } from './browser-platform/browser-platform-service.js'
 import type { CapabilityRegistry } from './capabilities/capability-registry.js'
 import type { DshSurfaceController } from './dsh/dsh-surface.js'
 import type { CodingEngineRegistry } from './engines/coding-engine-registry.js'
@@ -59,6 +60,8 @@ interface IpcDependencies {
   /** Frameless quick launcher popup; its renderer is admitted to launcher-only channels. */
   launcherPopup: LauncherPopupController
   browser: BrowserController
+  /** Multi-tab browser platform, for extension hosts that manage real browser tabs. */
+  browserPlatform?: Pick<BrowserPlatformService, 'createTab' | 'activateTab' | 'closeTab' | 'tabs'>
   dshSurface: DshSurfaceController
   engines: CodingEngineRegistry
   capabilities: CapabilityRegistry
@@ -278,6 +281,7 @@ export function registerIpc(deps: IpcDependencies): () => void {
     host: nativeHost,
     organization: deps.organizationStore,
     browser: deps.browser,
+    ...(deps.browserPlatform ? { browserPlatform: deps.browserPlatform } : {}),
     providers: deps.providers,
     workflow: workflowService,
     ...(deps.coreMedia ? { media: deps.coreMedia } : {}),

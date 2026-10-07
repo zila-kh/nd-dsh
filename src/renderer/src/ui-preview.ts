@@ -632,6 +632,7 @@ const desktopApi: DesktopApi = {
     approve: async () => ({ ok: false, error: { code: 'unavailable' as const, message: 'Extension actions are unavailable in preview mode.' } }),
     deny: async () => undefined,
     onChanged: () => () => undefined,
+    onBrowserFocus: () => () => undefined,
   },
   home: {
     state: async () => previewHomeState(),
@@ -662,6 +663,8 @@ const desktopApi: DesktopApi = {
       updatedAt: Date.now(),
     }),
     setChatTitle: async () => previewHomeState(),
+    saveLink: async () => previewHomeState(),
+    removeLink: async () => previewHomeState(),
     revealStorage: async () => undefined,
     onChanged: () => () => undefined,
   },
@@ -1038,5 +1041,6 @@ function previewHomeState() {
     notes: [],
     captures: [],
     chats: [],
+    links: [],
   }
 }

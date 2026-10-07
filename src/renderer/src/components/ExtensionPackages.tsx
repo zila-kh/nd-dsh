@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { BookOpen, Check, ChevronLeft, ChevronRight, Download, ExternalLink, Eye, FolderOpen, FolderPlus, Gamepad2, Image, Languages, Layers, Link2, ListChecks, MonitorPlay, Package, PanelsTopLeft, Pencil, Plus, Power, Puzzle, RefreshCw, Repeat, Search, Settings2, ShieldCheck, Shuffle, SkipBack, SkipForward, Sparkles, SquareTerminal, Trash2, Undo2, Upload, Workflow } from 'lucide-react'
+import { BookOpen, Check, ChevronLeft, ChevronRight, Download, ExternalLink, Eye, FolderOpen, FolderPlus, Gamepad2, Image, Languages, Layers, Link2, ListChecks, MonitorPlay, Package, PanelsTopLeft, Pencil, Plus, Power, Puzzle, RefreshCw, Repeat, Search, Settings2, ShieldCheck, Shuffle, SkipBack, SkipForward, Sparkles, SquareTerminal, Trash2, Undo2, Upload, Workflow, Globe } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { cn } from '../lib/utils'
 import type { NdContext } from '../../../shared/nd-context'
@@ -19,7 +19,7 @@ import { Input } from './ui/input'
 import { describeContextForUi, optionIdForContext, type ContextOption } from '../lib/nd-context-model'
 import type { OrganizationSnapshot } from '../../../shared/organization'
 import { SurfaceErrorBoundary } from './surface-error-boundary'
-import { ExtensionWebView } from './ExtensionWebView'
+import { admitKeepAliveView, dockKeepAliveView, extensionViewKey, lookupKeepAliveView, useExtensionKeepAlive } from './extension-view-keepalive'
 
 const NdTranslateView = lazy(() => import('./NdTranslateView'))
 const ExtensionGuideDialog = lazy(() => import('./ExtensionGuideDialog'))
@@ -56,6 +56,7 @@ const EXTENSION_ACCENTS: Record<string, { icon: LucideIcon; tileClassName: strin
   'nd.translate': { icon: Languages, tileClassName: 'border-emerald-500/25 bg-emerald-500/15 text-emerald-500' },
   'nd.quit-process': { icon: Power, tileClassName: 'border-rose-500/25 bg-rose-500/15 text-rose-500' },
   'nd.tic-tac-toe': { icon: Gamepad2, tileClassName: 'border-teal-500/25 bg-teal-500/15 text-teal-500' },
+  'nd.mini-browser': { icon: Globe, tileClassName: 'border-red-500/25 bg-red-500/15 text-red-500' },
 }
 
 function ExtensionIconTile({ id, large = false }: { id: string; large?: boolean }): React.ReactNode {
@@ -87,6 +88,8 @@ interface Props {
   contexts: ContextOption[]
   requestedView?: { extensionId: string; viewId: string; context: NdContext } | null
   onRequestedViewHandled?(): void
+  /** Bumped whenever a Mini Browser action surfaced a site in the ND browser pane; the open view dialog auto-hides for it. */
+  browserFocusNudge?: number
   onOpenBrowser?: ((tabId: string) => Promise<void>) | undefined
   onError(message: string): void
   onChanged(): Promise<void>
@@ -98,7 +101,7 @@ interface Props {
  * Installation is global; activation and grants are per context, and the two
  * are never implied by each other.
  */
-export function ExtensionPackagesCard({ state, organization, contexts, requestedView, onRequestedViewHandled, onOpenBrowser, onError, onChanged }: Props): React.ReactNode {
+export function ExtensionPackagesCard({ state, organization, contexts, requestedView, onRequestedViewHandled, browserFocusNudge, onOpenBrowser, onError, onChanged }: Props): React.ReactNode {
   const [manageContextId, setManageContextId] = useState('personal')
   const manageContext = contexts.find((option) => option.id === manageContextId)?.context ?? { kind: 'personal' as const }
   const [view, setView] = useState<{ extensionId: string; viewId: string; context: NdContext } | null>(null)
@@ -115,12 +118,31 @@ export function ExtensionPackagesCard({ state, organization, contexts, requested
   const installed = state.packages.filter((item) =>
     !normalizedQuery || `${item.name} ${item.description} ${item.id}`.toLowerCase().includes(normalizedQuery))
 
+  // Scrim bookkeeping: a browser-focus nudge only belongs to the dialog that
+  // was open when the tab was opened. Consuming a view request acknowledges
+  // every nudge so far, so the stale signal cannot close a dialog the user just
+  // asked for (reopening a kept-alive view, for example).
+  const scrimmedNudge = useRef(browserFocusNudge)
+  const latestNudge = useRef(browserFocusNudge)
+  latestNudge.current = browserFocusNudge
+
   useEffect(() => {
     if (!requestedView) return
+    scrimmedNudge.current = latestNudge.current
     setManageContextId(optionIdForContext(contexts, requestedView.context) ?? 'personal')
     setView(requestedView)
     onRequestedViewHandled?.()
   }, [requestedView])
+
+  useEffect(() => {
+    // A Mini Browser action opened or switched a real browser tab and the app
+    // is now showing the site; scrim the chrome dialog out of the way. The
+    // keep-alive layer keeps the view alive on its header tab.
+    if (scrimmedNudge.current === browserFocusNudge) return
+    scrimmedNudge.current = browserFocusNudge
+    setView(null)
+    setDetailTarget(null)
+  }, [browserFocusNudge])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -1858,12 +1880,26 @@ function ExtensionViewDialog({
     setPicker(null)
     setPickerChecked(new Set())
     setPickerNewName('')
-    if (!target) {
+    if (!target || !targetKey) {
+      return
+    }
+    // Keep-alive web views: an already-live view (opened before, backgrounded
+    // from the header tab strip) keeps its iframe and game state — reuse the
+    // admitted data instead of minting a fresh asset token via loadView.
+    const live = lookupKeepAliveView(targetKey)
+    if (live) {
+      setData(live)
+      setLoadedTarget(targetKey)
       return
     }
     let mounted = true
     void window.ndDsh.ndExtensions.loadView(target.extensionId, target.viewId, target.context)
-      .then((next) => { if (mounted) { setData(next); setLoadedTarget(targetKey) } })
+      .then((next) => {
+        if (!mounted) return
+        if (next.kind === 'web' && next.webView?.url) admitKeepAliveView(next)
+        setData(next)
+        setLoadedTarget(targetKey)
+      })
       .catch((cause) => {
         if (!mounted) return
         const message = cause instanceof Error ? cause.message : String(cause)
@@ -1874,7 +1910,9 @@ function ExtensionViewDialog({
   }, [target])
 
   useEffect(() => {
-    if (!target || !currentData?.refreshIntervalMs) return
+    // Web views are keep-alive surfaces: polling would mint fresh asset tokens
+    // behind a live iframe. Package UIs drive their own updates via the bridge.
+    if (!target || !currentData?.refreshIntervalMs || currentData.kind === 'web') return
     let mounted = true
     let loading = false
     let failed = false
@@ -1902,6 +1940,20 @@ function ExtensionViewDialog({
 
   const isDetail = currentData?.kind === 'detail'
   const isWebView = currentData?.kind === 'web' && Boolean(currentData.webView?.url)
+  // Keep-alive docking: the dialog renders a placeholder slot; the shell-level
+  // host pins the live iframe over it. Unmounting the slot (dialog closed)
+  // backgrounds the view without unmounting its iframe.
+  const webViewDockKey = isWebView && currentData ? extensionViewKey(currentData) : null
+  const dockWebViewSlot = useCallback((el: HTMLDivElement | null) => {
+    if (webViewDockKey) dockKeepAliveView(webViewDockKey, el)
+  }, [webViewDockKey])
+  const keepAliveViews = useExtensionKeepAlive().views
+  useEffect(() => {
+    // Closing this view from the keep-alive tab strip while its dialog is open
+    // must drop the dialog too, instead of leaving an empty slot behind.
+    if (!webViewDockKey) return
+    if (!keepAliveViews.some((view) => view.key === webViewDockKey)) onClose()
+  }, [webViewDockKey, keepAliveViews, onClose])
   const isTranslate = target?.extensionId === 'nd.translate' && target.viewId === 'translator'
     && currentData?.extensionId === target.extensionId && currentData.viewId === target.viewId
     && contextKey(currentData.context) === contextKey(target.context)
@@ -2587,9 +2639,11 @@ function ExtensionViewDialog({
             </Suspense>
           </SurfaceErrorBoundary>
         ) : isWebView && currentData?.webView ? (
-          <SurfaceErrorBoundary label={currentData.title} resetKey={targetKey ?? undefined} onError={onError}>
-            <ExtensionWebView data={currentData} onError={onError} />
-          </SurfaceErrorBoundary>
+          <div
+            ref={dockWebViewSlot}
+            title={currentData.title}
+            className="h-[480px] w-full rounded-md border border-border-soft bg-black sm:h-[540px]"
+          />
         ) : !currentData ? (
           <p className="text-xs text-faint" role={loadError ? 'alert' : 'status'}>{loadError ?? 'Loading extension view…'}</p>
         ) : <>

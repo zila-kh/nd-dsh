@@ -212,6 +212,28 @@ describe('HomeStore personal records', () => {
     expect(existsSync(join(homeRoot, 'captures', `${capture.id}.png`))).toBe(false)
   })
 
+  it('saves dialpad links as personal records and normalizes their address', async () => {
+    const home = new HomeStore(join(root, 'nd-home'))
+    const link = await home.saveLink({ url: 'youtube.com' })
+    expect(link.url).toBe('https://youtube.com/')
+    expect(link.title).toBe('youtube.com')
+
+    // Re-saving the same address refreshes the tile instead of duplicating it.
+    const renamed = await home.saveLink({ url: 'https://youtube.com/', title: 'Videos' })
+    expect(renamed.id).toBe(link.id)
+    expect(renamed.title).toBe('Videos')
+    expect((await home.state()).links).toHaveLength(1)
+
+    await expect(home.saveLink({ url: 'about:blank' })).rejects.toThrow(/http\(s\) address/)
+    await expect(home.saveLink({ url: 'not a website' })).rejects.toThrow()
+
+    const restarted = new HomeStore(join(root, 'nd-home'))
+    expect((await restarted.state()).links.map((item) => item.title)).toEqual(['Videos'])
+
+    await restarted.removeLink(link.id)
+    expect((await restarted.state()).links).toEqual([])
+  })
+
   it('gives each personal chat a managed working folder and binds its session id', async () => {
     const homeRoot = join(root, 'nd-home')
     const home = new HomeStore(homeRoot)

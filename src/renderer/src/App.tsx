@@ -13,6 +13,7 @@ import { Badge } from './components/ui/badge'
 import { Toaster } from './components/ui/sonner'
 import { ChatPanel } from './components/ChatPanel'
 import { SurfaceErrorBoundary } from './components/surface-error-boundary'
+import { useNativeViewOcclusion } from './lib/use-native-view-occlusion'
 import { DesignView } from './components/DesignView'
 import { DiffView } from './components/DiffView'
 import { DshCodingSurface } from './components/DshCodingSurface'
@@ -29,10 +30,14 @@ import { ModalInspectDock } from './components/modal-inspect-dock'
 import { ScreenshotDropdown } from './components/ScreenshotDropdown'
 import { QuickLauncher } from './components/QuickLauncher'
 import { HomeView } from './components/HomeView'
+import { PersonalSurface, type PersonalPane } from './components/personal-surface'
+import { PersonalDialpad } from './components/personal-dialpad'
 import { ExtensionPackagesCard } from './components/ExtensionPackages'
+import { ExtensionKeepAliveHost, ExtensionKeepAliveTabs, useExtensionKeepAliveReopenHandler } from './components/extension-view-keepalive'
 import { cn } from './lib/utils'
 import { fileAccent } from './lib/file-accents'
 import { isWorkspaceSelected } from './lib/workspace-selection'
+import { useModalDialogOpen } from './lib/modal-dialog-presence'
 import {
   buildLauncherMemoryMutation,
   buildLauncherTaskMutation,
@@ -45,9 +50,10 @@ import {
   currentContext,
   describeContextForUi,
   optionIdForContext,
+  browserFocusView,
 } from './lib/nd-context-model'
 import type { LauncherHandoffTarget } from '../../shared/quick-launcher'
-import type { NdContext } from '../../shared/nd-context'
+import { asNdContext, type NdContext } from '../../shared/nd-context'
 import type { WorkspaceProfile } from '../../shared/workspace-profile'
 import type {
   NdCaptureResultView,
@@ -206,6 +212,66 @@ export default function App() {
   const [captureOverlay, setCaptureOverlay] = useState<{ active: boolean; mode: CaptureOverlayMode } | null>(null)
   const [floatDropdownOpen, setFloatDropdownOpen] = useState(false)
   const [quickLauncherOpen, setQuickLauncherOpen] = useState(false)
+  // Keep-alive header: while a modal dialog is open, the titlebar stays live
+  // above the overlay so company/project/navigation controls keep working.
+  // The quick launcher is a spotlight surface that must keep its normal
+  // click-outside dismissal, so it suspends the keep-alive header.
+  const headerKeepAlive = useModalDialogOpen() && !quickLauncherOpen
+  // Extension keep-alive tabs (browser-style): a tab click reopens that view's
+  // dialog so the backgrounded view — game state included — is docked again.
+  useExtensionKeepAliveReopenHandler((view) => {
+    const request = { extensionId: view.data.extensionId, viewId: view.data.viewId, context: view.data.context }
+    setExtensionViewRequest(request)
+    setSettingsTab('extensions')
+    switchToWorkbench('settings')
+    // A hard-to-reproduce load race right after a browser-focus ping can
+    // swallow the reopen (the dialog never mounts). When a ping was recent,
+    // re-issue the request once after a short settle: the card keys each
+    // request by identity, so a no-op re-issue is harmless. No recent ping
+    // means no race, and a plain user click must never be replayed.
+    if (Date.now() - lastBrowserFocusAt.current < 800) {
+      const request = { extensionId: view.data.extensionId, viewId: view.data.viewId, context: view.data.context }
+      window.setTimeout(() => {
+        if (!document.querySelector('[data-slot="dialog-content"]')) {
+          setExtensionViewRequest({ ...request })
+        }
+      }, 300)
+    }
+  })
+  // Mini Browser actions emit a browser-focus ping: bring the site up right
+  // away, and let the extensions card auto-hide its chrome dialog (the
+  // keep-alive layer keeps it alive behind the surface). The event names the
+  // context that opened the tab, and the site is presented there: Personal
+  // browsing in the Personal space, everything else in the Agent workbench.
+  const [browserFocusNudge, setBrowserFocusNudge] = useState(0)
+  const lastBrowserFocusAt = useRef(0)
+  const [personalPane, setPersonalPane] = useState<PersonalPane>('records')
+  const [personalDialpadOpen, setPersonalDialpadOpen] = useState(true)
+  useEffect(() => window.ndDsh.ndExtensions.onBrowserFocus((focus) => {
+    lastBrowserFocusAt.current = Date.now()
+    const context = asNdContext(focus.context)
+    setBrowserFocusNudge((nudge) => nudge + 1)
+    if (browserFocusView(context) === 'personal') {
+      setPersonalPane('browser')
+      switchToWorkbench('home')
+      return
+    }
+    setAgentPane('browser')
+    switchToWorkbench('agent')
+  }), [])
+  // The embedded browser is one shared native child view, so exactly one
+  // surface may own it: the Agent workbench pane, or the Personal one. The
+  // shell makes that decision in one place so two mounted panes can never
+  // fight over visibility, and a dialog (occlusion) always wins.
+  const nativeOverlayOpen = useNativeViewOcclusion()
+  const browserSurface = view === 'agent' && agentPane === 'browser'
+    ? 'agent'
+    : view === 'home' && personalPane === 'browser'
+      ? 'personal'
+      : null
+  useEffect(() => {
+    void window.ndDsh.browser.setVisible(browserSurface !== null && !nativeOverlayOpen).catch(() => undefined)
+  }, [browserSurface, nativeOverlayOpen])
   // PRD 0006: ND Home personal records, extension packages, and the launcher's
   // explicit context selector (Personal by default, independent of the active
   // company/project selection).
@@ -875,7 +941,7 @@ export default function App() {
         const result = await invokeDailyEssentials('quick-note', 'command', context, { text, tags })
         if (handleInvocationFailure(result)) return
         await refreshHome()
-        toast('Note saved to ND Home.')
+        toast('Note saved to Personal.')
       } catch (cause) {
         notify(errorMessage(cause))
       }
@@ -926,7 +992,7 @@ export default function App() {
         const result = await invokeDailyEssentials('capture-clipboard', 'command', context, {})
         if (handleInvocationFailure(result)) return
         await refreshHome()
-        toast('Clipboard captured into ND Home.')
+        toast('Clipboard captured into Personal.')
       } catch (cause) {
         notify(errorMessage(cause))
       }
@@ -946,6 +1012,37 @@ export default function App() {
 
   const refreshHome = async (): Promise<void> => {
     setHomeState(await window.ndDsh.home.state())
+  }
+
+  /**
+   * Personal browser dialpad: a tile opens a real ND browser tab and the pane
+   * gives the site the space, so the speed dial behaves like a new-tab page.
+   * Links are personal records in ND-managed storage — never company or project
+   * memory.
+   */
+  const openPersonalTab = (url: string): void => {
+    setPersonalPane('browser')
+    setPersonalDialpadOpen(false)
+    void window.ndDsh.browserPlatform.createTab('builtin', url)
+      .then(async (tab) => {
+        await window.ndDsh.browserPlatform.activateTab('builtin', tab.id)
+        await window.ndDsh.browserPlatform.select({ mode: 'tab', targetId: 'builtin', tabId: tab.id })
+      })
+      .catch((cause) => notify(errorMessage(cause)))
+  }
+
+  const savePersonalDialpadLink = (): void => {
+    const url = browserState?.url
+    if (!url) return
+    void window.ndDsh.home.saveLink({ url })
+      .then(setHomeState)
+      .catch((cause) => notify(errorMessage(cause)))
+  }
+
+  const removePersonalDialpadLink = (id: string): void => {
+    void window.ndDsh.home.removeLink(id)
+      .then(setHomeState)
+      .catch((cause) => notify(errorMessage(cause)))
   }
 
   const activeLauncherContext = (): NdContext =>
@@ -996,7 +1093,7 @@ export default function App() {
       case 'capture.area':
         await refreshHome()
         setView('home')
-        notify('Capture saved to ND Home.')
+        notify('Capture saved to Personal.')
         return
       case 'note.create':
       case 'clipboard.read':
@@ -1080,7 +1177,7 @@ export default function App() {
       if (handleInvocationFailure(result)) return
       await refreshHome()
       setView('home')
-      notify('Capture saved to ND Home.')
+      notify('Capture saved to Personal.')
     } catch (cause) {
       notify(errorMessage(cause))
     } finally {
@@ -1102,7 +1199,7 @@ export default function App() {
       if (handleInvocationFailure(result)) return
       await refreshHome()
       setView('home')
-      notify('Area capture saved to ND Home.')
+      notify('Area capture saved to Personal.')
     } catch (cause) {
       notify(errorMessage(cause))
     } finally {
@@ -1191,7 +1288,7 @@ export default function App() {
   })
 
   const allNavItems: Array<{ id: ProductView; label: string; icon: ReactNode }> = [
-    { id: 'home', label: 'Home', icon: <HomeIcon /> },
+    { id: 'home', label: 'Personal', icon: <HomeIcon /> },
     { id: 'company', label: 'Company', icon: <CompanyIcon /> },
     { id: 'agent', label: 'Agent', icon: <SparkIcon /> },
     { id: 'design', label: 'Design', icon: <PencilIcon /> },
@@ -1347,7 +1444,13 @@ export default function App() {
           UI PREVIEW · DEVELOPMENT FIXTURES · ACTIONS ARE SIMULATED · LAUNCH ELECTRON FOR REAL RUNTIME FEATURES
         </aside>
       ) : null}
-      <header className="app-drag grid grid-cols-[minmax(180px,1fr)_auto_minmax(180px,1fr)] items-center gap-[18px] border-b border-border-soft bg-titlebar pr-[148px] pl-3">
+      <header
+        data-nd-keepalive={headerKeepAlive ? '' : undefined}
+        className={cn(
+          'app-drag grid grid-cols-[minmax(180px,1fr)_auto_minmax(180px,1fr)] items-center gap-[18px] border-b border-border-soft bg-titlebar pr-[148px] pl-3',
+          headerKeepAlive && 'pointer-events-auto relative z-[60]',
+        )}
+      >
         <div className="flex min-w-0 flex-col gap-[7px]">
           <div className="flex min-w-0 items-center gap-2">
             <TitlebarIconButton
@@ -1425,9 +1528,9 @@ export default function App() {
             </div>
           </div>
           {orgState ? (
-            <div className="app-no-drag flex items-center gap-[8px]">
-              <label className="flex items-center gap-[5px]">
-                <span className="text-[10px] font-semibold tracking-[0.1em] text-faint">COMPANY</span>
+        <div className="app-no-drag flex min-w-0 items-center gap-[8px] overflow-hidden">
+          <label className="flex items-center gap-[5px]">
+            <span className="text-[10px] font-semibold tracking-[0.1em] text-faint">COMPANY</span>
                 <Select value={company?.id ?? ''} onValueChange={switchCompany}>
                   <SelectTrigger size="sm" aria-label="Switch company" className="h-6! max-w-[220px]! min-w-0 gap-1.5 rounded-md border-border-strong bg-surface-1/50 px-2! text-xs! text-soft [&>svg]:size-3.5">
                     <SelectValue placeholder="No company" />
@@ -1522,6 +1625,7 @@ export default function App() {
                 Manage
               </Button>
               {showGitControls && workspace?.root ? <ProjectGitControls key={`${workspace.projectId ?? 'workspace'}:${workspace.root}:${workspace.binding ?? 'standalone'}`} root={workspace.root} editable={gitEditable} workspaceBinding={workspace.binding} onError={notify} /> : null}
+              <ExtensionKeepAliveTabs organization={orgState} activeContext={currentContext(orgState)} />
             </div>
           ) : null}
         </div>
@@ -1640,21 +1744,52 @@ export default function App() {
             </Separator>
             <Panel className="relative min-h-0 min-w-0 overflow-hidden bg-surface-0" minSize={WORKSPACE_MIN_PX}>
               <section aria-hidden={view !== 'home'} className={cn('absolute inset-0 overflow-hidden', view === 'home' ? 'block' : 'hidden')}>
-                <SurfaceErrorBoundary label="Home" resetKey={`home:${homeState?.notes.length ?? 0}`} onError={notify}>
+                <SurfaceErrorBoundary label="Personal" resetKey={`home:${homeState?.notes.length ?? 0}`} onError={notify}>
                   {homeState ? (
-                    <HomeView
-                      state={homeState}
-                      busy={homeBusy}
+                    <PersonalSurface
+                      active={view === 'home'}
+                      pane={personalPane}
+                      onPaneChange={setPersonalPane}
+                      dialpadOpen={personalDialpadOpen}
+                      onDialpadOpenChange={setPersonalDialpadOpen}
+                      dialpad={
+                        <PersonalDialpad
+                          links={homeState.links}
+                          currentUrl={browserState?.url}
+                          busy={homeBusy}
+                          onOpen={openPersonalTab}
+                          onSaveCurrent={savePersonalDialpadLink}
+                          onRemoveLink={removePersonalDialpadLink}
+                          onError={notify}
+                        />
+                      }
+                      state={browserState}
+                      onSnapshot={(result) => {
+                        navigator.clipboard.writeText(result)
+                          .then(() => notify('Browser snapshot copied to the clipboard.'))
+                          .catch(() => notify('Browser snapshot captured, but copying to the clipboard failed.'))
+                      }}
                       onError={notify}
-                      onChanged={refreshHome}
-                      onCaptureScreen={homeCaptureScreen}
-                      onCaptureArea={openLocalAreaCapture}
-                      onCopyCapture={(captureId) => runHomeCaptureAction('capture-copy', captureId)}
-                      onExportCapture={(captureId) => runHomeCaptureAction('capture-export', captureId)}
-                      onAskWithCapture={askWithCapture}
-                      onOpenChat={openSession}
-                      onStartChat={(prompt) => startContextChat(prompt?.trim() || 'Hello ND — this is my personal space.', { kind: 'personal' })}
-                    />
+                      onOpenSettings={() => {
+                        setSettingsTab('general')
+                        setSettingsSubTabs((current) => ({ ...current, general: 'browser' }))
+                        switchToWorkbench('settings')
+                      }}
+                    >
+                      <HomeView
+                        state={homeState}
+                        busy={homeBusy}
+                        onError={notify}
+                        onChanged={refreshHome}
+                        onCaptureScreen={homeCaptureScreen}
+                        onCaptureArea={openLocalAreaCapture}
+                        onCopyCapture={(captureId) => runHomeCaptureAction('capture-copy', captureId)}
+                        onExportCapture={(captureId) => runHomeCaptureAction('capture-export', captureId)}
+                        onAskWithCapture={askWithCapture}
+                        onOpenChat={openSession}
+                        onStartChat={(prompt) => startContextChat(prompt?.trim() || 'Hello ND — this is my personal space.', { kind: 'personal' })}
+                      />
+                    </PersonalSurface>
                   ) : null}
                 </SurfaceErrorBoundary>
               </section>
@@ -1823,6 +1958,7 @@ export default function App() {
                       contexts={extensionContextOptions}
                       requestedView={extensionViewRequest}
                       onRequestedViewHandled={() => setExtensionViewRequest(null)}
+                      browserFocusNudge={browserFocusNudge}
                       onOpenBrowser={async (tabId) => {
                         await window.ndDsh.browserPlatform.activateTab('builtin', tabId)
                         await window.ndDsh.browserPlatform.select({ mode: 'tab', targetId: 'builtin', tabId })
@@ -1880,6 +2016,7 @@ export default function App() {
         />
       ) : null}
       <RuntimePrompts onError={notify} organization={orgState} />
+      <ExtensionKeepAliveHost onError={notify} />
       <ModalInspectDock
         hidden={captureOverlay !== null}
         pickDisabled={elementInspectActive}

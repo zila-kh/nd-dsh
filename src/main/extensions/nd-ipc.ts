@@ -10,6 +10,7 @@ import {
   type NdExtensionsStateView,
   type NdAvailablePackageView,
   type NdInvocationRequest,
+  type NdBrowserFocusEvent,
 } from '../../shared/nd-invocations.js'
 import type { OrganizationMutation, OrganizationSnapshot } from '../../shared/organization.js'
 import { BUILTIN_EXTENSION_PACKAGES, defaultActivationContexts, WALLPAPER_MANAGER_ID } from '../../shared/builtin-extension-packages.js'
@@ -46,13 +47,14 @@ import type { CoreMedia } from '../core/core-media.js'
 import type { CoreClipboard } from '../core/core-clipboard.js'
 import type { CoreVault } from '../core/core-vault.js'
 import { ProcessInventory } from '../os/process-inventory.js'
-import type { BrowserController } from '../browser/browser-controller.js'
+import { BUILTIN_BROWSER_TARGET_ID, type BrowserController } from '../browser/browser-controller.js'
+import type { BrowserPlatformService } from '../browser-platform/browser-platform-service.js'
 import type { WorkflowService } from '../workflows/workflow-service.js'
 import type { HomeStore } from '../home/home-store.js'
 import type { ExtensionPackageStore } from './package-store.js'
 import type { InvocationBroker, NdOrganizationPort } from './invocation-broker.js'
 import type { InvocationStateStore } from './invocation-state.js'
-import type { NativeHostRegistry } from './native-host.js'
+import type { NativeHostRegistry, NdHostCallContext } from './native-host.js'
 import { NdTranslateService, type TranslateBrowserPort } from './translate-service.js'
 import { translateWithLlm } from './translate-llm.js'
 import { TranslateHistoryStore } from './translate-history-store.js'
@@ -68,6 +70,7 @@ import { createZipFile } from './zip.js'
 import { promptVaultEntry, type VaultPromptValues } from './vault-prompt.js'
 import { ExtensionWebViewAssets } from './webview-assets.js'
 import { TicTacToeStatsStore, asTicTacToeOutcome } from './tic-tac-toe-store.js'
+import { MiniBrowserStore, browserTabUrl, asMiniEntryId, miniTabTitle, legacyYouTubeQueuePath, type MiniLink } from './mini-browser-store.js'
 import { ND_TRANSLATE_ID, ND_TRANSLATE_MAX_TEXT, isLlmProvider } from '../../shared/nd-translate.js'
 import { ND_WEBVIEW_URL_SCHEME } from '../../shared/extension-webview.js'
 import type { ProviderStore } from '../providers.js'
@@ -88,6 +91,8 @@ export interface NdIpcDependencies {
   host: NativeHostRegistry
   organization: NdOrganizationPortFull
   browser: Pick<BrowserController, 'navigate'> & TranslateBrowserPort
+  /** Multi-tab platform surface for extension hosts that manage real browser tabs. */
+  browserPlatform?: Pick<BrowserPlatformService, 'createTab' | 'activateTab' | 'closeTab' | 'tabs'>
   providers: ProviderStore
   workflow: Pick<WorkflowService, 'projectView' | 'refresh'>
   /**
@@ -116,6 +121,7 @@ const MAX_OPEN_TARGETS = 1
 const QUIT_PROCESS_ID = 'nd.quit-process'
 const PASSWORD_VAULT_ID = 'nd.password-vault'
 const TIC_TAC_TOE_ID = 'nd.tic-tac-toe'
+const MINI_BROWSER_ID = 'nd.mini-browser'
 
 /**
  * The bundled on-demand packages. Not built-ins: nothing here is registered or
@@ -133,7 +139,7 @@ const AVAILABLE_PACKAGES: readonly { id: string; path: () => string }[] = [
   // three.js) is fully external and is never staged into packaged releases,
   // where it would only ever show as unavailable. Developers install it from
   // Discover; packaged users install it from a folder.
-  ...(app.isPackaged ? [] : [{ id: TIC_TAC_TOE_ID, path: ticTacToePackagePath }]),
+  ...(app.isPackaged ? [] : [{ id: TIC_TAC_TOE_ID, path: ticTacToePackagePath }, { id: MINI_BROWSER_ID, path: miniBrowserPackagePath }]),
 ]
 
 /**
@@ -189,6 +195,12 @@ function ticTacToePackagePath(): string {
   return app.isPackaged
     ? join(process.resourcesPath, 'nd-extensions', 'tic-tac-toe')
     : join(app.getAppPath(), 'extensions', 'tic-tac-toe')
+}
+
+function miniBrowserPackagePath(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'nd-extensions', 'nd-mini-browser')
+    : join(app.getAppPath(), 'extensions', 'nd-mini-browser')
 }
 
 /**
@@ -299,7 +311,7 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
         translateCatalogView(state),
         clipboardHistoryCatalogView(state),
         passwordVaultCatalogView(state),
-        ...(app.isPackaged ? [] : [ticTacToeCatalogView(state)]),
+        ...(app.isPackaged ? [] : [ticTacToeCatalogView(state), miniBrowserCatalogView(state)]),
       ]),
     }
   }
@@ -525,6 +537,23 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
 
   handle(ND_HOME_IPC.chatTitle, async (_event, sessionId, title) => {
     await deps.home.setChatTitle(shortId(sessionId, 'Session id'), typeof title === 'string' ? title : '')
+    return homeView()
+  })
+
+  // Personal browser dialpad links. The store normalizes and validates the
+  // address with the browser's own rules, so the renderer only sends what the
+  // user typed or the address bar currently shows.
+  handle(ND_HOME_IPC.linkSave, async (_event, input: unknown) => {
+    const record = (input ?? {}) as Record<string, unknown>
+    await deps.home.saveLink({
+      url: typeof record.url === 'string' ? record.url : '',
+      ...(typeof record.title === 'string' ? { title: record.title } : {}),
+    })
+    return homeView()
+  })
+
+  handle(ND_HOME_IPC.linkRemove, async (_event, id) => {
+    await deps.home.removeLink(shortId(id, 'Link id'))
     return homeView()
   })
 
@@ -1840,6 +1869,120 @@ export function registerNativeHostHandlers(
     return ticTacToeStats.reset()
   })
 
+  // --- Mini ND Browser ----------------------------------------------------------
+  //
+  // The browser chrome is the package's web view (sandboxed iframe, no
+  // network): it keep-alives as a persistent tab dashboard. The pages themselves
+  // are REAL tabs of the ND built-in browser — the canonical WebContentsView
+  // engine — created, activated, and closed through the platform; the store
+  // remembers the session so sleeping tabs can resume after a restart.
+  // Personal-only and non-sensitive: it is a list of already-public links.
+
+  const miniBrowser = new MiniBrowserStore(
+    join(app.getPath('userData'), 'nd-mini-browser', 'session.json'),
+    legacyYouTubeQueuePath(app.getPath('userData')),
+  )
+  const requireBrowserPlatform = (): Pick<NonNullable<NdIpcDependencies['browserPlatform']>, 'createTab' | 'activateTab' | 'closeTab' | 'tabs'> => {
+    if (!deps.browserPlatform) throw new Error('The multi-tab browser platform is unavailable in this runtime')
+    return deps.browserPlatform
+  }
+
+  /** A chrome row: a live engine tab, or a remembered session tab that can resume. */
+  interface LiveMiniTab {
+    id: string
+    url: string
+    title: string
+    active: boolean
+    alive: boolean
+    lastActiveAt: number
+  }
+
+  const asChromeRow = (descriptor: { id: string; url: string; title: string; active: boolean }): LiveMiniTab => ({
+    id: descriptor.id,
+    url: descriptor.url,
+    title: miniTabTitle(descriptor.title, descriptor.url),
+    active: descriptor.active,
+    alive: true,
+    lastActiveAt: Date.now(),
+  })
+
+  /**
+   * The renderer presents a focused tab in the context that opened it, so the
+   * owning context travels with the event instead of being re-derived from
+   * whatever company or project happens to be active.
+   */
+  const asBrowserFocus = (tabId: string, url: string, context: NdHostCallContext): NdBrowserFocusEvent => ({
+    url,
+    tabId,
+    context: asNdContext(context.context),
+  })
+
+  const sessionFor = async (): Promise<{ tabs: LiveMiniTab[]; links: MiniLink[] }> => {
+    const live = await requireBrowserPlatform().tabs(BUILTIN_BROWSER_TARGET_ID)
+    const rows = live
+      .filter((tab) => tab.targetId === BUILTIN_BROWSER_TARGET_ID)
+      .map((tab) => asChromeRow(tab))
+    for (const entry of await miniBrowser.tabs()) {
+      if (rows.some((row) => row.id === entry.id)) continue
+      rows.push({ ...entry, active: false, alive: false })
+    }
+    return { tabs: rows, links: await miniBrowser.links() }
+  }
+
+  host.register('minibrowser.session.list', async (_input, context) => {
+    requirePersonalContext(context)
+    return sessionFor()
+  })
+
+  host.register('minibrowser.link.list', async (_input, context) => {
+    requirePersonalContext(context)
+    return miniBrowser.links()
+  })
+
+  host.register('minibrowser.tab.open', async (input, context) => {
+    requirePersonalContext(context)
+    const href = browserTabUrl(requiredText(input.url, 'Address', 2_048))
+    if (!href) throw new Error('Type an http(s) address to open')
+    const tab = await requireBrowserPlatform().createTab(BUILTIN_BROWSER_TARGET_ID, href)
+    await miniBrowser.rememberTab(tab.id, tab.url, tab.title)
+    // The chrome auto-hides and the app surfaces the ND browser pane so the
+    // site is visible right away, not behind a dashboard.
+    deps.window.webContents.send(ND_EXTENSIONS_IPC.browserFocusEvent, asBrowserFocus(tab.id, tab.url, context))
+    return { tab: asChromeRow(tab), session: await sessionFor() }
+  })
+
+  host.register('minibrowser.tab.activate', async (input, context) => {
+    requirePersonalContext(context)
+    const id = asMiniEntryId(input.id)
+    const activated = await requireBrowserPlatform().activateTab(BUILTIN_BROWSER_TARGET_ID, id)
+    await miniBrowser.touchTab(id)
+    deps.window.webContents.send(ND_EXTENSIONS_IPC.browserFocusEvent, asBrowserFocus(id, activated.url, context))
+    return { session: await sessionFor() }
+  })
+
+  host.register('minibrowser.tab.close', async (input, context) => {
+    requirePersonalContext(context)
+    const id = asMiniEntryId(input.id)
+    try {
+      await requireBrowserPlatform().closeTab(BUILTIN_BROWSER_TARGET_ID, id)
+    } catch {
+      // A remembered-only (sleeping) tab has no engine tab to close.
+    }
+    await miniBrowser.forgetTab(id)
+    return { session: await sessionFor() }
+  })
+
+  host.register('minibrowser.link.save', async (input, context) => {
+    requirePersonalContext(context)
+    const href = requiredText(input.url, 'Link', 2_048)
+    return { links: await miniBrowser.saveLink(href, typeof input.title === 'string' ? input.title : href), session: await sessionFor() }
+  })
+
+  host.register('minibrowser.link.remove', async (input, context) => {
+    requirePersonalContext(context)
+    return { links: await miniBrowser.removeLink(asMiniEntryId(input.id)), session: await sessionFor() }
+  })
+
   host.register('browser.openUrl', async (input) => {
     const url = typeof input.url === 'string' && input.url.trim() ? httpUrl(input.url) : 'https://www.google.com'
     await deps.browser.navigate(url)
@@ -2069,6 +2212,14 @@ async function ticTacToeCatalogView(state: NdExtensionsStateView): Promise<NdAva
     name: 'ND 3D Tic-Tac-Toe',
     description: 'Play tic-tac-toe on a 3D board rendered with three.js, on demand from the launcher. Ships its own sandboxed UI; the package stays fully external to the app bundle.',
     permissions: ['tictactoe.read', 'tictactoe.write'],
+  })
+}
+
+async function miniBrowserCatalogView(state: NdExtensionsStateView): Promise<NdAvailablePackageView> {
+  return packageCatalogView(state, MINI_BROWSER_ID, miniBrowserPackagePath(), {
+    name: 'ND Mini Browser',
+    description: 'A keep-alive browser dashboard: manage many real tabs of the ND built-in browser from a persistent chrome, with quick links and launcher quick-open. Stays fully external to the app bundle.',
+    permissions: ['minibrowser.read', 'minibrowser.write'],
   })
 }
 

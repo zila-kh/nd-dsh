@@ -139,7 +139,7 @@ export default function LauncherPopupApp(): React.ReactNode {
           return
         }
         hidePopup()
-        toast('Note saved to ND Home.')
+        toast('Note saved to Personal.')
       } catch (cause) {
         notify(errorMessage(cause))
       }
@@ -167,7 +167,7 @@ export default function LauncherPopupApp(): React.ReactNode {
           return
         }
         hidePopup()
-        toast('Clipboard captured into ND Home.')
+        toast('Clipboard captured into Personal.')
       } catch (cause) {
         notify(errorMessage(cause))
       }
@@ -269,7 +269,7 @@ export default function LauncherPopupApp(): React.ReactNode {
         case 'note.search':
         case 'clipboard.read':
           hidePopup()
-          toast('Captured into ND Home.')
+          toast('Captured into Personal.')
           return
         case 'os.openTarget':
           if (value.opened) toast(`Opened ${String(value.path)}`)

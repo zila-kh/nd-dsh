@@ -1,9 +1,9 @@
 {
-  "name": "@nd-dsh/nd-youtube-player-mini",
-  "version": "0.1.0",
+  "name": "@nd-dsh/nd-mini-browser",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
-  "description": "ND YouTube Mini — declarative nd.extension/1 package scaffold with a zero-dependency verification chain.",
+  "description": "ND Mini Browser \u2014 keep-alive browser chrome over the ND built-in browser, with tabs and quick links.",
   "engines": {
     "node": ">=21.0.0"
   },

@@ -11,7 +11,7 @@
  *
  * Zero dependencies; safe to run in an isolated worktree.
  */
-import { readdir, readFile } from 'node:fs/promises'
+import { readdir, readFile, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { validateManifest } from './nd-contract.mjs'
@@ -91,6 +91,21 @@ for (const entry of await readdir(root, { withFileTypes: true })) {
 const manifest = await readJson('nd-extension.json')
 if (manifest !== undefined) {
   for (const issue of validateManifest(manifest)) issues.push(`nd-extension.json: ${issue}`)
+  // Web views serve their entry file token-scoped — the file must exist in the
+  // package (and under ui/, so package-root documents can never become UIs).
+  for (const view of manifest.contributions.views ?? []) {
+    if (view?.kind !== 'web') continue
+    const entry = typeof view.entry === 'string' && view.entry.startsWith('ui/') ? view.entry : undefined
+    if (entry !== undefined) {
+      let present = false
+      try {
+        present = (await stat(join(root, entry))).isFile()
+      } catch {
+        present = false
+      }
+      if (!present) issues.push(`nd-extension.json: web view "${view.id}" entry ${entry} is missing from the package`)
+    }
+  }
 }
 
 if (issues.length > 0) {

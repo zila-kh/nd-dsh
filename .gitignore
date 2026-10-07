@@ -57,3 +57,6 @@ benchmark-results/
 
 # Separate cargo target dir used by sidecar e2e runs (ND_DSH_CORE_BIN).
 target-e2e/
+
+# Chromium's generated declarative-rule index, written next to a loaded package.
+resources/browser-extensions/*/_metadata/

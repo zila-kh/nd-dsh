@@ -36,6 +36,7 @@ import {
   type NdInvocationResult,
   type NdScreenRect,
   type NdViewData,
+  type NdBrowserFocusEvent,
 } from '../shared/nd-invocations.js'
 import { USAGE_IPC, type UsageDesktopApi, type UsageScope, type UsageSummary } from '../shared/usage.js'
 import {
@@ -106,6 +107,11 @@ const ndExtensionsApi: NdExtensionsDesktopApi = {
     ipcRenderer.on(ND_EXTENSIONS_IPC.changedEvent, handler)
     return () => ipcRenderer.removeListener(ND_EXTENSIONS_IPC.changedEvent, handler)
   },
+  onBrowserFocus: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, focus: NdBrowserFocusEvent) => listener(focus)
+    ipcRenderer.on(ND_EXTENSIONS_IPC.browserFocusEvent, handler)
+    return () => ipcRenderer.removeListener(ND_EXTENSIONS_IPC.browserFocusEvent, handler)
+  },
 }
 
 const homeApi: NdHomeDesktopApi = {
@@ -122,6 +128,8 @@ const homeApi: NdHomeDesktopApi = {
   ensureChat: (context) => ipcRenderer.invoke(ND_HOME_IPC.chatEnsure, context),
   bindChat: (chatId, sessionId) => ipcRenderer.invoke(ND_HOME_IPC.chatBind, chatId, sessionId),
   setChatTitle: (sessionId, title) => ipcRenderer.invoke(ND_HOME_IPC.chatTitle, sessionId, title) as Promise<NdHomeStateView>,
+  saveLink: (input) => ipcRenderer.invoke(ND_HOME_IPC.linkSave, input) as Promise<NdHomeStateView>,
+  removeLink: (id) => ipcRenderer.invoke(ND_HOME_IPC.linkRemove, id) as Promise<NdHomeStateView>,
   revealStorage: () => ipcRenderer.invoke(ND_HOME_IPC.reveal) as Promise<void>,
   onChanged: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, state: NdHomeStateView) => listener(state)

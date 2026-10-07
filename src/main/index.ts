@@ -458,7 +458,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   const coreMedia = createCoreMedia(core)
   const coreClipboard = createCoreClipboard(core)
   const coreVault = createCoreVault(core)
-  const disposeIpc = registerIpc({ window, preloadPath: preload, launcherPopup, browser, dshSurface, engines, engineRouter, nativeToolBroker: nativeBroker, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, coreGit: coreGit.exec.bind(coreGit), coreMedia, coreClipboard, coreVault, qa, sessionArchive, usageLedger, capabilities, organizationStore })
+  const disposeIpc = registerIpc({ window, preloadPath: preload, launcherPopup, browser, browserPlatform, dshSurface, engines, engineRouter, nativeToolBroker: nativeBroker, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, coreGit: coreGit.exec.bind(coreGit), coreMedia, coreClipboard, coreVault, qa, sessionArchive, usageLedger, capabilities, organizationStore })
   if (nativeAgent.ready()) void nativeAgent.start().catch((error) => {
     console.warn('ND Agent private runtime could not initialize:', error instanceof Error ? error.message : String(error))
   })

@@ -47,6 +47,8 @@
           "vault.write",
           "tictactoe.read",
           "tictactoe.write",
+          "minibrowser.read",
+          "minibrowser.write",
           "chat.start",
           "workflow.read"
         ]
@@ -228,6 +230,13 @@
         "tictactoe.stats.get",
         "tictactoe.stats.record",
         "tictactoe.stats.reset",
+        "minibrowser.session.list",
+        "minibrowser.link.list",
+        "minibrowser.tab.open",
+        "minibrowser.tab.activate",
+        "minibrowser.tab.close",
+        "minibrowser.link.save",
+        "minibrowser.link.remove",
         "browser.openUrl",
         "browser.translate",
         "browser.translate.history",

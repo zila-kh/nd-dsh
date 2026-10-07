@@ -1,9 +1,7 @@
-import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { CameraIcon, CrosshairIcon } from './Icons'
 import { TitlebarIconButton } from './titlebar-icon-button'
-
-const DIALOG_SELECTOR = '[data-slot="dialog-content"]'
+import { useModalDialogOpen } from '../lib/modal-dialog-presence'
 
 interface ModalInspectDockProps {
   hidden?: boolean
@@ -24,15 +22,7 @@ export function ModalInspectDock({
   onPickElement,
   onScreenshot,
 }: ModalInspectDockProps) {
-  const [dialogOpen, setDialogOpen] = useState(() => !!document.querySelector(DIALOG_SELECTOR))
-
-  useEffect(() => {
-    const sync = (): void => setDialogOpen(!!document.querySelector(DIALOG_SELECTOR))
-    sync()
-    const observer = new MutationObserver(sync)
-    observer.observe(document.body, { childList: true, subtree: true })
-    return () => observer.disconnect()
-  }, [])
+  const dialogOpen = useModalDialogOpen()
 
   if (hidden || !dialogOpen) return null
   const stopPointerDown = (event: { stopPropagation(): void }): void => event.stopPropagation()

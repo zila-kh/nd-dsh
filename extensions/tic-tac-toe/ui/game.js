@@ -177,7 +177,15 @@ if (renderer) {
 
   const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100)
   const target = new THREE.Vector3(0, 0.2, 0)
-  const orbit = { theta: Math.PI * 0.24, phi: Math.PI * 0.36, radius: 8.4 }
+  // The default view keeps all nine cells readable; orbit drags stay clamped
+  // above the horizon so the board can never be tipped into an unplayable angle.
+  const DEFAULT_VIEW = { theta: 0.75, phi: 0.82, radius: 8.6 }
+  const PRESET_VIEWS = {
+    '3d': DEFAULT_VIEW,
+    top: { theta: 0.75, phi: 0.12, radius: 8.2 },
+    low: { theta: 0.75, phi: 1.22, radius: 9.2 },
+  }
+  const orbit = { ...DEFAULT_VIEW }
 
   function updateCamera() {
     const { theta, phi, radius } = orbit
@@ -213,18 +221,6 @@ if (renderer) {
     const alongZ = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.1, 3.5), gridMaterial)
     alongZ.position.set(offset, 0.05, 0)
     scene.add(alongZ)
-  }
-
-  // Raycastable pads, one per cell, in reading order.
-  const pads = []
-  const padMaterial = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false })
-  for (let index = 0; index < 9; index += 1) {
-    const pad = new THREE.Mesh(new THREE.PlaneGeometry(1.06, 1.06), padMaterial)
-    pad.rotation.x = -Math.PI / 2
-    pad.position.copy(cellPosition(index)).setY(0.11)
-    pad.userData.index = index
-    scene.add(pad)
-    pads.push(pad)
   }
 
   const hover = new THREE.Mesh(
@@ -265,6 +261,35 @@ if (renderer) {
     return new THREE.Vector3((col - 1) * CELL, 0, (row - 1) * CELL)
   }
 
+  // Faint 1–9 sprites keep the keyboard mapping readable from any camera
+  // angle; keys place marks in the same reading order.
+  function digitSprite(value) {
+    const canvas = document.createElement('canvas')
+    canvas.width = canvas.height = 96
+    const ctx = canvas.getContext('2d')
+    if (ctx) {
+      ctx.font = '600 54px system-ui, sans-serif'
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillStyle = '#99a3b5'
+      ctx.fillText(String(value), 48, 50)
+    }
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: new THREE.CanvasTexture(canvas),
+      transparent: true,
+      opacity: 0.55,
+      depthWrite: false,
+    }))
+    sprite.scale.setScalar(0.34)
+    return sprite
+  }
+  for (let index = 0; index < 9; index += 1) {
+    const sprite = digitSprite(index + 1)
+    const pos = cellPosition(index)
+    sprite.position.set(pos.x - 0.4, 0.1, pos.z - 0.4)
+    scene.add(sprite)
+  }
+
   addPiece = (index, player) => {
     const mesh = markMesh(player)
     mesh.position.copy(cellPosition(index))
@@ -298,40 +323,82 @@ if (renderer) {
     tweens.winBeams = []
   }
 
-  // --- pointer interaction: hover, place, orbit --------------------------------
+  // --- pointer interaction: hover, place, camera presets, orbit -----------------
 
   const raycaster = new THREE.Raycaster()
   const pointer = new THREE.Vector2()
+  const boardPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.11)
+  const planeHit = new THREE.Vector3()
   let dragging = false
   let dragMoved = false
   let lastX = 0
   let lastY = 0
 
-  function padUnderPointer(event) {
+  // Picking intersects the board plane and reads the cell off x/z instead of
+  // raycasting per-cell quads: flat pads become unhittable at grazing camera
+  // angles, which reads as "the game won't take my move". The plane works from
+  // any angle above the horizon, so a cell is always clickable.
+  function cellUnderPointer(event) {
     const rect = renderer.domElement.getBoundingClientRect()
     pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
     pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
     raycaster.setFromCamera(pointer, camera)
-    const hit = raycaster.intersectObjects(pads, false)[0]
-    return hit ? hit.object.userData.index : -1
+    if (!raycaster.ray.intersectPlane(boardPlane, planeHit)) return -1
+    const col = Math.round(planeHit.x / CELL) + 1
+    const row = Math.round(planeHit.z / CELL) + 1
+    if (col < 0 || col > 2 || row < 0 || row > 2) return -1
+    return row * 3 + col
+  }
+
+  const viewButtons = {
+    '3d': document.getElementById('view-3d'),
+    top: document.getElementById('view-top'),
+    low: document.getElementById('view-low'),
+  }
+  function markViewButton(name) {
+    for (const [key, el] of Object.entries(viewButtons)) el.classList.toggle('on', key === name)
+  }
+  let viewAnim = null
+  function animateViewTo(target) {
+    viewAnim = { from: { ...orbit }, to: target, start: performance.now() }
+  }
+  function stepViewAnim() {
+    if (!viewAnim) return
+    const t = Math.min(1, (performance.now() - viewAnim.start) / 380)
+    const ease = 1 - Math.pow(1 - t, 3)
+    for (const key of ['theta', 'phi', 'radius']) {
+      orbit[key] = viewAnim.from[key] + (viewAnim.to[key] - viewAnim.from[key]) * ease
+    }
+    updateCamera()
+    if (t >= 1) viewAnim = null
+  }
+  for (const [name, target] of Object.entries(PRESET_VIEWS)) {
+    viewButtons[name].addEventListener('click', () => {
+      animateViewTo(target)
+      markViewButton(name)
+    })
+  }
+
+  function showHover(index) {
+    hover.visible = index >= 0 && state.board[index] === EMPTY && humanTurn()
+    if (hover.visible) hover.position.copy(cellPosition(index)).setY(0.12)
   }
 
   renderer.domElement.addEventListener('pointermove', (event) => {
     if (dragging) {
       const dx = event.clientX - lastX
       const dy = event.clientY - lastY
-      if (Math.abs(dx) + Math.abs(dy) > 3) dragMoved = true
-      orbit.theta -= dx * 0.005
-      orbit.phi = Math.min(1.35, Math.max(0.2, orbit.phi - dy * 0.005))
+      if (Math.abs(dx) + Math.abs(dy) > 6) dragMoved = true
+      viewAnim = null
+      orbit.theta -= dx * 0.004
+      orbit.phi = Math.min(1.28, Math.max(0.12, orbit.phi - dy * 0.004))
       lastX = event.clientX
       lastY = event.clientY
       updateCamera()
       hover.visible = false
       return
     }
-    const index = padUnderPointer(event)
-    hover.visible = index >= 0 && state.board[index] === EMPTY && humanTurn()
-    if (hover.visible) hover.position.copy(cellPosition(index)).setY(0.12)
+    showHover(cellUnderPointer(event))
   })
 
   renderer.domElement.addEventListener('pointerdown', (event) => {
@@ -339,18 +406,30 @@ if (renderer) {
     dragMoved = false
     lastX = event.clientX
     lastY = event.clientY
+    // Touch has no hover phase, so preview the target cell on press.
+    showHover(cellUnderPointer(event))
   })
 
   renderer.domElement.addEventListener('pointerup', (event) => {
     dragging = false
     if (dragMoved) return
-    const index = padUnderPointer(event)
+    const index = cellUnderPointer(event)
     if (index >= 0) tryPlace(index)
+  })
+
+  // Double-clicking empty space gets a lost view back; on a cell it is left
+  // alone so rapid play never resets the camera.
+  renderer.domElement.addEventListener('dblclick', (event) => {
+    if (cellUnderPointer(event) === -1) {
+      animateViewTo(DEFAULT_VIEW)
+      markViewButton('3d')
+    }
   })
 
   renderer.domElement.addEventListener('wheel', (event) => {
     event.preventDefault()
-    orbit.radius = Math.min(12, Math.max(5.5, orbit.radius + event.deltaY * 0.004))
+    viewAnim = null
+    orbit.radius = Math.min(11.5, Math.max(6, orbit.radius + event.deltaY * 0.004))
     updateCamera()
   }, { passive: false })
 
@@ -366,6 +445,7 @@ if (renderer) {
 
   renderer.setAnimationLoop(() => {
     const now = performance.now()
+    stepViewAnim()
     for (let i = tweens.length - 1; i >= 0; i -= 1) {
       const tween = tweens[i]
       const t = Math.min(1, (now - tween.start) / tween.duration)
@@ -380,9 +460,28 @@ if (renderer) {
   })
 } else {
   fallbackEl.style.display = 'flex'
+  document.getElementById('view-controls')?.style.setProperty('display', 'none')
 }
 
 // --- game flow -----------------------------------------------------------------
+
+const toastsEl = document.getElementById('toasts')
+
+function toast(text, kind = 'info', ttl = 2200) {
+  const node = document.createElement('div')
+  node.className = kind === 'info' ? 'toast' : `toast ${kind}`
+  node.textContent = text
+  toastsEl.appendChild(node)
+  while (toastsEl.children.length > 3) toastsEl.firstChild.remove()
+  setTimeout(() => {
+    node.classList.add('leaving')
+    setTimeout(() => node.remove(), 260)
+  }, ttl)
+}
+
+function newGameMessage() {
+  return state.mode === '2p' ? 'New game — X to move' : 'New game — you are X'
+}
 
 function resetGame() {
   state.board = emptyBoard()
@@ -407,8 +506,12 @@ function afterMove(player) {
     if (outcome.status === 'won') {
       showWinLine(outcome.line)
       setStatus(state.mode === '2p' ? `${outcome.player} wins!` : outcome.player === HUMAN ? 'You win!' : 'AI wins — try again')
+      if (state.mode === '2p') toast(`${outcome.player} wins!`, 'win', 3200)
+      else if (outcome.player === HUMAN) toast('You win!', 'win', 3200)
+      else toast('AI wins — try again', 'loss', 3200)
     } else {
       setStatus('Draw — the board is full')
+      toast('Draw — the board is full', 'info', 3200)
     }
     // Scoreboard is X-perspective in both modes; see showScores().
     void recordOutcome(outcome.status === 'draw' ? 'draw' : outcome.player === HUMAN ? 'win' : 'loss')
@@ -453,6 +556,7 @@ function showScores(stats) {
 async function loadScores() {
   const result = await bridge.invoke({ action: 'get' })
   showScores(result.ok ? result.value : null)
+  if (!result.ok) toast("Scoreboard unavailable — scores won't persist", 'info', 3000)
 }
 
 async function recordOutcome(outcome) {
@@ -462,29 +566,37 @@ async function recordOutcome(outcome) {
 
 // --- controls --------------------------------------------------------------------
 
-els.newGame.addEventListener('click', resetGame)
+els.newGame.addEventListener('click', () => {
+  resetGame()
+  toast(newGameMessage())
+})
 els.modeAi.addEventListener('click', () => {
   state.mode = 'ai'
   refreshModeButtons()
   resetGame()
+  toast('VS AI mode')
 })
 els.mode2p.addEventListener('click', () => {
   state.mode = '2p'
   refreshModeButtons()
   resetGame()
+  toast('Two-player mode')
 })
 els.diffHard.addEventListener('click', () => {
   state.difficulty = 'hard'
   refreshModeButtons()
+  toast('AI difficulty: Hard')
 })
 els.diffEasy.addEventListener('click', () => {
   state.difficulty = 'easy'
   refreshModeButtons()
+  toast('AI difficulty: Easy')
 })
 els.resetScores.addEventListener('click', async () => {
   els.resetScores.disabled = true
   const result = await bridge.invoke({ action: 'reset' })
   showScores(result.ok ? result.value : null)
+  toast(result.ok ? 'Scoreboard cleared' : 'Scoreboard unavailable')
 })
 
 // Keys 1–9 place a mark in reading order, matching game-core's indexing.
@@ -495,6 +607,7 @@ window.addEventListener('keydown', (event) => {
 
 refreshModeButtons()
 setStatus(turnLabel())
+toast(newGameMessage())
 // The handshake lands asynchronously; only fetch the scoreboard once the
 // bridge is actually connected, or the first read would always miss.
 bridge.whenConnected(() => {

@@ -22,10 +22,13 @@ export const CONTEXTS = ['personal', 'company', 'project']
  * `ND_HOST_METHODS` in `src/shared/extension-package.ts`.
  */
 export const HOST_PERMISSIONS = {
-  'browser.openUrl': 'browser.navigate',
-  'note.create': 'notes.write',
-  'note.search': 'notes.read',
-  'note.open': 'notes.read',
+  'minibrowser.session.list': 'minibrowser.read',
+  'minibrowser.link.list': 'minibrowser.read',
+  'minibrowser.tab.open': 'minibrowser.write',
+  'minibrowser.tab.activate': 'minibrowser.write',
+  'minibrowser.tab.close': 'minibrowser.write',
+  'minibrowser.link.save': 'minibrowser.write',
+  'minibrowser.link.remove': 'minibrowser.write',
 }
 
 const PACKAGE_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{1,127}$/
@@ -158,20 +161,32 @@ function checkContributions(manifest, add) {
     if (!view || typeof view !== 'object') { add(`${path} must be an object`); return }
     claim(`${path}`, view.id)
     if (typeof view.title !== 'string' || !view.title.trim()) add(`${path}.title is required`)
-    if (view.kind !== undefined && view.kind !== 'list' && view.kind !== 'detail') {
-      add(`${path}.kind must be "list" or "detail"`)
+    if (view.kind === 'web') {
+      // Package-shipped UI: no data host; the entry names the web view's html
+      // document (checked for existence by the typecheck script) and every
+      // privileged operation must be a declared action.
+      if (typeof view.entry !== 'string' || !view.entry.endsWith('.html')
+        || view.entry.startsWith('/') || view.entry.includes('..') || view.entry.includes('\\')) {
+        add(`${path}.entry must be a package-relative html path such as "ui/index.html"`)
+      }
+      if (view.itemTitleKey !== undefined) add(`${path}.itemTitleKey is not used by web views`)
+      if (view.host !== undefined) add(`${path}.host is not used by web views`)
+    } else {
+      if (view.kind !== undefined && view.kind !== 'list' && view.kind !== 'detail') {
+        add(`${path}.kind must be "list", "detail", or "web"`)
+      }
+      if (typeof view.itemTitleKey !== 'string' || !view.itemTitleKey.trim()) add(`${path}.itemTitleKey is required`)
+      checkHost(path, view.host)
     }
-    if (typeof view.itemTitleKey !== 'string' || !view.itemTitleKey.trim()) add(`${path}.itemTitleKey is required`)
-    checkHost(path, view.host)
     checkContexts(path, view.contexts)
     const actions = Array.isArray(view.actions) ? view.actions : []
-    actions.forEach((action, actionIndex) => {
-      const actionPath = `${path}.actions[${actionIndex}]`
-      if (!action || typeof action !== 'object') { add(`${actionPath} must be an object`); return }
+    for (const action of actions) {
+      const actionPath = `${path}.actions[${actions.indexOf(action)}]`
+      if (!action || typeof action !== 'object') { add(`${actionPath} must be an object`); continue }
       claim(actionPath, action.id)
       if (typeof action.title !== 'string' || !action.title.trim()) add(`${actionPath}.title is required`)
       checkHost(actionPath, action.host)
-    })
+    }
   })
 
   const declared = new Set(Array.isArray(manifest.permissions) ? manifest.permissions : [])

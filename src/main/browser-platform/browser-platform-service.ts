@@ -188,6 +188,11 @@ export class BrowserPlatformService {
     return result
   }
 
+  /** Live tab descriptors for one target (extension hosts mirror them as sessions). */
+  async tabs(targetId?: string): Promise<BrowserTabDescriptor[]> {
+    return this.router.tabs(targetId).catch(() => [])
+  }
+
   async closeTab(targetId: string, tabId: string): Promise<boolean> {
     // A direct user close is authoritative: revoke any agent writer before
     // closing so an in-flight lane cannot keep ownership of a tab the user

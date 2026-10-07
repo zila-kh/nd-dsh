@@ -22,13 +22,22 @@ launcher (`Ctrl+K`).
   `tictactoe.stats.get` as the view's data host.
 - Scoreboard persistence lives main-side in `userData/nd-tic-tac-toe/stats.json`.
 
+## Controls
+
+- **Play**: click a cell — picking intersects the board plane, so it works from
+  any camera angle — or press keys 1–9 in reading order (the faint digits on
+  the board match).
+- **View**: drag to orbit, scroll to zoom, or use the 3D / Top / Low preset
+  buttons on the board. Double-clicking empty space resets to the default view;
+  orbit is clamped so the board can never be tipped into an unplayable angle.
+
 ## Layout
 
 | Path | Purpose |
 | --- | --- |
 | `nd-extension.json` | The manifest — the only executable-trust surface ND validates. |
 | `ui/index.html` | Web-view entry document (strict CSP, dark theme chrome). |
-| `ui/game.js` | three.js scene, hover/raycast, orbit controls, bridge client. |
+| `ui/game.js` | three.js scene, plane-based cell picking, camera presets + orbit, bridge client. |
 | `ui/game-core.js` | Pure rules + minimax/easy AI. Unit-tested straight from the repo. |
 | `ui/vendor/three.module.js`, `ui/vendor/three.core.js` | Vendored three.js — the app bundle never includes it. |
 
