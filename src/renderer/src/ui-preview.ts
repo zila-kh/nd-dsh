@@ -628,6 +628,7 @@ const desktopApi: DesktopApi = {
     commands: async () => [],
     invoke: async () => ({ ok: false, error: { code: 'unavailable' as const, message: 'Extension actions are unavailable in preview mode.' } }),
     loadView: async (extensionId, viewId, context) => ({ extensionId, viewId, title: 'Preview view', kind: 'list' as const, context, rows: [], actions: [] }),
+    closeWebView: async () => undefined,
     approve: async () => ({ ok: false, error: { code: 'unavailable' as const, message: 'Extension actions are unavailable in preview mode.' } }),
     deny: async () => undefined,
     onChanged: () => () => undefined,

@@ -53,6 +53,8 @@ export interface ClipboardHistoryEntry {
   imageFile?: string
   imageWidth?: number
   imageHeight?: number
+  /** The image was real but beyond the storage bound; metadata only. */
+  tooLarge?: boolean
   fileName?: string
   names?: string[]
 }
@@ -86,6 +88,8 @@ export interface ClipboardRecordInput {
   fingerprint?: string
   width?: number
   height?: number
+  /** The image was real but beyond the storage bound; metadata only. */
+  tooLarge?: boolean
   fileName?: string
   names?: string[]
 }
@@ -225,6 +229,7 @@ export class ClipboardHistoryStore {
           ...(imageFile ? { imageFile } : {}),
           ...(typeof input.width === 'number' ? { imageWidth: input.width } : {}),
           ...(typeof input.height === 'number' ? { imageHeight: input.height } : {}),
+          ...(input.tooLarge ? { tooLarge: true } : {}),
           ...(input.fileName ? { fileName: input.fileName } : {}),
         }
         this.index.entries.push(entry)

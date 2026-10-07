@@ -1,8 +1,9 @@
 # Authoring ND extensions
 
-Status: **v1 platform, implemented locally 2026-09-27 (PRD 0006)**. Public
-marketplace publishing, arbitrary HTML/React panels, and an OS sandbox for
-external executables are explicitly out of scope for v1.
+Status: **v1 platform, implemented locally 2026-09-27 (PRD 0006)**; sandboxed
+web views added 2026-10. Public marketplace publishing, renderer-code injection
+outside the web-view contract, and an OS sandbox for external executables are
+explicitly out of scope for v1.
 
 An ND extension is one folder with an `nd-extension.json` manifest. It
 contributes **tools, skills, commands, views, and workflows** that ND renders
@@ -220,14 +221,46 @@ match `^[A-Za-z][A-Za-z0-9._-]{0,63}$` and must be unique in the package.
 
 ## 5. Distribution and lifecycle
 
+### Delivery models: built-in, on-demand catalog, fully external
+
+Every package follows exactly one delivery model. Pick it before writing the
+manifest — it decides where the files live, how users find the package, and
+what a release download costs. **The default for new work is fully external,
+on demand**: nothing ships in the app bundle, and users install when they want
+the capability.
+
+| | **Built-in** | **On-demand (staged catalog)** | **Fully external (default)** |
+| --- | --- | --- | --- |
+| Source of truth | `src/shared/builtin-extension-packages.ts` | `extensions/<name>/` folder | `extensions/<name>/` folder |
+| Ships in the release? | Yes — inside the app bundle | Yes — staged via `electron-builder.yml` `extraResources` into `nd-extensions/` | **No — zero release impact** |
+| Found in Discover | Always; cannot be uninstalled | Yes, every build — one-click Install | Dev builds only; packaged builds install from folder |
+| Installed | Seeded automatically at startup | By explicit user action | By explicit user action |
+| Use when | The behavior is part of ND itself and must always exist (Wallpaper Manager, Daily Essentials) | A first-party extra small enough to ship for everyone (Translate, Clipboard History, Password Vault) | Everything else: experiments, large assets (e.g. a vendored three.js), third-party or opt-in packages (3D Tic-Tac-Toe) |
+
+Promotion between models is deliberate and visible in review:
+
+- **External → staged**: add the folder to `electron-builder.yml`
+  `extraResources` (`extensions/<name> → nd-extensions/<id>`), a path helper +
+  `AVAILABLE_PACKAGES` entry + a `packageCatalogView` in
+  `src/main/extensions/nd-ipc.ts`, and the package appears in Discover in every
+  build. Each staged package grows the release by its on-disk size.
+- **Staged → built-in**: move the manifest into
+  `src/shared/builtin-extension-packages.ts` (registered + seeded at startup,
+  uninstall refused). Do this only when the capability is genuinely part of the
+  product.
+- **Dev-only Discover entries** are the middle ground for external packages:
+  gate the `AVAILABLE_PACKAGES` entry and catalog view on `!app.isPackaged`, so
+  developers get one-click install from the repository folder while packaged
+  releases carry nothing (see `nd.tic-tac-toe` in `nd-ipc.ts`).
+
 - **Validate**: `node scripts/validate-nd-extension.mjs <folder>` (or
   `pnpm ext:validate`). The folder form requires a file named exactly
   `nd-extension.json`; you can also pass a manifest path directly. Multiple
   targets are accepted, and `--builtins` validates the shipped packages.
-- **Install**: Settings → Extensions → *Install from folder*, or hand a teammate
-  a private Git checkout and install from that working copy. The dialog rejects
-  a directory without `nd-extension.json`, and rejects symlinks and paths that
-  escape the package root.
+- **Install**: Settings → Extensions → *Install from folder*, the **Discover**
+  catalog, or hand a teammate a private Git checkout and install from that
+  working copy. The dialog rejects a directory without `nd-extension.json`,
+  and rejects symlinks and paths that escape the package root.
 - End-to-end walkthrough — validate, install, activate, run — is in
   [`examples/nd-extension-hello/README.md`](../../examples/nd-extension-hello/README.md).
 - Packages ship **prebuilt**. ND snapshots content, records source provenance
@@ -237,11 +270,47 @@ match `^[A-Za-z][A-Za-z0-9._-]{0,63}$` and must be unique in the package.
   review; **rollback** returns to the previous version; **uninstall** revokes
   activation and grants while leaving your notes and captures untouched.
 - Symbolic links inside a package are rejected, because a link can escape the
-  package root.
+  package root. Package assets are also size-capped (8 MB per file, 24 MB
+  total) so no package can smuggle unbounded content past the installer.
+
+### Web views: packages that ship their own UI
+
+A view with `kind: "web"` is the one place a package may ship UI code of its
+own. ND renders the package's `entry` document (for example `ui/index.html`)
+in an iframe whose origin is a **token-scoped private scheme** — unique per
+dialog load, cross-origin from the app and from every other package view,
+with no Node and no network. The frame's only reach into ND is the
+`nd.webview/1` postMessage bridge, and every bridge request is routed through
+the same broker invocation path as any other contribution call, so
+permissions, contexts, and audit never depend on what the frame claims.
+Serving is token-scoped: main issues a per-dialog token bound to the installed
+version, re-checks snapshot containment, an asset-type allowlist, and the size
+caps on every request, and revokes the token when the dialog closes.
+
+Rules for a web view:
+
+- `entry` must be a relative `.html` path inside the package — no `..`, no
+  absolute paths. Only the asset types in the serving allowlist (HTML, JS,
+  CSS, JSON, common images and fonts) are delivered.
+- Package assets are capped (8 MB per file, 24 MB total) at install time,
+  alongside the existing symlink and file-count rejections.
+- The UI's own CSP comes from ND (no `connect-src`, script only from the
+  private scheme); mirror it in a `<meta>` tag for defense in depth.
+- Privileged operations go through the bridge as view-action invocations
+  (`{ action: '<id>', … }`), which the broker routes to the action's declared
+  host method. A web view with no named action runs nothing.
+- `extensions/tic-tac-toe/` is the reference implementation: a three.js game
+  whose scoreboard persistence is three ordinary host methods. Its game logic
+  (`ui/game-core.js`) is unit-tested straight from the repository, and the
+  package stays fully external — it is never staged into the app bundle. Dev
+  builds list it in **Settings → Extensions → Discover** (installing from the
+  repository folder); packaged builds omit it from Discover, where users
+  install it from a folder instead.
 
 ## 6. What v1 deliberately does not support
 
-- Arbitrary extension HTML/React panels or renderer DOM access.
+- Arbitrary extension HTML/React panels or renderer DOM access outside the
+  sandboxed web-view contract above.
 - Executable lifecycle hooks; instruction-only hooks remain instructions.
 - A second general-purpose JavaScript runtime, or running Raycast/VS Code
   packages unchanged.
@@ -291,6 +360,15 @@ Validate the package with `node scripts/validate-nd-extension.mjs
 extensions/translate`. Desktop regression coverage is in
 `e2e/nd-translate.spec.ts`; opt into external service smoke with
 `ND_TRANSLATE_LIVE=1` and `ND_TRANSLATE_AI_LIVE=1`.
+
+`ND 3D Tic-Tac-Toe` under `extensions/tic-tac-toe` is the reference for the
+**fully external** delivery model and for web views: a three.js game that
+ships its own UI (`kind: "web"`), stays out of the release bundle entirely, and
+persists its scoreboard through three ordinary host methods
+(`tictactoe.stats.get/record/reset`). Dev builds list it in the Discover
+catalog; packaged users install it from a folder. Its pure game logic
+(`ui/game-core.js`) is unit-tested directly from the repository, and desktop
+coverage is in `e2e/tic-tac-toe.spec.ts`.
 
 For the real model-backed coding autopilot scenario, build first and configure
 the gitignored `.env.e2e`. In PowerShell, run:

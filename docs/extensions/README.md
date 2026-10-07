@@ -11,12 +11,35 @@ inject renderer code.
 | I want to… | Go to |
 | --- | --- |
 | Build my first extension | **Download the starter ZIP** from the in-app guide (Extensions → Extension developer guide), or copy [`examples/nd-extension-hello`](../../examples/nd-extension-hello) |
+| Choose how my extension ships (built-in, Discover, external) | **Pick a delivery model** below, or the agent skill **`create-extension`** |
 | Read the full contract | [`authoring.md`](authoring.md) |
 | Autocomplete my manifest | [`schema/nd-extension.schema.json`](../../schema/nd-extension.schema.json) |
 | See every host method and permission | `ND_HOST_METHODS` in [`src/shared/extension-package.ts`](../../src/shared/extension-package.ts) |
 | Validate a package | `pnpm ext:validate <package-dir>` |
-| Read a real shipped package | [`extensions/translate`](../../extensions/translate), [`extensions/quit-process`](../../extensions/quit-process) |
+| Read a real shipped package | [`extensions/translate`](../../extensions/translate), [`extensions/quit-process`](../../extensions/quit-process), [`extensions/tic-tac-toe`](../../extensions/tic-tac-toe) (external + web view) |
 | Read the built-in packages | [`src/shared/builtin-extension-packages.ts`](../../src/shared/builtin-extension-packages.ts) |
+
+## Pick a delivery model
+
+Every package follows exactly one delivery model. **The default for new work is
+fully external, on demand** — the package lives in git, ships zero bytes in the
+release, and users install it when they want it. See
+[`authoring.md` §5](authoring.md#5-distribution-and-lifecycle) for the full
+promotion paths.
+
+| | **Built-in** | **On-demand (staged catalog)** | **Fully external (default)** |
+| --- | --- | --- | --- |
+| Source of truth | `builtin-extension-packages.ts` | `extensions/<name>/` | `extensions/<name>/` |
+| Release bundle | Inside the app | Staged via `electron-builder.yml` (+ its size) | **Nothing — zero impact** |
+| Found in Discover | Always (cannot uninstall) | Every build, one-click Install | Dev builds only; packaged builds install from folder |
+| Use when | Part of ND itself, must always exist | First-party extra small enough to ship for everyone | Everything else: experiments, large assets, opt-in packages |
+| Example | Wallpaper Manager, Daily Essentials | Translate, Clipboard History, Password Vault | ND 3D Tic-Tac-Toe |
+
+For **rich package-owned UI** (games, canvases, bespoke tools), a package can
+contribute a **web view** (`kind: "web"`): ND renders the package's own
+`ui/index.html` in a token-scoped, cross-origin, no-network iframe and brokers
+every privileged call. Typed `list`/`detail` views remain the default when ND's
+own rendering is enough. See [`authoring.md` §5 — Web views](authoring.md#web-views-packages-that-ship-their-own-ui).
 
 ## Is there an SDK?
 
@@ -63,9 +86,11 @@ unrelated class.
 
 ## What v1 does not support
 
-Arbitrary HTML/React panels, executable lifecycle hooks, a second JavaScript
-runtime, an OS sandbox for external MCP executables, and public marketplace
-publishing. See [`authoring.md` §6](authoring.md#6-what-v1-deliberately-does-not-support).
+Renderer-code injection outside the sandboxed **web-view contract**
+(typed list/detail packages still ship no UI), executable lifecycle hooks, a
+second JavaScript runtime, an OS sandbox for external MCP executables, and
+public marketplace publishing. See
+[`authoring.md` §6](authoring.md#6-what-v1-deliberately-does-not-support).
 
 ## Design and validation history
 

@@ -54,3 +54,6 @@ beta-qa-report-**
 benchmark-results/
 # Isolated desktop exploration profiles, generated projects, and local evidence.
 /output/real-world/
+
+# Separate cargo target dir used by sidecar e2e runs (ND_DSH_CORE_BIN).
+target-e2e/

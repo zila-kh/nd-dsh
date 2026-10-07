@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { BookOpen, Check, ChevronLeft, ChevronRight, Download, ExternalLink, Eye, FolderOpen, FolderPlus, Image, Languages, Layers, Link2, ListChecks, MonitorPlay, Package, PanelsTopLeft, Pencil, Plus, Power, Puzzle, RefreshCw, Repeat, Search, Settings2, ShieldCheck, Shuffle, SkipBack, SkipForward, Sparkles, SquareTerminal, Trash2, Undo2, Upload, Workflow } from 'lucide-react'
+import { BookOpen, Check, ChevronLeft, ChevronRight, Download, ExternalLink, Eye, FolderOpen, FolderPlus, Gamepad2, Image, Languages, Layers, Link2, ListChecks, MonitorPlay, Package, PanelsTopLeft, Pencil, Plus, Power, Puzzle, RefreshCw, Repeat, Search, Settings2, ShieldCheck, Shuffle, SkipBack, SkipForward, Sparkles, SquareTerminal, Trash2, Undo2, Upload, Workflow } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { cn } from '../lib/utils'
 import type { NdContext } from '../../../shared/nd-context'
@@ -19,6 +19,7 @@ import { Input } from './ui/input'
 import { describeContextForUi, optionIdForContext, type ContextOption } from '../lib/nd-context-model'
 import type { OrganizationSnapshot } from '../../../shared/organization'
 import { SurfaceErrorBoundary } from './surface-error-boundary'
+import { ExtensionWebView } from './ExtensionWebView'
 
 const NdTranslateView = lazy(() => import('./NdTranslateView'))
 const ExtensionGuideDialog = lazy(() => import('./ExtensionGuideDialog'))
@@ -54,6 +55,7 @@ const EXTENSION_ACCENTS: Record<string, { icon: LucideIcon; tileClassName: strin
   'nd.project-workflow': { icon: ListChecks, tileClassName: 'border-sky-500/25 bg-sky-500/15 text-sky-500' },
   'nd.translate': { icon: Languages, tileClassName: 'border-emerald-500/25 bg-emerald-500/15 text-emerald-500' },
   'nd.quit-process': { icon: Power, tileClassName: 'border-rose-500/25 bg-rose-500/15 text-rose-500' },
+  'nd.tic-tac-toe': { icon: Gamepad2, tileClassName: 'border-teal-500/25 bg-teal-500/15 text-teal-500' },
 }
 
 function ExtensionIconTile({ id, large = false }: { id: string; large?: boolean }): React.ReactNode {
@@ -1899,6 +1901,7 @@ function ExtensionViewDialog({
       : (right.sortValues?.[sortBy] ?? -1) - (left.sortValues?.[sortBy] ?? -1))
 
   const isDetail = currentData?.kind === 'detail'
+  const isWebView = currentData?.kind === 'web' && Boolean(currentData.webView?.url)
   const isTranslate = target?.extensionId === 'nd.translate' && target.viewId === 'translator'
     && currentData?.extensionId === target.extensionId && currentData.viewId === target.viewId
     && contextKey(currentData.context) === contextKey(target.context)
@@ -2561,7 +2564,7 @@ function ExtensionViewDialog({
   return (
     <>
     <Dialog open={target !== null} onOpenChange={(open) => { if (!open) closeDialog() }}>
-      <DialogContent className={cn("max-h-[90vh] overflow-y-auto border-border-strong bg-surface-1 transition-all", isDetail || isTranslate ? "max-w-3xl sm:max-w-4xl" : "max-w-xl")}>
+      <DialogContent className={cn("max-h-[90vh] overflow-y-auto border-border-strong bg-surface-1 transition-all", isDetail || isTranslate || isWebView ? "max-w-3xl sm:max-w-4xl" : "max-w-xl")}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             {isDetail && !isTranslate ? <Image className="size-4 text-primary" /> : null}
@@ -2582,6 +2585,10 @@ function ExtensionViewDialog({
                   onOpenBrowser, closeDialog)
               } : undefined} />
             </Suspense>
+          </SurfaceErrorBoundary>
+        ) : isWebView && currentData?.webView ? (
+          <SurfaceErrorBoundary label={currentData.title} resetKey={targetKey ?? undefined} onError={onError}>
+            <ExtensionWebView data={currentData} onError={onError} />
           </SurfaceErrorBoundary>
         ) : !currentData ? (
           <p className="text-xs text-faint" role={loadError ? 'alert' : 'status'}>{loadError ?? 'Loading extension view…'}</p>
@@ -3674,6 +3681,8 @@ const PERMISSION_LABELS: Record<string, string> = {
   'os.wallpaper.write': 'Change desktop wallpaper',
   'process.read': 'See running processes',
   'process.quit': 'Quit running processes',
+  'vault.read': 'Read saved vault secrets',
+  'vault.write': 'Create and delete vault entries',
   'workflow.read': 'Read the project task board',
   'chat.start': 'Start chats as you',
 }

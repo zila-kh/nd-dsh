@@ -1,4 +1,4 @@
-import { app, clipboard, dialog, ipcMain, nativeImage, shell, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
+import { app, clipboard, dialog, ipcMain, nativeImage, protocol, shell, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
 import { existsSync, promises as fs } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import process from 'node:process'
@@ -44,6 +44,7 @@ import {
 import { parseWallpaperLinkUrl, parseWallpaperLinksBundle, type WallpaperCollection, type WallpaperCollectionEntry, type WallpaperCollectionItemInput, type WallpaperLink } from '../../shared/wallpaper-links.js'
 import type { CoreMedia } from '../core/core-media.js'
 import type { CoreClipboard } from '../core/core-clipboard.js'
+import type { CoreVault } from '../core/core-vault.js'
 import { ProcessInventory } from '../os/process-inventory.js'
 import type { BrowserController } from '../browser/browser-controller.js'
 import type { WorkflowService } from '../workflows/workflow-service.js'
@@ -64,7 +65,11 @@ import {
 } from './clipboard-history.js'
 import { starterKitFiles } from './starter-kit.js'
 import { createZipFile } from './zip.js'
+import { promptVaultEntry, type VaultPromptValues } from './vault-prompt.js'
+import { ExtensionWebViewAssets } from './webview-assets.js'
+import { TicTacToeStatsStore, asTicTacToeOutcome } from './tic-tac-toe-store.js'
 import { ND_TRANSLATE_ID, ND_TRANSLATE_MAX_TEXT, isLlmProvider } from '../../shared/nd-translate.js'
+import { ND_WEBVIEW_URL_SCHEME } from '../../shared/extension-webview.js'
 import type { ProviderStore } from '../providers.js'
 
 export interface NdOrganizationPortFull extends NdOrganizationPort {
@@ -97,6 +102,11 @@ export interface NdIpcDependencies {
    * Electron's in-process clipboard, and history recording stays off.
    */
   coreClipboard?: CoreClipboard
+  /**
+   * nd-core's encrypted local password vault. Optional like the other sidecar
+   * surfaces; the vault host methods fail closed without it.
+   */
+  coreVault?: CoreVault
   /** Notified after ND Home records change, so other services can re-derive views. */
   onHomeChanged?: () => void
 }
@@ -104,6 +114,8 @@ export interface NdIpcDependencies {
 const NOTE_TITLE_MAX = 80
 const MAX_OPEN_TARGETS = 1
 const QUIT_PROCESS_ID = 'nd.quit-process'
+const PASSWORD_VAULT_ID = 'nd.password-vault'
+const TIC_TAC_TOE_ID = 'nd.tic-tac-toe'
 
 /**
  * The bundled on-demand packages. Not built-ins: nothing here is registered or
@@ -116,6 +128,12 @@ const AVAILABLE_PACKAGES: readonly { id: string; path: () => string }[] = [
   { id: ND_TRANSLATE_ID, path: translatePackagePath },
   { id: QUIT_PROCESS_ID, path: quitProcessPackagePath },
   { id: CLIPBOARD_HISTORY_ID, path: clipboardHistoryPackagePath },
+  { id: PASSWORD_VAULT_ID, path: passwordVaultPackagePath },
+  // Discovery is dev-only for this one: the package (with its vendored
+  // three.js) is fully external and is never staged into packaged releases,
+  // where it would only ever show as unavailable. Developers install it from
+  // Discover; packaged users install it from a folder.
+  ...(app.isPackaged ? [] : [{ id: TIC_TAC_TOE_ID, path: ticTacToePackagePath }]),
 ]
 
 /**
@@ -159,6 +177,18 @@ function clipboardHistoryPackagePath(): string {
   return app.isPackaged
     ? join(process.resourcesPath, 'nd-extensions', 'clipboard-history')
     : join(app.getAppPath(), 'extensions', 'clipboard-history')
+}
+
+function passwordVaultPackagePath(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'nd-extensions', 'password-vault')
+    : join(app.getAppPath(), 'extensions', 'password-vault')
+}
+
+function ticTacToePackagePath(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'nd-extensions', 'tic-tac-toe')
+    : join(app.getAppPath(), 'extensions', 'tic-tac-toe')
 }
 
 /**
@@ -221,6 +251,18 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
     return seeded
   }
 
+  /**
+   * Token-scoped serving of installed package UI assets for `kind: 'web'`
+   * views. The scheme itself is privileged at the top of main; this handler
+   * validates token, package binding, containment, type, and size per request.
+   */
+  const webViews = new ExtensionWebViewAssets(deps.packages)
+  protocol.handle(ND_WEBVIEW_URL_SCHEME, async (request) => {
+    const response = await webViews.respond(request.url)
+    const body = response.body ? new Uint8Array(response.body) : null
+    return new Response(body, { status: response.status, headers: response.headers })
+  })
+
   const handle = (channel: string, listener: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown | Promise<unknown>): void => {
     ipcMain.removeHandler(channel)
     ipcMain.handle(channel, async (event, ...args) => {
@@ -256,6 +298,8 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
         quitProcessCatalogView(state),
         translateCatalogView(state),
         clipboardHistoryCatalogView(state),
+        passwordVaultCatalogView(state),
+        ...(app.isPackaged ? [] : [ticTacToeCatalogView(state)]),
       ]),
     }
   }
@@ -399,8 +443,21 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
     return result
   })
 
-  handle(ND_EXTENSIONS_IPC.view, async (_event, extensionId, viewId, context) =>
-    deps.broker.loadView(shortId(extensionId, 'Extension id'), shortId(viewId, 'View id'), await deps.broker.resolveContext(asNdContext(context))))
+  handle(ND_EXTENSIONS_IPC.view, async (_event, extensionId, viewId, context) => {
+    const data = await deps.broker.loadView(
+      shortId(extensionId, 'Extension id'),
+      shortId(viewId, 'View id'),
+      await deps.broker.resolveContext(asNdContext(context)),
+    )
+    if (data.kind !== 'web' || !data.webView) return data
+    const issued = await webViews.issue(data.extensionId, data.webView.entry)
+    if (!issued) throw new Error('The extension view assets could not be opened')
+    return { ...data, webView: { ...data.webView, url: issued.url, token: issued.token } }
+  })
+
+  handle(ND_EXTENSIONS_IPC.closeWebView, (_event, token) => {
+    if (typeof token === 'string' && token) webViews.revoke(token)
+  })
 
   handle(ND_EXTENSIONS_IPC.approve, async (_event, approvalId, remember) => {
     const result = await deps.broker.approve(shortId(approvalId, 'Approval id'), remember === true)
@@ -489,6 +546,7 @@ export function registerNdExtensionIpc(deps: NdIpcDependencies): () => void {
     void clipboardHistory.dispose()
     deps.broker.setOnApprovalRequested(undefined)
     deps.home.setOnChanged(undefined)
+    protocol.unhandle(ND_WEBVIEW_URL_SCHEME)
   }
 }
 
@@ -508,6 +566,7 @@ export function registerNativeHostHandlers(
   void history.initialize().catch((error) => console.warn('ND Translate history failed to load:', error))
   const media = deps.media
   const coreClipboard = deps.coreClipboard
+  const coreVault = deps.coreVault
   const clipboardStore: ClipboardHistoryStore | undefined = clipboardHistory?.store
   const thumbnailCache = media ? new WallpaperThumbnailCache(media) : null
   const applyWallpaper = media
@@ -1466,7 +1525,7 @@ export function registerNativeHostHandlers(
   }
   const requirePersonalContext = (context: { context: { kind: string } }): void => {
     if (context.context.kind !== 'personal') {
-      throw new Error('Clipboard history is available only in the Personal context')
+      throw new Error('This action is available only in the Personal context')
     }
   }
 
@@ -1533,19 +1592,18 @@ export function registerNativeHostHandlers(
         // Thumbnails are cosmetic; never fail the list over them.
       }
     }
-    return {
-      watcherActive: clipboardHistory?.controller.watching ?? false,
-      items: entries.map((entry) => ({
-        id: entry.id,
-        title: historyEntryTitle(entry),
-        detail: entry.kind === 'text'
-          ? (entry.text ?? '').slice(0, 400)
-          : `${new Date(entry.lastCopiedAt).toLocaleString()} · copied ${entry.occurrences}×`,
-        status: entry.pinned ? 'Pinned' : entry.kind,
-        ...(thumbnails.get(entry.id) ? { thumbnail: thumbnails.get(entry.id) } : {}),
-        sortValues: { date: entry.lastCopiedAt },
-      })),
-    }
+    // A plain row array: the broker's toRows maps itemTitleKey/itemBodyKey, and
+    // an object wrapper here would silently render the view's empty state.
+    return entries.map((entry) => ({
+      id: entry.id,
+      title: historyEntryTitle(entry),
+      detail: entry.kind === 'text'
+        ? (entry.text ?? '').slice(0, 400)
+        : `${new Date(entry.lastCopiedAt).toLocaleString()} · copied ${entry.occurrences}×`,
+      status: entry.pinned ? 'Pinned' : entry.kind,
+      ...(thumbnails.get(entry.id) ? { thumbnail: thumbnails.get(entry.id) } : {}),
+      sortValues: { date: entry.lastCopiedAt },
+    }))
   })
 
   host.register('clipboard.history.get', async (input, context) => {
@@ -1629,6 +1687,157 @@ export function registerNativeHostHandlers(
     if (names.length === 0) throw new Error('That entry has no file list to copy')
     clipboard.writeText(names.join('\n'))
     return { copied: true }
+  })
+
+  // --- Password Vault ----------------------------------------------------------
+  //
+  // Secrets live in one AES-GCM-encrypted file in userData, written by the
+  // sidecar under an OS-protected key (Windows DPAPI). This process only
+  // composes the user-visible flow: typed input arrives through the ND-owned
+  // prompt window, the list returns metadata rows the launcher can render, and
+  // every path that moves a secret out (`vault.get`, `vault.copy`) is marked
+  // sensitive at the broker so an agent needs an explicit grant. Create and
+  // edit are user-only actions because their input IS the prompt window.
+
+  const vaultPath = join(app.getPath('userData'), 'nd-vault', 'vault.ndvault')
+  const requireVault = (): CoreVault => {
+    if (!coreVault) throw new Error('The nd-core sidecar is required for the password vault')
+    return coreVault
+  }
+  const requireUserCaller = (context: { caller: string }): void => {
+    if (context.caller === 'agent') throw new Error('Changing the vault on ND\u2019s behalf is a user action; ask the user to do it in ND')
+  }
+  const vaultField = (value: unknown, label: string, max: number): string => {
+    if (typeof value !== 'string') throw new Error(`${label} must be text`)
+    if (value.length > max) throw new Error(`${label} must be at most ${max} characters`)
+    if (value.includes('\0')) throw new Error(`${label} must not contain NUL`)
+    return value
+  }
+  const vaultTitle = (value: unknown): string => {
+    const title = vaultField(value, 'Title', 200).trim()
+    if (!title) throw new Error('Title is required')
+    return title
+  }
+  const vaultEntryInput = (values: VaultPromptValues) => ({
+    title: vaultTitle(values.title),
+    username: vaultField(values.username, 'Username', 320),
+    url: vaultField(values.url, 'Website', 2_048),
+    notes: vaultField(values.notes, 'Notes', 10_000),
+    secret: vaultField(values.secret, 'Secret', 8_192),
+  })
+
+  host.register('vault.list', async (input, context) => {
+    requirePersonalContext(context)
+    const vault = requireVault()
+    const query = typeof input.query === 'string' ? input.query.slice(0, 200) : undefined
+    const result = await vault.list(vaultPath, query)
+    // A plain row array: the broker's toRows maps itemTitleKey/itemBodyKey.
+    return result.entries.map((entry) => ({
+      id: entry.id,
+      title: entry.title,
+      detail: [entry.username, entry.url].filter(Boolean).join(' · '),
+      sortValues: { date: entry.updatedAt },
+    }))
+  })
+
+  host.register('vault.get', async (input, context) => {
+    requirePersonalContext(context)
+    const vault = requireVault()
+    const id = requiredText(input.id, 'Vault entry', 128)
+    const entry = await vault.get(vaultPath, id)
+    return {
+      id: entry.id,
+      title: entry.title,
+      username: entry.username,
+      url: entry.url,
+      notes: entry.notes,
+      secret: entry.secret,
+      updatedAt: entry.updatedAt,
+    }
+  })
+
+  host.register('vault.create', async (_input, context) => {
+    requirePersonalContext(context)
+    requireUserCaller(context)
+    const vault = requireVault()
+    const prompt = await promptVaultEntry(deps.window, { mode: 'create' })
+    if (!prompt.submitted || !prompt.values) return { created: false }
+    const entry = await vault.create(vaultPath, vaultEntryInput(prompt.values))
+    return { created: true, id: entry.id, title: entry.title }
+  })
+
+  host.register('vault.update', async (input, context) => {
+    requirePersonalContext(context)
+    requireUserCaller(context)
+    const vault = requireVault()
+    const id = requiredText(input.id, 'Vault entry', 128)
+    const current = await vault.get(vaultPath, id)
+    const prompt = await promptVaultEntry(deps.window, {
+      mode: 'edit',
+      initial: {
+        title: current.title,
+        username: current.username,
+        url: current.url,
+        notes: current.notes,
+        secret: current.secret,
+      },
+    })
+    if (!prompt.submitted || !prompt.values) return { updated: false }
+    const entry = await vault.update(vaultPath, id, vaultEntryInput(prompt.values))
+    return { updated: true, id: entry.id, title: entry.title }
+  })
+
+  host.register('vault.delete', async (input, context) => {
+    requirePersonalContext(context)
+    const vault = requireVault()
+    const id = requiredText(input.id, 'Vault entry', 128)
+    return { deleted: await vault.delete(vaultPath, id) }
+  })
+
+  host.register('vault.copy', async (input, context) => {
+    requirePersonalContext(context)
+    const vault = requireVault()
+    const id = requiredText(input.id, 'Vault entry', 128)
+    const entry = await vault.get(vaultPath, id)
+    if (!entry.secret) throw new Error('That entry has no secret to copy')
+    // Prefer the sidecar write: it arms echo suppression, so a clipboard
+    // watcher can mistake this for a user copy. The in-process fallback only
+    // exists when the sidecar is gone entirely — and with it, any watcher.
+    const text = entry.secret.slice(0, 256_000)
+    if (coreClipboard) {
+      try {
+        await coreClipboard.writeText(text)
+        return { copied: true }
+      } catch {
+        // Fall through to the in-process clipboard.
+      }
+    }
+    clipboard.writeText(text)
+    return { copied: true }
+  })
+
+  // --- 3D Tic-Tac-Toe ----------------------------------------------------------
+  //
+  // The game UI itself is the package's web view (sandboxed iframe); this side
+  // only owns the durable scoreboard. Personal-only and non-sensitive: the
+  // worst thing an agent could do here is inflate a win counter, and even that
+  // still goes through the broker's grant path.
+
+  const ticTacToeStats = new TicTacToeStatsStore(join(app.getPath('userData'), 'nd-tic-tac-toe', 'stats.json'))
+
+  host.register('tictactoe.stats.get', async (_input, context) => {
+    requirePersonalContext(context)
+    return ticTacToeStats.get()
+  })
+
+  host.register('tictactoe.stats.record', async (input, context) => {
+    requirePersonalContext(context)
+    return ticTacToeStats.record(asTicTacToeOutcome(input.outcome))
+  })
+
+  host.register('tictactoe.stats.reset', async (_input, context) => {
+    requirePersonalContext(context)
+    return ticTacToeStats.reset()
   })
 
   host.register('browser.openUrl', async (input) => {
@@ -1844,6 +2053,22 @@ async function clipboardHistoryCatalogView(state: NdExtensionsStateView): Promis
     name: 'Clipboard History',
     description: 'Records your clipboard only after you turn recording on. Nothing is saved at install, at activation, or by default.',
     permissions: ['clipboard.read', 'clipboard.write'],
+  })
+}
+
+async function passwordVaultCatalogView(state: NdExtensionsStateView): Promise<NdAvailablePackageView> {
+  return packageCatalogView(state, PASSWORD_VAULT_ID, passwordVaultPackagePath(), {
+    name: 'Password Vault',
+    description: 'A local-first vault for passwords and API keys, encrypted on this device. Nothing is synced, nothing leaves ND.',
+    permissions: ['vault.read', 'vault.write'],
+  })
+}
+
+async function ticTacToeCatalogView(state: NdExtensionsStateView): Promise<NdAvailablePackageView> {
+  return packageCatalogView(state, TIC_TAC_TOE_ID, ticTacToePackagePath(), {
+    name: 'ND 3D Tic-Tac-Toe',
+    description: 'Play tic-tac-toe on a 3D board rendered with three.js, on demand from the launcher. Ships its own sandboxed UI; the package stays fully external to the app bundle.',
+    permissions: ['tictactoe.read', 'tictactoe.write'],
   })
 }
 

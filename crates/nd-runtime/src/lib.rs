@@ -21,6 +21,7 @@ pub mod search;
 pub mod session_journal;
 pub mod snapshot;
 pub mod terminal;
+pub mod vault;
 #[cfg(windows)]
 pub mod windows_job;
 pub mod workspace;

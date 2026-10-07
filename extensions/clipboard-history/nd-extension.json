@@ -64,6 +64,7 @@
         "host": "clipboard.history.list",
         "itemTitleKey": "title",
         "itemBodyKey": "detail",
+        "refreshIntervalMs": 3000,
         "contexts": ["personal"],
         "actions": [
           { "id": "copy-again", "title": "Copy again", "host": "clipboard.history.copyAgain" },

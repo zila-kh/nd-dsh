@@ -125,7 +125,7 @@ describe('extension package manifests', () => {
     expect(PROJECT_WORKFLOW_MANIFEST.contexts).toEqual(['project'])
     for (const view of PROJECT_WORKFLOW_MANIFEST.contributions.views) {
       expect(view.contexts).toEqual(['project'])
-      expect(view.host.startsWith('workflow.')).toBe(true)
+      expect(view.host?.startsWith('workflow.')).toBe(true)
     }
   })
 

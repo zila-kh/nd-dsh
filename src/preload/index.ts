@@ -98,6 +98,7 @@ const ndExtensionsApi: NdExtensionsDesktopApi = {
   commands: (context) => ipcRenderer.invoke(ND_EXTENSIONS_IPC.commands, context),
   invoke: (request: NdInvocationRequest) => ipcRenderer.invoke(ND_EXTENSIONS_IPC.invoke, request) as Promise<NdInvocationResult>,
   loadView: (extensionId: string, viewId: string, context) => ipcRenderer.invoke(ND_EXTENSIONS_IPC.view, extensionId, viewId, context) as Promise<NdViewData>,
+  closeWebView: (token: string) => ipcRenderer.invoke(ND_EXTENSIONS_IPC.closeWebView, token) as Promise<void>,
   approve: (approvalId: string, remember?: boolean) => ipcRenderer.invoke(ND_EXTENSIONS_IPC.approve, approvalId, remember) as Promise<NdInvocationResult>,
   deny: (approvalId: string) => ipcRenderer.invoke(ND_EXTENSIONS_IPC.deny, approvalId) as Promise<void>,
   onChanged: (listener) => {

@@ -1,5 +1,5 @@
 import 'dotenv/config'
-import { app, BrowserWindow, crashReporter, dialog, globalShortcut, Menu, screen, type MenuItemConstructorOptions } from 'electron'
+import { app, BrowserWindow, crashReporter, dialog, globalShortcut, Menu, protocol, screen, type MenuItemConstructorOptions } from 'electron'
 import { createServer } from 'node:net'
 import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
@@ -8,6 +8,7 @@ import { ND_ORG_MEMORY_ID, ND_WORKSPACE_CONTEXT_ID } from '../shared/capabilitie
 import { workerAssignableCodingEngines } from '../shared/coding-engines.js'
 import { IPC, type DshEventFrame } from '../shared/contracts.js'
 import { DESIGN_IPC } from '../shared/design.js'
+import { ND_WEBVIEW_SCHEME_PRIVILEGES } from '../shared/extension-webview.js'
 import { ORGANIZATION_IPC, type OrganizationSnapshot } from '../shared/organization.js'
 import { throttleLatest } from './latest-value-throttle.js'
 import { TERMINAL_IPC } from '../shared/terminal.js'
@@ -33,6 +34,7 @@ import { createCorePtySpawner } from './core/core-pty.js'
 import { CoreSessionJournalStore } from './core/core-session-journal.js'
 import { createCoreMedia } from './core/core-media.js'
 import { createCoreClipboard } from './core/core-clipboard.js'
+import { createCoreVault } from './core/core-vault.js'
 import { createCoreWorkspaceFileSystem } from './core/core-workspace.js'
 import { createCoreWorktreeGit } from './core/core-worktree-git.js'
 import { DesignService } from './design/design-service.js'
@@ -116,6 +118,10 @@ let activeExecutionCoordinator: ExecutionCoordinator | undefined
 let localRuntime: LocalRuntimeService | undefined
 let shutdownStarted = false
 const closingServices = new Set<Promise<void>>()
+
+// Must run before app ready: the extension web-view asset scheme parses as a
+// standard, secure URL but deliberately supports no fetch API and no CORS.
+protocol.registerSchemesAsPrivileged([{ scheme: ND_WEBVIEW_SCHEME_PRIVILEGES.scheme, privileges: { ...ND_WEBVIEW_SCHEME_PRIVILEGES.privileges } }])
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) app.quit()
@@ -451,7 +457,8 @@ async function createWindow(cdpPort: number): Promise<void> {
   const coreGit = new GitCli({ core })
   const coreMedia = createCoreMedia(core)
   const coreClipboard = createCoreClipboard(core)
-  const disposeIpc = registerIpc({ window, preloadPath: preload, launcherPopup, browser, dshSurface, engines, engineRouter, nativeToolBroker: nativeBroker, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, coreGit: coreGit.exec.bind(coreGit), coreMedia, coreClipboard, qa, sessionArchive, usageLedger, capabilities, organizationStore })
+  const coreVault = createCoreVault(core)
+  const disposeIpc = registerIpc({ window, preloadPath: preload, launcherPopup, browser, dshSurface, engines, engineRouter, nativeToolBroker: nativeBroker, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, coreGit: coreGit.exec.bind(coreGit), coreMedia, coreClipboard, coreVault, qa, sessionArchive, usageLedger, capabilities, organizationStore })
   if (nativeAgent.ready()) void nativeAgent.start().catch((error) => {
     console.warn('ND Agent private runtime could not initialize:', error instanceof Error ? error.message : String(error))
   })

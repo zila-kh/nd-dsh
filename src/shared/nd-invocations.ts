@@ -78,16 +78,27 @@ export interface NdViewRow {
   sortValues?: Record<string, number>
 }
 
+export interface NdWebViewData {
+  /** Package-relative UI entry from the manifest's web-view contribution. */
+  entry: string
+  /** Attached by main for the renderer: the token-scoped asset URL to load. */
+  url?: string
+  /** Opaque serving token; revoke it when the hosting dialog closes. */
+  token?: string
+}
+
 export interface NdViewData {
   extensionId: string
   viewId: string
   title: string
-  kind: 'list' | 'detail'
+  kind: 'list' | 'detail' | 'web'
   context: NdContext
   rows: NdViewRow[]
   actions: NdViewActionView[]
   refreshIntervalMs?: number
   empty?: string
+  /** Present only for `kind: 'web'` views. */
+  webView?: NdWebViewData
 }
 
 export type NdPackageSourceKind = 'builtin' | 'local' | 'git'
@@ -269,6 +280,8 @@ export interface NdExtensionsDesktopApi {
   commands(context: NdContext): Promise<NdCommandView[]>
   invoke(request: NdInvocationRequest): Promise<NdInvocationResult>
   loadView(extensionId: string, viewId: string, context: NdContext): Promise<NdViewData>
+  /** Invalidates the asset-serving token of a closed web-view dialog. */
+  closeWebView(token: string): Promise<void>
   approve(approvalId: string, remember?: boolean): Promise<NdInvocationResult>
   deny(approvalId: string): Promise<void>
   onChanged(listener: (state: NdExtensionsStateView) => void): () => void
@@ -308,6 +321,7 @@ export const ND_EXTENSIONS_IPC = {
   commands: 'nd-ext:commands',
   invoke: 'nd-ext:invoke',
   view: 'nd-ext:view',
+  closeWebView: 'nd-ext:webview:close',
   approve: 'nd-ext:approve',
   deny: 'nd-ext:deny',
   changedEvent: 'nd-ext:changed',

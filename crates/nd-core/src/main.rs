@@ -33,6 +33,10 @@ use nd_runtime::terminal::{
     TerminalCloseParams, TerminalCreateParams, TerminalHistoryAppendParams, TerminalManager,
     TerminalResizeParams, TerminalRestartParams, TerminalStateParams, TerminalWriteParams,
 };
+use nd_runtime::vault::{
+    VaultDeleteResult, VaultIdParams, VaultListParams, VaultListResult, VaultRegistry,
+    VaultUpdateParams, VaultWriteParams,
+};
 use nd_runtime::workspace::{
     self, IndexParams, ListParams, ReadParams, WriteParams as WorkspaceWriteParams,
 };
@@ -48,6 +52,7 @@ struct AppState {
     processes: Arc<ProcessManager>,
     terminals: Arc<TerminalManager>,
     clipboard: Arc<ClipboardManager>,
+    vault: VaultRegistry,
     session_journal: Arc<SessionJournalStore>,
     effect_journal: Arc<EffectJournalStore>,
     metrics: Arc<MetricsRegistry>,
@@ -82,6 +87,7 @@ impl AppState {
             processes,
             terminals,
             clipboard,
+            vault: VaultRegistry::new_platform(),
             session_journal,
             effect_journal,
             metrics: Arc::new(MetricsRegistry::new()),
@@ -213,6 +219,7 @@ fn dispatch(
                     "artifacts",
                     "workspace",
                     "media",
+                    "vault",
                     "search",
                     "revision",
                     "cache",
@@ -597,6 +604,31 @@ fn dispatch(
         "clipboard.write" => {
             let params = from_params::<ClipboardWriteTextParams>(params)?;
             to_value(state.clipboard.write_text(params)?)
+        }
+        // Vault files are paths the desktop owns (its own userData), not linked
+        // workspaces, so they deliberately do not feed `observe_workspace`. The
+        // registry serializes load-modify-save per vault path and keeps the
+        // decrypted key in memory only.
+        "vault.list" => {
+            let params = from_params::<VaultListParams>(params)?;
+            let result: VaultListResult = state.vault.list(params)?;
+            to_value(result)
+        }
+        "vault.get" => to_value(state.vault.get(from_params::<VaultIdParams>(params)?)?),
+        "vault.create" => to_value(
+            state
+                .vault
+                .create(from_params::<VaultWriteParams>(params)?)?,
+        ),
+        "vault.update" => to_value(
+            state
+                .vault
+                .update(from_params::<VaultUpdateParams>(params)?)?,
+        ),
+        "vault.delete" => {
+            let result: VaultDeleteResult =
+                state.vault.delete(from_params::<VaultIdParams>(params)?)?;
+            to_value(result)
         }
         other => {
             let _ = request_id;

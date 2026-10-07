@@ -16,6 +16,7 @@ import type {
 } from '../../shared/nd-invocations.js'
 import { quarantineFile } from '../logging/log-file.js'
 import { rawGitExecRunner, type GitExecRunner } from '../git/git-cli.js'
+import { ND_WEBVIEW_MAX_ASSET_FILE_BYTES, ND_WEBVIEW_MAX_ASSET_TOTAL_BYTES } from '../../shared/extension-webview.js'
 
 interface NdPackageRecord {
   manifest: NdExtensionManifest
@@ -344,10 +345,12 @@ export function sortPackageViews(views: NdInstalledPackageView[]): NdInstalledPa
 /**
  * Walk the package tree and reject symlinks outright. A symlink could point
  * outside the package root, and following it during the snapshot copy would
- * import content the manifest never declared.
+ * import content the manifest never declared. File sizes are capped so a web
+ * view package cannot smuggle unbounded assets past the installer.
  */
 async function assertContainedPackage(root: string): Promise<void> {
   let visited = 0
+  let totalBytes = 0
   const walk = async (directory: string): Promise<void> => {
     const entries = await fs.readdir(directory, { withFileTypes: true })
     for (const entry of entries) {
@@ -356,7 +359,18 @@ async function assertContainedPackage(root: string): Promise<void> {
       if (entry.name === '.git' || entry.name === 'node_modules') continue
       const absolute = join(directory, entry.name)
       if (entry.isSymbolicLink()) throw new Error(`Package contains a symbolic link (${relative(root, absolute)}); links are not allowed in packages`)
-      if (entry.isDirectory()) await walk(absolute)
+      if (entry.isDirectory()) {
+        await walk(absolute)
+        continue
+      }
+      const size = (await fs.stat(absolute)).size
+      if (size > ND_WEBVIEW_MAX_ASSET_FILE_BYTES) {
+        throw new Error(`Package file ${relative(root, absolute)} exceeds the ${ND_WEBVIEW_MAX_ASSET_FILE_BYTES / (1024 * 1024)} MB per-file cap`)
+      }
+      totalBytes += size
+      if (totalBytes > ND_WEBVIEW_MAX_ASSET_TOTAL_BYTES) {
+        throw new Error(`Package exceeds the ${ND_WEBVIEW_MAX_ASSET_TOTAL_BYTES / (1024 * 1024)} MB total asset cap`)
+      }
     }
   }
   await walk(root)

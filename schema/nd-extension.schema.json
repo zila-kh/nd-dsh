@@ -43,6 +43,10 @@
           "os.wallpaper.write",
           "process.read",
           "process.quit",
+          "vault.read",
+          "vault.write",
+          "tictactoe.read",
+          "tictactoe.write",
           "chat.start",
           "workflow.read"
         ]
@@ -137,15 +141,28 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["id", "title", "host", "itemTitleKey"],
+            "required": ["id", "title"],
+            "allOf": [
+              {
+                "if": { "required": ["kind"], "properties": { "kind": { "const": "web" } } },
+                "then": { "required": ["entry"] },
+                "else": { "required": ["host", "itemTitleKey"] }
+              }
+            ],
             "properties": {
               "id": { "type": "string" },
               "title": { "type": "string", "maxLength": 128 },
               "description": { "type": "string", "maxLength": 500 },
-              "kind": { "enum": ["list", "detail"] },
+              "kind": { "enum": ["list", "detail", "web"] },
               "host": { "$ref": "#/$defs/hostMethod" },
               "itemTitleKey": { "type": "string", "maxLength": 64 },
               "itemBodyKey": { "type": "string", "maxLength": 64 },
+              "entry": {
+                "type": "string",
+                "maxLength": 256,
+                "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._/-]*\\.html$",
+                "description": "Web views only: package-relative path to the UI entry HTML document."
+              },
               "refreshIntervalMs": { "type": "integer", "minimum": 2000, "maximum": 60000 },
               "contexts": { "type": "array", "items": { "enum": ["personal", "company", "project"] } },
               "actions": {
@@ -202,6 +219,15 @@
         "clipboard.history.delete",
         "clipboard.history.clear",
         "clipboard.history.copyAgain",
+        "vault.list",
+        "vault.get",
+        "vault.create",
+        "vault.update",
+        "vault.delete",
+        "vault.copy",
+        "tictactoe.stats.get",
+        "tictactoe.stats.record",
+        "tictactoe.stats.reset",
         "browser.openUrl",
         "browser.translate",
         "browser.translate.history",
