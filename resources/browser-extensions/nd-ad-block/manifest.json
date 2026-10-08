@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ND Ad Block",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "ND's built-in ad and tracker blocker. Enabled by default; turn it off any time in Settings > Browser > Extensions.",
   "author": "ND",
   "minimum_chrome_version": "111",
@@ -32,7 +32,8 @@
   "content_scripts": [
     {
       "matches": [
-        "*://*.youtube.com/*"
+        "*://*.youtube.com/*",
+        "*://*.youtube-nocookie.com/*"
       ],
       "js": [
         "content/youtube-ads.js"
@@ -43,7 +44,8 @@
     },
     {
       "matches": [
-        "*://*.youtube.com/*"
+        "*://*.youtube.com/*",
+        "*://*.youtube-nocookie.com/*"
       ],
       "js": [
         "content/youtube-ads-report.js"

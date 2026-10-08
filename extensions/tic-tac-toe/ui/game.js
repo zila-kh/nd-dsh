@@ -177,26 +177,17 @@ if (renderer) {
 
   const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100)
   const target = new THREE.Vector3(0, 0.2, 0)
-  // The default view keeps all nine cells readable; orbit drags stay clamped
-  // above the horizon so the board can never be tipped into an unplayable angle.
-  const DEFAULT_VIEW = { theta: 0.75, phi: 0.82, radius: 8.6 }
-  const PRESET_VIEWS = {
-    '3d': DEFAULT_VIEW,
-    top: { theta: 0.75, phi: 0.12, radius: 8.2 },
-    low: { theta: 0.75, phi: 1.22, radius: 9.2 },
-  }
-  const orbit = { ...DEFAULT_VIEW }
-
-  function updateCamera() {
-    const { theta, phi, radius } = orbit
-    camera.position.set(
-      radius * Math.sin(phi) * Math.sin(theta),
-      radius * Math.cos(phi),
-      radius * Math.sin(phi) * Math.cos(theta),
-    )
-    camera.lookAt(target)
-  }
-  updateCamera()
+  // The camera is fixed: a near top-down, axis-aligned view keeps all nine cells
+  // equally readable and clickable, with rows and columns square to the screen.
+  // There is no orbit, zoom, or preset switching, so a stray drag can never tip
+  // the board into an unplayable angle mid-game.
+  const VIEW = { theta: 0, phi: 0.32, radius: 8.2 }
+  camera.position.set(
+    VIEW.radius * Math.sin(VIEW.phi) * Math.sin(VIEW.theta),
+    VIEW.radius * Math.cos(VIEW.phi),
+    VIEW.radius * Math.sin(VIEW.phi) * Math.cos(VIEW.theta),
+  )
+  camera.lookAt(target)
 
   scene.add(new THREE.HemisphereLight(0xdfe7ff, 0x0b0d12, 1.0))
   const sun = new THREE.DirectionalLight(0xffffff, 1.6)
@@ -323,16 +314,12 @@ if (renderer) {
     tweens.winBeams = []
   }
 
-  // --- pointer interaction: hover, place, camera presets, orbit -----------------
+  // --- pointer interaction: hover + place (fixed camera, no orbit) --------------
 
   const raycaster = new THREE.Raycaster()
   const pointer = new THREE.Vector2()
   const boardPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.11)
   const planeHit = new THREE.Vector3()
-  let dragging = false
-  let dragMoved = false
-  let lastX = 0
-  let lastY = 0
 
   // Picking intersects the board plane and reads the cell off x/z instead of
   // raycasting per-cell quads: flat pads become unhittable at grazing camera
@@ -350,88 +337,33 @@ if (renderer) {
     return row * 3 + col
   }
 
-  const viewButtons = {
-    '3d': document.getElementById('view-3d'),
-    top: document.getElementById('view-top'),
-    low: document.getElementById('view-low'),
-  }
-  function markViewButton(name) {
-    for (const [key, el] of Object.entries(viewButtons)) el.classList.toggle('on', key === name)
-  }
-  let viewAnim = null
-  function animateViewTo(target) {
-    viewAnim = { from: { ...orbit }, to: target, start: performance.now() }
-  }
-  function stepViewAnim() {
-    if (!viewAnim) return
-    const t = Math.min(1, (performance.now() - viewAnim.start) / 380)
-    const ease = 1 - Math.pow(1 - t, 3)
-    for (const key of ['theta', 'phi', 'radius']) {
-      orbit[key] = viewAnim.from[key] + (viewAnim.to[key] - viewAnim.from[key]) * ease
-    }
-    updateCamera()
-    if (t >= 1) viewAnim = null
-  }
-  for (const [name, target] of Object.entries(PRESET_VIEWS)) {
-    viewButtons[name].addEventListener('click', () => {
-      animateViewTo(target)
-      markViewButton(name)
-    })
-  }
-
   function showHover(index) {
     hover.visible = index >= 0 && state.board[index] === EMPTY && humanTurn()
     if (hover.visible) hover.position.copy(cellPosition(index)).setY(0.12)
   }
 
   renderer.domElement.addEventListener('pointermove', (event) => {
-    if (dragging) {
-      const dx = event.clientX - lastX
-      const dy = event.clientY - lastY
-      if (Math.abs(dx) + Math.abs(dy) > 6) dragMoved = true
-      viewAnim = null
-      orbit.theta -= dx * 0.004
-      orbit.phi = Math.min(1.28, Math.max(0.12, orbit.phi - dy * 0.004))
-      lastX = event.clientX
-      lastY = event.clientY
-      updateCamera()
-      hover.visible = false
-      return
-    }
     showHover(cellUnderPointer(event))
   })
 
+  renderer.domElement.addEventListener('pointerleave', () => {
+    hover.visible = false
+  })
+
+  // Press previews the target cell (touch has no hover phase); release places
+  // the mark. With the camera fixed there is no drag gesture to disambiguate, so
+  // a plain click always lands on the cell under the pointer.
   renderer.domElement.addEventListener('pointerdown', (event) => {
-    dragging = true
-    dragMoved = false
-    lastX = event.clientX
-    lastY = event.clientY
-    // Touch has no hover phase, so preview the target cell on press.
     showHover(cellUnderPointer(event))
   })
 
   renderer.domElement.addEventListener('pointerup', (event) => {
-    dragging = false
-    if (dragMoved) return
     const index = cellUnderPointer(event)
     if (index >= 0) tryPlace(index)
   })
 
-  // Double-clicking empty space gets a lost view back; on a cell it is left
-  // alone so rapid play never resets the camera.
-  renderer.domElement.addEventListener('dblclick', (event) => {
-    if (cellUnderPointer(event) === -1) {
-      animateViewTo(DEFAULT_VIEW)
-      markViewButton('3d')
-    }
-  })
-
-  renderer.domElement.addEventListener('wheel', (event) => {
-    event.preventDefault()
-    viewAnim = null
-    orbit.radius = Math.min(11.5, Math.max(6, orbit.radius + event.deltaY * 0.004))
-    updateCamera()
-  }, { passive: false })
+  // The camera is fixed, but a wheel over the board must not scroll the chrome.
+  renderer.domElement.addEventListener('wheel', (event) => event.preventDefault(), { passive: false })
 
   function resize() {
     const { clientWidth, clientHeight } = boardEl
@@ -445,7 +377,6 @@ if (renderer) {
 
   renderer.setAnimationLoop(() => {
     const now = performance.now()
-    stepViewAnim()
     for (let i = tweens.length - 1; i >= 0; i -= 1) {
       const tween = tweens[i]
       const t = Math.min(1, (now - tween.start) / tween.duration)
@@ -460,7 +391,6 @@ if (renderer) {
   })
 } else {
   fallbackEl.style.display = 'flex'
-  document.getElementById('view-controls')?.style.setProperty('display', 'none')
 }
 
 // --- game flow -----------------------------------------------------------------

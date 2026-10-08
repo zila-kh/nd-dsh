@@ -289,6 +289,10 @@ export class BrowserExtensionManager {
     this.records.clear()
 
     for (const item of this.value.extensions) {
+      if (item.source === 'bundled' && item.catalogId) {
+        const refreshed = await this.materializeBundledExtension(item.catalogId)
+        if (refreshed) item.path = refreshed
+      }
       const manifest = await readManifest(item.path).catch(() => undefined)
       if (!item.enabled) {
         const id = persistedId(item.path)
@@ -313,6 +317,10 @@ export class BrowserExtensionManager {
     if (!item) throw new Error('Built-in browser extension persistence record is missing')
 
     if (enabled) {
+      if (item.source === 'bundled' && item.catalogId) {
+        const refreshed = await this.materializeBundledExtension(item.catalogId)
+        if (refreshed) item.path = refreshed
+      }
       item.enabled = true
       await this.persist()
       this.records.delete(extensionId)

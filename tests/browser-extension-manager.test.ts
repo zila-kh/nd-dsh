@@ -84,6 +84,28 @@ describe('BrowserExtensionManager', () => {
 })
 
 describe('bundled ad block default', () => {
+  it('refreshes shipped bytes on reload and re-enable without overriding disabled state', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nd-adblock-refresh-'))
+    dirs.push(root)
+    host.appPath = join(root, 'app')
+    const source = await writeBundledAdBlock(host.appPath)
+    await writeFile(join(source, 'background.js'), 'first')
+    const { session } = fakeSession({ loadable: true })
+    const manager = new BrowserExtensionManager(session, join(root, 'extensions.json'), () => undefined)
+    await manager.initialize()
+    await writeFile(join(source, 'background.js'), 'updated')
+    await manager.reloadAll()
+    expect(await readFile(join(installedCopy(root, 'nd-ad-block'), 'background.js'), 'utf8')).toBe('updated')
+    const record = manager.list()[0]!
+    await manager.setEnabled(record.id, false)
+    await writeFile(join(source, 'background.js'), 'latest')
+    await manager.reloadAll()
+    const disabled = manager.list()[0]!
+    expect(disabled.enabled).toBe(false)
+    await manager.setEnabled(disabled.id, true)
+    expect(await readFile(join(installedCopy(root, 'nd-ad-block'), 'background.js'), 'utf8')).toBe('latest')
+    expect(manager.list()[0]?.enabled).toBe(true)
+  })
   it('enables ND Ad Block on a profile that has never seen it', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nd-adblock-default-'))
     dirs.push(root)

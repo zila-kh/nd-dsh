@@ -53,6 +53,7 @@ import {
   browserFocusView,
 } from './lib/nd-context-model'
 import type { LauncherHandoffTarget } from '../../shared/quick-launcher'
+import { DEFAULT_CAPTURE_DELAY_SECONDS, type GlobalShortcutId } from '../../shared/shortcuts'
 import { asNdContext, type NdContext } from '../../shared/nd-context'
 import type { WorkspaceProfile } from '../../shared/workspace-profile'
 import type {
@@ -270,8 +271,11 @@ export default function App() {
       ? 'personal'
       : null
   useEffect(() => {
+    // The float overlay owns no surface; letting it claim the shared native
+    // browser view would both reject and fight the full window for it.
+    if (isFloatOverlay) return
     void window.ndDsh.browser.setVisible(browserSurface !== null && !nativeOverlayOpen).catch(() => undefined)
-  }, [browserSurface, nativeOverlayOpen])
+  }, [browserSurface, nativeOverlayOpen, isFloatOverlay])
   // PRD 0006: ND Home personal records, extension packages, and the launcher's
   // explicit context selector (Personal by default, independent of the active
   // company/project selection).
@@ -331,23 +335,28 @@ export default function App() {
     return window.ndDsh.window?.onLauncherHandoff?.((target, text, context) => launcherHandoffRef.current(target, text, context))
   }, [isFloatOverlay])
 
+  // The float overlay draws only the pill and the capture surface. It is a
+  // separate sandboxed renderer, and main admits it to window/capture channels
+  // only — so it must never request organization, home, or extension state.
   useEffect(() => {
+    if (isFloatOverlay) return
     let mounted = true
     void window.ndDsh.ndExtensions.state()
       .then((next) => { if (mounted) setNdExtensions(next) })
       .catch(() => undefined)
     const off = window.ndDsh.ndExtensions.onChanged((next) => { if (mounted) setNdExtensions(next) })
     return () => { mounted = false; off() }
-  }, [])
+  }, [isFloatOverlay])
 
   useEffect(() => {
+    if (isFloatOverlay) return
     let mounted = true
     void window.ndDsh.home.state()
       .then((next) => { if (mounted) setHomeState(next) })
       .catch(() => undefined)
     const off = window.ndDsh.home.onChanged((next) => { if (mounted) setHomeState(next) })
     return () => { mounted = false; off() }
-  }, [])
+  }, [isFloatOverlay])
 
   const extensionContextOptions = useMemo(() => contextOptions(orgState), [orgState])
 
@@ -362,13 +371,14 @@ export default function App() {
   }, [quickLauncherOpen])
 
   useEffect(() => {
+    if (isFloatOverlay) return
     const context = contextForOptionId(extensionContextOptions, launcherContextId) ?? { kind: 'personal' as const }
     let mounted = true
     void window.ndDsh.ndExtensions.commands(context)
       .then((next) => { if (mounted) setExtensionCommands(next) })
       .catch(() => { if (mounted) setExtensionCommands([]) })
     return () => { mounted = false }
-  }, [extensionContextOptions, launcherContextId, ndExtensions])
+  }, [extensionContextOptions, launcherContextId, ndExtensions, isFloatOverlay])
 
   const pendingApprovals = ndExtensions?.pendingApprovals.length ?? 0
   const notifiedApprovals = useRef(0)
@@ -401,6 +411,7 @@ export default function App() {
   }, [isFloatOverlay, pendingAppInspect, captureOverlay, floatDropdownOpen, appInspectCountdown])
 
   useEffect(() => {
+    if (isFloatOverlay) return
     let mounted = true
     void window.ndDshOrganization.state()
       .then((next) => { if (mounted) setOrgState(next) })
@@ -412,7 +423,7 @@ export default function App() {
       mounted = false
       off()
     }
-  }, [notify])
+  }, [notify, isFloatOverlay])
 
   const handlePillPointerDown = (e: React.PointerEvent<HTMLDivElement>): void => {
     // Buttons opt out of the draggable region. Capturing their pointer on the
@@ -475,12 +486,15 @@ export default function App() {
   // target app), the trusted main process captures the screen, bridges the
   // screenshot into the ND chat session, and copies it to the clipboard.
   // In 'self' scope there is nothing to switch to, so capture immediately.
-  const startAppInspect = (mode: AppInspectMode = 'full', rect?: AppInspectArea, scopeOverride?: InspectScope): Promise<AppInspectResult | undefined> => {
+  const startAppInspect = (mode: AppInspectMode = 'full', rect?: AppInspectArea, scopeOverride?: InspectScope, delayOverride?: number): Promise<AppInspectResult | undefined> => {
     if (appInspectCountdown !== null || appInspectInFlight) return Promise.resolve(undefined)
     const targetScope = scopeOverride ?? inspectScope
     const selfScope = targetScope === 'self'
-    let remaining = 3
-    if (!selfScope && mode === 'full') setAppInspectCountdown(remaining)
+    // External full captures count down by default so the user can focus the
+    // target app first; a global hotkey may override that to capture at once.
+    const delay = delayOverride ?? 3
+    let remaining = delay
+    if (!selfScope && mode === 'full' && delay > 0) setAppInspectCountdown(remaining)
     const fire = async (): Promise<AppInspectResult> => {
       setAppInspectInFlight(true)
       try {
@@ -509,7 +523,7 @@ export default function App() {
         setAppInspectInFlight(false)
       }
     }
-    if (selfScope || mode !== 'full') {
+    if (selfScope || mode !== 'full' || delay <= 0) {
       return fire()
     }
     return new Promise<AppInspectResult | undefined>((resolve) => {
@@ -537,13 +551,29 @@ export default function App() {
     if (appInspectTimer.current !== undefined) clearInterval(appInspectTimer.current)
   }, [])
 
+  // A pending countdown must be cancellable, like the Snipping Tool's delay.
+  useEffect(() => {
+    if (appInspectCountdown === null) return
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      if (appInspectTimer.current !== undefined) clearInterval(appInspectTimer.current)
+      appInspectTimer.current = undefined
+      setAppInspectCountdown(null)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [appInspectCountdown])
+
   useEffect(() => {
     if (!pendingPick) return
     const timeout = window.setTimeout(() => setPendingPick(null), 7_000)
     return () => window.clearTimeout(timeout)
   }, [pendingPick])
 
-  // Keyboard accelerators for the two inspect entry points.
+  // Keyboard accelerators for the two inspect entry points. Where the OS grab
+  // consumes the key this never fires for a bound capture key; where it does
+  // not (Wayland), the dedupe window keeps one press from firing twice.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (!event.altKey || !event.ctrlKey) return
@@ -551,17 +581,73 @@ export default function App() {
       if (key === 'e') {
         event.preventDefault()
         startElementInspect()
-      } else if (key === 'c') {
+      } else if (key === 'c' || key === 'a') {
+        if (Date.now() - lastGlobalCaptureAt.current < 750) return
         event.preventDefault()
-        startAppInspect('full')
-      } else if (key === 'a') {
-        event.preventDefault()
-        openCaptureOverlay('area')
+        if (key === 'c') startAppInspect('full')
+        else void openCaptureOverlay('area')
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   })
+
+  // Global capture hotkeys arrive from main. The float overlay is the only
+  // frame that can cover the whole screen, so the full window enters float
+  // mode and hands the request on; the overlay frame then runs the capture.
+  const lastGlobalCaptureAt = useRef(0)
+
+  const runGlobalCapture = async (action: GlobalShortcutId): Promise<void> => {
+    // One physical press must never run twice: the ready-handoff and the pull
+    // can both deliver, and some platforms do not consume the global key.
+    if (Date.now() - lastGlobalCaptureAt.current < 750) return
+    lastGlobalCaptureAt.current = Date.now()
+    if (isFloatOverlay) {
+      if (action === 'areaCapture') {
+        // A second press mid-snip must not reset an in-progress selection.
+        if (captureOverlay) return
+        await openCaptureOverlay('area')
+        return
+      }
+      const delayApi = window.ndDsh.window?.captureDelay
+      const configured = delayApi ? await delayApi().catch(() => undefined) : undefined
+      const delay = action === 'delayedCapture' ? configured ?? DEFAULT_CAPTURE_DELAY_SECONDS : 0
+      await startAppInspect('full', undefined, 'external', delay)
+      return
+    }
+    setInspectScope('external')
+    await window.ndDsh.window?.setFloatMode?.(true)
+    const forwarded = await window.ndDsh.window?.forwardCaptureRequest?.(action)
+    if (forwarded && !forwarded.delivered) {
+      notify('The capture overlay could not open. Try again in a moment.')
+    }
+  }
+
+  useEffect(() => {
+    const off = window.ndDsh.window?.onCaptureRequest?.((action) => {
+      void runGlobalCapture(action)
+    })
+    return () => {
+      off?.()
+    }
+  })
+
+  // A request can land while this overlay frame is still booting — in dev the
+  // renderer subscribes after did-finish-load — so main queues it, and this
+  // frame announces readiness on mount to collect whatever is waiting.
+  useEffect(() => {
+    if (!isFloatOverlay) return
+    let mounted = true
+    const bridge = window.ndDsh.window
+    void (async () => {
+      await bridge?.markCaptureReady?.()
+      const queued = await bridge?.pullPendingCapture?.()
+      if (mounted && queued) void runGlobalCapture(queued)
+    })()
+    return () => {
+      mounted = false
+    }
+  }, [isFloatOverlay])
 
   // Element-level inspect: in 'external' scope the picker is injected into
   // an external Electron app over its loopback debug port; in 'self' scope
@@ -1447,7 +1533,9 @@ export default function App() {
       <header
         data-nd-keepalive={headerKeepAlive ? '' : undefined}
         className={cn(
-          'app-drag grid grid-cols-[minmax(180px,1fr)_auto_minmax(180px,1fr)] items-center gap-[18px] border-b border-border-soft bg-titlebar pr-[148px] pl-3',
+          // Left column sizes to content so the keep-alive tabs are not clipped; the right column absorbs the slack
+          // and the nav keeps a content floor so it never shrinks under its buttons.
+          'app-drag grid grid-cols-[minmax(180px,auto)_minmax(min-content,auto)_minmax(180px,1fr)] items-center gap-[18px] border-b border-border-soft bg-titlebar pr-[148px] pl-3',
           headerKeepAlive && 'pointer-events-auto relative z-[60]',
         )}
       >
@@ -1629,7 +1717,7 @@ export default function App() {
             </div>
           ) : null}
         </div>
-        <nav className="app-no-drag flex min-w-0 items-center justify-center" aria-label="ND-DSH navigation">
+        <nav className="app-no-drag flex min-w-0 self-start items-center justify-center pt-[2px]" aria-label="ND-DSH navigation">
           <div className="flex min-w-0 items-center justify-center gap-0.5 rounded-lg border border-border-soft bg-surface-1/70 p-[3px] shadow-[inset_0_1px_0_rgba(255,255,255,0.025),0_4px_14px_rgba(0,0,0,0.12)]">
             {navItems.map((item) => (
               <button

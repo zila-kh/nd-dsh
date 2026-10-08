@@ -9,9 +9,11 @@ import type { OrganizationMutation, OrganizationSnapshot } from '../shared/organ
 import { USAGE_IPC, summarizeUsage, type UsageAttribution, type UsageScope, type UsageSummary } from '../shared/usage.js'
 import { WORKFLOW_PLUGINS_IPC } from '../shared/workflow-plugins.js'
 import { isLauncherHandoffTarget, isQuickLauncherShortcutMode } from '../shared/quick-launcher.js'
+import { isCaptureDelaySeconds, isGlobalShortcutId, type GlobalShortcutId } from '../shared/shortcuts.js'
 import { isWorkspaceProfile } from '../shared/workspace-profile.js'
 import { asNdContext, isNdContext } from '../shared/nd-context.js'
 import type { LauncherPopupController } from './launcher-popup.js'
+import type { ShortcutRegistry } from './shortcut-registry.js'
 import { projectRoot, presetSourceDir } from './app-paths.js'
 import { NdSkillService } from './skills/nd-skill-service.js'
 import { capturePrimaryDisplay, captureSelfWindow } from './capture/app-capture.js'
@@ -61,6 +63,8 @@ interface IpcDependencies {
   preloadPath: string
   /** Frameless quick launcher popup; its renderer is admitted to launcher-only channels. */
   launcherPopup: LauncherPopupController
+  /** OS-wide hotkeys. Validation and rollback live in the registry, not here. */
+  shortcuts: ShortcutRegistry
   browser: BrowserController
   /** Multi-tab browser platform, for extension hosts that manage real browser tabs. */
   browserPlatform?: Pick<BrowserPlatformService, 'createTab' | 'activateTab' | 'closeTab' | 'tabs'>
@@ -335,6 +339,9 @@ export function registerIpc(deps: IpcDependencies): () => void {
       },
     })
     floatWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+    floatWindow.on('closed', () => {
+      floatCaptureReady = false
+    })
     const currentUrl = deps.window.webContents.getURL()
     if (currentUrl) void floatWindow.loadURL(`${currentUrl.split('#')[0]}#/float`)
     return floatWindow
@@ -444,6 +451,55 @@ export function registerIpc(deps: IpcDependencies): () => void {
   handle(IPC.windowQuickLauncherModeSet, (_event, mode: unknown) => {
     if (!isQuickLauncherShortcutMode(mode)) throw new Error(`Unknown quick launcher mode: ${String(mode)}`)
     return deps.theme.setQuickLauncherMode(mode)
+  })
+
+  // Rebindable OS-wide hotkeys. `rebind` throws with the reason a key was
+  // refused — reserved by the OS, or already owned by another app — and leaves
+  // the previous binding live, so the message can be shown to the user as-is.
+  handle(IPC.shortcutsState, () => deps.shortcuts.state())
+  handle(IPC.shortcutsRebind, (_event, id: unknown, accelerator: unknown) => deps.shortcuts.rebind(id, accelerator))
+
+  // The float overlay reads the delay to run a timed capture; only Settings writes it.
+  handleFloatOverlay(IPC.windowCaptureDelay, () => deps.theme.captureDelay())
+  handle(IPC.windowCaptureDelaySet, (_event, seconds: unknown) => {
+    if (!isCaptureDelaySeconds(seconds)) throw new Error(`Unknown capture delay: ${String(seconds)}`)
+    return deps.theme.setCaptureDelay(seconds)
+  })
+
+  // The full window cannot draw over the screen; the float overlay can. Deliver
+  // the capture request there. Guessing whether the overlay frame has booted is
+  // unreliable (isLoading() is false both before loadURL starts and after it
+  // finishes), so the overlay frame announces readiness and pending requests
+  // are handed over at that point.
+  let pendingCapture: GlobalShortcutId | null = null
+  let floatCaptureReady = false
+  handleFloatOverlay(IPC.windowCaptureReady, (event) => {
+    floatCaptureReady = true
+    if (pendingCapture !== null) {
+      const queued = pendingCapture
+      pendingCapture = null
+      event.sender.send(IPC.windowCaptureRequestEvent, queued)
+    }
+    return true
+  })
+  handleFloatOverlay(IPC.windowCapturePull, () => {
+    const action = pendingCapture
+    pendingCapture = null
+    return action
+  })
+  handle(IPC.windowCaptureForward, (_event, action: unknown) => {
+    if (!isGlobalShortcutId(action)) throw new Error(`Unknown capture action: ${String(action)}`)
+    const target = floatWindow
+    if (!target || target.isDestroyed()) {
+      console.warn(`Capture request for ${String(action)} dropped: the capture overlay window is not open`)
+      return { delivered: false }
+    }
+    if (floatCaptureReady && !target.webContents.isLoading()) {
+      target.webContents.send(IPC.windowCaptureRequestEvent, action)
+    } else {
+      pendingCapture = action
+    }
+    return { delivered: true }
   })
 
   // Popup visibility and handoff: the popup renderer hides itself via Escape

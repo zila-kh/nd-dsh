@@ -261,22 +261,28 @@ export class BrowserPlatformService {
   }
 
   async setExtensionEnabled(extensionId: string, enabled: boolean): Promise<BrowserExtensionRecord[]> {
+    const adBlock = this.extensions.list().some(item => item.id === extensionId && item.catalogId === 'nd-ad-block')
     if (!enabled && this.browser.extensionPopupId() === extensionId) this.browser.closeExtensionPopup()
     const records = await this.extensions.setEnabled(extensionId, enabled)
+    if (adBlock) await this.browser.refreshAdBlockPages()
     await this.emit()
     return records
   }
 
   async removeExtension(extensionId: string): Promise<BrowserExtensionRecord[]> {
+    const adBlock = this.extensions.list().some(item => item.id === extensionId && item.catalogId === 'nd-ad-block')
     if (this.browser.extensionPopupId() === extensionId) this.browser.closeExtensionPopup()
     const records = await this.extensions.remove(extensionId)
+    if (adBlock) await this.browser.refreshAdBlockPages()
     await this.emit()
     return records
   }
 
   async reloadExtensions(): Promise<BrowserExtensionRecord[]> {
+    const adBlock = this.extensions.list().some(item => item.catalogId === 'nd-ad-block' && item.enabled)
     this.browser.closeExtensionPopup()
     const records = await this.extensions.reloadAll()
+    if (adBlock) await this.browser.refreshAdBlockPages()
     await this.emit()
     return records
   }
@@ -299,6 +305,7 @@ export class BrowserPlatformService {
 
   async installCatalogExtension(catalogId: string): Promise<BrowserExtensionRecord> {
     const record = await this.extensions.installCatalog(catalogId)
+    if (catalogId === 'nd-ad-block' && record.enabled && !record.error) await this.browser.refreshAdBlockPages()
     await this.emit()
     return record
   }

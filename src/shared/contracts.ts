@@ -1,4 +1,5 @@
 import type { LauncherHandoffTarget, QuickLauncherShortcutMode } from './quick-launcher.js'
+import type { GlobalShortcutId, GlobalShortcutState, CaptureDelaySeconds } from './shortcuts.js'
 import type { NdMediaSessionState } from './media-session.js'
 import type { WorkspaceProfile } from './workspace-profile.js'
 
@@ -811,6 +812,22 @@ export interface DesktopApi {
     toggleLauncherPopup?(): Promise<{ visible: boolean }>
     hideLauncherPopup?(): Promise<void>
     handoffLauncherPopup?(target: LauncherHandoffTarget, text?: string, context?: import('./nd-context.js').NdContext): Promise<void>
+    /** A global capture hotkey fired in main; the renderer runs the matching flow. */
+    onCaptureRequest?(listener: (action: GlobalShortcutId) => void): () => void
+    /** Full window asks main to deliver a capture request to the float overlay. */
+    forwardCaptureRequest?(action: GlobalShortcutId): Promise<{ delivered: boolean }>
+    /** Overlay frame collects a capture request queued while it was still loading. */
+    pullPendingCapture?(): Promise<GlobalShortcutId | null>
+    /** Overlay frame announces it can receive capture requests. */
+    markCaptureReady?(): Promise<boolean>
+    captureDelay?(): Promise<CaptureDelaySeconds>
+    setCaptureDelay?(seconds: CaptureDelaySeconds): Promise<CaptureDelaySeconds>
+  }
+  /** OS-wide hotkeys. Rebinding is validated in main against keys the operating system reserves. */
+  shortcuts?: {
+    state(): Promise<GlobalShortcutState>
+    /** Pass null to restore the shipped default for that action. */
+    rebind(id: GlobalShortcutId, accelerator: string | null): Promise<GlobalShortcutState>
   }
 }
 
@@ -875,6 +892,14 @@ export const IPC = {
   surfaceChangedEvent: 'surface:changed',
   workspaceProfileGet: 'workspace-profile:get',
   workspaceProfileSet: 'workspace-profile:set',
+  shortcutsState: 'shortcuts:state',
+  shortcutsRebind: 'shortcuts:rebind',
+  windowCaptureRequestEvent: 'window:capture-request',
+  windowCaptureForward: 'window:capture-forward',
+  windowCaptureReady: 'window:capture-ready',
+  windowCapturePull: 'window:capture-pull',
+  windowCaptureDelay: 'window:capture-delay',
+  windowCaptureDelaySet: 'window:capture-delay:set',
   dshViewSetBounds: 'dsh-view:set-bounds',
   dshViewSetVisible: 'dsh-view:set-visible',
   dshViewReload: 'dsh-view:reload',

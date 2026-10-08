@@ -1,5 +1,5 @@
 import 'dotenv/config'
-import { app, BrowserWindow, crashReporter, dialog, globalShortcut, Menu, protocol, screen, type MenuItemConstructorOptions } from 'electron'
+import { app, BrowserWindow, crashReporter, dialog, Menu, protocol, screen, type MenuItemConstructorOptions } from 'electron'
 import { createServer } from 'node:net'
 import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
@@ -13,6 +13,7 @@ import { ORGANIZATION_IPC, type OrganizationSnapshot } from '../shared/organizat
 import { throttleLatest } from './latest-value-throttle.js'
 import { TERMINAL_IPC } from '../shared/terminal.js'
 import { resolveShortcutBehavior } from '../shared/quick-launcher.js'
+import type { GlobalShortcutId } from '../shared/shortcuts.js'
 import { bundledResourceRoot, codexBinPath, presetSourceDir, projectRoot } from './app-paths.js'
 
 import { BrowserController } from './browser/browser-controller.js'
@@ -58,6 +59,7 @@ import { GitCli } from './git/git-cli.js'
 import { HarnessService } from './harness/harness-service.js'
 import { registerIpc } from './ipc.js'
 import { createLauncherPopup } from './launcher-popup.js'
+import { ShortcutRegistry } from './shortcut-registry.js'
 import { setTaskMetricsRecorder, taskMetricsRecorder, TaskMetricsRecorder } from './metrics/task-metrics.js'
 import { OrganizationApprovalGate } from './organization/approval-gate.js'
 import { createDecisionSupportFromEnv } from './organization/decision-support-config.js'
@@ -183,6 +185,27 @@ function showQuickLauncher(): void {
   }
   showMainWindowAndOpenLauncher()
 }
+
+/**
+ * Ask the primary renderer to run a capture flow. The window is deliberately
+ * left alone: raising ND here would put ND itself into the screenshot.
+ */
+function requestCapture(action: GlobalShortcutId): void {
+  const window = mainWindow
+  if (!window || window.isDestroyed()) return
+  window.webContents.send(IPC.windowCaptureRequestEvent, action)
+}
+
+/** Owns every OS-wide hotkey; bindings come from the user's persisted settings. */
+const shortcutRegistry = new ShortcutRegistry({
+  store: theme,
+  handlers: {
+    quickLauncher: showQuickLauncher,
+    areaCapture: () => requestCapture('areaCapture'),
+    fullCapture: () => requestCapture('fullCapture'),
+    delayedCapture: () => requestCapture('delayedCapture'),
+  },
+})
 
 app.on('second-instance', () => {
   showMainWindowAndOpenLauncher()
@@ -465,7 +488,7 @@ async function createWindow(cdpPort: number): Promise<void> {
   const coreClipboard = createCoreClipboard(core)
   const coreMediaKeys = createCoreMediaKeys(core)
   const coreVault = createCoreVault(core)
-  const disposeIpc = registerIpc({ window, preloadPath: preload, launcherPopup, browser, browserPlatform, dshSurface, engines, engineRouter, nativeToolBroker: nativeBroker, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, coreGit: coreGit.exec.bind(coreGit), coreMedia, coreClipboard, coreMediaKeys, coreVault, qa, sessionArchive, usageLedger, capabilities, organizationStore })
+  const disposeIpc = registerIpc({ window, preloadPath: preload, launcherPopup, shortcuts: shortcutRegistry, browser, browserPlatform, dshSurface, engines, engineRouter, nativeToolBroker: nativeBroker, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, coreGit: coreGit.exec.bind(coreGit), coreMedia, coreClipboard, coreMediaKeys, coreVault, qa, sessionArchive, usageLedger, capabilities, organizationStore })
   if (nativeAgent.ready()) void nativeAgent.start().catch((error) => {
     console.warn('ND Agent private runtime could not initialize:', error instanceof Error ? error.message : String(error))
   })
@@ -663,6 +686,10 @@ async function createWindow(cdpPort: number): Promise<void> {
   if (rendererUrl) await window.loadURL(rendererUrl)
   else await window.loadFile(rendererFile)
   markStartup('renderer-loaded')
+  // Hotkeys go live as soon as the window exists. createWindow still runs a long
+  // benchmark tail afterwards, and a launcher key that only works once startup
+  // benchmarks finish is a key that appears broken.
+  shortcutRegistry.sync()
 
   await browser.initialize(startUrl).catch((error) => {
     console.warn('Initial browser navigation failed:', error)
@@ -872,10 +899,6 @@ if (hasSingleInstanceLock) {
     await app.whenReady()
     markStartup('app-ready')
     await createWindow(cdpPort)
-    const quickLauncherRegistered = globalShortcut.register('CommandOrControl+Shift+Space', showQuickLauncher)
-    if (!quickLauncherRegistered) {
-      console.warn('ND Quick Launcher global shortcut is unavailable: CommandOrControl+Shift+Space')
-    }
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) void createWindow(cdpPort).catch(reportFatalStartupError)
     })
@@ -883,7 +906,7 @@ if (hasSingleInstanceLock) {
 }
 
 app.on('will-quit', () => {
-  globalShortcut.unregisterAll()
+  shortcutRegistry.dispose()
 })
 
 app.on('before-quit', (event) => {

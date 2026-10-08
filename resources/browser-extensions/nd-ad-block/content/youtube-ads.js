@@ -14,11 +14,10 @@
 (() => {
   'use strict'
 
-  if (window.__ndAdBlockInstalled) return
-  window.__ndAdBlockInstalled = true
-
   const host = location.hostname
   if (!/(^|\.)youtube(-nocookie)?\.com$/.test(host)) return
+  if (window.__ndAdBlockInstalled) return
+  window.__ndAdBlockInstalled = true
 
   // Fields that carry ad placements the player would otherwise schedule.
   const AD_KEYS = [
@@ -45,11 +44,16 @@
 
   // Responses whose bodies are worth pruning.
   const API_PATHS = [
+    // Watch-to-watch SPA navigation now combines player and next data here.
+    // Missing this endpoint lets pre-roll/mid-roll placements reach the player
+    // even when a direct page load is clean.
+    '/youtubei/v1/get_watch',
     '/youtubei/v1/player',
     '/youtubei/v1/next',
     '/youtubei/v1/browse',
     '/youtubei/v1/search',
     '/youtubei/v1/reel/reel_watch_sequence',
+    '/youtubei/v1/reel/reel_item_watch',
   ]
 
   const NODE_BUDGET = 40_000
@@ -70,22 +74,30 @@
    */
   const prune = (root) => {
     if (!root || typeof root !== 'object') return root
-    const queue = [root]
-    let visited = 0
-    while (queue.length > 0) {
-      if (visited++ > NODE_BUDGET) break
-      const node = queue.pop()
-      if (!node || typeof node !== 'object') continue
+    const queue = []
+    const seen = new WeakSet()
+    const enqueue = (node) => {
+      if (!node || typeof node !== 'object' || seen.has(node) || queue.length >= NODE_BUDGET) return
+      seen.add(node)
+      queue.push(node)
+    }
+    enqueue(root)
+    // Visit nearby player data before deeply nested recommendations. A large
+    // feed must not consume the budget before the sibling player is cleaned.
+    for (let cursor = 0; cursor < queue.length; cursor += 1) {
+      const node = queue[cursor]
       if (Array.isArray(node)) {
-        for (let index = node.length - 1; index >= 0; index -= 1) {
+        let retained = 0
+        for (let index = 0; index < node.length; index += 1) {
           const item = node[index]
           if (item && typeof item === 'object' && isPromoted(item)) {
-            node.splice(index, 1)
             count(1)
             continue
           }
-          queue.push(item)
+          node[retained++] = item
+          enqueue(item)
         }
+        node.length = retained
         continue
       }
       for (const key of AD_KEYS) {
@@ -96,7 +108,7 @@
           if (size > 0) count(size)
         }
       }
-      for (const key of Object.keys(node)) queue.push(node[key])
+      for (const key of Object.keys(node)) enqueue(node[key])
     }
     return root
   }
@@ -109,11 +121,14 @@
   }
 
   const matchesApi = (url) => {
-    if (typeof url !== 'string' || url.length === 0) return false
-    for (const path of API_PATHS) {
-      if (url.includes(path)) return true
+    try {
+      const parsed = new URL(url, location.href)
+      return /^https?:$/.test(parsed.protocol)
+        && /(^|\.)youtube(-nocookie)?\.com$/.test(parsed.hostname)
+        && API_PATHS.includes(parsed.pathname)
+    } catch {
+      return false
     }
-    return false
   }
 
   const pruneJsonText = (text) => {
@@ -125,7 +140,7 @@
       return undefined
     }
     const before = pruned
-    prune(parsed)
+    try { prune(parsed) } catch { return undefined }
     if (pruned === before) return undefined
     try {
       return JSON.stringify(parsed)
@@ -138,6 +153,7 @@
   for (const globalKey of ['ytInitialPlayerResponse', 'ytInitialData']) {
     let value
     try {
+      value = window[globalKey]
       delete window[globalKey]
       Object.defineProperty(window, globalKey, {
         configurable: true,
@@ -145,10 +161,11 @@
           return value
         },
         set(next) {
-          value = prune(next)
+          value = next
+          try { prune(value) } catch { /* Frozen data must still reach the player. */ }
         },
       })
-      if (window[globalKey]) value = prune(window[globalKey])
+      try { prune(value) } catch { /* Keep existing data if it cannot be edited. */ }
     } catch {
       // Non-configurable global: the fetch/XHR hooks still cover player data.
     }
@@ -159,7 +176,7 @@
     const nativeFetch = window.fetch
     if (typeof nativeFetch === 'function') {
       window.fetch = function (input, init) {
-        const url = typeof input === 'string' ? input : input && input.url
+        const url = typeof input === 'string' ? input : input && (input.url || input.href)
         const result = nativeFetch.call(this, input, init)
         if (!matchesApi(url)) return result
         return result.then((response) => {
@@ -168,11 +185,24 @@
             return clone.text().then((text) => {
               const pruned = pruneJsonText(text)
               if (pruned === undefined) return response
-              return new Response(pruned, {
+              const headers = new Headers(response.headers)
+              headers.delete('content-length')
+              headers.delete('content-encoding')
+              const cleaned = new Response(pruned, {
                 status: response.status,
                 statusText: response.statusText,
-                headers: response.headers,
+                headers,
               })
+              // Reconstructed bodies otherwise lose these fetch semantics.
+              const withMetadata = (body) => {
+                for (const name of ['url', 'redirected', 'type']) {
+                  Object.defineProperty(body, name, { value: response[name] })
+                }
+                const nativeClone = body.clone.bind(body)
+                body.clone = () => withMetadata(nativeClone())
+                return body
+              }
+              return withMetadata(cleaned)
             }).catch(() => response)
           } catch {
             return response
@@ -188,13 +218,11 @@
   try {
     const proto = XMLHttpRequest.prototype
     const nativeOpen = proto.open
+    const states = new WeakMap()
     proto.open = function (method, url, ...rest) {
-      try {
-        this.__ndAdUrl = typeof url === 'string' ? url : undefined
-      } catch {
-        // Ignore: the URL is only used to decide whether to prune.
-      }
-      return nativeOpen.call(this, method, url, ...rest)
+      const result = nativeOpen.call(this, method, url, ...rest)
+      states.set(this, { url, cache: new Map() })
+      return result
     }
 
     // Pruning happens on read, not on a readyState event. Pages normally set
@@ -203,7 +231,7 @@
     // payload, and the raw ad placements would reach the player.
     const clean = (xhr, raw) => {
       if (raw === null || raw === undefined || raw === '') return raw
-      if (!matchesApi(xhr.__ndAdUrl)) return raw
+      if (!matchesApi(states.get(xhr)?.url)) return raw
       if (typeof raw === 'string') {
         const pruned = pruneJsonText(raw)
         return pruned === undefined ? raw : pruned
@@ -225,10 +253,11 @@
           const value = descriptor.get.call(this)
           try {
             // Repeated reads of the same payload reuse the first result.
-            if (this.__ndAdRaw === value && this.__ndAdClean !== undefined) return this.__ndAdClean
+            const state = states.get(this)
+            const cached = state?.cache.get(name)
+            if (cached && cached.raw === value) return cached.cleaned
             const cleaned = clean(this, value)
-            this.__ndAdRaw = value
-            this.__ndAdClean = cleaned
+            state?.cache.set(name, { raw: value, cleaned })
             return cleaned
           } catch {
             return value
@@ -250,19 +279,21 @@
     '.ytp-ad-skip-button-modern',
     '.ytp-skip-ad-button__text',
     '.ytp-ad-skip-button-container button',
+    'button[id^="skip-button:"]',
   ]
 
   // The player's own playback state, so an ad can be rushed and silenced
   // without permanently changing how the user's video plays.
   let savedMuted
   let savedRate
+  let savedVideo
   // Per ad break: what we already counted and which button we already pressed,
   // so repeated ticks cannot inflate the popup's total.
   let adBreakCounted = false
   let clickedSkip
 
   const currentVideo = () =>
-    document.querySelector('video.html5-main-video') || document.querySelector('video')
+    player()?.querySelector('video.html5-main-video, video')
 
   const player = () => document.querySelector('#movie_player, .html5-video-player')
 
@@ -282,7 +313,12 @@
       }
       const video = currentVideo()
       if (video) {
+        if (savedVideo && savedVideo !== video) {
+          restorePlayback()
+          adBreakCounted = true
+        }
         if (savedMuted === undefined) {
+          savedVideo = video
           savedMuted = video.muted
           savedRate = video.playbackRate
         }
@@ -305,8 +341,8 @@
         if (video.paused) video.play().catch(() => undefined)
       }
       for (const selector of SKIP_SELECTORS) {
-        const button = document.querySelector(selector)
-        if (button && button !== clickedSkip && typeof button.click === 'function') {
+        const button = player()?.querySelector(selector)
+        if (button && button.getClientRects().length > 0 && button !== clickedSkip && typeof button.click === 'function') {
           clickedSkip = button
           button.click()
           break
@@ -324,7 +360,7 @@
     adBreakCounted = false
     clickedSkip = undefined
     if (savedMuted === undefined) return
-    const video = currentVideo()
+    const video = savedVideo
     try {
       if (video) {
         video.muted = savedMuted
@@ -335,6 +371,7 @@
     }
     savedMuted = undefined
     savedRate = undefined
+    savedVideo = undefined
   }
 
   const tick = () => {

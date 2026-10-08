@@ -21,6 +21,7 @@ import {
 import type { BrowserBounds, BrowserState, UiAnnotation, UiTarget } from '../../shared/contracts.js'
 import type { NdMediaSessionState } from '../../shared/media-session.js'
 import { AgentBrowserClient } from './agent-browser-client.js'
+import { refreshAdBlockPage } from './ad-block-page-refresh.js'
 import { BrowserDownloadManager, type BrowserDownloadAuthorizationRequest } from './browser-download-manager.js'
 import { BrowserHistoryStore } from './browser-history-store.js'
 import { BrowserPermissionStore } from './browser-permission-store.js'
@@ -159,6 +160,10 @@ export class BrowserController {
 
   browserSession(): Session {
     return this.browserSessionValue
+  }
+
+  async refreshAdBlockPages(): Promise<void> {
+    await Promise.all([...this.tabs.values()].map(tab => refreshAdBlockPage(tab.view.webContents)))
   }
 
   profileId(): string {

@@ -194,6 +194,16 @@ const api: DesktopApi = {
     toggleLauncherPopup: () => ipcRenderer.invoke(IPC.windowToggleLauncherPopup),
     hideLauncherPopup: () => ipcRenderer.invoke(IPC.windowHideLauncherPopup),
     handoffLauncherPopup: (target, text, context) => ipcRenderer.invoke(IPC.windowLauncherHandoff, target, text, context),
+    onCaptureRequest: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, action: Parameters<typeof listener>[0]) => listener(action)
+      ipcRenderer.on(IPC.windowCaptureRequestEvent, handler)
+      return () => ipcRenderer.removeListener(IPC.windowCaptureRequestEvent, handler)
+    },
+    captureDelay: () => ipcRenderer.invoke(IPC.windowCaptureDelay),
+    setCaptureDelay: (seconds) => ipcRenderer.invoke(IPC.windowCaptureDelaySet, seconds),
+    forwardCaptureRequest: (action) => ipcRenderer.invoke(IPC.windowCaptureForward, action),
+    pullPendingCapture: () => ipcRenderer.invoke(IPC.windowCapturePull),
+    markCaptureReady: () => ipcRenderer.invoke(IPC.windowCaptureReady),
   },
   media: {
     state: () => ipcRenderer.invoke(IPC.mediaState),
@@ -205,6 +215,10 @@ const api: DesktopApi = {
     playPause: () => ipcRenderer.invoke(IPC.mediaPlayPause),
     next: () => ipcRenderer.invoke(IPC.mediaNext),
     previous: () => ipcRenderer.invoke(IPC.mediaPrevious),
+  },
+  shortcuts: {
+    state: () => ipcRenderer.invoke(IPC.shortcutsState),
+    rebind: (id, accelerator) => ipcRenderer.invoke(IPC.shortcutsRebind, id, accelerator),
   },
   providers: {
     list: () => ipcRenderer.invoke(IPC.providersList),
