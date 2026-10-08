@@ -195,6 +195,17 @@ const api: DesktopApi = {
     hideLauncherPopup: () => ipcRenderer.invoke(IPC.windowHideLauncherPopup),
     handoffLauncherPopup: (target, text, context) => ipcRenderer.invoke(IPC.windowLauncherHandoff, target, text, context),
   },
+  media: {
+    state: () => ipcRenderer.invoke(IPC.mediaState),
+    onState: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: Parameters<typeof listener>[0]) => listener(state)
+      ipcRenderer.on(IPC.mediaStateEvent, handler)
+      return () => ipcRenderer.removeListener(IPC.mediaStateEvent, handler)
+    },
+    playPause: () => ipcRenderer.invoke(IPC.mediaPlayPause),
+    next: () => ipcRenderer.invoke(IPC.mediaNext),
+    previous: () => ipcRenderer.invoke(IPC.mediaPrevious),
+  },
   providers: {
     list: () => ipcRenderer.invoke(IPC.providersList),
     save: (providers) => ipcRenderer.invoke(IPC.providersSave, providers),

@@ -585,6 +585,10 @@ fn dispatch(
             let params = from_params::<media::WallpaperSetParams>(params)?;
             to_value(media::set_wallpaper(params)?)
         }
+        "media.key" => {
+            let params = from_params::<media::MediaKeyParams>(params)?;
+            to_value(media::send_media_key(params)?)
+        }
         // The sidecar owns clipboard read, write, and observation in one
         // process, which is what makes write-back echo suppression exact.
         // Watchers exist only in response to `clipboard.watch` from the

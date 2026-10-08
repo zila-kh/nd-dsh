@@ -389,6 +389,53 @@ fn apply_wallpaper(_target: &Path) -> Result<()> {
     bail!("media.set-wallpaper is implemented for Windows only; use the platform adapter")
 }
 
+/// One OS media transport key: `play-pause`, `next`, or `previous`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaKeyParams {
+    pub key: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaKeyResult {
+    pub sent: bool,
+}
+
+/// Synthesize one OS media transport key.
+///
+/// ND's quick launcher transport row presses the page's own buttons first;
+/// this is the fallback for pages with nothing to press and for media playing
+/// outside ND, which is exactly the session the OS media keys already target.
+pub fn send_media_key(params: MediaKeyParams) -> Result<MediaKeyResult> {
+    let vk = match params.key.as_str() {
+        "play-pause" => 0xB3u32,
+        "next" => 0xB0u32,
+        "previous" => 0xB1u32,
+        other => bail!("unknown media key: {other}"),
+    };
+    press_media_key(vk)?;
+    Ok(MediaKeyResult { sent: true })
+}
+
+#[cfg(windows)]
+fn press_media_key(vk: u32) -> Result<()> {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        keybd_event, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP,
+    };
+    // Media keys are extended keys; receivers ignore the press without the flag.
+    unsafe {
+        keybd_event(vk as u8, 0, KEYEVENTF_EXTENDEDKEY, 0);
+        keybd_event(vk as u8, 0, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, 0);
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn press_media_key(_vk: u32) -> Result<()> {
+    bail!("media.key is implemented for Windows only")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

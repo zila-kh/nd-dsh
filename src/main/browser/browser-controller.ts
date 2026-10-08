@@ -19,11 +19,13 @@ import {
   type BrowserTabDescriptor,
 } from '../../shared/browser-platform.js'
 import type { BrowserBounds, BrowserState, UiAnnotation, UiTarget } from '../../shared/contracts.js'
+import type { NdMediaSessionState } from '../../shared/media-session.js'
 import { AgentBrowserClient } from './agent-browser-client.js'
 import { BrowserDownloadManager, type BrowserDownloadAuthorizationRequest } from './browser-download-manager.js'
 import { BrowserHistoryStore } from './browser-history-store.js'
 import { BrowserPermissionStore } from './browser-permission-store.js'
 import { DEFAULT_BROWSER_URL, isAllowedBrowserUrl, normalizeBrowserUrl, sanitizeBrowserUserAgent } from './browser-url.js'
+import { BrowserMediaTracker } from './media-session-tracker.js'
 import { UiAnnotator, type UiAnnotationImage } from './ui-annotator.js'
 import { UiInspector } from './ui-inspector.js'
 import { translatePageReadScript } from './translate-page-reader.js'
@@ -36,6 +38,8 @@ export interface BrowserControllerOptions {
   reservedOrigin?: () => string | undefined
   dataPath?: string
   extensionRuntimePreload?: string
+  /** Now-playing changes across tabs, for the quick launcher transport row. */
+  onMediaState?: (state: NdMediaSessionState | null) => void
 }
 
 const EXTENSION_RUNTIME_PRELOAD_ID = 'nd-extension-runtime'
@@ -93,6 +97,7 @@ export class BrowserController {
   private readonly historyStore: BrowserHistoryStore
   private readonly permissionStore: BrowserPermissionStore
   private readonly downloads: BrowserDownloadManager
+  private readonly mediaTracker: BrowserMediaTracker
   private readonly reservedOrigin: (() => string | undefined) | undefined
   private readonly extensionRuntimePreload: string | undefined
   private extensionPopup: BrowserExtensionPopupRuntime | undefined
@@ -115,6 +120,7 @@ export class BrowserController {
   ) {
     this.reservedOrigin = options.reservedOrigin
     this.extensionRuntimePreload = options.extensionRuntimePreload
+    this.mediaTracker = new BrowserMediaTracker(options.onMediaState ?? (() => undefined))
     this.browserSessionValue = session.fromPartition(BROWSER_PARTITION)
     claimExtensionPopupContext(this)
     if (this.extensionRuntimePreload
@@ -157,6 +163,11 @@ export class BrowserController {
 
   profileId(): string {
     return BUILTIN_BROWSER_PROFILE_ID
+  }
+
+  /** Now-playing tracking and the OS-style transport over playing tabs. */
+  media(): BrowserMediaTracker {
+    return this.mediaTracker
   }
 
   activeTabId(): string {
@@ -863,6 +874,7 @@ export class BrowserController {
       },
     })
     this.installListeners(tab)
+    this.mediaTracker.attach(tab.id, view.webContents)
     return tab
   }
 

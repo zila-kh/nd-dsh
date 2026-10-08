@@ -1,4 +1,4 @@
-import { Fragment, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useState, type ReactNode } from 'react'
 import {
   Building2,
   Camera,
@@ -8,10 +8,16 @@ import {
   ListTodo,
   MessageSquare,
   MonitorUp,
+  Music2,
+  Pause,
+  Play,
   Puzzle,
+  SkipBack,
+  SkipForward,
   StickyNote,
 } from 'lucide-react'
 import type { OrganizationSnapshot } from '../../../shared/organization'
+import type { NdMediaSessionState } from '../../../shared/media-session'
 import type { NdCommandView } from '../../../shared/nd-invocations'
 import type { ContextOption } from '../lib/nd-context-model'
 import { cn } from '@renderer/lib/utils'
@@ -101,6 +107,7 @@ export function QuickLauncher({
   onCaptureUrl,
 }: Props) {
   const [query, setQuery] = useState('')
+  const [media, setMedia] = useState<NdMediaSessionState | null>(null)
   const companies = organization?.companies ?? []
   const projects = organization?.projects ?? []
   const activeCompany = companies.find((item) => item.id === organization?.activeCompanyId) ?? companies[0]
@@ -130,6 +137,20 @@ export function QuickLauncher({
     },
   })
   const groups = launcherCommandGroups(commands)
+
+  // The transport row mirrors whatever the embedded browser is playing; main
+  // pushes changes, so pausing from the page updates the row too.
+  useEffect(() => {
+    let mounted = true
+    void window.ndDsh.media?.state()
+      .then((next) => { if (mounted) setMedia(next) })
+      .catch(() => undefined)
+    const off = window.ndDsh.media?.onState((next) => { if (mounted) setMedia(next) })
+    return () => {
+      mounted = false
+      off?.()
+    }
+  }, [])
 
   const closeAndRun = (command: LauncherCommandItem): void => {
     if (command.closeOnRun === false) {
@@ -200,6 +221,53 @@ export function QuickLauncher({
           </Fragment>
         ))}
       </CommandList>
+
+      {media ? (
+        <div className="flex items-center gap-2 border-t border-border-soft px-3 py-2">
+          {media.artworkUrl ? (
+            <img src={media.artworkUrl} alt="" className="size-8 shrink-0 rounded-md object-cover" />
+          ) : (
+            <span className="grid size-8 shrink-0 place-items-center rounded-md border border-primary/30 bg-primary/10 text-primary">
+              <Music2 className="size-4" />
+            </span>
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-xs font-medium text-strong">{media.title}</div>
+            <div className="truncate text-[10px] text-faint">
+              {media.artist ? `${media.artist} · ` : ''}{media.site || 'media'}
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            <button
+              type="button"
+              aria-label="Previous track"
+              title="Previous track"
+              onClick={() => void window.ndDsh.media?.previous()}
+              className="rounded-md p-1.5 text-faint transition-colors hover:bg-surface-2 hover:text-strong"
+            >
+              <SkipBack className="size-4" />
+            </button>
+            <button
+              type="button"
+              aria-label={media.playing ? 'Pause' : 'Play'}
+              title={media.playing ? 'Pause' : 'Play'}
+              onClick={() => void window.ndDsh.media?.playPause()}
+              className="rounded-md p-1.5 text-strong transition-colors hover:bg-surface-2"
+            >
+              {media.playing ? <Pause className="size-4" /> : <Play className="size-4" />}
+            </button>
+            <button
+              type="button"
+              aria-label="Next track"
+              title="Next track"
+              onClick={() => void window.ndDsh.media?.next()}
+              className="rounded-md p-1.5 text-faint transition-colors hover:bg-surface-2 hover:text-strong"
+            >
+              <SkipForward className="size-4" />
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <div className="flex items-center justify-between gap-3 border-t border-border-soft px-3 py-2 text-[10px] text-faint">
         <span className="truncate">

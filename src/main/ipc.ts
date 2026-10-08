@@ -41,6 +41,8 @@ import type { GitService } from './git/git-service.js'
 import type { GitExecRunner } from './git/git-cli.js'
 import type { CoreMedia } from './core/core-media.js'
 import type { CoreClipboard } from './core/core-clipboard.js'
+import type { CoreMediaKeys } from './core/core-media-keys.js'
+import type { NdMediaKeyKind } from '../shared/media-session.js'
 import type { CoreVault } from './core/core-vault.js'
 import type { HarnessService } from './harness/harness-service.js'
 import type { ProviderStore } from './providers.js'
@@ -81,6 +83,8 @@ interface IpcDependencies {
   coreMedia?: CoreMedia
   /** nd-core-backed clipboard read/write/watcher surface for extensions. */
   coreClipboard?: CoreClipboard
+  /** nd-core-backed OS media transport keys, the launcher transport fallback. */
+  coreMediaKeys?: CoreMediaKeys
   /** nd-core-backed encrypted local password vault for extensions. */
   coreVault?: CoreVault
   qa: QaService
@@ -460,6 +464,27 @@ export function registerIpc(deps: IpcDependencies): () => void {
       typeof text === 'string' ? text : undefined,
       isNdContext(context) ? asNdContext(context) : undefined,
     )
+  })
+
+  // OS-style media transport: the row drives the tab ND is playing; when the
+  // page offers no button of its own to press, the OS media key takes over,
+  // which also reaches media playing outside ND like the OS flyout does.
+  const sendMediaKey = async (key: NdMediaKeyKind): Promise<void> => {
+    await deps.coreMediaKeys?.sendKey(key).catch(() => false)
+  }
+  handleLauncherSurface(IPC.mediaState, () => deps.browser.media().state())
+  handleLauncherSurface(IPC.mediaPlayPause, async () => {
+    const result = await deps.browser.media().playPause()
+    if (result === 'none') await sendMediaKey('play-pause')
+    return { ok: true }
+  })
+  handleLauncherSurface(IPC.mediaNext, async () => {
+    if (!(await deps.browser.media().skip('next'))) await sendMediaKey('next')
+    return { ok: true }
+  })
+  handleLauncherSurface(IPC.mediaPrevious, async () => {
+    if (!(await deps.browser.media().skip('previous'))) await sendMediaKey('previous')
+    return { ok: true }
   })
 
   handle(IPC.enginesList, () => deps.engines.list())

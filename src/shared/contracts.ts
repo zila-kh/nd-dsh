@@ -1,4 +1,5 @@
 import type { LauncherHandoffTarget, QuickLauncherShortcutMode } from './quick-launcher.js'
+import type { NdMediaSessionState } from './media-session.js'
 import type { WorkspaceProfile } from './workspace-profile.js'
 
 export interface BrowserBounds {
@@ -789,6 +790,14 @@ export interface DesktopApi {
     setProjectBinding(workspaceRoot: string, input: string): Promise<ChatGptProjectBinding>
     clearProjectBinding(workspaceRoot: string): Promise<void>
   }
+  /** OS-style media transport over whatever the embedded browser is playing. */
+  media?: {
+    state(): Promise<NdMediaSessionState | null>
+    onState(listener: (state: NdMediaSessionState | null) => void): () => void
+    playPause(): Promise<{ ok: boolean }>
+    next(): Promise<{ ok: boolean }>
+    previous(): Promise<{ ok: boolean }>
+  }
   window?: {
     setFloatMode(enabled: boolean): Promise<{ float: boolean }>
     resizeFloatWindow(width: number, height: number): Promise<void>
@@ -834,6 +843,11 @@ export const IPC = {
   browserClearAnnotation: 'browser:clear-annotation',
   browserOpenExternal: 'browser:open-external',
   browserStateEvent: 'browser:state-event',
+  mediaState: 'media:state',
+  mediaStateEvent: 'media:state-event',
+  mediaPlayPause: 'media:play-pause',
+  mediaNext: 'media:next',
+  mediaPrevious: 'media:previous',
   workspaceState: 'workspace:state',
   workspacePick: 'workspace:pick',
   workspacePickPath: 'workspace:pick-path',

@@ -34,6 +34,7 @@ import { createCorePtySpawner } from './core/core-pty.js'
 import { CoreSessionJournalStore } from './core/core-session-journal.js'
 import { createCoreMedia } from './core/core-media.js'
 import { createCoreClipboard } from './core/core-clipboard.js'
+import { createCoreMediaKeys } from './core/core-media-keys.js'
 import { createCoreVault } from './core/core-vault.js'
 import { createCoreWorkspaceFileSystem } from './core/core-workspace.js'
 import { createCoreWorktreeGit } from './core/core-worktree-git.js'
@@ -281,6 +282,11 @@ async function createWindow(cdpPort: number): Promise<void> {
     reservedOrigin,
     dataPath: userData,
     extensionRuntimePreload: join(currentDirectory, '../preload/extension-runtime.cjs'),
+    onMediaState: (state) => {
+      if (!window.isDestroyed()) window.webContents.send(IPC.mediaStateEvent, state)
+      const popup = launcherPopup.window()
+      if (popup && !popup.isDestroyed()) popup.webContents.send(IPC.mediaStateEvent, state)
+    },
   })
   activeBrowser = browser
   const browserCompanion = new BrowserCompanionService({
@@ -457,8 +463,9 @@ async function createWindow(cdpPort: number): Promise<void> {
   const coreGit = new GitCli({ core })
   const coreMedia = createCoreMedia(core)
   const coreClipboard = createCoreClipboard(core)
+  const coreMediaKeys = createCoreMediaKeys(core)
   const coreVault = createCoreVault(core)
-  const disposeIpc = registerIpc({ window, preloadPath: preload, launcherPopup, browser, browserPlatform, dshSurface, engines, engineRouter, nativeToolBroker: nativeBroker, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, coreGit: coreGit.exec.bind(coreGit), coreMedia, coreClipboard, coreVault, qa, sessionArchive, usageLedger, capabilities, organizationStore })
+  const disposeIpc = registerIpc({ window, preloadPath: preload, launcherPopup, browser, browserPlatform, dshSurface, engines, engineRouter, nativeToolBroker: nativeBroker, harness, projectWorkspace, workspaces, theme, providers, externalElements, recentPicks, git, coreGit: coreGit.exec.bind(coreGit), coreMedia, coreClipboard, coreMediaKeys, coreVault, qa, sessionArchive, usageLedger, capabilities, organizationStore })
   if (nativeAgent.ready()) void nativeAgent.start().catch((error) => {
     console.warn('ND Agent private runtime could not initialize:', error instanceof Error ? error.message : String(error))
   })
