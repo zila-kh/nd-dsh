@@ -487,6 +487,21 @@ export function registerIpc(deps: IpcDependencies): () => void {
     pendingCapture = null
     return action
   })
+  // The overlay frame captures but the composer lives in the full window, so
+  // the finished attachment is relayed through main after strict validation.
+  handleFloatOverlay(IPC.windowCaptureAttach, (_event, shot: unknown) => {
+    const value = (shot ?? {}) as { id?: unknown; dataUrl?: unknown }
+    if (
+      typeof value.id !== 'string' || value.id.length === 0 || value.id.length > 64
+      || typeof value.dataUrl !== 'string' || value.dataUrl.length > 40_000_000
+      || !value.dataUrl.startsWith('data:image/png;base64,')
+    ) {
+      throw new Error('Malformed capture attachment')
+    }
+    if (deps.window.isDestroyed()) return false
+    deps.window.webContents.send(IPC.windowCaptureAttachEvent, { id: value.id, dataUrl: value.dataUrl })
+    return true
+  })
   handle(IPC.windowCaptureForward, (_event, action: unknown) => {
     if (!isGlobalShortcutId(action)) throw new Error(`Unknown capture action: ${String(action)}`)
     const target = floatWindow
@@ -705,6 +720,21 @@ export function registerIpc(deps: IpcDependencies): () => void {
     }
   }
   handleFloatOverlay(IPC.captureInspectApp, inspectApp)
+
+  // Capture for the chat composer: identical pixels to inspect, but instead of
+  // bridging into the session the bytes return to the trusted renderer so the
+  // capture can wait in the composer as an unsent attachment.
+  const captureForComposer = async (_event: IpcMainInvokeEvent, scope: unknown, rawOptions?: unknown) => {
+    const inspectScope = asInspectScope(scope)
+    const options = asInspectOptions(rawOptions)
+    const mode = options?.mode ?? 'full'
+    const capture = inspectScope === 'self'
+      ? await captureSelfWindow(deps.window, options?.rect)
+      : await capturePrimaryDisplay(options?.rect)
+    clipboard.writeImage(nativeImage.createFromBuffer(Buffer.from(capture.data, 'base64')))
+    return { ...capture, mode, copiedToClipboard: true }
+  }
+  handleFloatOverlay(IPC.captureForComposer, captureForComposer)
 
   handle(IPC.browserState, () => deps.browser.state())
   handle(IPC.browserSetBounds, (_event, value) => deps.browser.setBounds(asBounds(value)))

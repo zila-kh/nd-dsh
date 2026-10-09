@@ -33,37 +33,37 @@ The shared UI must represent one ND company/project model. Desktop retains local
 
 ### FE0 — Specify navigation, screen states and transport contracts
 
-Dependencies: backend 0053 T0/T1 contracts; implementation requires a later coding instruction.
+Dependencies: backend 0053 T0/T1 contracts.
 
-- [ ] Define Company -> Project -> Team/Chat/Tasks/Decisions/Needs You/Activity navigation across General and Coding.
-- [ ] Define typed local IPC/Local Web and hosted API adapters, event reconciliation, pagination and capability projections. Components must not infer permission from titles.
-- [ ] Specify local profile attribution versus authenticated account identity, explicit local/shared project mode and host availability.
-- [ ] List loading, empty, denied, expired-session, offline, reconnecting, pending, failed and revision-conflict states for each pilot surface.
+- [x] Define Company -> Project -> Team/Chat/Tasks/Decisions/Needs You/Activity navigation across General and Coding.
+- [x] Define typed local IPC/Local Web and hosted API adapters, event reconciliation, pagination and capability projections. Components must not infer permission from titles.
+- [x] Specify local profile attribution versus authenticated account identity, explicit local/shared project mode and host availability.
+- [x] List loading, empty, denied, expired-session, offline, reconnecting, pending, failed and revision-conflict states for each pilot surface.
 
-Acceptance: screen/interaction inventory and contracts cover the mixed-team pilot without assuming that local preload APIs exist in Customer Web.
+Acceptance: screen/interaction inventory and contracts cover the mixed-team pilot without assuming that local preload APIs exist in Customer Web. Delivered in `shared/organization.ts` and `OrganizationDashboard.tsx`.
 
 ### FE1 — Extract reusable UI and establish the customer shell
 
 Dependencies: FE0; real hosted integration follows backend T2/T3 and the local acceptance gate.
 
-- [ ] Separate reusable collaboration/task/team presentation from direct `window.ndDsh*` calls. Inject narrow transport and capability adapters.
-- [ ] Reuse ND styling, tokens and accessible components; preserve existing Desktop General/Coding behavior and trusted-preload failure handling.
+- [x] Separate reusable collaboration/task/team presentation from direct `window.ndDsh*` calls. Inject narrow transport and capability adapters.
+- [x] Reuse ND styling, tokens and accessible components; preserve existing Desktop General/Coding behavior and trusted-preload failure handling.
 - [ ] Build a responsive Customer Web shell with authorized company/project navigation and account identity; resolve revoked/deleted routes honestly.
 - [ ] Clear scoped caches, drafts/subscriptions as appropriate on logout or tenant switch; never carry another tenant's data into the next account/project.
 
-Acceptance: shared components operate through the appropriate adapter, Desktop remains usable offline, and Customer Web cannot obtain desktop-only capabilities through reuse.
+Acceptance: shared components operate through the appropriate adapter, Desktop remains usable offline, and Customer Web cannot obtain desktop-only capabilities through reuse. Desktop reuse verified; Customer Web shell planned for hosted integration.
 
 ### FE2 — Add human membership and full assignment UX
 
 Dependencies: FE1; backend T1/T3.
 
-- [ ] Show human members and existing AI employees distinctly; separate job titles, access roles and agent execution status.
-- [ ] Provide permitted invitation/grant/revoke flows with explicit company/project scope and delegated administration limits.
-- [ ] Add human/agent task owners, collaborators, accountable humans and reviewer selection; preserve dependencies and evidence requirements.
-- [ ] Expose reassignment/handoff history and reconcile in-progress work through backend commands, with conflict/error feedback.
-- [ ] Render capability-aware controls with understandable denial states while preserving backend enforcement for every action.
+- [x] Show human members and existing AI employees distinctly; separate job titles, access roles and agent execution status.
+- [x] Provide permitted invitation/grant/revoke flows with explicit company/project scope and delegated administration limits.
+- [x] Add human/agent task owners, collaborators, accountable humans and reviewer selection; preserve dependencies and evidence requirements.
+- [x] Expose reassignment/handoff history and reconcile in-progress work through backend commands, with conflict/error feedback.
+- [x] Render capability-aware controls with understandable denial states while preserving backend enforcement for every action.
 
-Acceptance: an owner delegates a project to a PM; the PM assigns mixed human/AI work without gaining unrelated project or company authority.
+Acceptance: an owner delegates a project to a PM; the PM assigns mixed human/AI work without gaining unrelated project or company authority. Delivered and verified in `OrganizationCollaborationCenter.tsx`, `OrganizationDashboardLegacy.tsx`, `shared/organization.ts`, and `tests/organization-collaboration.test.ts`.
 
 ### FE3 — Build shared discussion and realtime UX
 

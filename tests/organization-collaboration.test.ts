@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { OrganizationStore } from '../src/main/organization/store.js'
+import { hasMemberCapability, resolveMemberCapabilities } from '../src/shared/organization.js'
 
 const temporary: string[] = []
 
@@ -237,5 +238,230 @@ describe('local team collaboration', () => {
     expect((state.approvalRequests ?? [])[0]?.status).toBe('changes_requested')
     expect((state.approvalVerdicts ?? [])[0]).toMatchObject({ verdict: 'request_changes', actor: { kind: 'human', id: owner.id } })
     expect(state.tasks[0]?.status).toBe('ready')
+  })
+
+  it('supports member access roles, capability resolution, and scoped grants', async () => {
+    const { store, company, project, owner } = await fixture()
+    expect(owner.accessRole).toBe('owner')
+    expect(hasMemberCapability(owner, 'company.admin')).toBe(true)
+    expect(hasMemberCapability(owner, 'task.assign')).toBe(true)
+
+    let state = await store.mutate({
+      type: 'member.create',
+      companyId: company.id,
+      displayName: 'Alex PM',
+      title: 'Project Lead',
+      accessRole: 'pm',
+    })
+    const pm = (state.members ?? []).find((m) => m.displayName === 'Alex PM')!
+    expect(pm.accessRole).toBe('pm')
+    expect(hasMemberCapability(pm, 'project.manage')).toBe(true)
+    expect(hasMemberCapability(pm, 'task.create')).toBe(true)
+    expect(hasMemberCapability(pm, 'task.assign')).toBe(true)
+    expect(hasMemberCapability(pm, 'company.admin')).toBe(false)
+
+    state = await store.mutate({
+      type: 'member.create',
+      companyId: company.id,
+      displayName: 'Sam Reviewer',
+      accessRole: 'reviewer',
+    })
+    const reviewer = (state.members ?? []).find((m) => m.displayName === 'Sam Reviewer')!
+    expect(reviewer.accessRole).toBe('reviewer')
+    expect(hasMemberCapability(reviewer, 'review.approve')).toBe(true)
+    expect(hasMemberCapability(reviewer, 'content.read')).toBe(true)
+    expect(hasMemberCapability(reviewer, 'task.create')).toBe(false)
+
+    state = await store.mutate({
+      type: 'member.create',
+      companyId: company.id,
+      displayName: 'Pat Guest',
+      accessRole: 'guest',
+    })
+    const guest = (state.members ?? []).find((m) => m.displayName === 'Pat Guest')!
+    expect(hasMemberCapability(guest, 'content.read')).toBe(true)
+    expect(hasMemberCapability(guest, 'content.write')).toBe(false)
+    expect(hasMemberCapability(guest, 'task.execute')).toBe(false)
+
+    // Custom capability grant and project grant
+    state = await store.mutate({
+      type: 'member.update',
+      id: guest.id,
+      patch: {
+        capabilities: ['content.read', 'content.write'],
+        projectGrants: [{ projectId: project.id, role: 'contributor' }],
+      },
+    })
+    const updatedGuest = (state.members ?? []).find((m) => m.id === guest.id)!
+    expect(hasMemberCapability(updatedGuest, 'content.write')).toBe(true)
+    expect(hasMemberCapability(updatedGuest, 'task.create', project.id)).toBe(true)
+  })
+
+  it('supports mixed human + agent task assignments, task.reassign with audit handoffs', async () => {
+    const { store, company, project, owner } = await fixture()
+    const agent = (await store.state()).agents[0]!
+    let state = await store.mutate({
+      type: 'member.create',
+      companyId: company.id,
+      displayName: 'Maya Builder',
+      accessRole: 'contributor',
+    })
+    const maya = (state.members ?? []).find((m) => m.displayName === 'Maya Builder')!
+
+    state = await store.mutate({
+      type: 'task.create',
+      companyId: company.id,
+      projectId: project.id,
+      title: 'Design Checkout Flow',
+      description: 'Implement responsive checkout modal',
+      assigneeKind: 'agent',
+      assignedAgentId: agent.id,
+      accountableMemberId: owner.id,
+    })
+    const task = state.tasks[0]!
+    expect(task.assigneeKind).toBe('agent')
+    expect(task.assignedAgentId).toBe(agent.id)
+    expect(task.accountableMemberId).toBe(owner.id)
+
+    // Reassign from Agent to Human
+    state = await store.mutate({
+      type: 'task.reassign',
+      taskId: task.id,
+      assignee: { kind: 'human', id: maya.id },
+      changedByMemberId: owner.id,
+      reason: 'Requires bespoke UX design decisions from Maya',
+    })
+    const reassignedTask = state.tasks[0]!
+    expect(reassignedTask.assigneeKind).toBe('human')
+    expect(reassignedTask.assignedMemberId).toBe(maya.id)
+    expect(reassignedTask.assignedAgentId).toBeUndefined()
+    expect(reassignedTask.handoffs).toHaveLength(1)
+    expect(reassignedTask.handoffs?.[0]).toMatchObject({
+      fromAssignee: { kind: 'agent', id: agent.id },
+      toAssignee: { kind: 'human', id: maya.id },
+      changedBy: { kind: 'human', id: owner.id },
+      reason: 'Requires bespoke UX design decisions from Maya',
+    })
+
+    // Reassign back from Human to Agent
+    state = await store.mutate({
+      type: 'task.reassign',
+      taskId: task.id,
+      assignee: { kind: 'agent', id: agent.id },
+      changedByMemberId: maya.id,
+      reason: 'UX completed, delegating automated test implementation',
+    })
+    const finalTask = state.tasks[0]!
+    expect(finalTask.assigneeKind).toBe('agent')
+    expect(finalTask.assignedAgentId).toBe(agent.id)
+    expect(finalTask.assignedMemberId).toBeUndefined()
+    expect(finalTask.handoffs).toHaveLength(2)
+    expect(finalTask.handoffs?.[1]?.fromAssignee).toEqual({ kind: 'human', id: maya.id })
+    expect(finalTask.handoffs?.[1]?.toAssignee).toEqual({ kind: 'agent', id: agent.id })
+  })
+
+  it('supports human work submission to review and approval request generation', async () => {
+    const { store, company, project, owner } = await fixture()
+    let state = await store.mutate({
+      type: 'member.create',
+      companyId: company.id,
+      displayName: 'Ken Reviewer',
+      accessRole: 'reviewer',
+    })
+    const ken = (state.members ?? []).find((m) => m.displayName === 'Ken Reviewer')!
+
+    state = await store.mutate({
+      type: 'task.create',
+      companyId: company.id,
+      projectId: project.id,
+      title: 'Auth Flow',
+      description: 'Implement JWT refresh',
+      assigneeKind: 'human',
+      assignedMemberId: owner.id,
+      reviewerKind: 'human',
+      reviewerMemberId: ken.id,
+    })
+    const task = state.tasks[0]!
+
+    // Mark task in_progress
+    await store.mutate({ type: 'task.update', id: task.id, patch: { status: 'in_progress' } })
+
+    // Submit work by owner
+    state = await store.mutate({
+      type: 'task.submitWork',
+      taskId: task.id,
+      memberId: owner.id,
+      summary: 'Auth tokens and refresh endpoint complete with unit tests.',
+      checkpointCommit: 'git-commit-auth-123',
+    })
+
+    const submittedTask = state.tasks.find((t) => t.id === task.id)!
+    expect(submittedTask.status).toBe('review')
+    expect(submittedTask.resultSummary).toContain('Auth tokens')
+
+    // Approval request automatically generated for Ken
+    const pendingApproval = (state.approvalRequests ?? []).find((a) => a.taskId === task.id)
+    expect(pendingApproval).toBeDefined()
+    expect(pendingApproval?.status).toBe('pending')
+    expect(pendingApproval?.targetRevision).toBe('git-commit-auth-123')
+
+    // When submitted without reviewer, task completes directly
+    state = await store.mutate({
+      type: 'task.create',
+      companyId: company.id,
+      projectId: project.id,
+      title: 'Self-serve Doc',
+      description: 'Document endpoints',
+      assigneeKind: 'human',
+      assignedMemberId: owner.id,
+    })
+    const docTask = state.tasks.find((t) => t.title === 'Self-serve Doc')!
+    await store.mutate({ type: 'task.update', id: docTask.id, patch: { status: 'in_progress' } })
+    state = await store.mutate({
+      type: 'task.submitWork',
+      taskId: docTask.id,
+      memberId: owner.id,
+      summary: 'Docs published to docs/',
+    })
+    expect(state.tasks.find((t) => t.id === docTask.id)?.status).toBe('completed')
+  })
+
+  it('supports agent and human collaboration messages with typed attribution and categories', async () => {
+    const { path, store, company, project, owner } = await fixture()
+    const agent = (await store.state()).agents[0]!
+
+    // Human posts a question
+    await store.mutate({
+      type: 'collaboration.message.add',
+      companyId: company.id,
+      projectId: project.id,
+      authorMemberId: owner.id,
+      category: 'question',
+      body: 'Can we use Argon2 for password hashing?',
+    })
+
+    // Agent posts a reply
+    await store.mutate({
+      type: 'collaboration.message.add',
+      companyId: company.id,
+      projectId: project.id,
+      authorAgentId: agent.id,
+      category: 'reply',
+      runId: 'run-pass-hash-01',
+      body: 'Yes, Argon2id is standard and supported by our password hasher module.',
+    })
+
+    const reloaded = new OrganizationStore(path)
+    const state = await reloaded.state()
+    expect(state.messages).toHaveLength(2)
+
+    const humanMsg = state.messages?.find((m) => m.author.id === owner.id)!
+    expect(humanMsg.author.kind).toBe('human')
+    expect(humanMsg.category).toBe('question')
+
+    const agentMsg = state.messages?.find((m) => m.author.id === agent.id)!
+    expect(agentMsg.author.kind).toBe('agent')
+    expect(agentMsg.category).toBe('reply')
+    expect(agentMsg.runId).toBe('run-pass-hash-01')
   })
 })

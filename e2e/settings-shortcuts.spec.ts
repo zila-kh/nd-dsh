@@ -139,14 +139,13 @@ test('rebinds the quick launcher key without stealing a system hotkey', async ()
   // sends exactly the event the registry's handler sends.
   await launched.app.evaluate(({ BrowserWindow }) => {
     const target = BrowserWindow.getAllWindows().find((item) => !item.isDestroyed())
-    target?.webContents.send('window:capture-request', 'delayedCapture')
+    target?.webContents.send('window:capture-request', 'fullCapture')
   })
-  await expect.poll(async () => {
-    // The pill copy differs between the main window and the float overlay tree.
-    const counts = await Promise.all(
-      launched.app.windows().map((win) => win.getByText(/Capture Area|Screen capture in \d+s|Capturing screen in \d+s/).count()),
-    )
-    return counts.reduce((total, count) => total + count, 0)
-  }, { timeout: 15_000 }).toBeGreaterThan(0)
-  await page.screenshot({ path: `${SHOT_DIR}/shortcuts-capture-request.png` })
+  // A capture must land in the composer as an UNSENT attachment, never as a
+  // message already on its way to the agent.
+  // A capture must land in the composer as an UNSENT attachment, and ND brings
+  // itself back from float mode so the user sees it waiting.
+  await expect(launched.page.getByAltText('Pasted image 1')).toBeVisible()
+  await expect(launched.page.getByText(/attached to the chat composer/)).toBeVisible()
+  await page.screenshot({ path: `${SHOT_DIR}/shortcuts-attached.png` })
 })

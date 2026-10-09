@@ -204,6 +204,12 @@ const api: DesktopApi = {
     forwardCaptureRequest: (action) => ipcRenderer.invoke(IPC.windowCaptureForward, action),
     pullPendingCapture: () => ipcRenderer.invoke(IPC.windowCapturePull),
     markCaptureReady: () => ipcRenderer.invoke(IPC.windowCaptureReady),
+    forwardCaptureAttach: (shot) => ipcRenderer.invoke(IPC.windowCaptureAttach, shot),
+    onCaptureAttach: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, shot: Parameters<typeof listener>[0]) => listener(shot)
+      ipcRenderer.on(IPC.windowCaptureAttachEvent, handler)
+      return () => ipcRenderer.removeListener(IPC.windowCaptureAttachEvent, handler)
+    },
   },
   media: {
     state: () => ipcRenderer.invoke(IPC.mediaState),
@@ -252,6 +258,7 @@ const api: DesktopApi = {
   },
   capture: {
     inspectApp: (copyToClipboard, scope, options) => ipcRenderer.invoke(IPC.captureInspectApp, copyToClipboard, scope, options),
+    forComposer: (scope, options) => ipcRenderer.invoke(IPC.captureForComposer, scope, options),
     inspectElement: (scope) => ipcRenderer.invoke(IPC.captureInspectElement, scope),
     stageElement: (element, targetTitle, pickId) => ipcRenderer.invoke(IPC.captureStageElement, element, targetTitle, pickId),
     elementAttachments: () => ipcRenderer.invoke(IPC.captureElementAttachments),

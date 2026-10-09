@@ -622,6 +622,12 @@ export interface QaOutputChunk {
   text: string
 }
 
+/** A finished capture handed to the chat composer as an unsent attachment. */
+export interface ComposerImageAttachment {
+  id: string
+  dataUrl: string
+}
+
 export interface DesktopApi {
   app: {
     info(): Promise<AppInfo>
@@ -680,6 +686,19 @@ export interface DesktopApi {
   }
   capture: {
     inspectApp(copyToClipboard: boolean, scope?: InspectScope, options?: AppInspectOptions): Promise<AppInspectResult>
+    /**
+     * Capture without touching the session: the bytes come back to the trusted
+     * renderer so a capture can sit in the composer as an unsent attachment.
+     */
+    forComposer(scope?: InspectScope, options?: AppInspectOptions): Promise<{
+      data: string
+      mediaType: 'image/png'
+      width: number
+      height: number
+      displayLabel: string
+      mode: AppInspectMode
+      copiedToClipboard: boolean
+    }>
     inspectElement(scope?: InspectScope): Promise<ExternalElementPickResult>
     stageElement(element: ExternalElementPickView, targetTitle: string, pickId?: string): Promise<ExternalElementAttachmentView[]>
     elementAttachments(): Promise<ExternalElementAttachmentView[]>
@@ -820,6 +839,9 @@ export interface DesktopApi {
     pullPendingCapture?(): Promise<GlobalShortcutId | null>
     /** Overlay frame announces it can receive capture requests. */
     markCaptureReady?(): Promise<boolean>
+    /** Overlay frame hands a finished capture back to the window hosting the composer. */
+    forwardCaptureAttach?(shot: ComposerImageAttachment): Promise<boolean>
+    onCaptureAttach?(listener: (shot: ComposerImageAttachment) => void): () => void
     captureDelay?(): Promise<CaptureDelaySeconds>
     setCaptureDelay?(seconds: CaptureDelaySeconds): Promise<CaptureDelaySeconds>
   }
@@ -898,6 +920,8 @@ export const IPC = {
   windowCaptureForward: 'window:capture-forward',
   windowCaptureReady: 'window:capture-ready',
   windowCapturePull: 'window:capture-pull',
+  windowCaptureAttach: 'window:capture-attach',
+  windowCaptureAttachEvent: 'window:capture-attach-event',
   windowCaptureDelay: 'window:capture-delay',
   windowCaptureDelaySet: 'window:capture-delay:set',
   dshViewSetBounds: 'dsh-view:set-bounds',
@@ -927,6 +951,7 @@ export const IPC = {
   sessionsSetArchived: 'sessions:set-archived',
   sessionsSetArchivedMany: 'sessions:set-archived-many',
   captureInspectApp: 'capture:inspect-app',
+  captureForComposer: 'capture:for-composer',
   captureInspectElement: 'capture:inspect-element',
   captureStageElement: 'capture:stage-element',
   captureElementAttachments: 'capture:element-attachments',

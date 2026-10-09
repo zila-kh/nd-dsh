@@ -93,6 +93,9 @@ interface ChatPanelProps {
   onOpenFile?(path: string): void
   externalPrompt?: { id: string; text: string } | null
   onExternalPromptConsumed?(): void
+  /** One-shot capture (data URL) from a capture shortcut; attached unsent. */
+  incomingImage?: { id: string; dataUrl: string } | null
+  onIncomingImageConsumed?(): void
   /** One-shot request from another surface (Home, Settings → presets) to select a session. */
   sessionOpenRequest?: { id: string; sessionId: string } | null
   onSessionOpenConsumed?(): void
@@ -170,7 +173,7 @@ function fileMentionTag(relativePath: string): string {
   return extension ? extension.toUpperCase().slice(0, 5) : 'FILE'
 }
 
-export function ChatPanel({ status, workspaceRoot, workspaceName, workspaceSelected, onOpenWorkspace, sessionsCollapsed, sessionProjectScope, projects, onSelectProject, onError, onOpenSettings, onOpenFile, onOpenLink, externalPrompt, onExternalPromptConsumed, sessionOpenRequest, onSessionOpenConsumed, elementAttachmentVersion, onGitEditableChange }: ChatPanelProps) {
+export function ChatPanel({ status, workspaceRoot, workspaceName, workspaceSelected, onOpenWorkspace, sessionsCollapsed, sessionProjectScope, projects, onSelectProject, onError, onOpenSettings, onOpenFile, onOpenLink, externalPrompt, onExternalPromptConsumed, incomingImage, onIncomingImageConsumed, sessionOpenRequest, onSessionOpenConsumed, elementAttachmentVersion, onGitEditableChange }: ChatPanelProps) {
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [collapsedSessionParents, setCollapsedSessionParents] = useState<Set<string>>(new Set())
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
@@ -818,6 +821,13 @@ export function ChatPanel({ status, workspaceRoot, workspaceName, workspaceSelec
     setPrompt(externalPrompt.text)
     onExternalPromptConsumed?.()
   }, [externalPrompt, onExternalPromptConsumed])
+
+  // Capture shortcuts attach their shot here; nothing sends until the user does.
+  useEffect(() => {
+    if (!incomingImage) return
+    setPendingImages((images) => [...images, incomingImage.dataUrl])
+    onIncomingImageConsumed?.()
+  }, [incomingImage, onIncomingImageConsumed])
 
   useEffect(() => {
     let mounted = true

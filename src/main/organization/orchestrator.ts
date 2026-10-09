@@ -199,7 +199,9 @@ export class OrganizationOrchestrator {
       throw new Error('Task is outside the selected delivery milestone')
     }
     this.assertPolicy(await this.store.policy(context.company.id, 'task.execute'), explicit, 'task execution')
-    if (!explicit && context.company.autonomyLevel < 3) throw new Error('Autonomy level 3+ is required for automatic execution')
+    if (context.task.assigneeKind === 'human' || (!context.task.assignedAgentId && context.task.assignedMemberId)) {
+      throw new Error('Task is assigned to a human member; submit human work or reassign to an agent before automated execution')
+    }
     if (context.task.status !== 'ready' && context.task.status !== 'blocked') throw new Error(`Task is ${context.task.status}; only ready or blocked tasks can run`)
 
     const state = await this.store.state()
@@ -1376,7 +1378,8 @@ export class OrganizationOrchestrator {
   private async nextDispatchableTask(projectId: string): Promise<{ task: OrganizationTask | undefined; capacityBound: boolean }> {
     // The round's dispatch limit must not truncate the readiness scan: a full
     // role pool can hold an arbitrarily long prefix while another role is free.
-    const candidates = await this.store.readyTasks(projectId)
+    const allCandidates = await this.store.readyTasks(projectId)
+    const candidates = allCandidates.filter((t) => t.assigneeKind !== 'human' && (t.assignedAgentId || !t.assignedMemberId))
     if (!this.dispatchAvailability) return { task: candidates[0], capacityBound: false }
     let capacityBound = false
     for (const candidate of candidates) {

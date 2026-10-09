@@ -280,6 +280,7 @@ export function ShortcutSettings({ onError }: { onError(message: string): void }
             })}
           </div>
         )}
+        <SettingsNote>Captures land in the chat composer as unsent attachments, and on the clipboard. Nothing reaches the agent until you press send.</SettingsNote>
         <SettingsNote>{GUARD_NOTE}</SettingsNote>
       </SettingsSection>
 

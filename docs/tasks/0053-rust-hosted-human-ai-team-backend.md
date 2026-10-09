@@ -40,15 +40,15 @@ Acceptance: a record-authority matrix and pilot contract identify every writer a
 
 ### T1 — Complete local human/agent management contracts
 
-Dependencies: T0 contracts; may be delivered locally before hosted deployment.
+Dependencies: T0 contracts; delivered locally before hosted deployment.
 
-- [ ] Define company/project membership, capabilities, delegated administration, explicit team-based grants and guest scope. Job titles and AI work roles do not establish access.
-- [ ] Extend agent-only task assignment deliberately to human/agent owners, collaborators, accountable humans and reviewers; preserve existing agent/run provenance.
-- [ ] Define ownership changes, human work evidence and active-run handoff/reconciliation rules.
-- [ ] Add typed agent collaboration operations for project/task replies, questions and mentions with actor/run/task attribution.
-- [ ] Keep conversation separate from execution commands and explicit approvals; local profile selection remains labeled attribution.
+- [x] Define company/project membership, capabilities, delegated administration, explicit team-based grants and guest scope. Job titles and AI work roles do not establish access.
+- [x] Extend agent-only task assignment deliberately to human/agent owners, collaborators, accountable humans and reviewers; preserve existing agent/run provenance.
+- [x] Define ownership changes, human work evidence and active-run handoff/reconciliation rules.
+- [x] Add typed agent collaboration operations for project/task replies, questions and mentions with actor/run/task attribution.
+- [x] Keep conversation separate from execution commands and explicit approvals; local profile selection remains labeled attribution.
 
-Acceptance: a mixed human/AI workflow survives restart and reassignment without fake agent identities, duplicate workers, or conversational approval.
+Acceptance: a mixed human/AI workflow survives restart and reassignment without fake agent identities, duplicate workers, or conversational approval. Delivered and verified in `src/shared/organization.ts`, `src/main/organization/store.ts`, `src/main/organization/orchestrator.ts`, and `tests/organization-collaboration.test.ts`.
 
 ### T2 — Establish the Rust service and durable storage boundary
 

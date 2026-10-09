@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import { toast } from 'sonner'
-import type { AppInspectArea, AppInspectMode, AppInspectResult, BrowserState, DshSurface, DshViewState, ExternalElementPickView, HarnessStatus, InspectScope, SurfaceState, ThemeMode, ThemeState, WorkspaceFile, WorkspaceState } from '../../shared/contracts'
+import type { AppInspectArea, AppInspectMode, AppInspectResult, BrowserState, ComposerImageAttachment, DshSurface, DshViewState, ExternalElementPickView, HarnessStatus, InspectScope, SurfaceState, ThemeMode, ThemeState, WorkspaceFile, WorkspaceState } from '../../shared/contracts'
 import type { OrganizationSnapshot } from '../../shared/organization'
 import { BrowserPane } from './components/BrowserPane'
 import { ProjectGitControls } from './components/ProjectGitControls'
@@ -485,8 +485,41 @@ export default function App() {
   // Cross-app inspect: after a short countdown (so the user can focus the
   // target app), the trusted main process captures the screen, bridges the
   // screenshot into the ND chat session, and copies it to the clipboard.
+  // Capture shortcuts attach their shot to the composer as an unsent
+  // attachment: the user reviews it, writes a prompt, and sends deliberately.
+  const [queuedCapture, setQueuedCapture] = useState<{ id: string; dataUrl: string } | null>(null)
+  const [captureAttachIntent, setCaptureAttachIntent] = useState(false)
+
+  const queueCaptureAttachment = (shot: ComposerImageAttachment): void => {
+    setQueuedCapture(shot)
+    switchToWorkbench('agent')
+    // The capture happened while ND was out of the way; come back so the user
+    // actually sees the attachment waiting in the composer.
+    void window.ndDsh.window?.setFloatMode?.(false)
+    toast('Capture attached to the chat composer and copied to the clipboard. Nothing sends until you do.', { duration: 5000 })
+  }
+
+  const attachCaptureToChat = async (mode: AppInspectMode, rect?: AppInspectArea): Promise<void> => {
+    try {
+      const shot = await window.ndDsh.capture.forComposer(inspectScope, { mode, ...(rect !== undefined ? { rect } : {}) })
+      const attachment: ComposerImageAttachment = { id: `capture-${Date.now()}`, dataUrl: `data:${shot.mediaType};base64,${shot.data}` }
+      // The overlay frame has no composer; main relays the attachment home.
+      if (isFloatOverlay) {
+        await window.ndDsh.window?.forwardCaptureAttach?.(attachment)
+        return
+      }
+      queueCaptureAttachment(attachment)
+    } catch (cause) {
+      notify(errorMessage(cause))
+    }
+  }
+
+  useEffect(() => window.ndDsh.window?.onCaptureAttach?.((shot) => {
+    queueCaptureAttachment(shot)
+  }))
+
   // In 'self' scope there is nothing to switch to, so capture immediately.
-  const startAppInspect = (mode: AppInspectMode = 'full', rect?: AppInspectArea, scopeOverride?: InspectScope, delayOverride?: number): Promise<AppInspectResult | undefined> => {
+  const startAppInspect = (mode: AppInspectMode = 'full', rect?: AppInspectArea, scopeOverride?: InspectScope, delayOverride?: number, destination: 'agent' | 'attach' = 'agent'): Promise<AppInspectResult | undefined> => {
     if (appInspectCountdown !== null || appInspectInFlight) return Promise.resolve(undefined)
     const targetScope = scopeOverride ?? inspectScope
     const selfScope = targetScope === 'self'
@@ -495,9 +528,13 @@ export default function App() {
     const delay = delayOverride ?? 3
     let remaining = delay
     if (!selfScope && mode === 'full' && delay > 0) setAppInspectCountdown(remaining)
-    const fire = async (): Promise<AppInspectResult> => {
+    const fire = async (): Promise<AppInspectResult | undefined> => {
       setAppInspectInFlight(true)
       try {
+        if (destination === 'attach') {
+          await attachCaptureToChat(mode, rect)
+          return undefined
+        }
         const result = await window.ndDsh.capture.inspectApp(true, targetScope, { mode, ...(rect !== undefined ? { rect } : {}) })
         setPendingAppInspect({
           displayLabel: result.displayLabel,
@@ -584,8 +621,12 @@ export default function App() {
       } else if (key === 'c' || key === 'a') {
         if (Date.now() - lastGlobalCaptureAt.current < 750) return
         event.preventDefault()
-        if (key === 'c') startAppInspect('full')
-        else void openCaptureOverlay('area')
+        if (key === 'c') {
+          void startAppInspect('full', undefined, undefined, undefined, 'attach')
+        } else {
+          setCaptureAttachIntent(true)
+          void openCaptureOverlay('area')
+        }
       }
     }
     window.addEventListener('keydown', onKeyDown)
@@ -606,13 +647,14 @@ export default function App() {
       if (action === 'areaCapture') {
         // A second press mid-snip must not reset an in-progress selection.
         if (captureOverlay) return
+        setCaptureAttachIntent(true)
         await openCaptureOverlay('area')
         return
       }
       const delayApi = window.ndDsh.window?.captureDelay
       const configured = delayApi ? await delayApi().catch(() => undefined) : undefined
       const delay = action === 'delayedCapture' ? configured ?? DEFAULT_CAPTURE_DELAY_SECONDS : 0
-      await startAppInspect('full', undefined, 'external', delay)
+      await startAppInspect('full', undefined, 'external', delay, 'attach')
       return
     }
     setInspectScope('external')
@@ -1508,6 +1550,11 @@ export default function App() {
                 await homeCaptureArea(rect)
                 return
               }
+              if (captureAttachIntent) {
+                setCaptureAttachIntent(false)
+                await startAppInspect(mode === 'area' ? 'area' : 'annotate', rect, undefined, 0, 'attach')
+                return
+              }
               await startAppInspect(mode === 'area' ? 'area' : 'annotate', rect)
             }}
             onClose={() => {
@@ -1818,6 +1865,8 @@ export default function App() {
                   onOpenLink={(url) => void openLink(url)}
                   externalPrompt={externalPrompt}
                   onExternalPromptConsumed={() => setExternalPrompt(null)}
+                  incomingImage={queuedCapture}
+                  onIncomingImageConsumed={() => setQueuedCapture(null)}
                   sessionOpenRequest={sessionOpenRequest}
                   onSessionOpenConsumed={() => setSessionOpenRequest(null)}
                   elementAttachmentVersion={elementAttachmentVersion}
@@ -2249,6 +2298,11 @@ export default function App() {
             if (localCaptureIntent) {
               setLocalCaptureIntent(false)
               await homeCaptureArea(rect)
+              return
+            }
+            if (captureAttachIntent) {
+              setCaptureAttachIntent(false)
+              void startAppInspect(mode === 'area' ? 'area' : 'annotate', rect, undefined, 0, 'attach')
               return
             }
             startAppInspect(mode === 'area' ? 'area' : 'annotate', rect)
